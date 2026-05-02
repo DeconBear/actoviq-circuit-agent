@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -161,40 +161,64 @@ export function parseCliOptions(argv: string[]): CliOptions {
   return options;
 }
 
+function lookupNgspiceOnPath(): string | undefined {
+  const lookup = process.platform === 'win32' ? 'where ngspice' : 'command -v ngspice';
+  try {
+    const result = execSync(lookup, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    if (!result) {
+      return undefined;
+    }
+    const firstLine = result.split(/\r?\n/)[0]?.trim();
+    return firstLine || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function checkNgspice(): void {
   const envBin = process.env.NGSPICE_BIN?.trim();
   if (envBin) {
-    writeStdout(`ngspice: ${envBin} (from NGSPICE_BIN)\n`);
-    return;
+    if (existsSync(envBin)) {
+      writeStdout(`ngspice: available -> ${envBin} (from NGSPICE_BIN)\n`);
+      return;
+    }
+    writeStdout(`ngspice: NGSPICE_BIN points to a missing path: ${envBin}\n`);
   }
 
   try {
     const raw = readFileSync(TOOL_PATHS_PATH, 'utf8');
     const toolPaths = JSON.parse(raw) as { ngspice_bin?: string };
-    if (toolPaths.ngspice_bin?.trim()) {
-      writeStdout(`ngspice: ${toolPaths.ngspice_bin} (from tool_paths.json)\n`);
-      return;
+    const configured = toolPaths.ngspice_bin?.trim();
+    if (configured) {
+      if (existsSync(configured)) {
+        writeStdout(`ngspice: available -> ${configured} (from tool_paths.json)\n`);
+        return;
+      }
+      writeStdout(`ngspice: tool_paths.json ngspice_bin points to a missing path: ${configured}\n`);
     }
   } catch {
     // tool_paths.json not readable, continue
   }
 
-  try {
-    const result = execSync('command -v ngspice', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-    if (result) {
-      writeStdout(`ngspice: ${result} (from PATH)\n`);
-      return;
-    }
-  } catch {
-    // not in PATH
+  const onPath = lookupNgspiceOnPath();
+  if (onPath) {
+    writeStdout(`ngspice: available -> ${onPath} (from PATH)\n`);
+    return;
   }
 
   writeStdout('\n');
-  writeStdout('-- ngspice not found --------------------------------------------------------\n');
-  writeStdout('  The simulation stage requires ngspice. Set it via one of:\n');
-  writeStdout('    1. Environment variable: set NGSPICE_BIN=/path/to/ngspice\n');
-  writeStdout('    2. Config file: edit embedded/circuit-design/tool_paths.json -> ngspice_bin\n');
-  writeStdout('    3. Add ngspice to your system PATH\n');
+  writeStdout('-- ngspice not available ----------------------------------------------------\n');
+  writeStdout('  The simulation stage requires ngspice. Configure it via one of:\n');
+  if (process.platform === 'win32') {
+    writeStdout('    1. PowerShell (current session):\n');
+    writeStdout("         $env:NGSPICE_BIN = 'C:\\path\\to\\ngspice.exe'\n");
+    writeStdout('    2. PowerShell (persistent for current user):\n');
+    writeStdout("         [Environment]::SetEnvironmentVariable('NGSPICE_BIN','C:\\path\\to\\ngspice.exe','User')\n");
+    writeStdout("    3. Add the directory containing ngspice.exe to your system PATH\n");
+  } else {
+    writeStdout('    1. export NGSPICE_BIN=/path/to/ngspice\n');
+    writeStdout('    2. Add ngspice to your system PATH\n');
+  }
   writeStdout('  Download: https://ngspice.sourceforge.net/download.html\n');
   writeStdout('-----------------------------------------------------------------------------\n');
   writeStdout('\n');
@@ -247,10 +271,9 @@ export async function main(): Promise<void> {
     return;
   }
 
-  checkNgspice();
-
   writeStdout(`actoviq-circuit-agent v${packageVersion}\n`);
   writeStdout(`workspace: ${WORKSPACE_ROOT}\n`);
+  checkNgspice();
   if (!options.legacyCli && !options.requirement && !options.requirementFile && !options.resumeJob) {
     await startTuiApp();
     return;
