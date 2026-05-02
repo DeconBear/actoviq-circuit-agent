@@ -1,9 +1,17 @@
 {
   "name": "actoviq-circuit-agent",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "description": "Interactive circuit design workflow built on actoviq-agent-sdk.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DeconBear/actoviq-circuit-agent.git"
+  },
+  "homepage": "https://github.com/DeconBear/actoviq-circuit-agent#readme",
+  "bugs": {
+    "url": "https://github.com/DeconBear/actoviq-circuit-agent/issues"
+  },
   "bin": {
     "actoviq-circuit-agent": "./bin/actoviq-circuit-agent.js"
   },
