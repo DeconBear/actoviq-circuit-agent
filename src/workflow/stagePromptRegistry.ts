@@ -281,59 +281,8 @@ function buildStages(paths: JobPaths, requirement: string): WorkflowStage[] {
       ].join('\n'),
     },
     {
-      key: 'schemdraw-renderer',
-      label: '8. Schemdraw Renderer',
-      agentName: 'schemdraw-renderer',
-      skillName: 'render-schematic-schemdraw',
-      category: 'rendering',
-      expectedArtifacts: [
-        { label: 'schemdraw svg', path: (p) => p.schemdrawPath },
-        { label: 'schemdraw notes', path: (p) => p.schemdrawNotesPath },
-      ],
-      buildPrompt: (p) => [
-        '目标: 使用 schemdraw 渲染原理图。',
-        `输入 final netlist: ${p.designFinalPath}`,
-        `输入 raw spec: ${p.specRawPath}`,
-        `复用 design json: ${p.designJsonPath}`,
-        `输出 svg: ${p.schemdrawPath}`,
-        `输出 notes: ${p.schemdrawNotesPath}`,
-        '',
-        '执行要求:',
-        '1. 如果 design.json 不存在，先调用 netlist_to_json。',
-        '2. 调用 render_schemdraw 产出 SVG。',
-        '3. 写 schemdraw-notes.md，说明输出质量、差异和任何 fallback 情况。',
-      ].join('\n'),
-    },
-    {
-      key: 'svg-layout-agent',
-      label: '9. SVG Layout Agent',
-      agentName: 'svg-layout-agent',
-      skillName: 'render-schematic-agent-svg',
-      category: 'rendering',
-      expectedArtifacts: [
-        { label: 'scene hints', path: (p) => p.sceneHintsPath },
-        { label: 'agent layout svg', path: (p) => p.agentSvgPath },
-        { label: 'agent layout notes', path: (p) => p.agentSvgNotesPath },
-      ],
-      buildPrompt: (p) => [
-        '目标: 由 agent 直接产出布局 hint，并通过 A* 布线的 SVG 管线输出第三种原理图。',
-        `输入 final netlist: ${p.designFinalPath}`,
-        `输入 raw spec: ${p.specRawPath}`,
-        `复用 design json: ${p.designJsonPath}`,
-        `输出 scene hints json: ${p.sceneHintsPath}`,
-        `输出 svg: ${p.agentSvgPath}`,
-        `输出 notes: ${p.agentSvgNotesPath}`,
-        '',
-        '执行要求:',
-        '1. 如果 design.json 不存在，先调用 netlist_to_json。',
-        '2. 创建 scene-hints.json，至少包含 title 和 placements。',
-        '3. 调用 render_agent_svg 输出 SVG。',
-        '4. 写 agent-layout-notes.md，解释布局逻辑、分组和布线策略。',
-      ].join('\n'),
-    },
-    {
       key: 'workflow-lead',
-      label: '10. Workflow Lead',
+      label: '8. Workflow Lead',
       agentName: 'workflow-lead',
       skillName: 'handoff-summary',
       category: 'summary',
@@ -354,7 +303,7 @@ function buildStages(paths: JobPaths, requirement: string): WorkflowStage[] {
         '- 用户需求摘要',
         '- 选定方案与复用能力',
         '- 最终网表与验证状态',
-        '- 三种 SVG 输出及路径',
+        '- netlistsvg SVG 输出及路径',
         '- 剩余风险和下一步建议',
       ].join('\n'),
     },
@@ -597,26 +546,6 @@ function withRobustCircuitPromptOverrides(stages: WorkflowStage[]): WorkflowStag
       };
     }
 
-    if (stage.key === 'schemdraw-renderer') {
-      return {
-        ...stage,
-        buildPrompt: (p) => [
-          'Goal: render the schematic using the real Python schemdraw backend.',
-          `Input final netlist: ${p.designFinalPath}`,
-          `Input raw spec: ${p.specRawPath}`,
-          `Input module manifest: ${p.moduleManifestPath}`,
-          `Reuse design JSON: ${p.designJsonPath}`,
-          `Output SVG: ${p.schemdrawPath}`,
-          `Output notes: ${p.schemdrawNotesPath}`,
-          '',
-          'Execution:',
-          '- Call netlist_to_json first only when design.json is missing, and pass module_manifest_path when module-manifest.json exists.',
-          '- Call render_schemdraw.',
-          '- Write schemdraw-notes.md in Chinese with backend status, fallback status, readability limits, and comparison against netlistsvg.',
-        ].join('\n'),
-      };
-    }
-
     if (stage.key === 'workflow-lead') {
       return {
         ...stage,
@@ -640,32 +569,7 @@ function withRobustCircuitPromptOverrides(stages: WorkflowStage[]): WorkflowStag
           '- Do not call Write with raw-only, markdown-only, or wrapped arguments.',
           '- Keep final-summary.md in Chinese, no tables, 90 lines maximum.',
           '- Clearly state pass/fail status from final-review.md; do not hide failed metrics.',
-          '- Include the paths for design.final.cir, module-manifest.json, detailed-design-report.md, final-review.md, netlistsvg.svg, schemdraw.svg, and agent-layout.svg.',
-        ].join('\n'),
-      };
-    }
-
-    if (stage.key === 'svg-layout-agent') {
-      return {
-        ...stage,
-        buildPrompt: (p) => [
-          'Goal: create the third schematic path using compact agent-authored scene hints plus A* routing.',
-          `Input final netlist: ${p.designFinalPath}`,
-          `Input raw spec: ${p.specRawPath}`,
-          `Input module manifest: ${p.moduleManifestPath}`,
-          `Reuse design json: ${p.designJsonPath}`,
-          `Output scene hints json: ${p.sceneHintsPath}`,
-          `Output svg: ${p.agentSvgPath}`,
-          `Output notes: ${p.agentSvgNotesPath}`,
-          '',
-          'Hard execution rules:',
-          '- If design.json is missing, call netlist_to_json once, and pass module_manifest_path when module-manifest.json exists.',
-          '- Write a compact scene-hints.json: title plus at most 12 placements.',
-          '- Do not enumerate every component; unlisted components are auto-placed by render_agent_svg.',
-          '- Prefer anchors for input, RF gain, detector, filter, threshold, alarm output, vdd, and ground.',
-          '- If a detailed Write fails, immediately write {"title":"Agent layout","placements":[]} to scene-hints.json.',
-          '- Call render_agent_svg after scene-hints.json exists.',
-          '- Write agent-layout-notes.md in Chinese, no tables, 50 lines maximum.',
+          '- Include the paths for design.final.cir, module-manifest.json, detailed-design-report.md, final-review.md, and netlistsvg.svg.',
         ].join('\n'),
       };
     }

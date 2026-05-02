@@ -13,7 +13,7 @@
 - 实时流式输出每个 Agent 阶段。
 - 支持 `/allow manual`、`/allow execution` 和 `/allow all` 三种确认策略。
 - 即使用户用中文描述需求，也会生成英文安全的 job slug。
-- 生成 primitive-oriented SPICE 网表，调用 ngspice 验证，并渲染三种原理图视图。
+- 生成 primitive-oriented SPICE 网表，调用 ngspice 验证，并渲染 netlistsvg 原理图。
 - 内置电路模板、Python 辅助脚本和渲染资源。
 
 ## 快速开始
@@ -72,7 +72,11 @@ ngspice 路径解析优先级：
 
 对 npm 用户，推荐使用 `NGSPICE_BIN` 或 `PATH`。不要直接修改已安装 npm 包内部的文件。
 
-### 3. 配置 Actoviq Provider
+### 3. 关于红色报错信息
+
+Agent 运行过程中终端可能会出现红色报错信息。这些是由 Agent 工具调用产生的，用于监看 Agent 是否能够检测并自我修正错误，**并不**影响设计流程。Agent 通常会尝试其他方案并继续正常执行。只要工作流抵达了最终汇总阶段，设计就是完整的，与中间工具调用报错无关。
+
+### 4. 配置 Actoviq Provider
 
 在运行 CLI 的目录中创建 Actoviq 配置，或者使用 `~/.actoviq/settings.json`。
 
@@ -84,7 +88,7 @@ copy C:\path\to\agent.settings.example.json .\actoviq.settings.json
 
 编辑 `actoviq.settings.json`，填入 provider endpoint、token 和模型名称。不要提交真实 API key。
 
-### 4. 启动 Agent
+### 5. 启动 Agent
 
 在你希望作为 workspace 的目录中运行：
 
@@ -109,7 +113,7 @@ TUI 中可以输入：
 
 使用 `/allow all` 可以自动通过所有阶段切换；使用 `/allow manual` 则每个阶段都需要确认。
 
-### 5. 单次任务运行
+### 6. 单次任务运行
 
 ```powershell
 actoviq-circuit-agent --approval-policy execution --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and SVG schematic."
@@ -145,7 +149,7 @@ npm run dev -- --legacy-cli
 源码 smoke run：
 
 ```powershell
-npm run dev -- --auto-approve --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist plus three SVG schematics."
+npm run dev -- --auto-approve --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and netlistsvg schematic."
 ```
 
 ## 本地可编辑 CLI
@@ -186,11 +190,11 @@ Actoviq 配置按以下顺序加载：
 
 大型设计会在设计阶段按功能分块。工作流会写入 `planning/module-plan.json` 和 `design/module-manifest.json`，并在渲染阶段复用这些模块边界。最终 netlistsvg 输出是单张 SVG 图纸，包含带标签的模块/子模块区域；跨模块连接通过匹配的网络标签和可见端口表达，而不是使用很长的跨图纸连线。
 
-## 渲染路径
+## 渲染
 
-- `render/netlistsvg.svg`：复杂电路的首选输出。
-- `render/schemdraw.svg`：Python `schemdraw` 后端。
-- `render/agent-layout.svg`：Agent scene hints 加确定性 SVG 布线。
+工作流通过 netlistsvg 后端生成原理图：
+
+- `render/netlistsvg.svg`：所有电路的主要原理图输出。
 
 ## 验证
 
@@ -199,5 +203,3 @@ npm test
 npm run build
 npm run pack:dry-run
 ```
-
-更详细的使用方式见 [USAGE.md](./USAGE.md)。

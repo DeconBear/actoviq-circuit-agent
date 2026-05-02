@@ -226,8 +226,6 @@ test('stage registry exposes the expected workflow order and prompt constraints'
     'netlist-designer',
     'simulation-verifier',
     'netlistsvg-renderer',
-    'schemdraw-renderer',
-    'svg-layout-agent',
     'workflow-lead',
   ]);
   assert.equal(new Set(stages.map((stage) => stage.key)).size, stages.length);

@@ -13,7 +13,7 @@ This project turns natural-language requirements into SPICE-oriented schematic d
 - Streams each agent stage in real time.
 - Supports `/allow manual`, `/allow execution`, and `/allow all` confirmation policies.
 - Generates English-safe job slugs even when the requirement is written in Chinese.
-- Designs primitive-oriented SPICE netlists, runs ngspice verification, and renders three schematic views.
+- Designs primitive-oriented SPICE netlists, runs ngspice verification, and renders netlistsvg schematics.
 - Bundles circuit templates, Python helpers, and render assets inside this package.
 
 ## Quick Start
@@ -72,7 +72,11 @@ Resolution priority:
 
 For npm users, prefer `NGSPICE_BIN` or `PATH`. Do not edit files inside the installed npm package.
 
-### 3. Configure the Actoviq Provider
+### 3. About Red Error Messages
+
+During agent execution you may see red error messages in the terminal. These are produced by agent tool calls and exist to show whether the agent can detect and self-correct errors. They do **not** mean the workflow has failed. The agent often retries with alternative approaches and continues normally. If the workflow reaches the final summary stage, the design is complete regardless of intermediate tool errors.
+
+### 4. Configure the Actoviq Provider
 
 Create an Actoviq config in the directory where you will run the CLI, or use `~/.actoviq/settings.json`.
 
@@ -84,7 +88,7 @@ copy C:\path\to\agent.settings.example.json .\actoviq.settings.json
 
 Edit `actoviq.settings.json` and fill in your provider endpoint, token, and model names. Never commit real API keys.
 
-### 4. Start the Agent
+### 5. Start the Agent
 
 Run the CLI from the directory you want to use as the workspace:
 
@@ -109,7 +113,7 @@ Inside the TUI:
 
 Use `/allow all` for fully automatic stage transitions, or `/allow manual` to confirm every stage.
 
-### 5. One-Shot Run
+### 6. One-Shot Run
 
 ```powershell
 actoviq-circuit-agent --approval-policy execution --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and SVG schematic."
@@ -145,7 +149,7 @@ npm run dev -- --legacy-cli
 Source smoke run:
 
 ```powershell
-npm run dev -- --auto-approve --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist plus three SVG schematics."
+npm run dev -- --auto-approve --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and netlistsvg schematic."
 ```
 
 ## Linked Local CLI
@@ -186,11 +190,11 @@ Do not commit real API keys. Use `agent.settings.example.json` as the template.
 
 Large designs are partitioned by function during the design stage. The workflow writes `planning/module-plan.json` and `design/module-manifest.json`, then reuses those module boundaries during rendering. The final netlistsvg output is a single SVG sheet with labelled module/submodule sections; cross-module connectivity is represented by matching net labels and visible ports instead of long cross-sheet wires.
 
-## Rendering Paths
+## Rendering
 
-- `render/netlistsvg.svg`: preferred output for complex circuits.
-- `render/schemdraw.svg`: Python `schemdraw` backend.
-- `render/agent-layout.svg`: agent scene hints plus deterministic SVG routing.
+The workflow generates schematics via the netlistsvg backend:
+
+- `render/netlistsvg.svg`: primary schematic output for all circuits.
 
 ## Validation
 
@@ -199,5 +203,3 @@ npm test
 npm run build
 npm run pack:dry-run
 ```
-
-More detailed usage is in [USAGE.md](./USAGE.md).

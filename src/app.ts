@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -160,6 +161,45 @@ export function parseCliOptions(argv: string[]): CliOptions {
   return options;
 }
 
+function checkNgspice(): void {
+  const envBin = process.env.NGSPICE_BIN?.trim();
+  if (envBin) {
+    writeStdout(`ngspice: ${envBin} (from NGSPICE_BIN)\n`);
+    return;
+  }
+
+  try {
+    const raw = readFileSync(TOOL_PATHS_PATH, 'utf8');
+    const toolPaths = JSON.parse(raw) as { ngspice_bin?: string };
+    if (toolPaths.ngspice_bin?.trim()) {
+      writeStdout(`ngspice: ${toolPaths.ngspice_bin} (from tool_paths.json)\n`);
+      return;
+    }
+  } catch {
+    // tool_paths.json not readable, continue
+  }
+
+  try {
+    const result = execSync('command -v ngspice', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    if (result) {
+      writeStdout(`ngspice: ${result} (from PATH)\n`);
+      return;
+    }
+  } catch {
+    // not in PATH
+  }
+
+  writeStdout('\n');
+  writeStdout('-- ngspice not found --------------------------------------------------------\n');
+  writeStdout('  The simulation stage requires ngspice. Set it via one of:\n');
+  writeStdout('    1. Environment variable: set NGSPICE_BIN=/path/to/ngspice\n');
+  writeStdout('    2. Config file: edit embedded/circuit-design/tool_paths.json -> ngspice_bin\n');
+  writeStdout('    3. Add ngspice to your system PATH\n');
+  writeStdout('  Download: https://ngspice.sourceforge.net/download.html\n');
+  writeStdout('-----------------------------------------------------------------------------\n');
+  writeStdout('\n');
+}
+
 export async function main(): Promise<void> {
   const options = parseCliOptions(process.argv.slice(2));
   if (options.error) {
@@ -206,6 +246,8 @@ export async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  checkNgspice();
 
   writeStdout(`actoviq-circuit-agent v${packageVersion}\n`);
   writeStdout(`workspace: ${WORKSPACE_ROOT}\n`);
