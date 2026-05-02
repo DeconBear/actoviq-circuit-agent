@@ -1,0 +1,49 @@
+{
+  "name": "actoviq-circuit-agent",
+  "version": "0.1.2",
+  "type": "module",
+  "description": "Interactive circuit design workflow built on actoviq-agent-sdk.",
+  "license": "MIT",
+  "bin": {
+    "actoviq-circuit-agent": "./bin/actoviq-circuit-agent.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "embedded/circuit-design/assets",
+    "embedded/circuit-design/scripts/*.py",
+    "embedded/circuit-design/tool_paths.json",
+    "python",
+    "agent.settings.example.json",
+    "README.md",
+    "README-zh.md"
+  ],
+  "scripts": {
+    "dev": "tsx src/app.ts",
+    "build": "tsc -p tsconfig.json",
+    "build:watch": "tsc -p tsconfig.json --watch",
+    "test": "npm run typecheck && npm run test:unit",
+    "test:unit": "tsx src/tests/runTests.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/app.js",
+    "start:linked": "node bin/actoviq-circuit-agent.js",
+    "link:dev": "npm link",
+    "unlink:dev": "npm unlink -g actoviq-circuit-agent",
+    "prepack": "npm run build && npm run clean:pack",
+    "clean:pack": "node -e \"var f=require('fs');f.rmSync('dist/tests',{recursive:true,force:true});var d=f.readdirSync('.',{recursive:true});d.filter(function(n){return n.endsWith('AGENTS.md')&&!n.startsWith('node_modules')}).forEach(function(n){f.rmSync(n)})\"",
+    "pack:dry-run": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "actoviq-agent-sdk": "0.1.11",
+    "netlistsvg": "^1.0.2",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

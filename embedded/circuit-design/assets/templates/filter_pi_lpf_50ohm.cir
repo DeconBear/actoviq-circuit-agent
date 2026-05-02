@@ -1,0 +1,32 @@
+* PI low-pass filter template (50-ohm terminated)
+* Primitive-only starter netlist with explicit in/out ports
+
+.param RSRC=50ohm RLOAD=50ohm
+.param C1=1.0p L1=8.0n C2=1.0p
+.param F_START=1MEG F_STOP=5G
+.param F_PASS=200MEG F_STOP_ATTN=2G
+
+Vin src 0 AC 1
+Rsrc src in {RSRC}
+
+* PI section (C-L-C)
+C1 in 0 {C1}
+L1 in out {L1}
+C2 out 0 {C2}
+
+Rload out 0 {RLOAD}
+
+.ac dec 200 {F_START} {F_STOP}
+
+* Metric placeholders (adjust to your spec definition)
+.meas ac g_pass_mag FIND mag(v(out)) AT={F_PASS}
+.meas ac g_stop_mag FIND mag(v(out)) AT={F_STOP_ATTN}
+.meas ac il_db FIND mag(v(out)) AT={F_PASS}
+.meas ac attn_stop_db FIND mag(v(out)) AT={F_STOP_ATTN}
+.meas ac bw_hz PARAM='0'
+.meas ac ripple_db PARAM='0'
+.meas ac rl_db PARAM='0'
+
+.print ac v(out)
+
+.end

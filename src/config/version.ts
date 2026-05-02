@@ -1,0 +1,1 @@
+export const ACTOVIQ_CIRCUIT_AGENT_VERSION = '0.1.1';

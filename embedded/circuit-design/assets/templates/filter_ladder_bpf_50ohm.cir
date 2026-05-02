@@ -1,0 +1,39 @@
+* Ladder band-pass filter template (50-ohm terminated)
+* Primitive-only starter netlist with explicit in/out ports
+
+.param RSRC=50ohm RLOAD=50ohm
+.param C_SER1=150p L_SH1=200n C_SER2=150p
+.param L_SER=160n C_SH=115p L_SER2=160n
+.param F_START=1MEG F_STOP=500MEG
+.param F_PASS_CENTER=30MEG F_STOP_LOW=5MEG F_STOP_HIGH=200MEG
+
+Vin src 0 AC 1
+Rsrc src in {RSRC}
+
+* High-pass shaping
+C_SER1 in n1 {C_SER1}
+L_SH1 n1 0 {L_SH1}
+C_SER2 n1 n2 {C_SER2}
+
+* Low-pass shaping
+L_SER n2 n3 {L_SER}
+C_SH n3 0 {C_SH}
+L_SER2 n3 out {L_SER2}
+
+Rload out 0 {RLOAD}
+
+.ac dec 300 {F_START} {F_STOP}
+
+* Metric placeholders (adjust to your spec definition)
+.meas ac g_pass_mag FIND mag(v(out)) AT={F_PASS_CENTER}
+.meas ac g_stop_low_mag FIND mag(v(out)) AT={F_STOP_LOW}
+.meas ac g_stop_high_mag FIND mag(v(out)) AT={F_STOP_HIGH}
+.meas ac il_db FIND mag(v(out)) AT={F_PASS_CENTER}
+.meas ac attn_stop_db FIND mag(v(out)) AT={F_STOP_HIGH}
+.meas ac bw_hz PARAM='0'
+.meas ac ripple_db PARAM='0'
+.meas ac rl_db PARAM='0'
+
+.print ac v(out)
+
+.end

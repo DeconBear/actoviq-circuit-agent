@@ -1,0 +1,16 @@
+* RC low-pass filter template
+* Target: cutoff and attenuation tuning
+
+.param R=1k
+.param C=159n
+
+Vin vin 0 AC 1
+R1 vin vout {R}
+C1 vout 0 {C}
+Rload vout 0 100k
+
+.op
+.ac dec 100 10 100k
+.meas ac gain_db FIND vdb(vout) AT=100
+.meas ac f_3db WHEN vdb(vout)=(vdb(vout)-3)
+.end

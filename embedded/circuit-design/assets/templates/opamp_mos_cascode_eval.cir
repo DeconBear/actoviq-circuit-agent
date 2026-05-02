@@ -1,0 +1,29 @@
+* Primitive-only MOS cascode op-amp style testbench
+* Use extract_opamp_metrics.py on AC + TRAN tables
+
+.param VDD=5
+.param IBIAS=350u
+
+VDD vdd 0 DC {VDD}
+VIN in 0 AC 1 PULSE(0 0.02 2u 20n 20n 8u 16u)
+VBIAS vb 0 DC 1.85
+I1 vdd ns DC {IBIAS}
+RS ns 0 1.2k
+
+M1 nd in ns 0 NMOS W=800u L=1u
+M2 no vb nd 0 NMOS W=500u L=1u
+RL vdd no 25k
+CINT no 0 1.5p
+CCOMP no in 0.8p
+ROUT no out 8ohm
+CLOAD out 0 12p
+RPROBE out 0 1Meg
+
+.model NMOS NMOS(LEVEL=1 VTO=0.8 KP=250u LAMBDA=0.03 CGSO=0.35n CGDO=0.35n)
+
+.op
+.ac dec 220 10 200Meg
+.tran 50n 60u
+.print ac v(out)
+.print tran v(out)
+.end

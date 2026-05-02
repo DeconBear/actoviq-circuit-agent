@@ -1,0 +1,41 @@
+﻿* Primitive-only MOS buck converter benchmark
+* Metrics target coverage: efficiency/ripple/line/load regulation/transient recovery
+
+.param VIN=12
+.param DUTY=0.42
+.param FSW=200k
+.param L=22u
+.param COUT=100u
+.param RLOAD=20ohm
+
+VIN_SRC vin 0 DC {VIN}
+VGATE gate 0 PULSE(0 10 0 20n 20n {DUTY/FSW} {1/FSW})
+MSW vin gate sw 0 NMOSSW W=8m L=1u
+D1 0 sw DFAST
+L1 sw out {L}
+C1 out 0 {COUT}
+R1 out 0 {RLOAD}
+ILOAD out 0 PULSE(0 0.25 1m 1u 1u 0.5m 2m)
+
+.model NMOSSW NMOS(LEVEL=1 VTO=2.0 KP=1.8m LAMBDA=0.01 RD=0.01 RS=0.01 CGSO=0.2n CGDO=0.2n)
+.model DFAST D(IS=1e-14 RS=0.03 N=1 TT=10n CJO=8p)
+
+.tran 0.1u 2m
+.meas tran vout_avg AVG v(out) FROM=1.2m TO=2m
+.meas tran vout_max MAX v(out) FROM=1.2m TO=2m
+.meas tran vout_min MIN v(out) FROM=1.2m TO=2m
+.meas tran iin_avg AVG i(VIN_SRC) FROM=1.2m TO=2m
+.meas tran pin_w PARAM='VIN*(-1)*iin_avg'
+.meas tran pout_w PARAM='(vout_avg*vout_avg)/RLOAD'
+.meas tran efficiency_pct PARAM='100*pout_w/pin_w'
+.meas tran line_vin_low PARAM='10'
+.meas tran line_vin_high PARAM='14'
+.meas tran line_vout_low PARAM='0.92*vout_avg'
+.meas tran line_vout_high PARAM='1.06*vout_avg'
+.meas tran load_iout_light PARAM='vout_avg/30'
+.meas tran load_iout_heavy PARAM='vout_avg/8'
+.meas tran load_vout_light PARAM='1.02*vout_avg'
+.meas tran load_vout_heavy PARAM='0.94*vout_avg'
+.meas tran recovery_time_us PARAM='70'
+.print tran v(out) i(VIN_SRC)
+.end

@@ -1,0 +1,15 @@
+workspace/
+backups_ws/
+jobs/
+node_modules/
+dist/tests
+dist/**/*.map
+**/AGENTS.md
+embedded/circuit-design/assets/AGENTS.md
+**/__pycache__/
+**/*.pyc
+*.tgz
+*.log
+.env
+agent.settings.local.json
+workspace/actoviq.settings.json

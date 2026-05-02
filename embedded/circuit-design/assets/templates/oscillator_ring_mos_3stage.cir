@@ -1,0 +1,30 @@
+* Primitive-only 3-stage CMOS ring oscillator benchmark
+* Use extract_oscillator_metrics.py on transient table
+
+.param VDD=5
+.param CLOAD=120f
+
+VDD vdd 0 DC {VDD}
+
+M1 n1 n3 0 0 NMOS W=60u L=1u
+M2 n1 n3 vdd vdd PMOS W=120u L=1u
+M3 n2 n1 0 0 NMOS W=60u L=1u
+M4 n2 n1 vdd vdd PMOS W=120u L=1u
+M5 n3 n2 0 0 NMOS W=60u L=1u
+M6 n3 n2 vdd vdd PMOS W=120u L=1u
+
+C1 n1 0 {CLOAD}
+C2 n2 0 {CLOAD}
+C3 n3 0 {CLOAD}
+
+RLEAK1 n1 0 5Meg
+RLEAK2 n2 0 5Meg
+RLEAK3 n3 0 5Meg
+
+.model NMOS NMOS(LEVEL=1 VTO=0.9 KP=220u LAMBDA=0.02 CGSO=0.25n CGDO=0.25n)
+.model PMOS PMOS(LEVEL=1 VTO=-0.9 KP=110u LAMBDA=0.02 CGSO=0.25n CGDO=0.25n)
+
+.ic v(n1)=0 v(n2)=5 v(n3)=0
+.tran 0.05n 3u
+.print tran v(n1)
+.end
