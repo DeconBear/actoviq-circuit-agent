@@ -182,7 +182,7 @@ function checkNgspice(): void {
       writeStdout(`ngspice: available -> ${envBin} (from NGSPICE_BIN)\n`);
       return;
     }
-    writeStdout(`ngspice: NGSPICE_BIN points to a missing path: ${envBin}\n`);
+    writeError(`ngspice: NGSPICE_BIN points to a missing path: ${envBin}\n`);
   }
 
   try {
@@ -194,7 +194,7 @@ function checkNgspice(): void {
         writeStdout(`ngspice: available -> ${configured} (from tool_paths.json)\n`);
         return;
       }
-      writeStdout(`ngspice: tool_paths.json ngspice_bin points to a missing path: ${configured}\n`);
+      writeError(`ngspice: tool_paths.json ngspice_bin points to a missing path: ${configured}\n`);
     }
   } catch {
     // tool_paths.json not readable, continue
@@ -206,22 +206,22 @@ function checkNgspice(): void {
     return;
   }
 
-  writeStdout('\n');
-  writeStdout('-- ngspice not available ----------------------------------------------------\n');
-  writeStdout('  The simulation stage requires ngspice. Configure it via one of:\n');
+  writeError('\n');
+  writeError('-- ngspice not available ----------------------------------------------------\n');
+  writeError('  The simulation stage requires ngspice. Configure it via one of:\n');
   if (process.platform === 'win32') {
-    writeStdout('    1. PowerShell (current session):\n');
-    writeStdout("         $env:NGSPICE_BIN = 'C:\\path\\to\\ngspice.exe'\n");
-    writeStdout('    2. PowerShell (persistent for current user):\n');
-    writeStdout("         [Environment]::SetEnvironmentVariable('NGSPICE_BIN','C:\\path\\to\\ngspice.exe','User')\n");
-    writeStdout("    3. Add the directory containing ngspice.exe to your system PATH\n");
+    writeError('    1. PowerShell (current session):\n');
+    writeError("         $env:NGSPICE_BIN = 'C:\\path\\to\\ngspice.exe'\n");
+    writeError('    2. PowerShell (persistent for current user):\n');
+    writeError("         [Environment]::SetEnvironmentVariable('NGSPICE_BIN','C:\\path\\to\\ngspice.exe','User')\n");
+    writeError("    3. Add the directory containing ngspice.exe to your system PATH\n");
   } else {
-    writeStdout('    1. export NGSPICE_BIN=/path/to/ngspice\n');
-    writeStdout('    2. Add ngspice to your system PATH\n');
+    writeError('    1. export NGSPICE_BIN=/path/to/ngspice\n');
+    writeError('    2. Add ngspice to your system PATH\n');
   }
-  writeStdout('  Download: https://ngspice.sourceforge.net/download.html\n');
-  writeStdout('-----------------------------------------------------------------------------\n');
-  writeStdout('\n');
+  writeError('  Download: https://ngspice.sourceforge.net/download.html\n');
+  writeError('-----------------------------------------------------------------------------\n');
+  writeError('\n');
 }
 
 export async function main(): Promise<void> {

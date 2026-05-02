@@ -78,6 +78,8 @@ Agent 运行过程中终端可能会出现红色报错信息。这些是由 Agen
 
 ### 4. 配置 Actoviq Provider
 
+`actoviq-circuit-agent` 通过 Anthropic 兼容接口调用模型（与 `https://api.anthropic.com/v1/messages` 相同的请求/响应格式）。任何暴露该接口的 provider —— Anthropic 官方、企业网关或自建代理 —— 只要接受 Anthropic 风格的鉴权头并返回 Anthropic 风格的流式响应，都可以使用。
+
 在运行 CLI 的目录中创建 Actoviq 配置，或者使用 `~/.actoviq/settings.json`。
 
 ```powershell

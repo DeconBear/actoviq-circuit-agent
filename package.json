@@ -1,6 +1,6 @@
 {
   "name": "actoviq-circuit-agent",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "type": "module",
   "description": "Interactive circuit design workflow built on actoviq-agent-sdk.",
   "license": "MIT",

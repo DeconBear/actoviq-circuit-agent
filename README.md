@@ -78,6 +78,8 @@ During agent execution you may see red error messages in the terminal. These are
 
 ### 4. Configure the Actoviq Provider
 
+`actoviq-circuit-agent` talks to the model through an Anthropic-compatible API (the same request/response format as `https://api.anthropic.com/v1/messages`). Any provider that exposes that interface — Anthropic itself, an enterprise gateway, or a self-hosted proxy — works as long as it accepts an Anthropic-style auth header and returns Anthropic-style streaming responses.
+
 Create an Actoviq config in the directory where you will run the CLI, or use `~/.actoviq/settings.json`.
 
 ```powershell
