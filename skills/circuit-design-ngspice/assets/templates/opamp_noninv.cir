@@ -1,0 +1,22 @@
+* Non-inverting op-amp template (simplified behavioral model)
+* Target: gain and bandwidth tuning example
+
+.param AV=1e5
+.param GBW=1e6
+.param R1=10k
+.param R2=90k
+.param CL=100p
+
+Vin vin 0 AC 1
+Eop vout_int 0 value = { limit(AV*(v(vp)-v(vn)), -12, 12) }
+Rout vout_int vout 10ohm
+Cload vout 0 {CL}
+R1f vn 0 {R1}
+R2f vout vn {R2}
+Rin vp vin 1m
+
+.op
+.ac dec 100 10 10Meg
+.meas ac gain_db FIND vdb(vout) AT=1k
+.meas ac gain_0db WHEN vdb(vout)=0
+.end

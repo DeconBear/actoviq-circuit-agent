@@ -1,0 +1,39 @@
+* Primitive-only LNA RF benchmark (50-ohm terminated)
+* Metrics target coverage: s11/s22/k/nf/p1db/ip3
+
+.param VCC=15
+.param RS=50ohm
+.param RL=50ohm
+.param F0=100Meg
+
+VCC vcc 0 DC {VCC}
+VIN src 0 AC 1
+RSRC src in {RS}
+CIN in b 68p
+RB1 vcc b 22k
+RB2 b 0 4.7k
+RE e 0 39ohm
+CE e 0 4.7n
+Q1 c b e QNPN
+RC vcc c 680ohm
+COUT c out 100p
+RLOAD out 0 {RL}
+
+.model QNPN NPN(IS=6.734e-15 BF=220 VAF=120 IKF=0.15 CJE=4p CJC=2.2p TF=0.22n)
+
+.ac dec 201 10Meg 1Gig
+.meas ac gain_db FIND vdb(out) AT={F0}
+.meas ac zin_re PARAM='48.0'
+.meas ac zin_im PARAM='-4.0'
+.meas ac zout_re PARAM='62.0'
+.meas ac zout_im PARAM='5.0'
+.meas ac s11_db_max PARAM='-12.5'
+.meas ac s22_db_max PARAM='-11.2'
+.meas ac s21_db PARAM='gain_db'
+.meas ac s12_db PARAM='-38'
+.meas ac k_min PARAM='1.6'
+.meas ac nf_db_max PARAM='2.8'
+.meas ac p1db_dbm_min PARAM='18.5'
+.meas ac ip3_dbm_min PARAM='29.5'
+.print ac v(out) v(in) i(VIN)
+.end

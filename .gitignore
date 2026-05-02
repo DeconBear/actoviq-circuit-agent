@@ -14,7 +14,7 @@ __pycache__/
 agent.settings.local.json
 actoviq.settings.json
 .env
-AGENTS.md
+/AGENTS.md
 USAGE.md
 WIKI.md
 repo-wiki/

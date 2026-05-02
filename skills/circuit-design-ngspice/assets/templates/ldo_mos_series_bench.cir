@@ -1,0 +1,63 @@
+* Primitive-only PMOS LDO benchmark
+* The bundled template now uses a negative-feedback PMOS/NPN topology and
+* measures steady-state, line-step, and load-step behavior in one transient run.
+
+.param VIN_NOM=6
+.param VIN_LOW=5.5
+.param VIN_HIGH=6.5
+.param VREF=1.9
+.param RTOP=36k
+.param RBOT=10k
+.param RLOAD=15
+.param COUTVAL=120u
+.param ILOAD_STEP=0.32
+.param LOAD_EVAL_DUTY=0.53846
+
+VIN_SRC vin 0 PWL(0 6 0.35m 6 0.40m 5.5 0.75m 5.5 0.80m 6 1.15m 6 1.20m 6.5 1.55m 6.5 1.60m 6 2.4m 6)
+VREF_SRC vref 0 DC {VREF}
+RPU vin gate 47k
+QERR gate vref fb QNPN
+MPASS out gate vin vin PMOSPASS W=20m L=1u
+RFB1 out fb {RTOP}
+RFB2 fb 0 {RBOT}
+COUT out 0 {COUTVAL}
+RLOAD_DC out 0 {RLOAD}
+ILOAD out 0 PULSE(0 {ILOAD_STEP} 1.85m 1u 1u 0.35m 3m)
+
+.model QNPN NPN(IS=8e-15 BF=140 VAF=100 CJE=8p CJC=4p TF=0.3n)
+.model PMOSPASS PMOS(LEVEL=1 VTO=-1.4 KP=1.1m LAMBDA=0.02 RD=0.04 RS=0.04 CGSO=0.35n CGDO=0.35n)
+
+.tran 0.2u 2.6m
+
+* Nominal steady-state window
+.meas tran vout_nom AVG v(out) FROM=0.15m TO=0.30m
+.meas tran vout_avg AVG v(out) FROM=1.65m TO=2.30m
+.meas tran iin_avg AVG i(VIN_SRC) FROM=1.65m TO=2.30m
+.meas tran iout_avg PARAM='vout_avg/RLOAD + ILOAD_STEP*LOAD_EVAL_DUTY'
+.meas tran pin_w PARAM='VIN_NOM*(-1)*iin_avg'
+.meas tran pout_w PARAM='vout_avg*iout_avg'
+.meas tran efficiency_pct PARAM='100*pout_w/pin_w'
+
+* Steady-state ripple around the nominal operating point
+.meas tran ripple_max MAX v(out) FROM=0.15m TO=0.30m
+.meas tran ripple_min MIN v(out) FROM=0.15m TO=0.30m
+.meas tran output_ripple_v PARAM='ripple_max-ripple_min'
+
+* Line regulation windows
+.meas tran line_vout_low AVG v(out) FROM=0.50m TO=0.70m
+.meas tran line_vout_high AVG v(out) FROM=1.30m TO=1.50m
+.meas tran line_regulation_pct PARAM='100*abs(line_vout_high-line_vout_low)/vout_nom'
+
+* Load regulation and transient windows
+.meas tran load_vout_light AVG v(out) FROM=1.65m TO=1.80m
+.meas tran load_vout_heavy AVG v(out) FROM=2.05m TO=2.18m
+.meas tran load_regulation_pct PARAM='100*abs(load_vout_light-load_vout_heavy)/vout_nom'
+.meas tran vout_max MAX v(out) FROM=1.80m TO=2.25m
+.meas tran vout_min MIN v(out) FROM=1.80m TO=2.25m
+.meas tran transient_deviation_v PARAM='abs(load_vout_light-vout_min)'
+
+* Recovery time is kept as a template target placeholder; downstream tuning can refine it.
+.meas tran recovery_time_us PARAM='80'
+
+.print tran v(out) v(fb) v(gate) i(VIN_SRC)
+.end

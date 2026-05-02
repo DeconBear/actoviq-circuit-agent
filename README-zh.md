@@ -198,6 +198,89 @@ Actoviq 配置按以下顺序加载：
 
 - `render/netlistsvg.svg`：所有电路的主要原理图输出。
 
+`netlistsvg` 是一个渲染必需的 Node.js 包，请全局安装：
+
+```powershell
+npm install -g netlistsvg
+```
+
+## 独立 Skill（Claude Code / Codex / Cursor）
+
+`skills/circuit-design-ngspice/` 目录包含一个可移植的、与 agent 运行时无关的
+skill，封装了相同的电路设计工作流，不依赖 `actoviq-agent-sdk`。可在 Claude
+Code、OpenAI Codex、Cursor 等任何可读取 Markdown prompt 并执行 shell 命令的
+AI 编程工具中直接使用。
+
+### 安装 Skill
+
+将 skill 目录复制或软链接到 agent 的 skill/插件目录。
+
+**Claude Code**：
+
+```powershell
+# 方案 A：注册为自定义斜杠命令
+mkdir C:\Users\<你的用户名>\.claude\skills\circuit-design-ngspice
+xcopy /E skills\circuit-design-ngspice C:\Users\<你的用户名>\.claude\skills\circuit-design-ngspice\
+```
+
+**Codex / OpenAI**：
+
+```powershell
+# agents/openai.yaml 提供了接口契约，将整个 skill 目录复制到 Codex skills 路径即可。
+```
+
+**在任意 agent 中手动使用**：
+
+将 `SKILL.md` 加载到 agent 上下文中，让它按说明执行。所有 Python 脚本位于
+`skills/circuit-design-ngspice/scripts/`，接受标准 `argparse` 参数。
+
+### 为 Skill 配置 ngspice
+
+Skill 按以下顺序解析 ngspice 路径：
+
+1. 传递给 Python 脚本的 `--ngspice-bin` 参数
+2. `NGSPICE_BIN` 环境变量
+3. skill 根目录下的 `tool_paths.json`
+4. 系统 `PATH`
+
+永久配置：既可以设置环境变量（见上面第 2 节），也可以编辑 skill 的
+`tool_paths.json`：
+
+```json
+{
+  "ngspice_bin": "E:/Program/ngspice-45.2_64/Spice64/bin/ngspice.exe"
+}
+```
+
+Skill 从自身目录读取 `tool_paths.json`，因此每份 skill 副本可以指向不同的
+ngspice 安装位置。
+
+### 为 Skill 安装 netlistsvg
+
+`render_netlistsvg.py` 脚本需要系统 PATH 中有 `netlistsvg` CLI：
+
+```powershell
+npm install -g netlistsvg
+```
+
+验证是否可用：
+
+```powershell
+netlistsvg --help
+```
+
+### 使用 Skill 运行设计
+
+让 agent 加载 `SKILL.md` 并提供电路需求：
+
+```
+请按照 skills/circuit-design-ngspice/SKILL.md 中的 circuit-design-ngspice skill 执行。
+设计一个 1 kHz RC 低通滤波器并渲染原理图。
+```
+
+Agent 会创建工作目录，执行 8 步工作流，产出所有设计文件，包括
+`design/design.final.cir`、`render/netlistsvg.svg` 和 `reports/final-summary.md`。
+
 ## 验证
 
 ```powershell

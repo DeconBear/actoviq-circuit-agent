@@ -198,6 +198,94 @@ The workflow generates schematics via the netlistsvg backend:
 
 - `render/netlistsvg.svg`: primary schematic output for all circuits.
 
+`netlistsvg` is a Node.js package required for rendering. Install it once:
+
+```powershell
+npm install -g netlistsvg
+```
+
+## Standalone Skill (Claude Code / Codex / Cursor)
+
+The `skills/circuit-design-ngspice/` directory contains a portable,
+agent-runtime-agnostic skill that captures the same circuit-design workflow
+without depending on `actoviq-agent-sdk`. It can be used directly inside
+Claude Code, OpenAI Codex, Cursor, or any AI coding tool that can read a
+Markdown prompt and execute shell commands.
+
+### Installing the Skill
+
+Copy or symlink the skill directory into the agent's skill/plugin folder.
+
+**Claude Code**:
+
+```powershell
+# Option A: register as a custom slash command
+mkdir C:\Users\<you>\.claude\skills\circuit-design-ngspice
+xcopy /E skills\circuit-design-ngspice C:\Users\<you>\.claude\skills\circuit-design-ngspice\
+```
+
+**Codex / OpenAI**:
+
+```powershell
+# The agents/openai.yaml provides the interface contract.
+# Copy the entire skill directory into the Codex skills path.
+```
+
+**Manual use with any agent**:
+
+Load `SKILL.md` into the agent's context and tell it to follow the
+instructions. All Python scripts are under `skills/circuit-design-ngspice/scripts/`
+and accept standard `argparse` arguments.
+
+### Configuring ngspice for the Skill
+
+The skill resolves ngspice in this order:
+
+1. `--ngspice-bin` argument passed directly to Python scripts
+2. `NGSPICE_BIN` environment variable
+3. `tool_paths.json` in the skill root directory
+4. system `PATH`
+
+To configure it permanently, either set the environment variable (see
+section 2 above) or edit the skill's `tool_paths.json`:
+
+```json
+{
+  "ngspice_bin": "E:/Program/ngspice-45.2_64/Spice64/bin/ngspice.exe"
+}
+```
+
+The skill reads `tool_paths.json` from its own directory, so each copy of
+the skill can point to a different ngspice installation.
+
+### Installing netlistsvg for the Skill
+
+The `render_netlistsvg.py` script requires the `netlistsvg` CLI on your
+system PATH:
+
+```powershell
+npm install -g netlistsvg
+```
+
+Verify it is reachable:
+
+```powershell
+netlistsvg --help
+```
+
+### Running a Design with the Skill
+
+Tell the agent to load `SKILL.md` and provide a circuit requirement:
+
+```
+Please follow the circuit-design-ngspice skill in skills/circuit-design-ngspice/SKILL.md.
+Design a 1 kHz RC low-pass filter and render the schematic.
+```
+
+The agent will create a workspace directory, run the 8-step workflow,
+and produce all design artifacts including `design/design.final.cir`,
+`render/netlistsvg.svg`, and `reports/final-summary.md`.
+
 ## Validation
 
 ```powershell
