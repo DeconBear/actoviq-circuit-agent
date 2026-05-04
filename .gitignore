@@ -1,5 +1,8 @@
 node_modules/
 dist/
+dist-electron/
+dist-renderer/
+release/
 workspace/
 backups_ws/
 jobs/

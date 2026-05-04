@@ -1,0 +1,35 @@
+appId: com.actoviq.circuit-agent
+productName: Actoviq Circuit Agent
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - dist-renderer/**/*
+  - embedded/**/*
+  - skills/**/*
+  - python/**/*
+  - bin/**/*
+  - package.json
+  - agent.settings.example.json
+  - README.md
+  - README-zh.md
+extraResources:
+  - from: embedded/
+    to: embedded/
+  - from: skills/
+    to: skills/
+win:
+  target:
+    - nsis
+  icon: assets/icon.png
+mac:
+  target:
+    - dmg
+  icon: assets/icon.png
+linux:
+  target:
+    - AppImage
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

@@ -1,7 +1,8 @@
 {
   "name": "actoviq-circuit-agent",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "type": "module",
+  "main": "dist-electron/main.js",
   "description": "Interactive circuit design workflow built on actoviq-agent-sdk.",
   "license": "MIT",
   "repository": {
@@ -18,10 +19,13 @@
   "files": [
     "bin",
     "dist",
+    "dist-electron",
+    "dist-renderer",
     "embedded/circuit-design/assets",
     "embedded/circuit-design/scripts/*.py",
     "embedded/circuit-design/tool_paths.json",
     "python",
+    "skills",
     "agent.settings.example.json",
     "README.md",
     "README-zh.md"
@@ -29,7 +33,13 @@
   "scripts": {
     "dev": "tsx src/app.ts",
     "build": "tsc -p tsconfig.json",
+    "build:src": "tsc -p tsconfig.json",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:renderer": "vite build",
+    "build:all": "npm run build:src && npm run build:electron && npm run build:renderer",
     "build:watch": "tsc -p tsconfig.json --watch",
+    "electron:dev": "concurrently -n src,electron,vite,app \"npm run build:src -- --watch --preserveWatchOutput\" \"npm run build:electron -- --watch --preserveWatchOutput\" \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:start": "electron .",
     "test": "npm run typecheck && npm run test:unit",
     "test:unit": "tsx src/tests/runTests.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -37,8 +47,8 @@
     "start:linked": "node bin/actoviq-circuit-agent.js",
     "link:dev": "npm link",
     "unlink:dev": "npm unlink -g actoviq-circuit-agent",
-    "prepack": "npm run build && npm run clean:pack",
-    "clean:pack": "node -e \"var f=require('fs');f.rmSync('dist/tests',{recursive:true,force:true});var d=f.readdirSync('.',{recursive:true});d.filter(function(n){return n.endsWith('AGENTS.md')&&!n.startsWith('node_modules')}).forEach(function(n){f.rmSync(n)})\"",
+    "prepack": "npm run build:all && npm run clean:pack",
+    "clean:pack": "node -e \"var f=require('fs');f.rmSync('dist/tests',{recursive:true,force:true});try{f.rmSync('dist-electron',{recursive:true,force:true});f.rmSync('dist-renderer',{recursive:true,force:true})}catch(e){};var d=f.readdirSync('.',{recursive:true});d.filter(function(n){return n.endsWith('AGENTS.md')&&!n.startsWith('node_modules')}).forEach(function(n){f.rmSync(n)})\"",
     "pack:dry-run": "npm pack --dry-run"
   },
   "dependencies": {
@@ -47,9 +57,21 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@types/archiver": "^7.0.0",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "archiver": "^7.0.1",
+    "concurrently": "^9.2.1",
+    "electron": "^41.5.0",
+    "electron-builder": "^26.8.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
     "tsx": "^4.20.6",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vite": "^8.0.10",
+    "wait-on": "^8.0.5"
   },
   "engines": {
     "node": ">=18"
