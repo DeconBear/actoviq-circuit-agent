@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useAppStore } from '../../store/appStore';
 
 interface Props {
   onClose: () => void;
@@ -6,12 +7,26 @@ interface Props {
 
 export function SettingsDialog({ onClose }: Props) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const setupWizardOpen = useAppStore((s) => s.setupWizardOpen);
 
   useEffect(() => {
-    if (window.electronAPI) {
-      window.electronAPI.getSettings().then(setSettings);
+    if (!window.electronAPI) {
+      setError('electronAPI not available — are you running in Electron?');
+      setLoading(false);
+      return;
     }
+    window.electronAPI.getSettings()
+      .then((s) => {
+        setSettings(s);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(`Failed to load settings: ${err?.message ?? String(err)}`);
+        setLoading(false);
+      });
   }, []);
 
   const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -21,12 +36,15 @@ export function SettingsDialog({ onClose }: Props) {
 
   const handleSave = useCallback(async () => {
     if (!settings || !window.electronAPI) return;
-    await window.electronAPI.saveSettings(settings);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      await window.electronAPI.saveSettings(settings);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Failed to save: ${msg}`);
+    }
   }, [settings]);
-
-  if (!settings) return null;
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -37,32 +55,47 @@ export function SettingsDialog({ onClose }: Props) {
         </div>
 
         <div style={styles.body}>
-          <section style={styles.section}>
-            <h3 style={styles.sectionTitle}>Actoviq Provider (Anthropic-compatible)</h3>
-            <Field label="Base URL" value={settings.actoviqBaseUrl} onChange={(v) => update('actoviqBaseUrl', v)} />
-            <Field label="Auth Token" value={settings.actoviqAuthToken} onChange={(v) => update('actoviqAuthToken', v)} type="password" />
-            <Field label="Opus Model" value={settings.opusModel} onChange={(v) => update('opusModel', v)} />
-            <Field label="Sonnet Model" value={settings.sonnetModel} onChange={(v) => update('sonnetModel', v)} />
-            <Field label="Haiku Model" value={settings.haikuModel} onChange={(v) => update('haikuModel', v)} />
-          </section>
+          {loading && (
+            <div style={styles.statusMsg}>Loading settings...</div>
+          )}
+          {error && (
+            <div style={styles.errorMsg}>
+              <p>{error}</p>
+              <button onClick={() => setError(null)} style={styles.dismissBtn}>Dismiss</button>
+            </div>
+          )}
+          {settings && (
+            <>
+              <section style={styles.section}>
+                <h3 style={styles.sectionTitle}>Actoviq Provider (Anthropic-compatible)</h3>
+                <Field label="Base URL" value={settings.actoviqBaseUrl} onChange={(v) => update('actoviqBaseUrl', v)} />
+                <Field label="Auth Token" value={settings.actoviqAuthToken} onChange={(v) => update('actoviqAuthToken', v)} type="password" />
+                <Field label="Opus Model" value={settings.opusModel} onChange={(v) => update('opusModel', v)} />
+                <Field label="Sonnet Model" value={settings.sonnetModel} onChange={(v) => update('sonnetModel', v)} />
+                <Field label="Haiku Model" value={settings.haikuModel} onChange={(v) => update('haikuModel', v)} />
+              </section>
 
-          <section style={styles.section}>
-            <h3 style={styles.sectionTitle}>Tool Paths</h3>
-            <Field label="ngspice Binary" value={settings.ngspiceBin} onChange={(v) => update('ngspiceBin', v)} placeholder="e.g. E:/Program/ngspice/bin/ngspice.exe" />
-          </section>
+              <section style={styles.section}>
+                <h3 style={styles.sectionTitle}>Tool Paths</h3>
+                <Field label="ngspice Binary" value={settings.ngspiceBin} onChange={(v) => update('ngspiceBin', v)} placeholder="e.g. E:/Program/ngspice/bin/ngspice.exe" />
+              </section>
 
-          <section style={styles.section}>
-            <h3 style={styles.sectionTitle}>Workspace</h3>
-            <Field label="Workspace Root" value={settings.workspaceRoot} onChange={(v) => update('workspaceRoot', v)} placeholder="Leave blank for default" />
-          </section>
+              <section style={styles.section}>
+                <h3 style={styles.sectionTitle}>Workspace</h3>
+                <Field label="Workspace Root" value={settings.workspaceRoot} onChange={(v) => update('workspaceRoot', v)} placeholder="Leave blank for default" />
+              </section>
+            </>
+          )}
         </div>
 
-        <div style={styles.footer}>
-          <button onClick={handleSave} style={styles.saveBtn}>
-            {saved ? 'Saved ✓' : 'Save'}
-          </button>
-          <button onClick={onClose} style={styles.cancelBtn}>Cancel</button>
-        </div>
+        {settings && (
+          <div style={styles.footer}>
+            <button onClick={handleSave} style={styles.saveBtn}>
+              {saved ? 'Saved ✓' : 'Save'}
+            </button>
+            <button onClick={onClose} style={styles.cancelBtn}>Cancel</button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -139,6 +172,30 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 18,
   },
   body: { padding: '16px 24px', overflowY: 'auto', flex: 1 },
+  statusMsg: { color: '#a0a0b0', textAlign: 'center', padding: 24 },
+  errorMsg: {
+    backgroundColor: '#4a1a1a',
+    border: '1px solid #e94560',
+    borderRadius: 6,
+    padding: '10px 14px',
+    marginBottom: 12,
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    color: '#e0e0e0',
+    fontSize: 13,
+  },
+  dismissBtn: {
+    background: '#e94560',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 4,
+    padding: '4px 10px',
+    cursor: 'pointer',
+    fontSize: 12,
+    whiteSpace: 'nowrap',
+  },
   section: { marginBottom: 20 },
   sectionTitle: {
     fontSize: 13,

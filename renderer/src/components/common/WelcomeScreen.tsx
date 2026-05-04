@@ -12,6 +12,7 @@ export function WelcomeScreen({ onStart, onClose }: Props) {
     const trimmed = text.trim();
     if (trimmed) {
       onStart(trimmed);
+      setText('');
     }
   };
 

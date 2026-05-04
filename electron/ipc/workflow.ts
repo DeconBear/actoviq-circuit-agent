@@ -1,4 +1,4 @@
-import { BrowserWindow, IpcMain } from 'electron';
+import { app, BrowserWindow, IpcMain } from 'electron';
 import { ChildProcess, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,27 +36,17 @@ function send(win: BrowserWindow | undefined, event: WorkflowEvent): void {
 }
 
 function resolveCliPath(): string {
-  if (process.env.NODE_ENV === 'development' || !appIsPackaged()) {
+  if (!app.isPackaged) {
     return path.resolve(PROJECT_ROOT, 'node_modules', '.bin', 'tsx');
   }
   return path.resolve(PROJECT_ROOT, 'bin', 'actoviq-circuit-agent.js');
 }
 
 function resolveCliArgs(): string[] {
-  if (process.env.NODE_ENV === 'development' || !appIsPackaged()) {
+  if (!app.isPackaged) {
     return [path.resolve(PROJECT_ROOT, 'src', 'app.ts')];
   }
   return [path.resolve(PROJECT_ROOT, 'bin', 'actoviq-circuit-agent.js')];
-}
-
-function appIsPackaged(): boolean {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { app } = require('electron');
-    return app.isPackaged;
-  } catch {
-    return false;
-  }
 }
 
 function buildStageNames(stages: string[]): { key: string; name: string }[] {

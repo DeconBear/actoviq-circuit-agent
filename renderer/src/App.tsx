@@ -79,22 +79,56 @@ export function App() {
         }
         case 'workflow-complete': {
           store.setIsRunning(false);
-          store.setStages(store.stages.map((s) => ({
-            ...s,
-            status: s.status === 'running' ? 'done' : s.status,
-          })));
-          store.addMessage({
-            id: `complete-${Date.now()}`,
-            role: 'system',
-            content: 'Workflow complete.',
-            timestamp: event.timestamp,
-          });
+          const exitCode = (event.data as { exitCode?: number; stopped?: boolean } | undefined);
+          if (exitCode?.stopped) {
+            store.addMessage({
+              id: `stopped-${Date.now()}`,
+              role: 'system',
+              content: 'Workflow stopped by user.',
+              timestamp: event.timestamp,
+            });
+          } else if (exitCode?.exitCode !== 0 && store.stages.length === 0) {
+            store.addMessage({
+              id: `config-error-${Date.now()}`,
+              role: 'system',
+              content: 'Workflow failed to start. Please check your API and ngspice configuration in Settings (⚙). If this is your first time, run the Setup Wizard.',
+              timestamp: event.timestamp,
+              isError: true,
+            });
+            store.setSettingsOpen(true);
+          } else {
+            store.setStages(store.stages.map((s) => ({
+              ...s,
+              status: s.status === 'running' ? 'done' : s.status,
+            })));
+            store.addMessage({
+              id: `complete-${Date.now()}`,
+              role: 'system',
+              content: exitCode?.exitCode === 0 ? 'Workflow complete.' : `Workflow exited with code ${exitCode?.exitCode}.`,
+              timestamp: event.timestamp,
+            });
+          }
           break;
         }
       }
     });
 
     return cleanup;
+  }, []);
+
+  // Check if settings are configured on first mount
+  useEffect(() => {
+    if (!window.electronAPI) return;
+    window.electronAPI.getSettings().then((s) => {
+      if (!s.actoviqAuthToken.trim()) {
+        store.setSetupWizardOpen(true);
+        store.setWelcomeOpen(false);
+      }
+    }).catch(() => {
+      // Settings not accessible — show setup wizard
+      store.setSetupWizardOpen(true);
+      store.setWelcomeOpen(false);
+    });
   }, []);
 
   // Refresh job artifacts when a job is selected
@@ -116,17 +150,29 @@ export function App() {
 
   const handleStartDesign = useCallback((requirement: string) => {
     store.resetWorkflow();
+    store.setWelcomeOpen(false);
+    store.setActiveTab('chat');
     store.addMessage({
       id: `user-${Date.now()}`,
       role: 'user',
       content: requirement,
       timestamp: Date.now(),
     });
-    window.electronAPI.startWorkflow({
-      requirement,
-      approvalPolicy: store.approvalPolicy,
-      jobName: undefined,
-    });
+    if (window.electronAPI) {
+      window.electronAPI.startWorkflow({
+        requirement,
+        approvalPolicy: store.approvalPolicy,
+        jobName: undefined,
+      });
+    } else {
+      store.addMessage({
+        id: `error-${Date.now()}`,
+        role: 'system',
+        content: 'Cannot start workflow: electronAPI not available.',
+        timestamp: Date.now(),
+        isError: true,
+      });
+    }
   }, [store.approvalPolicy]);
 
   const isRunning = store.isRunning;
