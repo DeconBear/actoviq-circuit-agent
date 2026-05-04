@@ -238,12 +238,29 @@ export function App() {
     const trimmed = text.trim();
     if (!trimmed) return;
 
+    // Auto-create conversation if none exists
+    let cid = store.conversationId;
+    if (!cid) {
+      cid = store.newConversation();
+    }
+
+    // Update conversation metadata
+    store.upsertConversation({
+      id: cid,
+      title: trimmed.slice(0, 50),
+      lastMessage: trimmed,
+      messageCount: store.messages.length + 1,
+      updatedAt: Date.now(),
+      jobId: currentJobIdRef.current ?? undefined,
+    });
+
     // Add user message to chat
     store.addMessage({
       id: `user-${Date.now()}`,
       role: 'user',
       content: trimmed,
       timestamp: Date.now(),
+      conversationId: cid,
     });
 
     // If workflow is already running, no intent check needed
@@ -264,7 +281,12 @@ export function App() {
     }
 
     try {
-      const result = await window.electronAPI.sendChatMessage(trimmed);
+      // Build conversation history for context
+      const history = store.messages.map((m) => ({
+        role: m.role === 'user' ? 'user' as const : 'assistant' as const,
+        content: m.content,
+      }));
+      const result = await window.electronAPI.sendChatMessage(trimmed, history);
 
       // Show the agent's chat response
       store.addMessage({
@@ -325,10 +347,23 @@ export function App() {
               </button>
             ))}
             <div style={styles.tabBarRight}>
+              {store.isRunning && (
+                <button
+                  onClick={() => {
+                    window.electronAPI?.stopWorkflow();
+                    store.setIsRunning(false);
+                  }}
+                  style={styles.stopBtn}
+                  title="Stop workflow"
+                >
+                  ⏹ Stop
+                </button>
+              )}
               <select
                 value={store.approvalPolicy}
                 onChange={(e) => store.setApprovalPolicy(e.target.value as typeof store.approvalPolicy)}
                 style={styles.policySelect}
+                disabled={store.isRunning}
               >
                 <option value="manual">Manual</option>
                 <option value="execution">Execution</option>
@@ -447,6 +482,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     padding: '3px 8px',
     fontSize: 12,
+  },
+  stopBtn: {
+    padding: '4px 12px',
+    backgroundColor: '#e94560',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 4,
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
   },
   folderBtn: {
     background: 'transparent',

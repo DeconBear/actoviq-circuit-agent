@@ -23,7 +23,7 @@ declare global {
       getSettings(): Promise<AppSettings>;
       saveSettings(settings: AppSettings): Promise<void>;
       getAppVersion(): Promise<string>;
-      sendChatMessage(message: string): Promise<ChatResponse>;
+      sendChatMessage(message: string, history?: Array<{ role: string; content: string }>): Promise<ChatResponse>;
     };
   }
 }

@@ -10,6 +10,9 @@ export function ChatView({ onSend }: Props) {
   const messages = useAppStore((s) => s.messages);
   const outputText = useAppStore((s) => s.outputText);
   const isRunning = useAppStore((s) => s.isRunning);
+  const conversationId = useAppStore((s) => s.conversationId);
+  const conversations = useAppStore((s) => s.conversations);
+  const currentConv = conversations.find((c) => c.id === conversationId);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,8 +27,27 @@ export function ChatView({ onSend }: Props) {
     }
   };
 
+  const handleNewConversation = () => {
+    useAppStore.getState().newConversation();
+  };
+
   return (
     <div style={styles.container}>
+      <div style={styles.convHeader}>
+        <div style={styles.convInfo}>
+          <span style={styles.convTitle}>
+            {currentConv ? currentConv.title : (messages.length > 0 ? messages[0].content.slice(0, 40) : 'New Conversation')}
+          </span>
+          {currentConv && (
+            <span style={styles.convMeta}>
+              {currentConv.messageCount} messages · {new Date(currentConv.updatedAt).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+        <button onClick={handleNewConversation} style={styles.newConvBtn} title="New conversation">
+          + New
+        </button>
+      </div>
       <div style={styles.messages}>
         {messages.map((msg) => (
           <div
@@ -86,6 +108,38 @@ export function ChatView({ onSend }: Props) {
 
 const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', flexDirection: 'column', height: '100%' },
+  convHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '8px 16px',
+    backgroundColor: '#0f3460',
+    borderBottom: '1px solid #16213e',
+    minHeight: 40,
+  },
+  convInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+  },
+  convTitle: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#e0e0e0',
+  },
+  convMeta: {
+    fontSize: 10,
+    color: '#808090',
+  },
+  newConvBtn: {
+    padding: '4px 14px',
+    backgroundColor: '#1a1a2e',
+    color: '#e0e0e0',
+    border: '1px solid #e94560',
+    borderRadius: 4,
+    cursor: 'pointer',
+    fontSize: 12,
+  },
   messages: {
     flex: 1,
     overflowY: 'auto',

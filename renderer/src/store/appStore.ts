@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatMessage, StageState, ToolCallEntry } from '../types';
+import type { ChatMessage, ConversationSummary, StageState, ToolCallEntry } from '../types';
 
 export type TabKey = 'chat' | 'netlist' | 'svg' | 'simulation' | 'report';
 export type ApprovalPolicy = 'manual' | 'execution' | 'all';
@@ -31,6 +31,10 @@ interface AppState {
   toolCalls: ToolCallEntry[];
   isRunning: boolean;
   outputText: string;
+  conversationId: string;
+
+  // Conversations
+  conversations: ConversationSummary[];
 
   // Content
   netlistContent: string;
@@ -65,6 +69,10 @@ interface AppState {
   setReportContent: (content: string) => void;
   setSimulationData: (data: SimulationMetric[] | null) => void;
   resetWorkflow: () => void;
+  setConversationId: (id: string) => void;
+  newConversation: () => string;
+  upsertConversation: (conv: ConversationSummary) => void;
+  setConversations: (convs: ConversationSummary[]) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -81,6 +89,8 @@ export const useAppStore = create<AppState>((set) => ({
   toolCalls: [],
   isRunning: false,
   outputText: '',
+  conversationId: '',
+  conversations: [],
   netlistContent: '',
   svgContent: '',
   reportContent: '',
@@ -124,4 +134,18 @@ export const useAppStore = create<AppState>((set) => ({
       messages: [],
       stages: [],
     }),
+  setConversationId: (id) => set({ conversationId: id }),
+  newConversation: () => {
+    const id = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    set({ conversationId: id, messages: [] });
+    return id;
+  },
+  upsertConversation: (conv) =>
+    set((s) => ({
+      conversations: [
+        conv,
+        ...s.conversations.filter((c) => c.id !== conv.id),
+      ].slice(0, 50),
+    })),
+  setConversations: (convs) => set({ conversations: convs }),
 }));

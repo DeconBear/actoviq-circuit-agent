@@ -101,8 +101,8 @@ const electronAPI = {
     return ipcRenderer.invoke('app:version');
   },
 
-  sendChatMessage(message: string): Promise<ChatResponse> {
-    return ipcRenderer.invoke('chat:send', message);
+  sendChatMessage(message: string, history?: Array<{ role: string; content: string }>): Promise<ChatResponse> {
+    return ipcRenderer.invoke('chat:send', message, history);
   },
 };
 

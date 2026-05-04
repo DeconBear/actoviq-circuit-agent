@@ -17,6 +17,9 @@ interface Props {
 
 export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDesign }: Props) {
   const [jobs, setJobs] = useState<JobEntry[]>([]);
+  const conversations = useAppStore((s) => s.conversations);
+  const conversationId = useAppStore((s) => s.conversationId);
+  const setConversationId = useAppStore((s) => s.setConversationId);
 
   const refreshJobs = useCallback(async () => {
     if (!window.electronAPI) return;
@@ -32,6 +35,10 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
     const interval = setInterval(refreshJobs, 30000);
     return () => clearInterval(interval);
   }, [refreshJobs]);
+
+  const handleSelectConversation = useCallback((convId: string) => {
+    setConversationId(convId);
+  }, [setConversationId]);
 
   const handleExport = useCallback(async (jobId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -68,6 +75,27 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
       </div>
       <button onClick={onNewDesign} style={styles.newBtn}>+ New Design</button>
       <div style={styles.list}>
+        {conversations.length > 0 && (
+          <>
+            <div style={styles.sectionHeader}>Conversations</div>
+            {conversations.slice(0, 5).map((conv) => (
+              <div
+                key={conv.id}
+                onClick={() => handleSelectConversation(conv.id)}
+                style={{
+                  ...styles.convItem,
+                  ...(conversationId === conv.id ? styles.convItemActive : {}),
+                }}
+              >
+                <div style={styles.convItemTitle}>{conv.title}</div>
+                <div style={styles.convItemMeta}>
+                  {conv.messageCount} msgs · {new Date(conv.updatedAt).toLocaleTimeString()}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+        <div style={styles.sectionHeader}>Jobs</div>
         {jobs.length === 0 && (
           <div style={styles.empty}>No jobs yet</div>
         )}
@@ -200,4 +228,28 @@ const styles: Record<string, React.CSSProperties> = {
   status: { fontWeight: 600 },
   date: { color: '#606080' },
   empty: { padding: 20, textAlign: 'center', color: '#606070', fontSize: 13 },
+  sectionHeader: {
+    padding: '10px 14px 6px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: '#808090',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  convItem: {
+    padding: '8px 14px',
+    cursor: 'pointer',
+    borderBottom: '1px solid #0f346033',
+    transition: 'background 0.1s',
+  },
+  convItemActive: { backgroundColor: '#0f3460' },
+  convItemTitle: {
+    fontSize: 12,
+    fontWeight: 500,
+    color: '#e0e0e0',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  convItemMeta: { fontSize: 10, color: '#606080', marginTop: 2 },
 };
