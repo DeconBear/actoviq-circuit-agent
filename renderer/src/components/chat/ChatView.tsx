@@ -61,16 +61,15 @@ export function ChatView({ onSend }: Props) {
           }}
           placeholder={
             isRunning
-              ? 'Workflow running...'
+              ? 'Workflow running — type to continue the conversation...'
               : 'Describe your circuit (e.g. Design a 1 kHz RC low-pass filter)'
           }
           style={styles.input}
-          disabled={isRunning}
         />
         <button
           onClick={handleSend}
           style={styles.sendBtn}
-          disabled={isRunning || !input.trim()}
+          disabled={!input.trim()}
         >
           Send
         </button>

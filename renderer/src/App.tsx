@@ -148,7 +148,6 @@ export function App() {
     store.resetWorkflow();
     store.setActiveJobId(null);
     store.setActiveTab('chat');
-    store.setIsRunning(false);
   }, []);
 
   // Start workflow from chat message
@@ -156,10 +155,22 @@ export function App() {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    // Reset for a fresh design if not currently running
-    if (!store.isRunning) {
-      store.resetWorkflow();
+    // If already running, just add the message as follow-up (don't start new workflow)
+    if (store.isRunning) {
+      store.addMessage({
+        id: `user-${Date.now()}`,
+        role: 'user',
+        content: trimmed,
+        timestamp: Date.now(),
+      });
+      return;
     }
+
+    // Starting a new design — reset first, then immediately set running
+    store.resetWorkflow();
+    store.setIsRunning(true);
+    store.setWelcomeOpen(false);
+    store.setActiveTab('chat');
 
     store.addMessage({
       id: `user-${Date.now()}`,
@@ -175,6 +186,7 @@ export function App() {
         jobName: undefined,
       });
     } else {
+      store.setIsRunning(false);
       store.addMessage({
         id: `error-${Date.now()}`,
         role: 'system',
