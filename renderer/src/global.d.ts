@@ -13,6 +13,7 @@ declare global {
       resumeWorkflow(): void;
       stopWorkflow(): void;
       retryStage(): void;
+      sendConfirmResponse(answer: 'y' | 'n'): void;
       onWorkflowEvent(callback: (event: WorkflowEvent) => void): () => void;
       readJobFile(jobId: string, relativePath: string): Promise<string>;
       writeJobFile(jobId: string, relativePath: string, content: string): Promise<void>;

@@ -55,6 +55,10 @@ const electronAPI = {
     ipcRenderer.send('workflow:retry-stage');
   },
 
+  sendConfirmResponse(answer: 'y' | 'n'): void {
+    ipcRenderer.send('workflow:confirm-response', answer);
+  },
+
   onWorkflowEvent(callback: (event: WorkflowEvent) => void): () => void {
     const handler = (_event: Electron.IpcRendererEvent, data: WorkflowEvent): void => {
       callback(data);

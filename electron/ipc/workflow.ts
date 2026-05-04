@@ -25,9 +25,13 @@ const STAGE_LABELS: Record<string, string> = {
   'workflow-lead': 'Final Summary',
 };
 
+// Build a list of all stage display labels for prompt matching
+const STAGE_DISPLAY_LABELS = Object.values(STAGE_LABELS);
+
 let currentProcess: ChildProcess | null = null;
 let isPaused = false;
 let lastStartParams: Record<string, unknown> | null = null;
+let pendingConfirmResolve: ((answer: string) => void) | null = null;
 
 function send(win: BrowserWindow | undefined, event: WorkflowEvent): void {
   if (win && !win.isDestroyed()) {
@@ -37,7 +41,6 @@ function send(win: BrowserWindow | undefined, event: WorkflowEvent): void {
 
 function resolveCliPath(): string {
   if (!app.isPackaged) {
-    // Use tsx's ESM CLI entry directly — avoids the bash wrapper in .bin/
     return path.resolve(PROJECT_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   }
   return path.resolve(PROJECT_ROOT, 'bin', 'actoviq-circuit-agent.js');
@@ -61,7 +64,6 @@ const ALL_STAGE_KEYS = Object.keys(STAGE_LABELS);
 
 // Detect tool calls from output text patterns
 function detectToolCalls(text: string, win: BrowserWindow | undefined, currentStage: string): void {
-  // Match patterns like: "Running tool: <name>" or "[tool] <name>" or "Tool call: <name>"
   const patterns = [
     /Running tool:\s*(\S+)/gi,
     /\[tool\]\s*(\S+)/gi,
@@ -81,6 +83,36 @@ function detectToolCalls(text: string, win: BrowserWindow | undefined, currentSt
       });
     }
   }
+}
+
+// Detect the CLI's y/n confirmation prompt: "从 X 切换到 Y 前请输入 y 确认: "
+function detectConfirmPrompt(text: string): { currentStage: string; nextStage: string } | null {
+  // Build regex dynamically from known stage labels
+  const labelPattern = STAGE_DISPLAY_LABELS.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const regex = new RegExp(
+    `从\\s+(${labelPattern})\\s+切换到\\s+(${labelPattern})\\s+前请输入\\s*y\\s*确认`,
+    'i',
+  );
+  const match = regex.exec(text);
+  if (match && match[1] && match[2]) {
+    return { currentStage: match[1], nextStage: match[2] };
+  }
+  return null;
+}
+
+async function handleConfirmPrompt(
+  win: BrowserWindow,
+  currentStage: string,
+  nextStage: string,
+): Promise<string> {
+  return new Promise((resolve) => {
+    pendingConfirmResolve = resolve;
+    send(win, {
+      type: 'confirm-request',
+      data: { currentStage, nextStage },
+      timestamp: Date.now(),
+    });
+  });
 }
 
 function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): void {
@@ -114,8 +146,6 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
   }
 
   const cliPath = resolveCliPath();
-  // In dev, use system Node.js to run tsx (Electron's process.execPath is electron.exe, not node.exe).
-  // In production, use the bundled JS file which can be run with Electron's embedded Node.
   const nodeBin = app.isPackaged ? process.execPath : 'node';
   const proc = spawn(nodeBin, [cliPath, ...args], {
     cwd: process.cwd(),
@@ -132,11 +162,63 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
   let currentStage = '';
   let stageOutput = '';
 
-  proc.stdout.on('data', (chunk: Buffer) => {
+  proc.stdout.on('data', async (chunk: Buffer) => {
     const text = chunk.toString('utf8');
     if (isPaused) return;
 
-    // Detect stage transitions
+    // Check for confirmation prompt BEFORE stage detection
+    const confirmMatch = detectConfirmPrompt(text);
+    if (confirmMatch) {
+      // Complete the previous stage
+      if (currentStage && stageOutput) {
+        send(win, {
+          type: 'stage-complete',
+          stageKey: currentStage,
+          stageName: STAGE_LABELS[currentStage] ?? currentStage,
+          data: { output: stageOutput },
+          timestamp: Date.now(),
+        });
+      }
+      // Send output up to the prompt (without the prompt itself)
+      const promptIndex = text.indexOf('从 ');
+      if (promptIndex > 0) {
+        send(win, {
+          type: 'output',
+          data: { text: text.slice(0, promptIndex) },
+          stageKey: currentStage || undefined,
+          timestamp: Date.now(),
+        });
+      }
+
+      // Resolve next stage key from label
+      const nextKey = ALL_STAGE_KEYS.find((k) => STAGE_LABELS[k] === confirmMatch.nextStage) ?? '';
+      currentStage = nextKey;
+      stageOutput = '';
+
+      // Ask the renderer for confirmation
+      const answer = await handleConfirmPrompt(win, confirmMatch.currentStage, confirmMatch.nextStage);
+
+      if (answer === 'y') {
+        proc.stdin.write('y\n');
+        send(win, {
+          type: 'stage-start',
+          stageKey: nextKey,
+          stageName: confirmMatch.nextStage,
+          timestamp: Date.now(),
+        });
+      } else {
+        proc.stdin.write('n\n');
+        // If rejected, the CLI will handle the fallback
+        send(win, {
+          type: 'confirm-rejected',
+          data: { currentStage: confirmMatch.currentStage, nextStage: confirmMatch.nextStage },
+          timestamp: Date.now(),
+        });
+      }
+      return;
+    }
+
+    // Detect stage transitions (auto-approve path)
     for (const key of ALL_STAGE_KEYS) {
       const label = STAGE_LABELS[key] ?? key;
       if (text.includes(`[auto-approve:`) && text.includes(label)) {
@@ -260,12 +342,17 @@ export function registerWorkflowHandlers(ipcMain: IpcMain): void {
   ipcMain.on('workflow:retry-stage', () => {
     const win = BrowserWindow.getAllWindows()[0];
     if (!win) return;
-    // Kill current process and restart the workflow
     killProcess();
     isPaused = false;
     if (lastStartParams) {
-      // Small delay to let process cleanup complete
       setTimeout(() => startWorkflow(win, lastStartParams!), 200);
+    }
+  });
+
+  ipcMain.on('workflow:confirm-response', (_event, answer: 'y' | 'n') => {
+    if (pendingConfirmResolve) {
+      pendingConfirmResolve(answer);
+      pendingConfirmResolve = null;
     }
   });
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ChatView } from './components/chat/ChatView';
 import { NetlistEditor } from './components/netlist/NetlistEditor';
 import { SvgViewer } from './components/schematic/SvgViewer';
@@ -6,6 +6,7 @@ import { SimulationTab } from './components/simulation/SimulationTab';
 import { ReportPreview } from './components/report/ReportPreview';
 import { Sidebar } from './components/layout/Sidebar';
 import { StagePanel } from './components/layout/StagePanel';
+import { StageConfirmDialog } from './components/common/StageConfirmDialog';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { SetupWizard } from './components/settings/SetupWizard';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -22,6 +23,10 @@ const tabLabels: Record<TabKey, string> = {
 
 export function App() {
   const store = useAppStore();
+  const [confirmState, setConfirmState] = useState<{
+    currentStage: string;
+    nextStage: string;
+  } | null>(null);
 
   // Listen for workflow events
   useEffect(() => {
@@ -73,6 +78,23 @@ export function App() {
           if (data?.tool) {
             store.addToolCall({ tool: data.tool!, stageKey: data.stageKey ?? '', timestamp: event.timestamp });
           }
+          break;
+        }
+        case 'confirm-request': {
+          const crData = event.data as { currentStage: string; nextStage: string };
+          if (crData?.currentStage && crData?.nextStage) {
+            setConfirmState({ currentStage: crData.currentStage, nextStage: crData.nextStage });
+          }
+          break;
+        }
+        case 'confirm-rejected': {
+          const cjData = event.data as { currentStage: string; nextStage: string } | undefined;
+          store.addMessage({
+            id: `confirm-skip-${Date.now()}`,
+            role: 'system',
+            content: `Skipped stage transition: ${cjData?.currentStage ?? ''} → ${cjData?.nextStage ?? ''}`,
+            timestamp: event.timestamp,
+          });
           break;
         }
         case 'workflow-complete': {
@@ -283,6 +305,21 @@ export function App() {
 
         {store.setupWizardOpen && (
           <SetupWizard onClose={() => store.setSetupWizardOpen(false)} />
+        )}
+
+        {confirmState && (
+          <StageConfirmDialog
+            currentStage={confirmState.currentStage}
+            nextStage={confirmState.nextStage}
+            onApprove={() => {
+              window.electronAPI?.sendConfirmResponse('y');
+              setConfirmState(null);
+            }}
+            onReject={() => {
+              window.electronAPI?.sendConfirmResponse('n');
+              setConfirmState(null);
+            }}
+          />
         )}
       </div>
     </ErrorBoundary>
