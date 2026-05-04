@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatView } from './components/chat/ChatView';
 import { NetlistEditor } from './components/netlist/NetlistEditor';
 import { SvgViewer } from './components/schematic/SvgViewer';
@@ -27,6 +27,12 @@ export function App() {
     currentStage: string;
     nextStage: string;
   } | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const currentJobIdRef = useRef<string | null>(null);
+  const setJobId = useCallback((id: string | null) => {
+    setCurrentJobId(id);
+    currentJobIdRef.current = id;
+  }, []);
 
   // Listen for workflow events
   useEffect(() => {
@@ -37,6 +43,14 @@ export function App() {
         case 'stage-list': {
           const list = (event.data as { stageList: StageDef[] }).stageList;
           store.setStages(list.map((s) => ({ key: s.key, name: s.name, status: 'waiting' as const })));
+          break;
+        }
+        case 'job-info': {
+          const jiData = event.data as { jobId: string };
+          if (jiData?.jobId) {
+            setJobId(jiData.jobId);
+            store.setActiveJobId(jiData.jobId);
+          }
           break;
         }
         case 'stage-start': {
@@ -54,6 +68,27 @@ export function App() {
           store.updateStage(event.stageKey!, 'done');
           const output = (event.data as { output: string } | undefined)?.output ?? '';
           if (output) store.appendOutput(output);
+          // Auto-refresh relevant artifact for the completed stage
+          const jid = currentJobIdRef.current;
+          if (jid && window.electronAPI) {
+            const key = event.stageKey;
+            if (key === 'netlist-designer') {
+              window.electronAPI.readJobFile(jid, 'design/design.final.cir').then((c) => store.setNetlistContent(c || '')).catch(() => {});
+            } else if (key === 'netlistsvg-renderer') {
+              window.electronAPI.readJobFile(jid, 'render/netlistsvg.svg').then((c) => store.setSvgContent(c || '')).catch(() => {});
+            } else if (key === 'simulation-verifier') {
+              window.electronAPI.readJobFile(jid, 'verification/final-simulation/metrics.json').then((raw) => {
+                if (raw) {
+                  try {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed)) store.setSimulationData(parsed);
+                  } catch { store.setSimulationData(null); }
+                }
+              }).catch(() => {});
+            } else if (key === 'workflow-lead') {
+              window.electronAPI.readJobFile(jid, 'reports/final-summary.md').then((c) => store.setReportContent(c || '')).catch(() => {});
+            }
+          }
           break;
         }
         case 'stage-error': {
@@ -128,6 +163,21 @@ export function App() {
               timestamp: event.timestamp,
             });
           }
+          // Refresh all artifacts after workflow ends
+          if (currentJobId && window.electronAPI) {
+            const jid = currentJobIdRef.current;
+            window.electronAPI.readJobFile(jid, 'design/design.final.cir').then((c) => store.setNetlistContent(c || '')).catch(() => {});
+            window.electronAPI.readJobFile(jid, 'render/netlistsvg.svg').then((c) => store.setSvgContent(c || '')).catch(() => {});
+            window.electronAPI.readJobFile(jid, 'reports/final-summary.md').then((c) => store.setReportContent(c || '')).catch(() => {});
+            window.electronAPI.readJobFile(jid, 'verification/final-simulation/metrics.json').then((raw) => {
+              if (raw) {
+                try {
+                  const parsed = JSON.parse(raw);
+                  if (Array.isArray(parsed)) store.setSimulationData(parsed);
+                } catch { store.setSimulationData(null); }
+              }
+            }).catch(() => {});
+          }
           break;
         }
       }
@@ -151,6 +201,7 @@ export function App() {
   // Refresh job artifacts when a job is selected
   const refreshJobArtifacts = useCallback(async (jobId: string) => {
     store.setActiveJobId(jobId);
+    setJobId(jobId);
     try {
       const netlist = await window.electronAPI.readJobFile(jobId, 'design/design.final.cir');
       store.setNetlistContent(netlist || '');
@@ -163,12 +214,22 @@ export function App() {
       const report = await window.electronAPI.readJobFile(jobId, 'reports/final-summary.md');
       store.setReportContent(report || '');
     } catch { store.setReportContent(''); }
+    try {
+      const metricsRaw = await window.electronAPI.readJobFile(jobId, 'verification/final-simulation/metrics.json');
+      if (metricsRaw) {
+        const parsed = JSON.parse(metricsRaw);
+        if (Array.isArray(parsed)) {
+          store.setSimulationData(parsed);
+        }
+      }
+    } catch { store.setSimulationData(null); }
   }, []);
 
   // "New Design" — reset and go to chat
   const handleNewDesign = useCallback(() => {
     store.resetWorkflow();
     store.setActiveJobId(null);
+    setJobId(null);
     store.setActiveTab('chat');
   }, []);
 
@@ -273,6 +334,15 @@ export function App() {
                 <option value="execution">Execution</option>
                 <option value="all">All Auto</option>
               </select>
+              {currentJobId && (
+                <button
+                  onClick={() => window.electronAPI?.openJobFolder(currentJobId)}
+                  style={styles.folderBtn}
+                  title="Open working directory"
+                >
+                  📂
+                </button>
+              )}
               <button
                 onClick={() => store.setSettingsOpen(true)}
                 style={styles.settingsBtn}
@@ -377,6 +447,14 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     padding: '3px 8px',
     fontSize: 12,
+  },
+  folderBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: '#a0a0b0',
+    cursor: 'pointer',
+    fontSize: 14,
+    padding: '2px 6px',
   },
   settingsBtn: {
     background: 'transparent',

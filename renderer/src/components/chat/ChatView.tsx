@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
 
 interface Props {
@@ -10,6 +10,11 @@ export function ChatView({ onSend }: Props) {
   const messages = useAppStore((s) => s.messages);
   const outputText = useAppStore((s) => s.outputText);
   const isRunning = useAppStore((s) => s.isRunning);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, outputText]);
 
   const handleSend = () => {
     const trimmed = input.trim();
@@ -47,6 +52,7 @@ export function ChatView({ onSend }: Props) {
             <p>Type a circuit requirement below to start designing.</p>
           </div>
         )}
+        <div ref={bottomRef} />
       </div>
 
       <div style={styles.inputBar}>

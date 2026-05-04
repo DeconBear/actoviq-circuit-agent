@@ -8,7 +8,7 @@ export interface WorkflowParams {
 }
 
 export interface WorkflowEvent {
-  type: 'stage-start' | 'stage-complete' | 'stage-error' | 'stream-chunk' | 'tool-call' | 'workflow-complete';
+  type: 'stage-start' | 'stage-complete' | 'stage-error' | 'stream-chunk' | 'tool-call' | 'workflow-complete' | 'job-info' | 'confirm-request' | 'confirm-rejected';
   stageKey?: string;
   stageName?: string;
   data?: unknown;

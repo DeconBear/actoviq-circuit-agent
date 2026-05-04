@@ -15,14 +15,14 @@ interface WorkflowEvent {
 }
 
 const STAGE_LABELS: Record<string, string> = {
-  'solution-analyst': 'Requirements Analysis',
-  'doc-writer': 'Technical Documentation',
-  librarian: 'Template Selection',
-  architect: 'Architecture Planning',
-  'netlist-designer': 'Netlist Design',
-  'simulation-verifier': 'Simulation & Verification',
-  'netlistsvg-renderer': 'Schematic Rendering',
-  'workflow-lead': 'Final Summary',
+  'solution-analyst': '1. Solution Analyst',
+  'doc-writer': '2. Doc Writer',
+  librarian: '3. Librarian',
+  architect: '4. Architect',
+  'netlist-designer': '5. Netlist Designer',
+  'simulation-verifier': '6. Simulation Verifier',
+  'netlistsvg-renderer': '7. Netlistsvg Renderer',
+  'workflow-lead': '8. Workflow Lead',
 };
 
 // Build a list of all stage display labels for prompt matching
@@ -161,10 +161,24 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
 
   let currentStage = '';
   let stageOutput = '';
+  let detectedJobId = '';
 
   proc.stdout.on('data', async (chunk: Buffer) => {
     const text = chunk.toString('utf8');
     if (isPaused) return;
+
+    // Detect job ID from [workspace] .../jobs/<jobId> output
+    if (!detectedJobId) {
+      const wsMatch = text.match(/\[workspace\]\s*(.+)/);
+      if (wsMatch && wsMatch[1]) {
+        detectedJobId = path.basename(wsMatch[1].trim());
+        send(win, {
+          type: 'job-info',
+          data: { jobId: detectedJobId },
+          timestamp: Date.now(),
+        });
+      }
+    }
 
     // Check for confirmation prompt BEFORE stage detection
     const confirmMatch = detectConfirmPrompt(text);
