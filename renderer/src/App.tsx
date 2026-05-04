@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { ChatView } from './components/chat/ChatView';
 import { NetlistEditor } from './components/netlist/NetlistEditor';
 import { SvgViewer } from './components/schematic/SvgViewer';
@@ -8,31 +8,21 @@ import { Sidebar } from './components/layout/Sidebar';
 import { StagePanel } from './components/layout/StagePanel';
 import { WelcomeScreen } from './components/common/WelcomeScreen';
 import { SettingsDialog } from './components/settings/SettingsDialog';
-import type { ChatMessage, StageState, ToolCallEntry } from './types';
+import { SetupWizard } from './components/settings/SetupWizard';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { useAppStore, type TabKey } from './store/appStore';
+import type { StageDef } from './types';
 
-type TabKey = 'chat' | 'netlist' | 'svg' | 'simulation' | 'report';
+const tabLabels: Record<TabKey, string> = {
+  chat: 'Chat',
+  netlist: 'Netlist',
+  svg: 'SVG',
+  simulation: 'Sim',
+  report: 'Report',
+};
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabKey>('chat');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [stagePanelCollapsed, setStagePanelCollapsed] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [welcomeOpen, setWelcomeOpen] = useState(true);
-
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [stages, setStages] = useState<StageState[]>([]);
-  const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([]);
-  const [isRunning, setIsRunning] = useState(false);
-  const [outputText, setOutputText] = useState('');
-  const [netlistContent, setNetlistContent] = useState('');
-  const [svgContent, setSvgContent] = useState('');
-  const [reportContent, setReportContent] = useState('');
-  const [approvalPolicy, setApprovalPolicy] = useState<'manual' | 'execution' | 'all'>('execution');
-  const [simulationData, setSimulationData] = useState<{
-    metrics: { name: string; target: string; measured: string; pass: boolean }[];
-    pass: boolean;
-  } | null>(null);
+  const store = useAppStore();
 
   // Listen for workflow events
   useEffect(() => {
@@ -42,87 +32,63 @@ export function App() {
       switch (event.type) {
         case 'stage-list': {
           const list = (event.data as { stageList: StageDef[] }).stageList;
-          setStages(list.map((s) => ({ key: s.key, name: s.name, status: 'waiting' })));
+          store.setStages(list.map((s) => ({ key: s.key, name: s.name, status: 'waiting' as const })));
           break;
         }
         case 'stage-start': {
-          setStages((prev) =>
-            prev.map((s) =>
-              s.key === event.stageKey ? { ...s, status: 'running' } : s,
-            ),
-          );
-          setIsRunning(true);
-          setWelcomeOpen(false);
-          const msg: ChatMessage = {
+          store.updateStage(event.stageKey!, 'running');
+          store.setIsRunning(true);
+          store.setWelcomeOpen(false);
+          store.addMessage({
             id: `stage-${event.stageKey}-${Date.now()}`,
             role: 'system',
             content: `Starting: ${event.stageName}`,
             timestamp: event.timestamp,
-          };
-          setMessages((prev) => [...prev, msg]);
+          });
           break;
         }
         case 'stage-complete': {
-          setStages((prev) =>
-            prev.map((s) =>
-              s.key === event.stageKey ? { ...s, status: 'done' } : s,
-            ),
-          );
+          store.updateStage(event.stageKey!, 'done');
           const output = (event.data as { output: string } | undefined)?.output ?? '';
-          setOutputText((prev) => prev + output);
+          if (output) store.appendOutput(output);
           break;
         }
         case 'stage-error': {
-          setStages((prev) =>
-            prev.map((s) =>
-              s.key === event.stageKey ? { ...s, status: 'error' } : s,
-            ),
-          );
+          store.updateStage(event.stageKey!, 'error');
           const errMsg = (event.data as { error: string } | undefined)?.error ?? 'Unknown error';
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `error-${Date.now()}`,
-              role: 'system',
-              content: `Error in ${event.stageName}: ${errMsg}`,
-              timestamp: event.timestamp,
-              isError: true,
-            },
-          ]);
+          store.addMessage({
+            id: `error-${Date.now()}`,
+            role: 'system',
+            content: `Error in ${event.stageName}: ${errMsg}`,
+            timestamp: event.timestamp,
+            isError: true,
+          });
           break;
         }
         case 'output': {
           const text = (event.data as { text: string }).text;
-          setOutputText((prev) => prev + text);
+          store.appendOutput(text);
           break;
         }
         case 'tool-call': {
           const data = event.data as { tool?: string; stageKey?: string };
           if (data?.tool) {
-            setToolCalls((prev) =>
-              [
-                { tool: data.tool!, stageKey: data.stageKey ?? '', timestamp: event.timestamp },
-                ...prev,
-              ].slice(0, 50),
-            );
+            store.addToolCall({ tool: data.tool!, stageKey: data.stageKey ?? '', timestamp: event.timestamp });
           }
           break;
         }
         case 'workflow-complete': {
-          setIsRunning(false);
-          setStages((prev) => prev.map((s) => ({
+          store.setIsRunning(false);
+          store.setStages(store.stages.map((s) => ({
             ...s,
             status: s.status === 'running' ? 'done' : s.status,
           })));
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `complete-${Date.now()}`,
-              role: 'system',
-              content: 'Workflow complete.',
-              timestamp: event.timestamp,
-            },
-          ]);
+          store.addMessage({
+            id: `complete-${Date.now()}`,
+            role: 'system',
+            content: 'Workflow complete.',
+            timestamp: event.timestamp,
+          });
           break;
         }
       }
@@ -133,149 +99,114 @@ export function App() {
 
   // Refresh job artifacts when a job is selected
   const refreshJobArtifacts = useCallback(async (jobId: string) => {
-    setActiveJobId(jobId);
+    store.setActiveJobId(jobId);
     try {
       const netlist = await window.electronAPI.readJobFile(jobId, 'design/design.final.cir');
-      setNetlistContent(netlist || '');
-    } catch { setNetlistContent(''); }
+      store.setNetlistContent(netlist || '');
+    } catch { store.setNetlistContent(''); }
     try {
       const svg = await window.electronAPI.readJobFile(jobId, 'render/netlistsvg.svg');
-      setSvgContent(svg || '');
-    } catch { setSvgContent(''); }
+      store.setSvgContent(svg || '');
+    } catch { store.setSvgContent(''); }
     try {
       const report = await window.electronAPI.readJobFile(jobId, 'reports/final-summary.md');
-      setReportContent(report || '');
-    } catch { setReportContent(''); }
+      store.setReportContent(report || '');
+    } catch { store.setReportContent(''); }
   }, []);
 
   const handleStartDesign = useCallback((requirement: string) => {
-    setOutputText('');
-    setToolCalls([]);
-    setNetlistContent('');
-    setSvgContent('');
-    setReportContent('');
-    setSimulationData(null);
-    setMessages([
-      {
-        id: `user-${Date.now()}`,
-        role: 'user',
-        content: requirement,
-        timestamp: Date.now(),
-      },
-    ]);
-
+    store.resetWorkflow();
+    store.addMessage({
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: requirement,
+      timestamp: Date.now(),
+    });
     window.electronAPI.startWorkflow({
       requirement,
-      approvalPolicy,
+      approvalPolicy: store.approvalPolicy,
       jobName: undefined,
     });
-  }, [approvalPolicy]);
+  }, [store.approvalPolicy]);
 
-  const handleSelectJob = useCallback((jobId: string) => {
-    refreshJobArtifacts(jobId);
-  }, [refreshJobArtifacts]);
+  const isRunning = store.isRunning;
 
   return (
-    <div style={styles.appShell}>
-      {/* Left Sidebar */}
-      <Sidebar
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        activeJobId={activeJobId}
-        onSelectJob={handleSelectJob}
-        onNewDesign={() => setWelcomeOpen(true)}
-      />
+    <ErrorBoundary>
+      <div style={styles.appShell} className={`theme-${store.theme}`}>
+        <Sidebar
+          collapsed={store.sidebarCollapsed}
+          onToggle={store.toggleSidebar}
+          activeJobId={store.activeJobId}
+          onSelectJob={refreshJobArtifacts}
+          onNewDesign={() => store.setWelcomeOpen(true)}
+        />
 
-      {/* Main Content */}
-      <div style={styles.mainContent}>
-        {/* Tab Bar */}
-        <div style={styles.tabBar}>
-          {(['chat', 'netlist', 'svg', 'simulation', 'report'] as TabKey[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              style={{
-                ...styles.tab,
-                ...(activeTab === tab ? styles.tabActive : {}),
-              }}
-            >
-              {tabLabels[tab]}
-            </button>
-          ))}
-          <div style={styles.tabBarRight}>
-            <select
-              value={approvalPolicy}
-              onChange={(e) => setApprovalPolicy(e.target.value as typeof approvalPolicy)}
-              style={styles.policySelect}
-            >
-              <option value="manual">Manual</option>
-              <option value="execution">Execution</option>
-              <option value="all">All Auto</option>
-            </select>
-            <button
-              onClick={() => setSettingsOpen(true)}
-              style={styles.settingsBtn}
-              title="Settings"
-            >
-              ⚙
-            </button>
+        <div style={styles.mainContent}>
+          <div style={styles.tabBar}>
+            {(Object.keys(tabLabels) as TabKey[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => store.setActiveTab(tab)}
+                style={{
+                  ...styles.tab,
+                  ...(store.activeTab === tab ? styles.tabActive : {}),
+                }}
+              >
+                {tabLabels[tab]}
+              </button>
+            ))}
+            <div style={styles.tabBarRight}>
+              <select
+                value={store.approvalPolicy}
+                onChange={(e) => store.setApprovalPolicy(e.target.value as typeof store.approvalPolicy)}
+                style={styles.policySelect}
+              >
+                <option value="manual">Manual</option>
+                <option value="execution">Execution</option>
+                <option value="all">All Auto</option>
+              </select>
+              <button
+                onClick={() => store.setSettingsOpen(true)}
+                style={styles.settingsBtn}
+                title="Settings"
+              >
+                ⚙
+              </button>
+            </div>
+          </div>
+
+          <div style={styles.tabContent}>
+            {store.activeTab === 'chat' && <ChatView />}
+            {store.activeTab === 'netlist' && <NetlistEditor />}
+            {store.activeTab === 'svg' && <SvgViewer />}
+            {store.activeTab === 'simulation' && <SimulationTab />}
+            {store.activeTab === 'report' && <ReportPreview />}
+            {store.welcomeOpen && !isRunning && (
+              <WelcomeScreen
+                onStart={handleStartDesign}
+                onClose={() => store.setWelcomeOpen(false)}
+              />
+            )}
           </div>
         </div>
 
-        {/* Tab Content */}
-        <div style={styles.tabContent}>
-          {activeTab === 'chat' && (
-            <ChatView
-              messages={messages}
-              outputText={outputText}
-              isRunning={isRunning}
-              onSend={handleStartDesign}
-            />
-          )}
-          {activeTab === 'netlist' && (
-            <NetlistEditor content={netlistContent} jobId={activeJobId} />
-          )}
-          {activeTab === 'svg' && (
-            <SvgViewer svgContent={svgContent} />
-          )}
-          {activeTab === 'simulation' && (
-            <SimulationTab data={simulationData} />
-          )}
-          {activeTab === 'report' && (
-            <ReportPreview content={reportContent} />
-          )}
-          {welcomeOpen && !isRunning && (
-            <WelcomeScreen
-              onStart={handleStartDesign}
-              onClose={() => setWelcomeOpen(false)}
-            />
-          )}
-        </div>
+        <StagePanel
+          collapsed={store.stagePanelCollapsed}
+          onToggle={store.toggleStagePanel}
+        />
+
+        {store.settingsOpen && (
+          <SettingsDialog onClose={() => store.setSettingsOpen(false)} />
+        )}
+
+        {store.setupWizardOpen && (
+          <SetupWizard onClose={() => store.setSetupWizardOpen(false)} />
+        )}
       </div>
-
-      {/* Right Stage Panel */}
-      <StagePanel
-        collapsed={stagePanelCollapsed}
-        onToggle={() => setStagePanelCollapsed(!stagePanelCollapsed)}
-        stages={stages}
-        toolCalls={toolCalls}
-        isRunning={isRunning}
-      />
-
-      {settingsOpen && (
-        <SettingsDialog onClose={() => setSettingsOpen(false)} />
-      )}
-    </div>
+    </ErrorBoundary>
   );
 }
-
-const tabLabels: Record<TabKey, string> = {
-  chat: 'Chat',
-  netlist: 'Netlist',
-  svg: 'SVG',
-  simulation: 'Sim',
-  report: 'Report',
-};
 
 const styles: Record<string, React.CSSProperties> = {
   appShell: {

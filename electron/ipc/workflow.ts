@@ -27,6 +27,7 @@ const STAGE_LABELS: Record<string, string> = {
 
 let currentProcess: ChildProcess | null = null;
 let isPaused = false;
+let lastStartParams: Record<string, unknown> | null = null;
 
 function send(win: BrowserWindow | undefined, event: WorkflowEvent): void {
   if (win && !win.isDestroyed()) {
@@ -49,7 +50,6 @@ function resolveCliArgs(): string[] {
 }
 
 function appIsPackaged(): boolean {
-  // In an electron-builder packaged app, app.isPackaged is true
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { app } = require('electron');
@@ -68,139 +68,179 @@ function buildStageNames(stages: string[]): { key: string; name: string }[] {
 
 const ALL_STAGE_KEYS = Object.keys(STAGE_LABELS);
 
-export function registerWorkflowHandlers(ipcMain: IpcMain): void {
-  ipcMain.on('workflow:start', (_event, params) => {
-    if (currentProcess) {
-      return;
+// Detect tool calls from output text patterns
+function detectToolCalls(text: string, win: BrowserWindow | undefined, currentStage: string): void {
+  // Match patterns like: "Running tool: <name>" or "[tool] <name>" or "Tool call: <name>"
+  const patterns = [
+    /Running tool:\s*(\S+)/gi,
+    /\[tool\]\s*(\S+)/gi,
+    /Tool call:\s*(\S+)/gi,
+    /Executing\s+(\S+)\s*\.\.\./gi,
+    /▶\s*(\S+)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    pattern.lastIndex = 0;
+    while ((match = pattern.exec(text)) !== null) {
+      send(win, {
+        type: 'tool-call',
+        data: { tool: match[1], stageKey: currentStage },
+        timestamp: Date.now(),
+      });
+    }
+  }
+}
+
+function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): void {
+  if (currentProcess) {
+    return;
+  }
+
+  lastStartParams = params;
+  isPaused = false;
+
+  send(win, {
+    type: 'stage-list',
+    data: { stageList: buildStageNames(ALL_STAGE_KEYS) },
+    timestamp: Date.now(),
+  });
+
+  const args: string[] = [
+    ...resolveCliArgs(),
+    '--auto-approve',
+    '--approval-policy',
+    (params.approvalPolicy as string) || 'all',
+    '--requirement',
+    params.requirement as string,
+  ];
+
+  if (params.jobName) {
+    args.push('--job-name', params.jobName as string);
+  }
+  if (params.configPath) {
+    args.push('--config', params.configPath as string);
+  }
+
+  const cliPath = resolveCliPath();
+  const proc = spawn(process.execPath, [cliPath, ...args], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NO_COLOR: '1',
+      FORCE_COLOR: '0',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  currentProcess = proc;
+
+  let currentStage = '';
+  let stageOutput = '';
+
+  proc.stdout.on('data', (chunk: Buffer) => {
+    const text = chunk.toString('utf8');
+    if (isPaused) return;
+
+    // Detect stage transitions
+    for (const key of ALL_STAGE_KEYS) {
+      const label = STAGE_LABELS[key] ?? key;
+      if (text.includes(`[auto-approve:`) && text.includes(label)) {
+        if (currentStage && stageOutput) {
+          send(win, {
+            type: 'stage-complete',
+            stageKey: currentStage,
+            stageName: STAGE_LABELS[currentStage] ?? currentStage,
+            data: { output: stageOutput },
+            timestamp: Date.now(),
+          });
+        }
+        currentStage = key;
+        stageOutput = '';
+        send(win, {
+          type: 'stage-start',
+          stageKey: key,
+          stageName: label,
+          timestamp: Date.now(),
+        });
+        break;
+      }
     }
 
-    const win = BrowserWindow.getAllWindows()[0];
-    isPaused = false;
+    stageOutput += text;
 
-    // Emit stage list so the UI can build the stepper
+    // Detect tool calls in output
+    detectToolCalls(text, win, currentStage);
+
     send(win, {
-      type: 'stage-list',
-      data: { stageList: buildStageNames(ALL_STAGE_KEYS) },
+      type: 'output',
+      data: { text },
+      stageKey: currentStage || undefined,
+      timestamp: Date.now(),
+    });
+  });
+
+  proc.stderr.on('data', (chunk: Buffer) => {
+    if (isPaused) return;
+    const text = chunk.toString('utf8');
+    send(win, {
+      type: 'output',
+      data: { text, stream: 'stderr' },
+      stageKey: currentStage || undefined,
+      timestamp: Date.now(),
+    });
+  });
+
+  proc.on('close', (code) => {
+    if (currentStage && stageOutput) {
+      send(win, {
+        type: 'stage-complete',
+        stageKey: currentStage,
+        stageName: STAGE_LABELS[currentStage] ?? currentStage,
+        data: { output: stageOutput },
+        timestamp: Date.now(),
+      });
+    }
+    currentStage = '';
+    stageOutput = '';
+
+    send(win, {
+      type: 'workflow-complete',
+      data: { exitCode: code },
       timestamp: Date.now(),
     });
 
-    // Build CLI args
-    const args: string[] = [
-      ...resolveCliArgs(),
-      '--auto-approve',
-      '--approval-policy',
-      params.approvalPolicy || 'all',
-      '--requirement',
-      params.requirement,
-    ];
+    currentProcess = null;
+  });
 
-    if (params.jobName) {
-      args.push('--job-name', params.jobName);
+  proc.on('error', (error) => {
+    send(win, {
+      type: 'stage-error',
+      stageKey: 'fatal',
+      stageName: 'Fatal Error',
+      data: { error: error.message },
+      timestamp: Date.now(),
+    });
+    currentProcess = null;
+  });
+}
+
+function killProcess(): void {
+  if (currentProcess) {
+    try {
+      currentProcess.kill('SIGTERM');
+    } catch {
+      // Process may already be dead
     }
-    if (params.configPath) {
-      args.push('--config', params.configPath);
-    }
+    currentProcess = null;
+  }
+}
 
-    const cliPath = resolveCliPath();
-    const proc = spawn(process.execPath, [cliPath, ...args], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        NO_COLOR: '1',  // Strip ANSI so we can parse cleanly
-        FORCE_COLOR: '0',
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    currentProcess = proc;
-
-    let currentStage = '';
-    let stageOutput = '';
-
-    proc.stdout.on('data', (chunk: Buffer) => {
-      const text = chunk.toString('utf8');
-      if (isPaused) return;
-
-      // Detect stage transitions from output patterns
-      for (const key of ALL_STAGE_KEYS) {
-        const label = STAGE_LABELS[key] ?? key;
-        if (text.includes(`[auto-approve:`) && text.includes(label)) {
-          if (currentStage && stageOutput) {
-            send(win, {
-              type: 'stage-complete',
-              stageKey: currentStage,
-              stageName: STAGE_LABELS[currentStage] ?? currentStage,
-              data: { output: stageOutput },
-              timestamp: Date.now(),
-            });
-          }
-          currentStage = key;
-          stageOutput = '';
-          send(win, {
-            type: 'stage-start',
-            stageKey: key,
-            stageName: label,
-            timestamp: Date.now(),
-          });
-          break;
-        }
-      }
-
-      stageOutput += text;
-
-      // Stream output for the chat/log view
-      send(win, {
-        type: 'output',
-        data: { text },
-        stageKey: currentStage || undefined,
-        timestamp: Date.now(),
-      });
-    });
-
-    proc.stderr.on('data', (chunk: Buffer) => {
-      if (isPaused) return;
-      const text = chunk.toString('utf8');
-      send(win, {
-        type: 'output',
-        data: { text, stream: 'stderr' },
-        stageKey: currentStage || undefined,
-        timestamp: Date.now(),
-      });
-    });
-
-    proc.on('close', (code) => {
-      // Emit final stage completion
-      if (currentStage && stageOutput) {
-        send(win, {
-          type: 'stage-complete',
-          stageKey: currentStage,
-          stageName: STAGE_LABELS[currentStage] ?? currentStage,
-          data: { output: stageOutput },
-          timestamp: Date.now(),
-        });
-      }
-      currentStage = '';
-      stageOutput = '';
-
-      send(win, {
-        type: 'workflow-complete',
-        data: { exitCode: code },
-        timestamp: Date.now(),
-      });
-
-      currentProcess = null;
-    });
-
-    proc.on('error', (error) => {
-      send(win, {
-        type: 'stage-error',
-        stageKey: 'fatal',
-        stageName: 'Fatal Error',
-        data: { error: error.message },
-        timestamp: Date.now(),
-      });
-      currentProcess = null;
-    });
+export function registerWorkflowHandlers(ipcMain: IpcMain): void {
+  ipcMain.on('workflow:start', (_event, params) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) return;
+    startWorkflow(win, params);
   });
 
   ipcMain.on('workflow:pause', () => {
@@ -211,7 +251,27 @@ export function registerWorkflowHandlers(ipcMain: IpcMain): void {
     isPaused = false;
   });
 
+  ipcMain.on('workflow:stop', () => {
+    killProcess();
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) {
+      send(win, {
+        type: 'workflow-complete',
+        data: { exitCode: -1, stopped: true },
+        timestamp: Date.now(),
+      });
+    }
+  });
+
   ipcMain.on('workflow:retry-stage', () => {
-    // Not supported in child_process mode; restart the workflow
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) return;
+    // Kill current process and restart the workflow
+    killProcess();
+    isPaused = false;
+    if (lastStartParams) {
+      // Small delay to let process cleanup complete
+      setTimeout(() => startWorkflow(win, lastStartParams!), 200);
+    }
   });
 }

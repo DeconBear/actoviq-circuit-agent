@@ -1,15 +1,12 @@
 import { useCallback, useRef, useState } from 'react';
+import { useAppStore } from '../../store/appStore';
 
-interface Props {
-  svgContent: string;
-}
-
-export function SvgViewer({ svgContent }: Props) {
+export function SvgViewer() {
+  const svgContent = useAppStore((s) => s.svgContent);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
-  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
@@ -36,9 +33,7 @@ export function SvgViewer({ svgContent }: Props) {
     setOffset({ x: 0, y: 0 });
   }, []);
 
-  const handleSave = useCallback(async () => {
-    if (!window.electronAPI) return;
-    // We can't easily save SVG through the IPC but can use a download approach
+  const handleExport = useCallback(() => {
     const blob = new Blob([svgContent], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -63,13 +58,12 @@ export function SvgViewer({ svgContent }: Props) {
         <div style={styles.toolGroup}>
           <button onClick={() => setScale((s) => Math.min(4, s + 0.25))} style={styles.btn}>+</button>
           <span style={styles.scaleText}>{Math.round(scale * 100)}%</span>
-          <button onClick={() => setScale((s) => Math.max(0.25, s - 0.25))} style={styles.btn}>−</button>
+          <button onClick={() => setScale((s) => Math.max(0.25, s - 0.25))} style={styles.btn}>-</button>
           <button onClick={resetView} style={styles.btn}>Fit</button>
-          <button onClick={handleSave} style={styles.saveBtn}>Export SVG</button>
+          <button onClick={handleExport} style={styles.saveBtn}>Export SVG</button>
         </div>
       </div>
       <div
-        ref={containerRef}
         style={{ ...styles.viewport, cursor: dragging ? 'grabbing' : 'grab' }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
@@ -83,11 +77,18 @@ export function SvgViewer({ svgContent }: Props) {
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
             transformOrigin: '0 0',
           }}
-          dangerouslySetInnerHTML={{ __html: svgContent }}
+          dangerouslySetInnerHTML={{ __html: sanitizeSvg(svgContent) }}
         />
       </div>
     </div>
   );
+}
+
+function sanitizeSvg(svg: string): string {
+  // Remove script tags and event handlers for safety
+  return svg
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
 }
 
 const styles: Record<string, React.CSSProperties> = {

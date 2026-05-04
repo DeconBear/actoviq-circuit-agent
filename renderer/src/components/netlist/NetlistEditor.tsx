@@ -1,29 +1,21 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef } from 'react';
+import Editor, { type OnMount } from '@monaco-editor/react';
+import { useAppStore } from '../../store/appStore';
 
-interface Props {
-  content: string;
-  jobId: string | null;
-}
+export function NetlistEditor() {
+  const content = useAppStore((s) => s.netlistContent);
+  const jobId = useAppStore((s) => s.activeJobId);
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
 
-export function NetlistEditor({ content, jobId }: Props) {
-  const [edited, setEdited] = useState(content);
-  const [saved, setSaved] = useState(false);
+  const handleMount: OnMount = useCallback((editor) => {
+    editorRef.current = editor;
+  }, []);
 
   const handleSave = useCallback(async () => {
-    if (!jobId || !window.electronAPI) return;
-    await window.electronAPI.writeJobFile(jobId, 'design/design.final.cir', edited);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  }, [jobId, edited]);
-
-  // Sync prop changes
-  if (content !== edited && !saved) {
-    // Only sync if content changed externally
-    if (edited === '' || content !== edited) {
-      // Keep local edits; sync only if empty
-      if (!edited) setEdited(content);
-    }
-  }
+    if (!jobId || !window.electronAPI || !editorRef.current) return;
+    const value = editorRef.current.getValue();
+    await window.electronAPI.writeJobFile(jobId, 'design/design.final.cir', value);
+  }, [jobId]);
 
   if (!content) {
     return (
@@ -37,15 +29,29 @@ export function NetlistEditor({ content, jobId }: Props) {
     <div style={styles.container}>
       <div style={styles.toolbar}>
         <span style={styles.fileName}>design/design.final.cir</span>
-        <button onClick={handleSave} style={styles.saveBtn} disabled={!jobId}>
-          {saved ? 'Saved ✓' : 'Save'}
-        </button>
+        <div style={styles.toolGroup}>
+          <button onClick={handleSave} style={styles.saveBtn} disabled={!jobId}>
+            Save (Ctrl+S)
+          </button>
+        </div>
       </div>
-      <textarea
-        value={edited}
-        onChange={(e) => setEdited(e.target.value)}
-        style={styles.editor}
-        spellCheck={false}
+      <Editor
+        height="100%"
+        defaultLanguage="spice"
+        theme="vs-dark"
+        value={content}
+        onMount={handleMount}
+        options={{
+          fontSize: 13,
+          fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+          lineNumbers: 'on',
+          minimap: { enabled: false },
+          scrollBeyondLastLine: false,
+          wordWrap: 'on',
+          tabSize: 2,
+          automaticLayout: true,
+          readOnly: !jobId,
+        }}
       />
     </div>
   );
@@ -62,6 +68,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: '1px solid #0f3460',
   },
   fileName: { fontSize: 12, fontFamily: "'Cascadia Code', 'Consolas', monospace", color: '#a0a0b0' },
+  toolGroup: { display: 'flex', gap: 8 },
   saveBtn: {
     padding: '4px 14px',
     backgroundColor: '#e94560',
@@ -71,19 +78,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontSize: 12,
     fontWeight: 600,
-  },
-  editor: {
-    flex: 1,
-    backgroundColor: '#0d1117',
-    color: '#c9d1d9',
-    border: 'none',
-    padding: '16px',
-    fontSize: 13,
-    fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
-    lineHeight: 1.6,
-    resize: 'none',
-    outline: 'none',
-    tabSize: 2,
   },
   empty: {
     flex: 1,

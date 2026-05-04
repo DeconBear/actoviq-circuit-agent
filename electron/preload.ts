@@ -47,6 +47,10 @@ const electronAPI = {
     ipcRenderer.send('workflow:resume');
   },
 
+  stopWorkflow(): void {
+    ipcRenderer.send('workflow:stop');
+  },
+
   retryStage(): void {
     ipcRenderer.send('workflow:retry-stage');
   },

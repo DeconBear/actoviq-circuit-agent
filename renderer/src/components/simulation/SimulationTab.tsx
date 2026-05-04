@@ -1,15 +1,25 @@
-interface SimulationMetric {
-  name: string;
-  target: string;
-  measured: string;
-  pass: boolean;
-}
+import { useMemo } from 'react';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Legend,
+} from 'recharts';
+import { useAppStore, type SimulationMetric } from '../../store/appStore';
 
-interface Props {
-  data: SimulationMetric[] | null;
-}
+export function SimulationTab() {
+  const data = useAppStore((s) => s.simulationData);
 
-export function SimulationTab({ data }: Props) {
+  // Parse simulation output to extract waveform-like data
+  const chartData = useMemo(() => {
+    if (!data || data.length === 0) return null;
+    // Build a simple index-based chart from metrics for visualization
+    return data.map((m, i) => ({
+      name: m.name,
+      measured: parseFloat(m.measured) || 0,
+      target: parseFloat(m.target) || parseFloat(m.target.replace(/[^0-9.-]/g, '')) || 0,
+      index: i,
+    }));
+  }, [data]);
+
   if (!data || data.length === 0) {
     return (
       <div style={styles.empty}>
@@ -29,9 +39,10 @@ export function SimulationTab({ data }: Props) {
           backgroundColor: overallPass ? '#1a3a1a' : '#4a1a1a',
           borderColor: overallPass ? '#4caf50' : '#e94560',
         }}>
-          {overallPass ? '✓ ALL PASS' : `${passCount}/${data.length} PASS`}
+          {overallPass ? 'ALL PASS' : `${passCount}/${data.length} PASS`}
         </div>
       </div>
+
       <table style={styles.table}>
         <thead>
           <tr>
@@ -60,6 +71,30 @@ export function SimulationTab({ data }: Props) {
           ))}
         </tbody>
       </table>
+
+      {chartData && chartData.length > 1 && (
+        <div style={styles.chartSection}>
+          <div style={styles.chartTitle}>Metrics Comparison</div>
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#0f3460" />
+              <XAxis dataKey="name" stroke="#808090" tick={{ fontSize: 11 }} />
+              <YAxis stroke="#808090" tick={{ fontSize: 11 }} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: '#16213e',
+                  border: '1px solid #0f3460',
+                  borderRadius: 4,
+                  color: '#e0e0e0',
+                }}
+              />
+              <Legend />
+              <Line type="monotone" dataKey="target" stroke="#e94560" name="Target" strokeWidth={2} dot={{ r: 4 }} />
+              <Line type="monotone" dataKey="measured" stroke="#4caf50" name="Measured" strokeWidth={2} dot={{ r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }
@@ -75,7 +110,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontSize: 14,
   },
-  table: { width: '100%', borderCollapse: 'collapse' },
+  table: { width: '100%', borderCollapse: 'collapse', marginBottom: 24 },
   th: {
     textAlign: 'left',
     padding: '8px 12px',
@@ -94,6 +129,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     fontWeight: 700,
   },
+  chartSection: { marginTop: 16 },
+  chartTitle: { fontSize: 13, fontWeight: 600, color: '#a0a0b0', marginBottom: 12 },
   empty: {
     flex: 1,
     display: 'flex',

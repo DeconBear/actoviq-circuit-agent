@@ -1,14 +1,16 @@
-import type { StageState, ToolCallEntry } from '../../types';
+import { useAppStore } from '../../store/appStore';
+import type { StageState } from '../../types';
 
 interface Props {
   collapsed: boolean;
   onToggle: () => void;
-  stages: StageState[];
-  toolCalls: ToolCallEntry[];
-  isRunning: boolean;
 }
 
-export function StagePanel({ collapsed, onToggle, stages, toolCalls, isRunning }: Props) {
+export function StagePanel({ collapsed, onToggle }: Props) {
+  const stages = useAppStore((s) => s.stages);
+  const toolCalls = useAppStore((s) => s.toolCalls);
+  const isRunning = useAppStore((s) => s.isRunning);
+
   if (collapsed) {
     return (
       <div style={styles.collapsed}>
@@ -28,7 +30,6 @@ export function StagePanel({ collapsed, onToggle, stages, toolCalls, isRunning }
         </button>
       </div>
 
-      {/* Stage Stepper */}
       <div style={styles.section}>
         <div style={styles.sectionTitle}>
           Stages {isRunning && <span style={styles.spinner}>●</span>}
@@ -62,7 +63,6 @@ export function StagePanel({ collapsed, onToggle, stages, toolCalls, isRunning }
         </div>
       </div>
 
-      {/* Tool Call Log */}
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Tool Calls</div>
         <div style={styles.toolList}>
@@ -70,7 +70,7 @@ export function StagePanel({ collapsed, onToggle, stages, toolCalls, isRunning }
             <div style={styles.empty}>No tool calls yet</div>
           )}
           {toolCalls.map((tc, i) => (
-            <div key={`${tc.tool}-${i}`} style={styles.toolItem}>
+            <div key={`${tc.tool}-${tc.timestamp}-${i}`} style={styles.toolItem}>
               <div style={styles.toolName}>{tc.tool}</div>
               <div style={styles.toolMeta}>
                 {tc.stageKey} · {new Date(tc.timestamp).toLocaleTimeString()}
@@ -140,7 +140,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: 6,
   },
-  spinner: { color: '#e94560', animation: 'none' },
+  spinner: { color: '#e94560' },
   stageList: { display: 'flex', flexDirection: 'column', paddingLeft: 14 },
   stageItem: { position: 'relative', paddingLeft: 28, paddingBottom: 14, minHeight: 32 },
   stageDot: {

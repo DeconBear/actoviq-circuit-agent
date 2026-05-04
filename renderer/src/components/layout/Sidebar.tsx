@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useAppStore } from '../../store/appStore';
 
 interface JobEntry {
   jobId: string;
@@ -17,9 +18,33 @@ interface Props {
 export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDesign }: Props) {
   const [jobs, setJobs] = useState<JobEntry[]>([]);
 
-  useEffect(() => {
+  const refreshJobs = useCallback(async () => {
     if (!window.electronAPI) return;
-    window.electronAPI.listJobs().then(setJobs).catch(() => setJobs([]));
+    try {
+      const list = await window.electronAPI.listJobs();
+      setJobs(list);
+    } catch { setJobs([]); }
+  }, []);
+
+  useEffect(() => {
+    refreshJobs();
+    // Refresh every 30 seconds
+    const interval = setInterval(refreshJobs, 30000);
+    return () => clearInterval(interval);
+  }, [refreshJobs]);
+
+  const handleExport = useCallback(async (jobId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.electronAPI) return;
+    const zipPath = await window.electronAPI.exportJob(jobId);
+    window.electronAPI.openJobFolder(jobId);
+  }, []);
+
+  const handleOpenFolder = useCallback((jobId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.electronAPI) {
+      window.electronAPI.openJobFolder(jobId);
+    }
   }, []);
 
   if (collapsed) {
@@ -36,9 +61,10 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
     <div style={styles.panel}>
       <div style={styles.header}>
         <span style={styles.title}>Jobs</span>
-        <button onClick={onToggle} style={styles.toggleBtn} title="Collapse sidebar">
-          ←
-        </button>
+        <div style={styles.headerActions}>
+          <button onClick={refreshJobs} style={styles.refreshBtn} title="Refresh">↻</button>
+          <button onClick={onToggle} style={styles.toggleBtn} title="Collapse sidebar">←</button>
+        </div>
       </div>
       <button onClick={onNewDesign} style={styles.newBtn}>+ New Design</button>
       <div style={styles.list}>
@@ -54,7 +80,21 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
               ...(activeJobId === job.jobId ? styles.itemActive : {}),
             }}
           >
-            <div style={styles.itemName}>{job.jobId}</div>
+            <div style={styles.itemHeader}>
+              <div style={styles.itemName}>{job.jobId}</div>
+              <div style={styles.itemActions}>
+                <button
+                  onClick={(e) => handleOpenFolder(job.jobId, e)}
+                  style={styles.actionBtn}
+                  title="Open folder"
+                >📂</button>
+                <button
+                  onClick={(e) => handleExport(job.jobId, e)}
+                  style={styles.actionBtn}
+                  title="Export as ZIP"
+                >📦</button>
+              </div>
+            </div>
             <div style={styles.itemMeta}>
               <span style={{
                 ...styles.status,
@@ -64,6 +104,11 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
               }}>
                 {job.status}
               </span>
+              {job.createdAt && (
+                <span style={styles.date}>
+                  {new Date(job.createdAt).toLocaleDateString()}
+                </span>
+              )}
             </div>
           </div>
         ))}
@@ -99,6 +144,15 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: '1px solid #0f3460',
   },
   title: { fontWeight: 600, fontSize: 14 },
+  headerActions: { display: 'flex', gap: 4 },
+  refreshBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: '#a0a0b0',
+    cursor: 'pointer',
+    fontSize: 14,
+    padding: '2px 6px',
+  },
   toggleBtn: {
     background: 'transparent',
     border: 'none',
@@ -126,8 +180,24 @@ const styles: Record<string, React.CSSProperties> = {
     transition: 'background 0.1s',
   },
   itemActive: { backgroundColor: '#0f3460' },
-  itemName: { fontSize: 12, fontWeight: 500, marginBottom: 2, wordBreak: 'break-all' },
-  itemMeta: { fontSize: 11, color: '#808090' },
+  itemHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  itemName: { fontSize: 12, fontWeight: 500, wordBreak: 'break-all', flex: 1 },
+  itemActions: { display: 'flex', gap: 2 },
+  actionBtn: {
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: 10,
+    padding: '1px 4px',
+    opacity: 0.7,
+  },
+  itemMeta: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#808090' },
   status: { fontWeight: 600 },
+  date: { color: '#606080' },
   empty: { padding: 20, textAlign: 'center', color: '#606070', fontSize: 13 },
 };

@@ -1,16 +1,15 @@
-import { useRef, useState } from 'react';
-import type { ChatMessage } from '../../types';
+import { useCallback, useState } from 'react';
+import { useAppStore } from '../../store/appStore';
 
 interface Props {
-  messages: ChatMessage[];
-  outputText: string;
-  isRunning: boolean;
   onSend: (text: string) => void;
 }
 
-export function ChatView({ messages, outputText, isRunning, onSend }: Props) {
+export function ChatView({ onSend }: Props) {
   const [input, setInput] = useState('');
-  const containerRef = useRef<HTMLDivElement>(null);
+  const messages = useAppStore((s) => s.messages);
+  const outputText = useAppStore((s) => s.outputText);
+  const isRunning = useAppStore((s) => s.isRunning);
 
   const handleSend = () => {
     const trimmed = input.trim();
@@ -20,12 +19,9 @@ export function ChatView({ messages, outputText, isRunning, onSend }: Props) {
     }
   };
 
-  // Auto-scroll on new content
-  // useEffect would scroll but we keep it simple for now
-
   return (
     <div style={styles.container}>
-      <div style={styles.messages} ref={containerRef}>
+      <div style={styles.messages}>
         {messages.map((msg) => (
           <div
             key={msg.id}

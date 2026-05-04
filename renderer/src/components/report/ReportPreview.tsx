@@ -1,8 +1,30 @@
-interface Props {
-  content: string;
-}
+import { useMemo } from 'react';
+import { marked } from 'marked';
+import hljs from 'highlight.js';
+import { useAppStore } from '../../store/appStore';
 
-export function ReportPreview({ content }: Props) {
+// Configure marked with highlight.js
+marked.setOptions({
+  highlight: (code: string, lang: string) => {
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(code, { language: lang }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  },
+});
+
+export function ReportPreview() {
+  const content = useAppStore((s) => s.reportContent);
+
+  const html = useMemo(() => {
+    if (!content) return '';
+    try {
+      return marked.parse(content) as string;
+    } catch {
+      return `<pre>${escapeHtml(content)}</pre>`;
+    }
+  }, [content]);
+
   if (!content) {
     return (
       <div style={styles.empty}>
@@ -16,11 +38,20 @@ export function ReportPreview({ content }: Props) {
       <div style={styles.toolbar}>
         <span style={styles.label}>Final Summary Report</span>
       </div>
-      <div style={styles.content}>
-        <pre style={styles.pre}>{content}</pre>
-      </div>
+      <div
+        className="markdown-content"
+        style={styles.content}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   );
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -37,15 +68,9 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     overflowY: 'auto',
     padding: '20px 24px',
-  },
-  pre: {
-    fontFamily: "'Cascadia Code', 'Consolas', monospace",
+    color: '#c9d1d9',
     fontSize: 13,
     lineHeight: 1.7,
-    color: '#c9d1d9',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-    margin: 0,
   },
   empty: {
     flex: 1,

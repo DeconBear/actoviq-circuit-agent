@@ -11,6 +11,7 @@ declare global {
       }): void;
       pauseWorkflow(): void;
       resumeWorkflow(): void;
+      stopWorkflow(): void;
       retryStage(): void;
       onWorkflowEvent(callback: (event: WorkflowEvent) => void): () => void;
       readJobFile(jobId: string, relativePath: string): Promise<string>;

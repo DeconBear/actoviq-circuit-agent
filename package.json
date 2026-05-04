@@ -52,9 +52,15 @@
     "pack:dry-run": "npm pack --dry-run"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "actoviq-agent-sdk": "0.1.11",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.3",
+    "monaco-editor": "^0.55.1",
     "netlistsvg": "^1.0.2",
-    "zod": "^4.1.12"
+    "recharts": "^3.8.1",
+    "zod": "^4.1.12",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@types/archiver": "^7.0.0",
