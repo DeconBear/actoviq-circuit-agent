@@ -37,7 +37,8 @@ function send(win: BrowserWindow | undefined, event: WorkflowEvent): void {
 
 function resolveCliPath(): string {
   if (!app.isPackaged) {
-    return path.resolve(PROJECT_ROOT, 'node_modules', '.bin', 'tsx');
+    // Use tsx's ESM CLI entry directly — avoids the bash wrapper in .bin/
+    return path.resolve(PROJECT_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   }
   return path.resolve(PROJECT_ROOT, 'bin', 'actoviq-circuit-agent.js');
 }
@@ -46,7 +47,7 @@ function resolveCliArgs(): string[] {
   if (!app.isPackaged) {
     return [path.resolve(PROJECT_ROOT, 'src', 'app.ts')];
   }
-  return [path.resolve(PROJECT_ROOT, 'bin', 'actoviq-circuit-agent.js')];
+  return [];
 }
 
 function buildStageNames(stages: string[]): { key: string; name: string }[] {
@@ -113,7 +114,10 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
   }
 
   const cliPath = resolveCliPath();
-  const proc = spawn(process.execPath, [cliPath, ...args], {
+  // In dev, use system Node.js to run tsx (Electron's process.execPath is electron.exe, not node.exe).
+  // In production, use the bundled JS file which can be run with Electron's embedded Node.
+  const nodeBin = app.isPackaged ? process.execPath : 'node';
+  const proc = spawn(nodeBin, [cliPath, ...args], {
     cwd: process.cwd(),
     env: {
       ...process.env,

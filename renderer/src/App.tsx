@@ -6,7 +6,6 @@ import { SimulationTab } from './components/simulation/SimulationTab';
 import { ReportPreview } from './components/report/ReportPreview';
 import { Sidebar } from './components/layout/Sidebar';
 import { StagePanel } from './components/layout/StagePanel';
-import { WelcomeScreen } from './components/common/WelcomeScreen';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { SetupWizard } from './components/settings/SetupWizard';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -38,7 +37,6 @@ export function App() {
         case 'stage-start': {
           store.updateStage(event.stageKey!, 'running');
           store.setIsRunning(true);
-          store.setWelcomeOpen(false);
           store.addMessage({
             id: `stage-${event.stageKey}-${Date.now()}`,
             role: 'system',
@@ -116,18 +114,15 @@ export function App() {
     return cleanup;
   }, []);
 
-  // Check if settings are configured on first mount
+  // Check if settings are configured on first mount — show wizard if no API token
   useEffect(() => {
     if (!window.electronAPI) return;
     window.electronAPI.getSettings().then((s) => {
       if (!s.actoviqAuthToken.trim()) {
         store.setSetupWizardOpen(true);
-        store.setWelcomeOpen(false);
       }
     }).catch(() => {
-      // Settings not accessible — show setup wizard
       store.setSetupWizardOpen(true);
-      store.setWelcomeOpen(false);
     });
   }, []);
 
@@ -148,19 +143,34 @@ export function App() {
     } catch { store.setReportContent(''); }
   }, []);
 
-  const handleStartDesign = useCallback((requirement: string) => {
+  // "New Design" — reset and go to chat
+  const handleNewDesign = useCallback(() => {
     store.resetWorkflow();
-    store.setWelcomeOpen(false);
+    store.setActiveJobId(null);
     store.setActiveTab('chat');
+    store.setIsRunning(false);
+  }, []);
+
+  // Start workflow from chat message
+  const handleSendMessage = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    // Reset for a fresh design if not currently running
+    if (!store.isRunning) {
+      store.resetWorkflow();
+    }
+
     store.addMessage({
       id: `user-${Date.now()}`,
       role: 'user',
-      content: requirement,
+      content: trimmed,
       timestamp: Date.now(),
     });
+
     if (window.electronAPI) {
       window.electronAPI.startWorkflow({
-        requirement,
+        requirement: trimmed,
         approvalPolicy: store.approvalPolicy,
         jobName: undefined,
       });
@@ -173,9 +183,7 @@ export function App() {
         isError: true,
       });
     }
-  }, [store.approvalPolicy]);
-
-  const isRunning = store.isRunning;
+  }, [store.approvalPolicy, store.isRunning]);
 
   return (
     <ErrorBoundary>
@@ -185,7 +193,7 @@ export function App() {
           onToggle={store.toggleSidebar}
           activeJobId={store.activeJobId}
           onSelectJob={refreshJobArtifacts}
-          onNewDesign={() => store.setWelcomeOpen(true)}
+          onNewDesign={handleNewDesign}
         />
 
         <div style={styles.mainContent}>
@@ -223,17 +231,13 @@ export function App() {
           </div>
 
           <div style={styles.tabContent}>
-            {store.activeTab === 'chat' && <ChatView />}
+            {store.activeTab === 'chat' && (
+              <ChatView onSend={handleSendMessage} />
+            )}
             {store.activeTab === 'netlist' && <NetlistEditor />}
             {store.activeTab === 'svg' && <SvgViewer />}
             {store.activeTab === 'simulation' && <SimulationTab />}
             {store.activeTab === 'report' && <ReportPreview />}
-            {store.welcomeOpen && !isRunning && (
-              <WelcomeScreen
-                onStart={handleStartDesign}
-                onClose={() => store.setWelcomeOpen(false)}
-              />
-            )}
           </div>
         </div>
 
