@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildMenu } from './menu.js';
+import { registerChatHandlers } from './ipc/chat.js';
 import { registerWorkflowHandlers } from './ipc/workflow.js';
 import { registerFileHandlers } from './ipc/fileTools.js';
 import { registerSettingsHandlers } from './ipc/settings.js';
@@ -41,6 +42,7 @@ function createWindow(): void {
 }
 
 function registerIpcHandlers(): void {
+  registerChatHandlers(ipcMain);
   registerWorkflowHandlers(ipcMain);
   registerFileHandlers(ipcMain);
   registerSettingsHandlers(ipcMain);

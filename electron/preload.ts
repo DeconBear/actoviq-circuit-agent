@@ -96,7 +96,17 @@ const electronAPI = {
   getAppVersion(): Promise<string> {
     return ipcRenderer.invoke('app:version');
   },
+
+  sendChatMessage(message: string): Promise<ChatResponse> {
+    return ipcRenderer.invoke('chat:send', message);
+  },
 };
+
+export interface ChatResponse {
+  text: string;
+  isDesignRequest: boolean;
+  formalizedRequirement?: string;
+}
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 

@@ -22,8 +22,15 @@ declare global {
       getSettings(): Promise<AppSettings>;
       saveSettings(settings: AppSettings): Promise<void>;
       getAppVersion(): Promise<string>;
+      sendChatMessage(message: string): Promise<ChatResponse>;
     };
   }
+}
+
+interface ChatResponse {
+  text: string;
+  isDesignRequest: boolean;
+  formalizedRequirement?: string;
 }
 
 interface WorkflowEvent {

@@ -150,28 +150,12 @@ export function App() {
     store.setActiveTab('chat');
   }, []);
 
-  // Start workflow from chat message
-  const handleSendMessage = useCallback((text: string) => {
+  // Send a chat message — first checks intent, then decides chat vs workflow
+  const handleSendMessage = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    // If already running, just add the message as follow-up (don't start new workflow)
-    if (store.isRunning) {
-      store.addMessage({
-        id: `user-${Date.now()}`,
-        role: 'user',
-        content: trimmed,
-        timestamp: Date.now(),
-      });
-      return;
-    }
-
-    // Starting a new design — reset first, then immediately set running
-    store.resetWorkflow();
-    store.setIsRunning(true);
-    store.setWelcomeOpen(false);
-    store.setActiveTab('chat');
-
+    // Add user message to chat
     store.addMessage({
       id: `user-${Date.now()}`,
       role: 'user',
@@ -179,18 +163,53 @@ export function App() {
       timestamp: Date.now(),
     });
 
-    if (window.electronAPI) {
-      window.electronAPI.startWorkflow({
-        requirement: trimmed,
-        approvalPolicy: store.approvalPolicy,
-        jobName: undefined,
-      });
-    } else {
-      store.setIsRunning(false);
+    // If workflow is already running, no intent check needed
+    if (store.isRunning) {
+      return;
+    }
+
+    // Otherwise, ask the LLM to screen the message
+    if (!window.electronAPI) {
       store.addMessage({
         id: `error-${Date.now()}`,
         role: 'system',
-        content: 'Cannot start workflow: electronAPI not available.',
+        content: 'Cannot connect to backend.',
+        timestamp: Date.now(),
+        isError: true,
+      });
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.sendChatMessage(trimmed);
+
+      // Show the agent's chat response
+      store.addMessage({
+        id: `agent-${Date.now()}`,
+        role: 'system',
+        content: result.text,
+        timestamp: Date.now(),
+      });
+
+      // If it's a design request, trigger the workflow
+      if (result.isDesignRequest) {
+        const requirement = result.formalizedRequirement || trimmed;
+        store.setIsRunning(true);
+        store.setWelcomeOpen(false);
+        store.setActiveTab('chat');
+
+        window.electronAPI.startWorkflow({
+          requirement,
+          approvalPolicy: store.approvalPolicy,
+          jobName: undefined,
+        });
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      store.addMessage({
+        id: `error-${Date.now()}`,
+        role: 'system',
+        content: `Chat error: ${errorMessage}`,
         timestamp: Date.now(),
         isError: true,
       });
