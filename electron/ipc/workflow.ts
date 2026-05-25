@@ -33,6 +33,13 @@ let isPaused = false;
 let lastStartParams: Record<string, unknown> | null = null;
 let pendingConfirmResolve: ((answer: string) => void) | null = null;
 
+function resolvePendingConfirmation(answer: 'y' | 'n'): void {
+  if (pendingConfirmResolve) {
+    pendingConfirmResolve(answer);
+    pendingConfirmResolve = null;
+  }
+}
+
 function send(win: BrowserWindow | undefined, event: WorkflowEvent): void {
   if (win && !win.isDestroyed()) {
     win.webContents.send('workflow:event', event);
@@ -116,8 +123,13 @@ async function handleConfirmPrompt(
 }
 
 function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): void {
+  // Kill any previous process to ensure clean state
   if (currentProcess) {
-    return;
+    resolvePendingConfirmation('n');
+    try {
+      currentProcess.kill('SIGTERM');
+    } catch { /* already dead */ }
+    currentProcess = null;
   }
 
   lastStartParams = params;
@@ -164,14 +176,21 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
   let detectedJobId = '';
 
   proc.stdout.on('data', async (chunk: Buffer) => {
+    if (currentProcess !== proc) return;
     const text = chunk.toString('utf8');
     if (isPaused) return;
 
     // Detect job ID from [workspace] .../jobs/<jobId> output
     if (!detectedJobId) {
+      // Try multiple patterns to detect job ID from output
       const wsMatch = text.match(/\[workspace\]\s*(.+)/);
-      if (wsMatch && wsMatch[1]) {
-        detectedJobId = path.basename(wsMatch[1].trim());
+      const jobDirMatch = text.match(/[\\/]jobs[\\/]([^\\/\s]+)/);
+      const jobNameMatch = text.match(/Job\s+(?:created|started|initialized)[:\s]*(\S+)/i);
+      const jobId = wsMatch?.[1]?.trim()
+        || jobDirMatch?.[1]?.trim()
+        || jobNameMatch?.[1]?.trim();
+      if (jobId) {
+        detectedJobId = path.basename(jobId);
         send(win, {
           type: 'job-info',
           data: { jobId: detectedJobId },
@@ -271,6 +290,7 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
   });
 
   proc.stderr.on('data', (chunk: Buffer) => {
+    if (currentProcess !== proc) return;
     if (isPaused) return;
     const text = chunk.toString('utf8');
     send(win, {
@@ -282,6 +302,7 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
   });
 
   proc.on('close', (code) => {
+    if (currentProcess !== proc) return;
     if (currentStage && stageOutput) {
       send(win, {
         type: 'stage-complete',
@@ -304,6 +325,7 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
   });
 
   proc.on('error', (error) => {
+    if (currentProcess !== proc) return;
     send(win, {
       type: 'stage-error',
       stageKey: 'fatal',
@@ -317,6 +339,7 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
 
 function killProcess(): void {
   if (currentProcess) {
+    resolvePendingConfirmation('n');
     try {
       currentProcess.kill('SIGTERM');
     } catch {
@@ -364,9 +387,6 @@ export function registerWorkflowHandlers(ipcMain: IpcMain): void {
   });
 
   ipcMain.on('workflow:confirm-response', (_event, answer: 'y' | 'n') => {
-    if (pendingConfirmResolve) {
-      pendingConfirmResolve(answer);
-      pendingConfirmResolve = null;
-    }
+    resolvePendingConfirmation(answer);
   });
 }

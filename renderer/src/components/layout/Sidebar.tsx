@@ -9,14 +9,17 @@ interface JobEntry {
 
 interface Props {
   collapsed: boolean;
+  width: number;
   onToggle: () => void;
   activeJobId: string | null;
   onSelectJob: (jobId: string) => void;
   onNewDesign: () => void;
 }
 
-export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDesign }: Props) {
+export function Sidebar({ collapsed, width, onToggle, activeJobId, onSelectJob, onNewDesign }: Props) {
   const [jobs, setJobs] = useState<JobEntry[]>([]);
+  const [exportingJobId, setExportingJobId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const conversations = useAppStore((s) => s.conversations);
   const conversationId = useAppStore((s) => s.conversationId);
   const setConversationId = useAppStore((s) => s.setConversationId);
@@ -38,13 +41,27 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
 
   const handleSelectConversation = useCallback((convId: string) => {
     setConversationId(convId);
-  }, [setConversationId]);
+    const conv = useAppStore.getState().conversations.find((entry) => entry.id === convId);
+    if (conv?.jobId) {
+      onSelectJob(conv.jobId);
+    }
+  }, [onSelectJob, setConversationId]);
 
   const handleExport = useCallback(async (jobId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!window.electronAPI) return;
-    const zipPath = await window.electronAPI.exportJob(jobId);
-    window.electronAPI.openJobFolder(jobId);
+    setExportingJobId(jobId);
+    setNotice(null);
+    try {
+      const zipPath = await window.electronAPI.exportJob(jobId);
+      setNotice({ type: 'ok', text: `Exported ZIP: ${zipPath}` });
+      window.electronAPI.openJobFolder(jobId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotice({ type: 'error', text: `Export failed: ${message}` });
+    } finally {
+      setExportingJobId(null);
+    }
   }, []);
 
   const handleOpenFolder = useCallback((jobId: string, e: React.MouseEvent) => {
@@ -65,7 +82,7 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
   }
 
   return (
-    <div style={styles.panel}>
+    <div style={{ ...styles.panel, width, minWidth: width }}>
       <div style={styles.header}>
         <span style={styles.title}>Jobs</span>
         <div style={styles.headerActions}>
@@ -74,6 +91,14 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
         </div>
       </div>
       <button onClick={onNewDesign} style={styles.newBtn}>+ New Design</button>
+      {notice && (
+        <div style={{
+          ...styles.notice,
+          ...(notice.type === 'error' ? styles.noticeError : styles.noticeOk),
+        }}>
+          {notice.text}
+        </div>
+      )}
       <div style={styles.list}>
         {conversations.length > 0 && (
           <>
@@ -120,7 +145,8 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
                   onClick={(e) => handleExport(job.jobId, e)}
                   style={styles.actionBtn}
                   title="Export as ZIP"
-                >📦</button>
+                  disabled={exportingJobId === job.jobId}
+                >{exportingJobId === job.jobId ? '…' : '📦'}</button>
               </div>
             </div>
             <div style={styles.itemMeta}>
@@ -147,8 +173,6 @@ export function Sidebar({ collapsed, onToggle, activeJobId, onSelectJob, onNewDe
 
 const styles: Record<string, React.CSSProperties> = {
   panel: {
-    width: 240,
-    minWidth: 240,
     backgroundColor: '#16213e',
     borderRight: '1px solid #0f3460',
     display: 'flex',
@@ -199,6 +223,24 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontSize: 13,
     fontWeight: 600,
+  },
+  notice: {
+    margin: '0 12px 8px',
+    padding: '6px 8px',
+    borderRadius: 4,
+    fontSize: 11,
+    lineHeight: 1.4,
+    wordBreak: 'break-all',
+  },
+  noticeOk: {
+    color: '#b7f7c4',
+    backgroundColor: '#15321e',
+    border: '1px solid #2f7d3a',
+  },
+  noticeError: {
+    color: '#ffd0d6',
+    backgroundColor: '#40171d',
+    border: '1px solid #e94560',
   },
   list: { flex: 1, overflowY: 'auto' },
   item: {

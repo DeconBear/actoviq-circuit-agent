@@ -8,7 +8,7 @@ export interface WorkflowParams {
 }
 
 export interface WorkflowEvent {
-  type: 'stage-start' | 'stage-complete' | 'stage-error' | 'stream-chunk' | 'tool-call' | 'workflow-complete' | 'job-info' | 'confirm-request' | 'confirm-rejected';
+  type: 'stage-list' | 'stage-start' | 'stage-complete' | 'stage-error' | 'output' | 'stream-chunk' | 'tool-call' | 'workflow-complete' | 'job-info' | 'confirm-request' | 'confirm-rejected';
   stageKey?: string;
   stageName?: string;
   data?: unknown;
@@ -21,7 +21,7 @@ export interface JobSummary {
   createdAt: string;
   stageCount: number;
   completedStages: number;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'unknown' | 'incomplete';
 }
 
 export interface AppSettings {
@@ -110,6 +110,7 @@ export interface ChatResponse {
   text: string;
   isDesignRequest: boolean;
   formalizedRequirement?: string;
+  isError?: boolean;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

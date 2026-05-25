@@ -1,3 +1,5 @@
+import type { AppSettings, ChatResponse, JobSummary, WorkflowEvent } from './types';
+
 export {};
 
 declare global {
@@ -26,42 +28,4 @@ declare global {
       sendChatMessage(message: string, history?: Array<{ role: string; content: string }>): Promise<ChatResponse>;
     };
   }
-}
-
-interface ChatResponse {
-  text: string;
-  isDesignRequest: boolean;
-  formalizedRequirement?: string;
-}
-
-interface WorkflowEvent {
-  type: string;
-  stageKey?: string;
-  stageName?: string;
-  data?: unknown;
-  timestamp: number;
-}
-
-interface JobSummary {
-  jobId: string;
-  jobRoot: string;
-  createdAt: string;
-  stageCount: number;
-  completedStages: number;
-  status: 'running' | 'completed' | 'failed' | 'unknown' | 'incomplete';
-}
-
-interface AppSettings {
-  actoviqBaseUrl: string;
-  actoviqAuthToken: string;
-  opusModel: string;
-  sonnetModel: string;
-  haikuModel: string;
-  ngspiceBin: string;
-  workspaceRoot: string;
-}
-
-interface StageDef {
-  key: string;
-  name: string;
 }

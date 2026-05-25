@@ -7,6 +7,7 @@ interface ChatResponse {
   text: string;
   isDesignRequest: boolean;
   formalizedRequirement?: string;
+  isError?: boolean;
 }
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
@@ -135,6 +136,7 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
       return {
         text: 'Please configure your API token in Settings (⚙) before chatting.',
         isDesignRequest: false,
+        isError: true,
       };
     }
 
@@ -172,6 +174,7 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
       return {
         text: `Chat error: ${errorMessage}`,
         isDesignRequest: false,
+        isError: true,
       };
     }
   });

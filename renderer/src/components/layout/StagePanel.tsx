@@ -3,10 +3,11 @@ import type { StageState } from '../../types';
 
 interface Props {
   collapsed: boolean;
+  width: number;
   onToggle: () => void;
 }
 
-export function StagePanel({ collapsed, onToggle }: Props) {
+export function StagePanel({ collapsed, width, onToggle }: Props) {
   const stages = useAppStore((s) => s.stages);
   const toolCalls = useAppStore((s) => s.toolCalls);
   const isRunning = useAppStore((s) => s.isRunning);
@@ -22,7 +23,7 @@ export function StagePanel({ collapsed, onToggle }: Props) {
   }
 
   return (
-    <div style={styles.panel}>
+    <div style={{ ...styles.panel, width, minWidth: width }}>
       <div style={styles.header}>
         <span style={styles.title}>Workflow</span>
         <button onClick={onToggle} style={styles.toggleBtn} title="Collapse panel">
@@ -94,8 +95,6 @@ function statusColor(status: StageState['status']): string {
 
 const styles: Record<string, React.CSSProperties> = {
   panel: {
-    width: 280,
-    minWidth: 280,
     backgroundColor: '#16213e',
     borderLeft: '1px solid #0f3460',
     display: 'flex',
@@ -140,9 +139,19 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: 6,
   },
-  spinner: { color: '#e94560' },
+  spinner: {
+    color: '#e94560',
+    animation: 'actoviq-pulse 1.2s ease-in-out infinite',
+    display: 'inline-block',
+  },
   stageList: { display: 'flex', flexDirection: 'column', paddingLeft: 14 },
-  stageItem: { position: 'relative', paddingLeft: 28, paddingBottom: 14, minHeight: 32 },
+  stageItem: {
+    position: 'relative',
+    paddingLeft: 28,
+    paddingBottom: 14,
+    minHeight: 32,
+    transition: 'opacity 0.15s',
+  },
   stageDot: {
     position: 'absolute',
     left: 0,

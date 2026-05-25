@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useAppStore } from '../../store/appStore';
+import type { AppSettings } from '../../types';
 
 interface Props {
   onClose: () => void;
@@ -10,7 +10,8 @@ export function SettingsDialog({ onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const setupWizardOpen = useAppStore((s) => s.setupWizardOpen);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!window.electronAPI) {
@@ -32,26 +33,39 @@ export function SettingsDialog({ onClose }: Props) {
   const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
     setSaved(false);
+    setDirty(true);
   }, []);
 
   const handleSave = useCallback(async () => {
     if (!settings || !window.electronAPI) return;
+    setSaving(true);
+    setError(null);
     try {
       await window.electronAPI.saveSettings(settings);
       setSaved(true);
+      setDirty(false);
       setTimeout(() => setSaved(false), 2000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Failed to save: ${msg}`);
+    } finally {
+      setSaving(false);
     }
   }, [settings]);
 
+  const requestClose = useCallback(() => {
+    if (dirty && !window.confirm('Discard unsaved settings changes?')) {
+      return;
+    }
+    onClose();
+  }, [dirty, onClose]);
+
   return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={styles.overlay} onClick={requestClose}>
       <div style={styles.dialog} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <h2 style={styles.title}>Settings</h2>
-          <button onClick={onClose} style={styles.closeBtn}>✕</button>
+          <button onClick={requestClose} style={styles.closeBtn}>✕</button>
         </div>
 
         <div style={styles.body}>
@@ -90,10 +104,10 @@ export function SettingsDialog({ onClose }: Props) {
 
         {settings && (
           <div style={styles.footer}>
-            <button onClick={handleSave} style={styles.saveBtn}>
-              {saved ? 'Saved ✓' : 'Save'}
+            <button onClick={handleSave} style={styles.saveBtn} disabled={saving || !dirty}>
+              {saving ? 'Saving...' : saved ? 'Saved ✓' : dirty ? 'Save' : 'Saved'}
             </button>
-            <button onClick={onClose} style={styles.cancelBtn}>Cancel</button>
+            <button onClick={requestClose} style={styles.cancelBtn}>Cancel</button>
           </div>
         )}
       </div>

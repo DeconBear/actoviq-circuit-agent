@@ -23,7 +23,12 @@ export function SimulationTab() {
   if (!data || data.length === 0) {
     return (
       <div style={styles.empty}>
-        <p>No simulation data. Run the simulation stage to see results.</p>
+        <div style={styles.emptyIcon}>📊</div>
+        <div style={styles.emptyTitle}>No Simulation Data</div>
+        <div style={styles.emptyDesc}>
+          Run the simulation stage to see results.<br />
+          Metrics and comparison charts will appear here.
+        </div>
       </div>
     );
   }
@@ -134,8 +139,13 @@ const styles: Record<string, React.CSSProperties> = {
   empty: {
     flex: 1,
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     color: '#606070',
+    gap: 8,
   },
+  emptyIcon: { fontSize: 40, opacity: 0.4 },
+  emptyTitle: { fontSize: 16, fontWeight: 600, color: '#808090' },
+  emptyDesc: { fontSize: 13, color: '#505060', textAlign: 'center', lineHeight: 1.6 },
 };

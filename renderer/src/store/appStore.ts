@@ -18,7 +18,6 @@ interface AppState {
   sidebarCollapsed: boolean;
   stagePanelCollapsed: boolean;
   settingsOpen: boolean;
-  welcomeOpen: boolean;
   setupWizardOpen: boolean;
   theme: ThemeMode;
 
@@ -35,6 +34,7 @@ interface AppState {
 
   // Conversations
   conversations: ConversationSummary[];
+  conversationMessages: Record<string, ChatMessage[]>;
 
   // Content
   netlistContent: string;
@@ -50,7 +50,6 @@ interface AppState {
   toggleSidebar: () => void;
   toggleStagePanel: () => void;
   setSettingsOpen: (open: boolean) => void;
-  setWelcomeOpen: (open: boolean) => void;
   setSetupWizardOpen: (open: boolean) => void;
   setTheme: (theme: ThemeMode) => void;
   setActiveJobId: (id: string | null) => void;
@@ -68,8 +67,9 @@ interface AppState {
   setSvgContent: (content: string) => void;
   setReportContent: (content: string) => void;
   setSimulationData: (data: SimulationMetric[] | null) => void;
-  resetWorkflow: () => void;
+  resetWorkflow: (options?: { preserveMessages?: boolean }) => void;
   setConversationId: (id: string) => void;
+  setConversationJobId: (jobId: string, conversationId?: string) => void;
   newConversation: () => string;
   upsertConversation: (conv: ConversationSummary) => void;
   setConversations: (convs: ConversationSummary[]) => void;
@@ -80,7 +80,6 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarCollapsed: false,
   stagePanelCollapsed: false,
   settingsOpen: false,
-  welcomeOpen: true,
   setupWizardOpen: false,
   theme: 'dark',
   activeJobId: null,
@@ -91,6 +90,7 @@ export const useAppStore = create<AppState>((set) => ({
   outputText: '',
   conversationId: '',
   conversations: [],
+  conversationMessages: {},
   netlistContent: '',
   svgContent: '',
   reportContent: '',
@@ -101,13 +101,46 @@ export const useAppStore = create<AppState>((set) => ({
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   toggleStagePanel: () => set((s) => ({ stagePanelCollapsed: !s.stagePanelCollapsed })),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
-  setWelcomeOpen: (open) => set({ welcomeOpen: open }),
   setSetupWizardOpen: (open) => set({ setupWizardOpen: open }),
   setTheme: (theme) => set({ theme }),
   setActiveJobId: (id) => set({ activeJobId: id }),
   setApprovalPolicy: (policy) => set({ approvalPolicy: policy }),
   setIsRunning: (running) => set({ isRunning: running }),
-  addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
+  addMessage: (msg) =>
+    set((s) => {
+      const conversationId = msg.conversationId ?? s.conversationId;
+      const message = conversationId ? { ...msg, conversationId } : msg;
+      const messages = !conversationId || conversationId === s.conversationId
+        ? [...s.messages, message]
+        : s.messages;
+      if (!conversationId) {
+        return { messages };
+      }
+
+      const savedMessages = [...(s.conversationMessages[conversationId] ?? []), message];
+      const existing = s.conversations.find((conv) => conv.id === conversationId);
+      const titleSource = existing?.title || savedMessages.find((entry) => entry.role === 'user')?.content || 'New Conversation';
+      const summary: ConversationSummary = {
+        id: conversationId,
+        title: titleSource.slice(0, 50),
+        lastMessage: message.content,
+        messageCount: savedMessages.length,
+        updatedAt: message.timestamp,
+        jobId: existing?.jobId,
+      };
+
+      return {
+        messages,
+        conversationMessages: {
+          ...s.conversationMessages,
+          [conversationId]: savedMessages,
+        },
+        conversations: [
+          summary,
+          ...s.conversations.filter((conv) => conv.id !== conversationId),
+        ].slice(0, 50),
+      };
+    }),
   clearMessages: () => set({ messages: [] }),
   setStages: (stages) => set({ stages }),
   updateStage: (key, status) =>
@@ -123,7 +156,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSvgContent: (content) => set({ svgContent: content }),
   setReportContent: (content) => set({ reportContent: content }),
   setSimulationData: (data) => set({ simulationData: data }),
-  resetWorkflow: () =>
+  resetWorkflow: (options) =>
     set({
       outputText: '',
       toolCalls: [],
@@ -131,10 +164,26 @@ export const useAppStore = create<AppState>((set) => ({
       svgContent: '',
       reportContent: '',
       simulationData: null,
-      messages: [],
+      ...(options?.preserveMessages ? {} : { messages: [] }),
       stages: [],
     }),
-  setConversationId: (id) => set({ conversationId: id }),
+  setConversationId: (id) =>
+    set((s) => ({
+      conversationId: id,
+      messages: s.conversationMessages[id] ?? [],
+    })),
+  setConversationJobId: (jobId, conversationId) =>
+    set((s) => {
+      const targetId = conversationId ?? s.conversationId;
+      if (!targetId) {
+        return {};
+      }
+      return {
+        conversations: s.conversations.map((conv) =>
+          conv.id === targetId ? { ...conv, jobId } : conv,
+        ),
+      };
+    }),
   newConversation: () => {
     const id = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     set({ conversationId: id, messages: [] });
@@ -143,7 +192,10 @@ export const useAppStore = create<AppState>((set) => ({
   upsertConversation: (conv) =>
     set((s) => ({
       conversations: [
-        conv,
+        {
+          ...s.conversations.find((existing) => existing.id === conv.id),
+          ...conv,
+        },
         ...s.conversations.filter((c) => c.id !== conv.id),
       ].slice(0, 50),
     })),

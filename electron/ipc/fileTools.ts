@@ -8,6 +8,76 @@ const WORKSPACE_ROOT =
 
 import archiver from 'archiver';
 
+const WORKFLOW_STAGE_COUNT = 8;
+
+interface WorkflowStateFile {
+  createdAt?: string;
+  completedStages?: Array<{ key?: string; status?: string }>;
+}
+
+interface ManifestFile {
+  createdAt?: string;
+  created_at?: string;
+  stageCount?: number;
+  stage_count?: number;
+  completedStages?: number;
+  completed_stages?: number;
+  status?: string;
+}
+
+async function readJsonFile<T>(filePath: string): Promise<T | null> {
+  try {
+    return JSON.parse(await readFile(filePath, 'utf8')) as T;
+  } catch {
+    return null;
+  }
+}
+
+function createdAtFromJobId(jobId: string): string {
+  const match = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(jobId);
+  if (!match) {
+    return '';
+  }
+  const [, year, month, day, hour, minute, second] = match;
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+}
+
+function summarizeWorkflowStatus(state: WorkflowStateFile | null, manifest: ManifestFile | null): {
+  createdAt: string;
+  stageCount: number;
+  completedStages: number;
+  status: 'completed' | 'failed' | 'running' | 'unknown' | 'incomplete';
+} {
+  const stageRecords = state?.completedStages ?? [];
+  const latestByKey = new Map<string, string>();
+  for (const record of stageRecords) {
+    if (record.key) {
+      latestByKey.set(record.key, record.status ?? 'unknown');
+    }
+  }
+  const latestStatuses = [...latestByKey.values()];
+  const hasError = latestStatuses.includes('error');
+  const completedStages = latestStatuses.filter((status) => status === 'completed').length;
+  const stageCount = manifest?.stageCount ?? manifest?.stage_count ?? WORKFLOW_STAGE_COUNT;
+  const workflowLeadDone = latestByKey.get('workflow-lead') === 'completed';
+  const status = hasError
+    ? 'failed'
+    : workflowLeadDone || (completedStages >= stageCount && completedStages > 0)
+      ? 'completed'
+      : completedStages > 0
+        ? 'running'
+        : manifest?.status === 'completed' || manifest?.status === 'failed'
+          ? manifest.status
+          : 'incomplete';
+
+  return {
+    createdAt: state?.createdAt ?? manifest?.createdAt ?? manifest?.created_at ?? '',
+    stageCount,
+    completedStages: manifest?.completedStages ?? manifest?.completed_stages ?? completedStages,
+    status,
+  };
+}
+
 export function registerFileHandlers(ipcMain: IpcMain): void {
   ipcMain.handle('file:read', async (_event, { jobId, relativePath }) => {
     const filePath = path.resolve(WORKSPACE_ROOT, 'jobs', jobId, relativePath);
@@ -31,28 +101,20 @@ export function registerFileHandlers(ipcMain: IpcMain): void {
       const jobs = [];
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
+        const jobRoot = path.join(jobsDir, entry.name);
         const manifestPath = path.join(jobsDir, entry.name, 'reports', 'manifest.json');
-        try {
-          const manifestRaw = await readFile(manifestPath, 'utf8');
-          const manifest = JSON.parse(manifestRaw);
-          jobs.push({
-            jobId: entry.name,
-            jobRoot: path.join(jobsDir, entry.name),
-            createdAt: manifest.created_at ?? '',
-            stageCount: manifest.stage_count ?? 0,
-            completedStages: manifest.completed_stages ?? 0,
-            status: manifest.status ?? 'unknown',
-          });
-        } catch {
-          jobs.push({
-            jobId: entry.name,
-            jobRoot: path.join(jobsDir, entry.name),
-            createdAt: '',
-            stageCount: 0,
-            completedStages: 0,
-            status: 'incomplete',
-          });
-        }
+        const statePath = path.join(jobsDir, entry.name, 'logs', 'workflow-state.json');
+        const manifest = await readJsonFile<ManifestFile>(manifestPath);
+        const state = await readJsonFile<WorkflowStateFile>(statePath);
+        const summary = summarizeWorkflowStatus(state, manifest);
+        jobs.push({
+          jobId: entry.name,
+          jobRoot,
+          createdAt: summary.createdAt || createdAtFromJobId(entry.name),
+          stageCount: summary.stageCount,
+          completedStages: summary.completedStages,
+          status: summary.status,
+        });
       }
       return jobs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     } catch {

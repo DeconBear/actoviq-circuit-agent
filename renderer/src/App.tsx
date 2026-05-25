@@ -29,89 +29,109 @@ export function App() {
   } | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const currentJobIdRef = useRef<string | null>(null);
+  const [isChatPending, setIsChatPending] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [stagePanelWidth, setStagePanelWidth] = useState(280);
+  const resizing = useRef<'sidebar' | 'stage' | null>(null);
+  const workflowConversationIdRef = useRef<string | null>(null);
   const setJobId = useCallback((id: string | null) => {
     setCurrentJobId(id);
     currentJobIdRef.current = id;
   }, []);
+
+  // Retry file read with backoff — agent files may not be flushed to disk yet
+  async function readFileWithRetry(jobId: string, relPath: string, maxRetries = 3): Promise<string | null> {
+    for (let i = 0; i < maxRetries; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 500 * i));
+      try {
+        const content = await window.electronAPI!.readJobFile(jobId, relPath);
+        if (content) return content;
+      } catch { /* retry */ }
+    }
+    return null;
+  }
 
   // Listen for workflow events
   useEffect(() => {
     if (!window.electronAPI) return;
 
     const cleanup = window.electronAPI.onWorkflowEvent((event) => {
+      const state = useAppStore.getState();
+      const workflowConversationId = workflowConversationIdRef.current ?? state.conversationId;
       switch (event.type) {
         case 'stage-list': {
           const list = (event.data as { stageList: StageDef[] }).stageList;
-          store.setStages(list.map((s) => ({ key: s.key, name: s.name, status: 'waiting' as const })));
+          state.setStages(list.map((s) => ({ key: s.key, name: s.name, status: 'waiting' as const })));
           break;
         }
         case 'job-info': {
           const jiData = event.data as { jobId: string };
           if (jiData?.jobId) {
             setJobId(jiData.jobId);
-            store.setActiveJobId(jiData.jobId);
+            state.setActiveJobId(jiData.jobId);
+            state.setConversationJobId(jiData.jobId, workflowConversationId);
           }
           break;
         }
         case 'stage-start': {
-          store.updateStage(event.stageKey!, 'running');
-          store.setIsRunning(true);
-          store.addMessage({
+          state.updateStage(event.stageKey!, 'running');
+          state.setIsRunning(true);
+          state.addMessage({
             id: `stage-${event.stageKey}-${Date.now()}`,
             role: 'system',
             content: `Starting: ${event.stageName}`,
             timestamp: event.timestamp,
+            conversationId: workflowConversationId,
           });
           break;
         }
         case 'stage-complete': {
-          store.updateStage(event.stageKey!, 'done');
-          const output = (event.data as { output: string } | undefined)?.output ?? '';
-          if (output) store.appendOutput(output);
+          state.updateStage(event.stageKey!, 'done');
           // Auto-refresh relevant artifact for the completed stage
           const jid = currentJobIdRef.current;
           if (jid && window.electronAPI) {
             const key = event.stageKey;
             if (key === 'netlist-designer') {
-              window.electronAPI.readJobFile(jid, 'design/design.final.cir').then((c) => store.setNetlistContent(c || '')).catch(() => {});
+              readFileWithRetry(jid, 'design/design.final.cir').then((c) => { if (c) useAppStore.getState().setNetlistContent(c); });
             } else if (key === 'netlistsvg-renderer') {
-              window.electronAPI.readJobFile(jid, 'render/netlistsvg.svg').then((c) => store.setSvgContent(c || '')).catch(() => {});
+              readFileWithRetry(jid, 'render/netlistsvg.svg').then((c) => { if (c) useAppStore.getState().setSvgContent(c); });
             } else if (key === 'simulation-verifier') {
-              window.electronAPI.readJobFile(jid, 'verification/final-simulation/metrics.json').then((raw) => {
+              readFileWithRetry(jid, 'verification/final-simulation/metrics.json').then((raw) => {
                 if (raw) {
                   try {
                     const parsed = JSON.parse(raw);
-                    if (Array.isArray(parsed)) store.setSimulationData(parsed);
-                  } catch { store.setSimulationData(null); }
+                    if (Array.isArray(parsed)) useAppStore.getState().setSimulationData(parsed);
+                  } catch { useAppStore.getState().setSimulationData(null); }
                 }
-              }).catch(() => {});
+              });
             } else if (key === 'workflow-lead') {
-              window.electronAPI.readJobFile(jid, 'reports/final-summary.md').then((c) => store.setReportContent(c || '')).catch(() => {});
+              readFileWithRetry(jid, 'reports/final-summary.md').then((c) => { if (c) useAppStore.getState().setReportContent(c); });
             }
           }
           break;
         }
         case 'stage-error': {
-          store.updateStage(event.stageKey!, 'error');
+          state.updateStage(event.stageKey!, 'error');
           const errMsg = (event.data as { error: string } | undefined)?.error ?? 'Unknown error';
-          store.addMessage({
+          state.addMessage({
             id: `error-${Date.now()}`,
             role: 'system',
             content: `Error in ${event.stageName}: ${errMsg}`,
             timestamp: event.timestamp,
             isError: true,
+            conversationId: workflowConversationId,
           });
           break;
         }
         case 'output': {
           const text = (event.data as { text: string }).text;
-          store.appendOutput(text);
+          state.appendOutput(text);
           break;
         }
         case 'tool-call': {
           const data = event.data as { tool?: string; stageKey?: string };
           if (data?.tool) {
-            store.addToolCall({ tool: data.tool!, stageKey: data.stageKey ?? '', timestamp: event.timestamp });
+            state.addToolCall({ tool: data.tool!, stageKey: data.stageKey ?? '', timestamp: event.timestamp });
           }
           break;
         }
@@ -124,59 +144,71 @@ export function App() {
         }
         case 'confirm-rejected': {
           const cjData = event.data as { currentStage: string; nextStage: string } | undefined;
-          store.addMessage({
+          state.addMessage({
             id: `confirm-skip-${Date.now()}`,
             role: 'system',
             content: `Skipped stage transition: ${cjData?.currentStage ?? ''} → ${cjData?.nextStage ?? ''}`,
             timestamp: event.timestamp,
+            conversationId: workflowConversationId,
           });
           break;
         }
         case 'workflow-complete': {
-          store.setIsRunning(false);
+          state.setIsRunning(false);
           const exitCode = (event.data as { exitCode?: number; stopped?: boolean } | undefined);
           if (exitCode?.stopped) {
-            store.addMessage({
+            state.setStages(state.stages.map((s) => ({
+              ...s,
+              status: s.status === 'running' ? 'error' : s.status,
+            })));
+            state.addMessage({
               id: `stopped-${Date.now()}`,
               role: 'system',
               content: 'Workflow stopped by user.',
               timestamp: event.timestamp,
+              isError: true,
+              conversationId: workflowConversationId,
             });
-          } else if (exitCode?.exitCode !== 0 && store.stages.length === 0) {
-            store.addMessage({
+          } else if (exitCode?.exitCode !== 0 && state.stages.length === 0) {
+            state.addMessage({
               id: `config-error-${Date.now()}`,
               role: 'system',
               content: 'Workflow failed to start. Please check your API and ngspice configuration in Settings (⚙). If this is your first time, run the Setup Wizard.',
               timestamp: event.timestamp,
               isError: true,
+              conversationId: workflowConversationId,
             });
-            store.setSettingsOpen(true);
+            state.setSettingsOpen(true);
           } else {
-            store.setStages(store.stages.map((s) => ({
+            const succeeded = exitCode?.exitCode === 0;
+            state.setStages(state.stages.map((s) => ({
               ...s,
-              status: s.status === 'running' ? 'done' : s.status,
+              status: s.status === 'running' ? (succeeded ? 'done' : 'error') : s.status,
             })));
-            store.addMessage({
+            state.addMessage({
               id: `complete-${Date.now()}`,
               role: 'system',
               content: exitCode?.exitCode === 0 ? 'Workflow complete.' : `Workflow exited with code ${exitCode?.exitCode}.`,
               timestamp: event.timestamp,
+              isError: !succeeded,
+              conversationId: workflowConversationId,
             });
           }
+          workflowConversationIdRef.current = null;
           // Refresh all artifacts after workflow ends
-          if (currentJobId && window.electronAPI) {
+          if (currentJobIdRef.current && window.electronAPI) {
             const jid = currentJobIdRef.current;
-            window.electronAPI.readJobFile(jid, 'design/design.final.cir').then((c) => store.setNetlistContent(c || '')).catch(() => {});
-            window.electronAPI.readJobFile(jid, 'render/netlistsvg.svg').then((c) => store.setSvgContent(c || '')).catch(() => {});
-            window.electronAPI.readJobFile(jid, 'reports/final-summary.md').then((c) => store.setReportContent(c || '')).catch(() => {});
-            window.electronAPI.readJobFile(jid, 'verification/final-simulation/metrics.json').then((raw) => {
+            readFileWithRetry(jid, 'design/design.final.cir').then((c) => { if (c) useAppStore.getState().setNetlistContent(c); });
+            readFileWithRetry(jid, 'render/netlistsvg.svg').then((c) => { if (c) useAppStore.getState().setSvgContent(c); });
+            readFileWithRetry(jid, 'reports/final-summary.md').then((c) => { if (c) useAppStore.getState().setReportContent(c); });
+            readFileWithRetry(jid, 'verification/final-simulation/metrics.json').then((raw) => {
               if (raw) {
                 try {
                   const parsed = JSON.parse(raw);
-                  if (Array.isArray(parsed)) store.setSimulationData(parsed);
-                } catch { store.setSimulationData(null); }
+                  if (Array.isArray(parsed)) useAppStore.getState().setSimulationData(parsed);
+                } catch { useAppStore.getState().setSimulationData(null); }
               }
-            }).catch(() => {});
+            });
           }
           break;
         }
@@ -198,64 +230,91 @@ export function App() {
     });
   }, []);
 
+  // Handle resize drag
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (resizing.current === 'sidebar') {
+        setSidebarWidth(Math.max(160, Math.min(400, e.clientX)));
+      } else if (resizing.current === 'stage') {
+        setStagePanelWidth(Math.max(180, Math.min(500, window.innerWidth - e.clientX)));
+      }
+    };
+    const handleMouseUp = () => {
+      resizing.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
   // Refresh job artifacts when a job is selected
   const refreshJobArtifacts = useCallback(async (jobId: string) => {
-    store.setActiveJobId(jobId);
+    const state = useAppStore.getState();
+    state.setActiveJobId(jobId);
     setJobId(jobId);
+    state.setNetlistContent('');
+    state.setSvgContent('');
+    state.setReportContent('');
+    state.setSimulationData(null);
     try {
       const netlist = await window.electronAPI.readJobFile(jobId, 'design/design.final.cir');
-      store.setNetlistContent(netlist || '');
-    } catch { store.setNetlistContent(''); }
+      useAppStore.getState().setNetlistContent(netlist || '');
+    } catch { useAppStore.getState().setNetlistContent(''); }
     try {
       const svg = await window.electronAPI.readJobFile(jobId, 'render/netlistsvg.svg');
-      store.setSvgContent(svg || '');
-    } catch { store.setSvgContent(''); }
+      useAppStore.getState().setSvgContent(svg || '');
+    } catch { useAppStore.getState().setSvgContent(''); }
     try {
       const report = await window.electronAPI.readJobFile(jobId, 'reports/final-summary.md');
-      store.setReportContent(report || '');
-    } catch { store.setReportContent(''); }
+      useAppStore.getState().setReportContent(report || '');
+    } catch { useAppStore.getState().setReportContent(''); }
     try {
       const metricsRaw = await window.electronAPI.readJobFile(jobId, 'verification/final-simulation/metrics.json');
       if (metricsRaw) {
         const parsed = JSON.parse(metricsRaw);
         if (Array.isArray(parsed)) {
-          store.setSimulationData(parsed);
+          useAppStore.getState().setSimulationData(parsed);
+        } else {
+          useAppStore.getState().setSimulationData(null);
         }
+      } else {
+        useAppStore.getState().setSimulationData(null);
       }
-    } catch { store.setSimulationData(null); }
+    } catch { useAppStore.getState().setSimulationData(null); }
   }, []);
 
   // "New Design" — reset and go to chat
   const handleNewDesign = useCallback(() => {
-    store.resetWorkflow();
-    store.setActiveJobId(null);
+    const state = useAppStore.getState();
+    state.resetWorkflow();
+    state.setActiveJobId(null);
+    state.newConversation();
+    workflowConversationIdRef.current = null;
     setJobId(null);
-    store.setActiveTab('chat');
+    state.setActiveTab('chat');
   }, []);
 
   // Send a chat message — first checks intent, then decides chat vs workflow
   const handleSendMessage = useCallback(async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || isChatPending) return;
+
+    const state = useAppStore.getState();
+    const workflowWasRunning = state.isRunning;
 
     // Auto-create conversation if none exists
-    let cid = store.conversationId;
+    let cid = state.conversationId;
     if (!cid) {
-      cid = store.newConversation();
+      cid = state.newConversation();
     }
 
-    // Update conversation metadata
-    store.upsertConversation({
-      id: cid,
-      title: trimmed.slice(0, 50),
-      lastMessage: trimmed,
-      messageCount: store.messages.length + 1,
-      updatedAt: Date.now(),
-      jobId: currentJobIdRef.current ?? undefined,
-    });
-
     // Add user message to chat
-    store.addMessage({
+    state.addMessage({
       id: `user-${Date.now()}`,
       role: 'user',
       content: trimmed,
@@ -263,74 +322,98 @@ export function App() {
       conversationId: cid,
     });
 
-    // If workflow is already running, no intent check needed
-    if (store.isRunning) {
-      return;
-    }
-
-    // Otherwise, ask the LLM to screen the message
     if (!window.electronAPI) {
-      store.addMessage({
+      useAppStore.getState().addMessage({
         id: `error-${Date.now()}`,
         role: 'system',
         content: 'Cannot connect to backend.',
         timestamp: Date.now(),
         isError: true,
+        conversationId: cid,
       });
       return;
     }
 
+    setIsChatPending(true);
     try {
       // Build conversation history for context
-      const history = store.messages.map((m) => ({
+      const history = state.messages.map((m) => ({
         role: m.role === 'user' ? 'user' as const : 'assistant' as const,
         content: m.content,
       }));
       const result = await window.electronAPI.sendChatMessage(trimmed, history);
 
       // Show the agent's chat response
-      store.addMessage({
+      useAppStore.getState().addMessage({
         id: `agent-${Date.now()}`,
         role: 'system',
         content: result.text,
         timestamp: Date.now(),
+        isError: result.isError,
+        conversationId: cid,
       });
 
       // If it's a design request, trigger the workflow
-      if (result.isDesignRequest) {
+      if (result.isDesignRequest && workflowWasRunning) {
+        useAppStore.getState().addMessage({
+          id: `workflow-busy-${Date.now()}`,
+          role: 'system',
+          content: 'A design workflow is already running. I kept your note in this conversation and will not start a second workflow until the current one finishes.',
+          timestamp: Date.now(),
+          conversationId: cid,
+        });
+      } else if (result.isDesignRequest) {
         const requirement = result.formalizedRequirement || trimmed;
-        store.setIsRunning(true);
-        store.setWelcomeOpen(false);
-        store.setActiveTab('chat');
+        const latest = useAppStore.getState();
+        latest.resetWorkflow({ preserveMessages: true });
+        latest.setIsRunning(true);
+        latest.setActiveTab('chat');
+        workflowConversationIdRef.current = cid;
 
         window.electronAPI.startWorkflow({
           requirement,
-          approvalPolicy: store.approvalPolicy,
+          approvalPolicy: latest.approvalPolicy,
           jobName: undefined,
         });
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      store.addMessage({
+      useAppStore.getState().addMessage({
         id: `error-${Date.now()}`,
         role: 'system',
         content: `Chat error: ${errorMessage}`,
         timestamp: Date.now(),
         isError: true,
+        conversationId: cid,
       });
+    } finally {
+      setIsChatPending(false);
     }
-  }, [store.approvalPolicy, store.isRunning]);
+  }, [isChatPending]);
 
   return (
     <ErrorBoundary>
       <div style={styles.appShell} className={`theme-${store.theme}`}>
         <Sidebar
           collapsed={store.sidebarCollapsed}
+          width={sidebarWidth}
           onToggle={store.toggleSidebar}
           activeJobId={store.activeJobId}
           onSelectJob={refreshJobArtifacts}
           onNewDesign={handleNewDesign}
         />
+
+        {!store.sidebarCollapsed && (
+          <div
+            style={styles.dragHandle}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              resizing.current = 'sidebar';
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
+            }}
+          />
+        )}
 
         <div style={styles.mainContent}>
           <div style={styles.tabBar}>
@@ -390,7 +473,7 @@ export function App() {
 
           <div style={styles.tabContent}>
             {store.activeTab === 'chat' && (
-              <ChatView onSend={handleSendMessage} />
+              <ChatView onSend={handleSendMessage} isPending={isChatPending} />
             )}
             {store.activeTab === 'netlist' && <NetlistEditor />}
             {store.activeTab === 'svg' && <SvgViewer />}
@@ -399,8 +482,21 @@ export function App() {
           </div>
         </div>
 
+        {!store.stagePanelCollapsed && (
+          <div
+            style={styles.dragHandle}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              resizing.current = 'stage';
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
+            }}
+          />
+        )}
+
         <StagePanel
           collapsed={store.stagePanelCollapsed}
+          width={stagePanelWidth}
           onToggle={store.toggleStagePanel}
         />
 
@@ -514,5 +610,12 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     position: 'relative',
     overflow: 'hidden',
+  },
+  dragHandle: {
+    width: 4,
+    cursor: 'col-resize',
+    backgroundColor: '#0f3460',
+    transition: 'background-color 0.15s',
+    flexShrink: 0,
   },
 };

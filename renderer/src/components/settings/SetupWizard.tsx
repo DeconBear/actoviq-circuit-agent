@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
+import type { AppSettings } from '../../types';
 
 interface Props {
   onClose: () => void;
@@ -10,17 +11,23 @@ const STEPS = ['Provider', 'Tools', 'Ready'];
 export function SetupWizard({ onClose }: Props) {
   const [step, setStep] = useState(0);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (window.electronAPI) {
-      window.electronAPI.getSettings().then((s) => {
-        setSettings(s);
-        // Auto-detect if setup is needed
-        if (s.actoviqAuthToken) {
-          onClose();
-        }
-      });
+    if (!window.electronAPI) {
+      setError('electronAPI not available. Please run the app in Electron.');
+      return;
     }
+    window.electronAPI.getSettings().then((s) => {
+      setSettings(s);
+      // Auto-detect if setup is needed
+      if (s.actoviqAuthToken) {
+        onClose();
+      }
+    }).catch((err) => {
+      setError(`Failed to load settings: ${err?.message ?? String(err)}`);
+    });
   }, [onClose]);
 
   const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -28,6 +35,11 @@ export function SetupWizard({ onClose }: Props) {
   }, []);
 
   const handleNext = () => {
+    if (step === 0 && !settings?.actoviqAuthToken.trim()) {
+      setError('Auth Token is required before continuing.');
+      return;
+    }
+    setError(null);
     if (step < STEPS.length - 1) {
       setStep((s) => s + 1);
     }
@@ -41,8 +53,18 @@ export function SetupWizard({ onClose }: Props) {
 
   const handleFinish = async () => {
     if (settings && window.electronAPI) {
-      await window.electronAPI.saveSettings(settings);
+      setSaving(true);
+      setError(null);
+      try {
+        await window.electronAPI.saveSettings(settings);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(`Failed to save settings: ${message}`);
+        setSaving(false);
+        return;
+      }
     }
+    setSaving(false);
     onClose();
   };
 
@@ -50,7 +72,9 @@ export function SetupWizard({ onClose }: Props) {
     return (
       <div style={styles.overlay}>
         <div style={styles.card}>
-          <p style={styles.loading}>Loading settings...</p>
+          <p style={error ? styles.loadingError : styles.loading}>
+            {error ?? 'Loading settings...'}
+          </p>
         </div>
       </div>
     );
@@ -93,6 +117,7 @@ export function SetupWizard({ onClose }: Props) {
         </div>
 
         <div style={styles.body}>
+          {error && <div style={styles.errorMsg}>{error}</div>}
           {step === 0 && (
             <div>
               <h3 style={styles.sectionTitle}>Actoviq Provider (Anthropic-compatible API)</h3>
@@ -154,7 +179,9 @@ export function SetupWizard({ onClose }: Props) {
           {!isLast ? (
             <button onClick={handleNext} style={styles.primaryBtn}>Next</button>
           ) : (
-            <button onClick={handleFinish} style={styles.primaryBtn}>Get Started</button>
+            <button onClick={handleFinish} style={styles.primaryBtn} disabled={saving}>
+              {saving ? 'Saving...' : 'Get Started'}
+            </button>
           )}
         </div>
       </div>
@@ -224,6 +251,16 @@ const styles: Record<string, React.CSSProperties> = {
   title: { color: '#e94560', fontSize: 20, margin: '0 0 6px' },
   subtitle: { color: '#a0a0b0', fontSize: 13, margin: 0 },
   loading: { color: '#a0a0b0', textAlign: 'center', padding: 40 },
+  loadingError: { color: '#e94560', textAlign: 'center', padding: 40 },
+  errorMsg: {
+    backgroundColor: '#4a1a1a',
+    border: '1px solid #e94560',
+    borderRadius: 6,
+    color: '#e0e0e0',
+    fontSize: 13,
+    marginBottom: 12,
+    padding: '8px 10px',
+  },
   stepper: {
     display: 'flex',
     justifyContent: 'center',

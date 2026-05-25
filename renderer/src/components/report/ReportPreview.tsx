@@ -1,16 +1,9 @@
 import { useMemo } from 'react';
-import { marked } from 'marked';
-import hljs from 'highlight.js';
 import { useAppStore } from '../../store/appStore';
+import { createSafeMarkdownParser, escapeHtml } from '../../utils/markdown';
 
-// Configure marked with highlight.js
-marked.setOptions({
-  highlight: (code: string, lang: string) => {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value;
-    }
-    return hljs.highlightAuto(code).value;
-  },
+const reportMarkdown = createSafeMarkdownParser({
+  highlightCode: true,
 });
 
 export function ReportPreview() {
@@ -19,7 +12,7 @@ export function ReportPreview() {
   const html = useMemo(() => {
     if (!content) return '';
     try {
-      return marked.parse(content) as string;
+      return reportMarkdown.parse(content) as string;
     } catch {
       return `<pre>${escapeHtml(content)}</pre>`;
     }
@@ -28,7 +21,12 @@ export function ReportPreview() {
   if (!content) {
     return (
       <div style={styles.empty}>
-        <p>No report generated. Complete the summary stage to see the final report.</p>
+        <div style={styles.emptyIcon}>📋</div>
+        <div style={styles.emptyTitle}>No Report Generated</div>
+        <div style={styles.emptyDesc}>
+          Complete the summary stage to see the final report.<br />
+          The report includes design analysis, verification results, and recommendations.
+        </div>
       </div>
     );
   }
@@ -45,13 +43,6 @@ export function ReportPreview() {
       />
     </div>
   );
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -75,8 +66,13 @@ const styles: Record<string, React.CSSProperties> = {
   empty: {
     flex: 1,
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     color: '#606070',
+    gap: 8,
   },
+  emptyIcon: { fontSize: 40, opacity: 0.4 },
+  emptyTitle: { fontSize: 16, fontWeight: 600, color: '#808090' },
+  emptyDesc: { fontSize: 13, color: '#505060', textAlign: 'center', lineHeight: 1.6 },
 };
