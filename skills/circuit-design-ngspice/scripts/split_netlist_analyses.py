@@ -12,6 +12,10 @@ from pathlib import Path
 MEAS_NAME_RE = re.compile(r"^\s*\.meas(?:ure)?\s+\w+\s+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 COMMENT_PREFIXES = ("*", ";", "//", "$")
 VDB_RE = re.compile(r"\bvdb\s*\(\s*([^)]+?)\s*\)", re.IGNORECASE)
+VOLTAGE_NODE_RE = re.compile(
+    r"\b(?:v|vm|vp|vr|vi|vdb)\s*\(\s*([A-Za-z_][A-Za-z0-9_.$:-]*)",
+    re.IGNORECASE,
+)
 SPICE_SUFFIXES = {
     "t": 1e12,
     "g": 1e9,
@@ -78,6 +82,19 @@ def is_independent_source(tokens: list[str]) -> bool:
 
 def has_ac_stimulus(stripped: str) -> bool:
     return re.search(r"\bac\b", stripped, re.IGNORECASE) is not None
+
+
+def has_dc_stimulus(tokens: list[str]) -> bool:
+    source_tokens = tokens[3:]
+    if not source_tokens:
+        return False
+    lowered = [token.lower() for token in source_tokens]
+    if "dc" in lowered:
+        return True
+    first = lowered[0]
+    return first != "ac" and not any(
+        first.startswith(keyword) for keyword in ("sin(", "pulse(", "pwl(", "exp(", "sffm(")
+    )
 
 
 def has_time_domain_stimulus(stripped: str) -> bool:
@@ -191,11 +208,21 @@ def ensure_ac_print(ac_lines: list[str], warnings: list[str]) -> list[str]:
             and second_token(line.strip().lstrip("\ufeff")) == "ac"
         )
     ]
+    nodes: list[str] = []
+    for line in ac_lines:
+        for match in VOLTAGE_NODE_RE.finditer(line):
+            node = match.group(1)
+            if node != "0" and node not in nodes:
+                nodes.append(node)
+
     if len(filtered) != len(ac_lines):
         warnings.append("replaced existing AC print directives with a compact standard print set")
     else:
         warnings.append("inserted AC print directive so ngspice saves vectors for .meas ac")
-    return [*filtered, ".print ac v(in) v(alarm_n) v(bb_out)"]
+    if not nodes:
+        warnings.append("no AC measurement nodes were found; using .print ac all")
+        return [*filtered, ".print ac all"]
+    return [*filtered, f".print ac {' '.join(f'v({node})' for node in nodes)}"]
 
 
 def should_convert_dc_measurement_to_power(name: str) -> bool:
@@ -364,16 +391,17 @@ def main() -> int:
             if is_independent_source(tokens):
                 has_ac = has_ac_stimulus(stripped)
                 has_time = has_time_domain_stimulus(stripped)
-                if has_ac:
+                has_dc = has_dc_stimulus(tokens)
+                if has_ac or has_dc:
                     ac_lines.append(line)
-                if has_time:
+                if has_time or has_dc:
                     power_lines.append(line)
-                if not has_ac and not has_time:
+                if not has_ac and not has_time and not has_dc:
                     ac_lines.append(line)
                     power_lines.append(line)
-                if has_ac and not has_time:
+                if has_ac and not has_time and not has_dc:
                     result["warnings"].append(f"kept AC-only source out of {power_analysis} split: {tokens[0]}")
-                if has_time and not has_ac:
+                if has_time and not has_ac and not has_dc:
                     result["warnings"].append(f"kept time-domain source out of AC split: {tokens[0]}")
                 continue
             ac_lines.append(line)

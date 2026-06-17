@@ -3,7 +3,7 @@ interface Props {
   color?: string;
 }
 
-export function Spinner({ size = 24, color = '#e94560' }: Props) {
+export function Spinner({ size = 24, color = '#2563eb' }: Props) {
   return (
     <span
       style={{

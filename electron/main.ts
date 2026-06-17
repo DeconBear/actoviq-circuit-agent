@@ -6,6 +6,8 @@ import { registerChatHandlers } from './ipc/chat.js';
 import { registerWorkflowHandlers } from './ipc/workflow.js';
 import { registerFileHandlers } from './ipc/fileTools.js';
 import { registerSettingsHandlers } from './ipc/settings.js';
+import { registerWorkspaceHandlers } from './ipc/workspaces.js';
+import { registerProjectHandlers } from './ipc/projects.js';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -30,8 +32,10 @@ function createWindow(): void {
   Menu.setApplicationMenu(menu);
 
   if (!app.isPackaged) {
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    mainWindow.loadURL('http://127.0.0.1:5173');
+    if (process.env.ACTOVIQ_E2E !== '1') {
+      mainWindow.webContents.openDevTools({ mode: 'detach' });
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist-renderer', 'index.html'));
   }
@@ -46,6 +50,8 @@ function registerIpcHandlers(): void {
   registerWorkflowHandlers(ipcMain);
   registerFileHandlers(ipcMain);
   registerSettingsHandlers(ipcMain);
+  registerWorkspaceHandlers(ipcMain);
+  registerProjectHandlers(ipcMain);
 }
 
 app.whenReady().then(() => {

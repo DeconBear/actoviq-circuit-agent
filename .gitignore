@@ -9,6 +9,12 @@ jobs/
 sessions/
 actoviq-sessions/
 .tmp-*/
+.tools/
+output/
+.deepseek/
+.playwright-cli/
+playwright-report/
+test-results/
 *.log
 *.tgz
 *.tsbuildinfo

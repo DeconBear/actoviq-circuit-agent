@@ -214,22 +214,22 @@ Markdown prompt and execute shell commands.
 
 ### Installing the Skill
 
-Copy or symlink the skill directory into the agent's skill/plugin folder.
-
-**Claude Code**:
-
 ```powershell
-# Option A: register as a custom slash command
-mkdir C:\Users\<you>\.claude\skills\circuit-design-ngspice
-xcopy /E skills\circuit-design-ngspice C:\Users\<you>\.claude\skills\circuit-design-ngspice\
+# Install the same skill source for both Codex and Claude Code.
+python skills\circuit-design-ngspice\scripts\install_skill.py --agent all --scope user
 ```
 
-**Codex / OpenAI**:
+For a project-scoped install:
 
 ```powershell
-# The agents/openai.yaml provides the interface contract.
-# Copy the entire skill directory into the Codex skills path.
+python skills\circuit-design-ngspice\scripts\install_skill.py `
+  --agent all `
+  --scope project `
+  --project-root C:\path\to\project
 ```
+
+The installer copies one portable source into `.codex/skills/` and
+`.claude/skills/`. Use `--force` to replace an existing installed copy.
 
 **Manual use with any agent**:
 

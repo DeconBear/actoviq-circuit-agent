@@ -11,6 +11,8 @@ import {
   runCircuitDesignWorkflow,
   type WorkflowRunSummary,
 } from '../workflow/circuitDesignWorkflow.js';
+import { buildRevisionRequirement } from '../workflow/revisionRequirement.js';
+export { buildRevisionRequirement } from '../workflow/revisionRequirement.js';
 import {
   type ArtifactName,
   listRecentJobs,
@@ -37,51 +39,6 @@ function effectiveApprovalPolicy(
 async function updateActiveJob(stateStore: TuiStateStore, summary: WorkflowRunSummary): Promise<WorkflowRunSummary> {
   await stateStore.setActiveJob(summary);
   return summary;
-}
-
-export async function buildRevisionRequirement(options: {
-  baseJobId: string;
-  baseJobRoot: string;
-  revisionRequest: string;
-}): Promise<string> {
-  const manifest = await readArtifactSummary(options.baseJobRoot, 'manifest');
-  const report = await readArtifactSummary(options.baseJobRoot, 'design-report');
-  const netlist = await readArtifactSummary(options.baseJobRoot, 'netlist');
-  return [
-    '# Revision Requirement',
-    '',
-    '请基于已有电路设计创建一个修订版，不要覆盖原始 job。',
-    '',
-    `Base job id: ${options.baseJobId}`,
-    `Base job root: ${options.baseJobRoot}`,
-    '',
-    '## User Revision Request',
-    '',
-    options.revisionRequest.trim(),
-    '',
-    '## Base Artifacts',
-    '',
-    `- Manifest: ${manifest.path}`,
-    `- Detailed design report: ${report.path}`,
-    `- Final netlist: ${netlist.path}`,
-    '',
-    '## Base Artifact Preview',
-    '',
-    '### Manifest',
-    manifest.preview ?? '(missing)',
-    '',
-    '### Detailed Design Report',
-    report.preview ?? '(missing)',
-    '',
-    '### Netlist',
-    netlist.preview ?? '(missing)',
-    '',
-    '## Revision Rules',
-    '',
-    '- 保留原设计中仍然有效的拓扑解释和节点命名。',
-    '- 明确写出本次修改改变了哪些模块、参数、验证目标和图纸输出。',
-    '- 重新执行网表验证、仿真和三条渲染路径。',
-  ].join('\n');
 }
 
 export function createTuiWorkflowTools(options: TuiWorkflowToolOptions): AgentToolDefinition[] {

@@ -600,9 +600,11 @@ def infer_mount_policy(comp: dict) -> str:
     comp_type = str(comp.get("type", ""))
     name = str(comp.get("name", "")).lower()
     nodes = [str(node).lower() for node in comp.get("nodes", [])]
-    if comp_type in {"voltage_source", "current_source"}:
+    if comp_type in {"voltage_source", "current_source"} and name.startswith(
+        ("vtest", "itest", "vprobe", "iprobe")
+    ):
         return "testbench_exclude"
-    if name.startswith(("rprobe", "vprobe", "iprobe", "rsrc", "rsource")):
+    if name.startswith(("rload", "rprobe", "vprobe", "iprobe", "rsrc", "rsource")):
         return "optional_testbench"
     if name.startswith(("cdec", "cvdd", "cvcc", "cdd", "cbyp")) and any(
         node.startswith(("vcc", "vdd")) for node in nodes

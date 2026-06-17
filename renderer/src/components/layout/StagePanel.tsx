@@ -56,7 +56,7 @@ export function StagePanel({ collapsed, width, onToggle }: Props) {
               {i < stages.length - 1 && (
                 <div style={{
                   ...styles.connector,
-                  borderColor: stage.status === 'done' ? '#4caf50' : '#2a2a4a',
+                  borderLeftColor: stage.status === 'done' ? '#68ad7e' : '#dfe3e8',
                 }} />
               )}
             </div>
@@ -86,17 +86,18 @@ export function StagePanel({ collapsed, width, onToggle }: Props) {
 
 function statusColor(status: StageState['status']): string {
   switch (status) {
-    case 'running': return '#ff9800';
-    case 'done': return '#4caf50';
-    case 'error': return '#e94560';
-    default: return '#606070';
+    case 'running': return '#a26108';
+    case 'done': return '#267346';
+    case 'error': return '#a32d38';
+    default: return '#8a929d';
   }
 }
 
 const styles: Record<string, React.CSSProperties> = {
   panel: {
-    backgroundColor: '#16213e',
-    borderLeft: '1px solid #0f3460',
+    backgroundColor: '#ffffff',
+    color: '#28313b',
+    borderLeft: '1px solid #dfe3e8',
     display: 'flex',
     flexDirection: 'column',
     overflowY: 'auto',
@@ -104,8 +105,8 @@ const styles: Record<string, React.CSSProperties> = {
   collapsed: {
     width: 32,
     minWidth: 32,
-    backgroundColor: '#16213e',
-    borderLeft: '1px solid #0f3460',
+    backgroundColor: '#ffffff',
+    borderLeft: '1px solid #dfe3e8',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -116,13 +117,13 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '10px 12px',
-    borderBottom: '1px solid #0f3460',
+    borderBottom: '1px solid #dfe3e8',
   },
   title: { fontWeight: 600, fontSize: 14 },
   toggleBtn: {
     background: 'transparent',
     border: 'none',
-    color: '#a0a0b0',
+    color: '#69727d',
     cursor: 'pointer',
     fontSize: 14,
     padding: '2px 6px',
@@ -132,7 +133,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '0 14px 8px',
     fontSize: 12,
     fontWeight: 600,
-    color: '#808090',
+    color: '#7b8490',
     textTransform: 'uppercase',
     letterSpacing: '0.5px',
     display: 'flex',
@@ -140,7 +141,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 6,
   },
   spinner: {
-    color: '#e94560',
+    color: '#2563eb',
     animation: 'actoviq-pulse 1.2s ease-in-out infinite',
     display: 'inline-block',
   },
@@ -162,10 +163,10 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dotRunning: { color: '#ff9800', fontSize: 10 },
-  dotDone: { color: '#4caf50', fontSize: 10 },
-  dotError: { color: '#e94560', fontSize: 10, fontWeight: 700 },
-  dotWaiting: { color: '#404060', fontSize: 10 },
+  dotRunning: { color: '#a26108', fontSize: 10 },
+  dotDone: { color: '#267346', fontSize: 10 },
+  dotError: { color: '#a32d38', fontSize: 10, fontWeight: 700 },
+  dotWaiting: { color: '#a6adb5', fontSize: 10 },
   connector: {
     position: 'absolute',
     left: 8,
@@ -180,11 +181,12 @@ const styles: Record<string, React.CSSProperties> = {
   toolList: { display: 'flex', flexDirection: 'column', padding: '0 14px', gap: 4 },
   toolItem: {
     padding: '4px 8px',
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#f3f5f7',
+    border: '1px solid #e5e8ec',
     borderRadius: 4,
     fontSize: 11,
   },
-  toolName: { fontFamily: "'Cascadia Code', 'Consolas', monospace", color: '#e0e0e0' },
-  toolMeta: { color: '#606080', fontSize: 10, marginTop: 1 },
-  empty: { padding: '8px 14px', color: '#505060', fontSize: 12, fontStyle: 'italic' },
+  toolName: { fontFamily: "'Cascadia Code', 'Consolas', monospace", color: '#303741' },
+  toolMeta: { color: '#8a929d', fontSize: 10, marginTop: 1 },
+  empty: { padding: '8px 14px', color: '#8a929d', fontSize: 12, fontStyle: 'italic' },
 };

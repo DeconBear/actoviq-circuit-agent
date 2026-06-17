@@ -1,42 +1,145 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '../../store/appStore';
+import { createSafeMarkdownParser, escapeHtml } from '../../utils/markdown';
+import { createNetlistNotebook, extractNetlistCode } from '../../utils/netlistNotebook';
 
-export function NetlistEditor() {
-  const content = useAppStore((s) => s.netlistContent);
-  const jobId = useAppStore((s) => s.activeJobId);
-  const setNetlistContent = useAppStore((s) => s.setNetlistContent);
-  const [draft, setDraft] = useState(content);
-  const [dirty, setDirty] = useState(false);
+interface Props {
+  onValidate?: () => void;
+  onReloadProject?: () => Promise<void>;
+  isWorkflowRunning?: boolean;
+}
+
+const notebookMarkdown = createSafeMarkdownParser({
+  codeBlockClassName: 'netlist-code-block',
+  highlightCode: true,
+  showLanguageLabel: true,
+});
+
+export function NetlistEditor({
+  onValidate,
+  onReloadProject,
+  isWorkflowRunning = false,
+}: Props) {
+  const netlistContent = useAppStore((state) => state.netlistContent);
+  const jobId = useAppStore((state) => state.activeJobId);
+  const projectId = useAppStore((state) => state.activeProjectId);
+  const moduleId = useAppStore((state) => state.activeModuleId);
+  const bundle = useAppStore((state) => state.circuitProject);
+  const setNetlistContent = useAppStore((state) => state.setNetlistContent);
+  const moduleRef = bundle?.project.modules.find((module) => module.id === moduleId);
+  const modulePreview = moduleId ? bundle?.module_previews[moduleId] : undefined;
+  const projectContext = Boolean(projectId && moduleId && bundle);
+  const sourceKey = projectContext ? `project:${projectId}:${moduleId}` : `job:${jobId ?? ''}`;
+  const [draft, setDraft] = useState('');
+  const [savedValue, setSavedValue] = useState('');
+  const [mode, setMode] = useState<'edit' | 'preview'>('preview');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveMessage, setSaveMessage] = useState('');
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const loadedSourceKeyRef = useRef('');
 
   useEffect(() => {
-    setDraft(content);
-    setDirty(false);
-    setSaveStatus('idle');
-    setSaveMessage('');
-  }, [content, jobId]);
-
-  const handleSave = useCallback(async () => {
-    if (!jobId || !window.electronAPI || !editorRef.current) return;
-    const value = editorRef.current.getValue();
-    setSaveStatus('saving');
-    setSaveMessage('Saving...');
-    try {
-      await window.electronAPI.writeJobFile(jobId, 'design/design.final.cir', value);
-      setNetlistContent(value);
+    let cancelled = false;
+    async function loadNotebook() {
+      let value = '';
+      if (projectContext) {
+        value = modulePreview?.notebook ?? '';
+      } else if (jobId) {
+        const stored = await window.electronAPI.readJobFile(jobId, 'design/netlist-notebook.md');
+        value = stored || createNetlistNotebook(
+          'Circuit netlist',
+          'This notebook documents the generated workflow netlist.',
+          netlistContent,
+        );
+      }
+      if (cancelled) return;
+      const sourceChanged = loadedSourceKeyRef.current !== sourceKey;
+      loadedSourceKeyRef.current = sourceKey;
       setDraft(value);
-      setDirty(false);
-      setSaveStatus('saved');
-      setSaveMessage('Saved');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setSaveStatus('error');
-      setSaveMessage(`Save failed: ${message}`);
+      setSavedValue(value);
+      if (sourceChanged) {
+        setSaveStatus('idle');
+        setSaveMessage('');
+        setMode('preview');
+      }
     }
-  }, [jobId, setNetlistContent]);
+    void loadNotebook();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, modulePreview?.notebook, netlistContent, projectContext, sourceKey]);
+
+  const dirty = draft !== savedValue;
+  const html = useMemo(() => {
+    if (!draft) return '';
+    try {
+      return notebookMarkdown.parse(draft) as string;
+    } catch {
+      return `<pre>${escapeHtml(draft)}</pre>`;
+    }
+  }, [draft]);
+
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    const value = editorRef.current?.getValue() ?? draft;
+    let netlist: string;
+    try {
+      netlist = extractNetlistCode(value);
+    } catch (error) {
+      setSaveStatus('error');
+      setSaveMessage(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+
+    setSaveStatus('saving');
+    setSaveMessage(projectContext ? 'Saving and rendering SVG...' : 'Saving notebook...');
+    try {
+      if (projectContext && projectId && moduleId) {
+        const result = await window.electronAPI.saveCircuitModuleNotebook(projectId, moduleId, value);
+        if (!result.render.ok) {
+          throw new Error(result.render.error || 'netlistsvg could not render this code block.');
+        }
+        await onReloadProject?.();
+      } else if (jobId) {
+        await Promise.all([
+          window.electronAPI.writeJobFile(jobId, 'design/netlist-notebook.md', value),
+          window.electronAPI.writeJobFile(jobId, 'design/design.final.cir', netlist),
+        ]);
+      } else {
+        return false;
+      }
+      setNetlistContent(netlist);
+      setDraft(value);
+      setSavedValue(value);
+      setSaveStatus('saved');
+      setSaveMessage(projectContext ? 'Saved and SVG refreshed' : 'Notebook saved');
+      return true;
+    } catch (error) {
+      setSaveStatus('error');
+      setSaveMessage(`Save failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }, [draft, jobId, moduleId, onReloadProject, projectContext, projectId, setNetlistContent]);
+
+  const handleSaveAndValidate = useCallback(async () => {
+    const saved = dirty ? await handleSave() : true;
+    if (saved) onValidate?.();
+  }, [dirty, handleSave, onValidate]);
+
+  const handleBuildModule = useCallback(async () => {
+    if (!projectId || !moduleId) return;
+    setSaveStatus('saving');
+    setSaveMessage('Building module notebook source...');
+    try {
+      await window.electronAPI.compileCircuitModule(projectId, moduleId);
+      await onReloadProject?.();
+      setSaveStatus('saved');
+      setSaveMessage('Module built');
+    } catch (error) {
+      setSaveStatus('error');
+      setSaveMessage(error instanceof Error ? error.message : String(error));
+    }
+  }, [moduleId, onReloadProject, projectId]);
 
   const handleMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;
@@ -53,24 +156,56 @@ export function NetlistEditor() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleSave]);
 
-  if (!content) {
+  if (!draft) {
     return (
-      <div style={styles.empty}>
-        <div style={styles.emptyIcon}>🔌</div>
-        <div style={styles.emptyTitle}>No Netlist Loaded</div>
-        <div style={styles.emptyDesc}>
-          Run a design workflow to generate a SPICE netlist.<br />
-          The netlist will appear here for viewing and editing.
+      <div style={styles.empty} data-testid="netlist-notebook-empty">
+        <div style={styles.emptyTitle}>
+          {projectContext ? 'Module netlist has not been built' : 'No netlist loaded'}
         </div>
+        <div style={styles.emptyDesc}>
+          {projectContext
+            ? 'Build the selected Design module to create its Markdown netlist notebook.'
+            : 'Select a completed workflow job to open its netlist notebook.'}
+        </div>
+        {projectContext && (
+          <button style={styles.primaryBtn} onClick={() => void handleBuildModule()}>
+            Build selected module
+          </button>
+        )}
       </div>
     );
   }
 
+  const fileName = projectContext
+    ? `modules/${moduleId}/netlist-notebook.md`
+    : 'design/netlist-notebook.md';
+
   return (
-    <div style={styles.container}>
+    <div style={styles.container} data-testid="netlist-notebook">
       <div style={styles.toolbar}>
-        <span style={styles.fileName}>design/design.final.cir{dirty ? ' *' : ''}</span>
+        <div style={styles.fileGroup}>
+          <span style={styles.contextLabel}>
+            {projectContext ? `${moduleRef?.name ?? moduleId} · Design module` : 'Workflow job'}
+          </span>
+          <span style={styles.fileName}>{fileName}{dirty ? ' *' : ''}</span>
+        </div>
         <div style={styles.toolGroup}>
+          <div style={styles.segmented}>
+            <button
+              style={{ ...styles.segmentBtn, ...(mode === 'edit' ? styles.segmentActive : {}) }}
+              onClick={() => setMode('edit')}
+              data-testid="netlist-mode-edit"
+            >
+              Edit
+            </button>
+            <button
+              style={{ ...styles.segmentBtn, ...(mode === 'preview' ? styles.segmentActive : {}) }}
+              onClick={() => setMode('preview')}
+              data-testid="netlist-mode-preview"
+            >
+              Preview
+            </button>
+          </div>
           {saveMessage && (
             <span style={{
               ...styles.saveStatus,
@@ -79,84 +214,123 @@ export function NetlistEditor() {
               {saveMessage}
             </span>
           )}
-          <button onClick={handleSave} style={styles.saveBtn} disabled={!jobId || saveStatus === 'saving'}>
-            {saveStatus === 'saving' ? 'Saving...' : 'Save (Ctrl+S)'}
+          <button
+            onClick={() => void handleSave()}
+            style={styles.primaryBtn}
+            disabled={saveStatus === 'saving'}
+            data-testid="save-netlist-notebook"
+          >
+            {projectContext ? 'Save & Render' : 'Save'}
           </button>
+          {!projectContext && (
+            <button
+              onClick={() => void handleSaveAndValidate()}
+              style={styles.secondaryBtn}
+              disabled={saveStatus === 'saving' || isWorkflowRunning}
+            >
+              {isWorkflowRunning ? 'Workflow Running' : 'Save & Validate'}
+            </button>
+          )}
         </div>
       </div>
-      <Editor
-        height="100%"
-        defaultLanguage="spice"
-        theme="vs-dark"
-        value={draft}
-        onChange={(value) => {
-          const next = value ?? '';
-          setDraft(next);
-          setDirty(next !== content);
-          if (saveStatus !== 'idle') {
-            setSaveStatus('idle');
-            setSaveMessage('');
-          }
-        }}
-        onMount={handleMount}
-        options={{
-          fontSize: 13,
-          fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
-          lineNumbers: 'on',
-          minimap: { enabled: false },
-          scrollBeyondLastLine: false,
-          wordWrap: 'on',
-          tabSize: 2,
-          automaticLayout: true,
-          readOnly: !jobId,
-        }}
-      />
+      {mode === 'edit' ? (
+        <Editor
+          height="100%"
+          defaultLanguage="markdown"
+          theme="vs"
+          value={draft}
+          onChange={(value) => {
+            setDraft(value ?? '');
+            if (saveStatus !== 'idle') {
+              setSaveStatus('idle');
+              setSaveMessage('');
+            }
+          }}
+          onMount={handleMount}
+          options={{
+            fontSize: 13,
+            fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+            lineNumbers: 'on',
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            tabSize: 2,
+            automaticLayout: true,
+          }}
+        />
+      ) : (
+        <div
+          className="markdown-content netlist-notebook-preview"
+          style={styles.preview}
+          dangerouslySetInnerHTML={{ __html: html }}
+          data-testid="netlist-notebook-preview"
+        />
+      )}
     </div>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: { display: 'flex', flexDirection: 'column', height: '100%' },
+  container: { display: 'flex', flexDirection: 'column', height: '100%', background: '#f7f8fa' },
   toolbar: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '6px 16px',
-    backgroundColor: '#16213e',
-    borderBottom: '1px solid #0f3460',
+    minHeight: 56,
+    padding: '8px 16px',
+    backgroundColor: '#ffffff',
+    borderBottom: '1px solid #dfe3e8',
+    gap: 12,
   },
-  fileName: { fontSize: 12, fontFamily: "'Cascadia Code', 'Consolas', monospace", color: '#a0a0b0' },
-  toolGroup: { display: 'flex', gap: 8 },
-  saveStatus: {
-    alignSelf: 'center',
-    fontSize: 12,
-    color: '#4caf50',
-    maxWidth: 260,
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  saveStatusError: { color: '#e94560' },
-  saveBtn: {
-    padding: '4px 14px',
-    backgroundColor: '#e94560',
+  fileGroup: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
+  contextLabel: { fontSize: 12, color: '#303741', fontWeight: 700 },
+  fileName: { fontSize: 10, fontFamily: "'Cascadia Code', 'Consolas', monospace", color: '#7b8490' },
+  toolGroup: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  segmented: { display: 'flex', border: '1px solid #cbd2da', borderRadius: 5, overflow: 'hidden' },
+  segmentBtn: { border: 0, background: '#fff', color: '#606a75', padding: '5px 10px', cursor: 'pointer', fontSize: 11 },
+  segmentActive: { background: '#eaf2ff', color: '#1f5fbf', fontWeight: 700 },
+  saveStatus: { fontSize: 11, color: '#267346', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' },
+  saveStatusError: { color: '#a32d38' },
+  primaryBtn: {
+    padding: '6px 14px',
+    backgroundColor: '#2563eb',
     color: '#fff',
-    border: 'none',
-    borderRadius: 4,
+    border: '1px solid #2563eb',
+    borderRadius: 5,
     cursor: 'pointer',
-    fontSize: 12,
-    fontWeight: 600,
+    fontSize: 11,
+    fontWeight: 700,
+  },
+  secondaryBtn: {
+    padding: '6px 14px',
+    backgroundColor: '#fff',
+    color: '#3f4a56',
+    border: '1px solid #c5ccd4',
+    borderRadius: 5,
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: 650,
+  },
+  preview: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: '28px max(32px, calc((100% - 920px) / 2)) 80px',
+    color: '#303741',
+    background: '#f7f8fa',
+    fontSize: 14,
+    lineHeight: 1.7,
   },
   empty: {
-    flex: 1,
+    height: '100%',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#606070',
-    gap: 8,
+    color: '#69727d',
+    gap: 10,
+    background: '#f7f8fa',
+    textAlign: 'center',
   },
-  emptyIcon: { fontSize: 40, opacity: 0.4 },
-  emptyTitle: { fontSize: 16, fontWeight: 600, color: '#808090' },
-  emptyDesc: { fontSize: 13, color: '#505060', textAlign: 'center', lineHeight: 1.6 },
+  emptyTitle: { fontSize: 17, fontWeight: 700, color: '#303741' },
+  emptyDesc: { fontSize: 13, color: '#7b8490', maxWidth: 480, lineHeight: 1.6 },
 };

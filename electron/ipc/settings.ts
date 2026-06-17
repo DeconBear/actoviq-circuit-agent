@@ -14,6 +14,9 @@ interface AppSettings {
   haikuModel: string;
   ngspiceBin: string;
   workspaceRoot: string;
+  yunzhishengOcrBaseUrl: string;
+  yunzhishengOcrApiKey: string;
+  yunzhishengOcrModel: string;
 }
 
 const settingsDir = path.resolve(homedir(), '.actoviq');
@@ -27,9 +30,12 @@ const defaultSettings: AppSettings = {
   haikuModel: 'claude-haiku-4-5-20251001',
   ngspiceBin: '',
   workspaceRoot: '',
+  yunzhishengOcrBaseUrl: '',
+  yunzhishengOcrApiKey: '',
+  yunzhishengOcrModel: '',
 };
 
-async function loadSettings(): Promise<AppSettings> {
+export async function loadSettings(): Promise<AppSettings> {
   try {
     const raw = await readFile(settingsPath, 'utf8');
     const saved = JSON.parse(raw);

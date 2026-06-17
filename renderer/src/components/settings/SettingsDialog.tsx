@@ -98,6 +98,13 @@ export function SettingsDialog({ onClose }: Props) {
                 <h3 style={styles.sectionTitle}>Workspace</h3>
                 <Field label="Workspace Root" value={settings.workspaceRoot} onChange={(v) => update('workspaceRoot', v)} placeholder="Leave blank for default" />
               </section>
+
+              <section style={styles.section}>
+                <h3 style={styles.sectionTitle}>Yunzhisheng OCR</h3>
+                <Field label="OCR Endpoint" value={settings.yunzhishengOcrBaseUrl} onChange={(v) => update('yunzhishengOcrBaseUrl', v)} placeholder="https://.../ocr" />
+                <Field label="OCR API Key" value={settings.yunzhishengOcrApiKey} onChange={(v) => update('yunzhishengOcrApiKey', v)} type="password" />
+                <Field label="OCR Model" value={settings.yunzhishengOcrModel} onChange={(v) => update('yunzhishengOcrModel', v)} placeholder="Optional model name" />
+              </section>
             </>
           )}
         </div>
@@ -138,14 +145,14 @@ function Field({ label, value, onChange, type, placeholder }: {
 
 const fieldStyles: Record<string, React.CSSProperties> = {
   wrapper: { marginBottom: 10 },
-  label: { display: 'block', fontSize: 12, color: '#808090', marginBottom: 4 },
+  label: { display: 'block', fontSize: 12, color: '#69727d', marginBottom: 4 },
   input: {
     width: '100%',
     padding: '6px 10px',
-    backgroundColor: '#1a1a2e',
-    border: '1px solid #0f3460',
+    backgroundColor: '#ffffff',
+    border: '1px solid #c8cfd7',
     borderRadius: 4,
-    color: '#e0e0e0',
+    color: '#303741',
     fontSize: 13,
     outline: 'none',
   },
@@ -155,15 +162,15 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(32,42,56,0.24)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 200,
   },
   dialog: {
-    backgroundColor: '#16213e',
-    border: '1px solid #0f3460',
+    backgroundColor: '#ffffff',
+    border: '1px solid #dfe3e8',
     borderRadius: 12,
     width: 520,
     maxHeight: '80vh',
@@ -175,21 +182,21 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '16px 24px',
-    borderBottom: '1px solid #0f3460',
+    borderBottom: '1px solid #dfe3e8',
   },
-  title: { color: '#e94560', fontSize: 18, margin: 0 },
+  title: { color: '#2563eb', fontSize: 18, margin: 0 },
   closeBtn: {
     background: 'transparent',
     border: 'none',
-    color: '#a0a0b0',
+    color: '#69727d',
     cursor: 'pointer',
     fontSize: 18,
   },
   body: { padding: '16px 24px', overflowY: 'auto', flex: 1 },
-  statusMsg: { color: '#a0a0b0', textAlign: 'center', padding: 24 },
+  statusMsg: { color: '#69727d', textAlign: 'center', padding: 24 },
   errorMsg: {
-    backgroundColor: '#4a1a1a',
-    border: '1px solid #e94560',
+    backgroundColor: '#fff0f2',
+    border: '1px solid #e7b8be',
     borderRadius: 6,
     padding: '10px 14px',
     marginBottom: 12,
@@ -197,11 +204,11 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 12,
-    color: '#e0e0e0',
+    color: '#a32d38',
     fontSize: 13,
   },
   dismissBtn: {
-    background: '#e94560',
+    background: '#a32d38',
     color: '#fff',
     border: 'none',
     borderRadius: 4,
@@ -213,7 +220,7 @@ const styles: Record<string, React.CSSProperties> = {
   section: { marginBottom: 20 },
   sectionTitle: {
     fontSize: 13,
-    color: '#e94560',
+    color: '#2563eb',
     marginBottom: 12,
     marginTop: 0,
     fontWeight: 600,
@@ -225,11 +232,11 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'flex-end',
     gap: 10,
     padding: '12px 24px',
-    borderTop: '1px solid #0f3460',
+    borderTop: '1px solid #dfe3e8',
   },
   saveBtn: {
     padding: '8px 20px',
-    backgroundColor: '#e94560',
+    backgroundColor: '#2563eb',
     color: '#fff',
     border: 'none',
     borderRadius: 6,
@@ -240,8 +247,8 @@ const styles: Record<string, React.CSSProperties> = {
   cancelBtn: {
     padding: '8px 20px',
     backgroundColor: 'transparent',
-    color: '#a0a0b0',
-    border: '1px solid #0f3460',
+    color: '#59636e',
+    border: '1px solid #c8cfd7',
     borderRadius: 6,
     cursor: 'pointer',
     fontSize: 14,

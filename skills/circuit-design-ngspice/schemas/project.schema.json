@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/project.schema.json",
+  "title": "Actoviq Circuit Project",
+  "type": "object",
+  "required": ["schema", "project_id", "name", "revision", "modules", "connections"],
+  "properties": {
+    "schema": { "const": "actoviq.project.v1" },
+    "project_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "kind", "source", "position", "size", "ports"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "minLength": 1 },
+          "function": { "type": "string" },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "notes": { "type": "string" },
+          "preview_enabled": { "type": "boolean" },
+          "source": { "type": "string", "minLength": 1 },
+          "position": { "$ref": "#/$defs/position" },
+          "size": {
+            "type": "object",
+            "required": ["width", "height"],
+            "properties": {
+              "width": { "type": "number", "exclusiveMinimum": 0 },
+              "height": { "type": "number", "exclusiveMinimum": 0 }
+            },
+            "additionalProperties": false
+          },
+          "ports": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/port" }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "connections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "from", "to"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "from": { "$ref": "#/$defs/endpoint" },
+          "to": { "$ref": "#/$defs/endpoint" },
+          "network": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "analyses": { "type": "object" }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "port": {
+      "type": "object",
+      "required": ["id", "name", "direction", "signal_type", "net"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "direction": { "enum": ["input", "output", "bidirectional"] },
+        "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
+        "net": { "type": "string", "minLength": 1 },
+        "network": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "endpoint": {
+      "type": "object",
+      "required": ["module_id", "port_id"],
+      "properties": {
+        "module_id": { "type": "string", "minLength": 1 },
+        "port_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

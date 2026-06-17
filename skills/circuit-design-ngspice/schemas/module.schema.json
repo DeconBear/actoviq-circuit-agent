@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/module.schema.json",
+  "title": "Actoviq Circuit Module",
+  "type": "object",
+  "required": ["schema", "module_id", "name", "revision", "ports", "components"],
+  "properties": {
+    "schema": { "const": "actoviq.module.v1" },
+    "module_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "ports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "direction", "signal_type", "net"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "direction": { "enum": ["input", "output", "bidirectional"] },
+          "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
+          "net": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "name", "value", "position", "rotation", "pins"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "type": { "enum": ["R", "C", "L", "D", "Q", "M", "V", "I"] },
+          "name": { "type": "string", "minLength": 1 },
+          "value": { "type": "string", "minLength": 1 },
+          "position": {
+            "type": "object",
+            "required": ["x", "y"],
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" }
+            },
+            "additionalProperties": false
+          },
+          "rotation": { "type": "number" },
+          "pins": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": ["id", "name", "net"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "name": { "type": "string", "minLength": 1 },
+                "net": { "type": "string", "minLength": 1 }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "wires": { "type": "array" },
+    "annotations": { "type": "array" }
+  },
+  "additionalProperties": true
+}

@@ -213,21 +213,22 @@ AI 编程工具中直接使用。
 
 ### 安装 Skill
 
-将 skill 目录复制或软链接到 agent 的 skill/插件目录。
-
-**Claude Code**：
-
 ```powershell
-# 方案 A：注册为自定义斜杠命令
-mkdir C:\Users\<你的用户名>\.claude\skills\circuit-design-ngspice
-xcopy /E skills\circuit-design-ngspice C:\Users\<你的用户名>\.claude\skills\circuit-design-ngspice\
+# 将同一份 skill 安装到 Codex 和 Claude Code
+python skills\circuit-design-ngspice\scripts\install_skill.py --agent all --scope user
 ```
 
-**Codex / OpenAI**：
+项目级安装：
 
 ```powershell
-# agents/openai.yaml 提供了接口契约，将整个 skill 目录复制到 Codex skills 路径即可。
+python skills\circuit-design-ngspice\scripts\install_skill.py `
+  --agent all `
+  --scope project `
+  --project-root C:\path\to\project
 ```
+
+安装器会将同一份可移植 skill 复制到 `.codex/skills/` 与
+`.claude/skills/`。已有安装需要更新时使用 `--force`。
 
 **在任意 agent 中手动使用**：
 

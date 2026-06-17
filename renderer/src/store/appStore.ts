@@ -1,7 +1,18 @@
 import { create } from 'zustand';
-import type { ChatMessage, ConversationSummary, StageState, ToolCallEntry } from '../types';
+import type {
+  ChatMessage,
+  CircuitBuildState,
+  CircuitProjectBundle,
+  CircuitProjectSummary,
+  ConversationSummary,
+  ModuleManifest,
+  ReferenceDocument,
+  StageState,
+  ToolCallEntry,
+  WorkspaceSummary,
+} from '../types';
 
-export type TabKey = 'chat' | 'netlist' | 'svg' | 'simulation' | 'report';
+export type TabKey = 'design' | 'netlist' | 'svg' | 'simulation' | 'report';
 export type ApprovalPolicy = 'manual' | 'execution' | 'all';
 export type ThemeMode = 'dark' | 'light';
 
@@ -15,6 +26,7 @@ export interface SimulationMetric {
 interface AppState {
   // UI
   activeTab: TabKey;
+  chatOpen: boolean;
   sidebarCollapsed: boolean;
   stagePanelCollapsed: boolean;
   settingsOpen: boolean;
@@ -23,6 +35,16 @@ interface AppState {
 
   // Job
   activeJobId: string | null;
+  activeProjectId: string | null;
+  activeModuleId: string | null;
+  activeWorkspace: WorkspaceSummary | null;
+  workspaces: WorkspaceSummary[];
+  referenceDocuments: ReferenceDocument[];
+  circuitProjects: CircuitProjectSummary[];
+  circuitProject: CircuitProjectBundle | null;
+  circuitBuild: CircuitBuildState | null;
+  circuitBusy: boolean;
+  circuitError: string;
 
   // Workflow
   messages: ChatMessage[];
@@ -41,18 +63,31 @@ interface AppState {
   svgContent: string;
   reportContent: string;
   simulationData: SimulationMetric[] | null;
+  moduleManifest: ModuleManifest | null;
 
   // Settings
   approvalPolicy: ApprovalPolicy;
 
   // Actions
   setActiveTab: (tab: TabKey) => void;
+  setChatOpen: (open: boolean) => void;
+  toggleChatOpen: () => void;
   toggleSidebar: () => void;
   toggleStagePanel: () => void;
   setSettingsOpen: (open: boolean) => void;
   setSetupWizardOpen: (open: boolean) => void;
   setTheme: (theme: ThemeMode) => void;
   setActiveJobId: (id: string | null) => void;
+  setActiveProjectId: (id: string | null) => void;
+  setActiveModuleId: (id: string | null) => void;
+  setActiveWorkspace: (workspace: WorkspaceSummary | null) => void;
+  setWorkspaces: (workspaces: WorkspaceSummary[]) => void;
+  setReferenceDocuments: (documents: ReferenceDocument[]) => void;
+  setCircuitProjects: (projects: CircuitProjectSummary[]) => void;
+  setCircuitProject: (project: CircuitProjectBundle | null) => void;
+  setCircuitBuild: (build: CircuitBuildState | null) => void;
+  setCircuitBusy: (busy: boolean) => void;
+  setCircuitError: (error: string) => void;
   setApprovalPolicy: (policy: ApprovalPolicy) => void;
   setIsRunning: (running: boolean) => void;
   addMessage: (msg: ChatMessage) => void;
@@ -67,6 +102,7 @@ interface AppState {
   setSvgContent: (content: string) => void;
   setReportContent: (content: string) => void;
   setSimulationData: (data: SimulationMetric[] | null) => void;
+  setModuleManifest: (manifest: ModuleManifest | null) => void;
   resetWorkflow: (options?: { preserveMessages?: boolean }) => void;
   setConversationId: (id: string) => void;
   setConversationJobId: (jobId: string, conversationId?: string) => void;
@@ -76,13 +112,24 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  activeTab: 'chat',
+  activeTab: 'design',
+  chatOpen: false,
   sidebarCollapsed: false,
-  stagePanelCollapsed: false,
+  stagePanelCollapsed: true,
   settingsOpen: false,
   setupWizardOpen: false,
-  theme: 'dark',
+  theme: 'light',
   activeJobId: null,
+  activeProjectId: null,
+  activeModuleId: null,
+  activeWorkspace: null,
+  workspaces: [],
+  referenceDocuments: [],
+  circuitProjects: [],
+  circuitProject: null,
+  circuitBuild: null,
+  circuitBusy: false,
+  circuitError: '',
   messages: [],
   stages: [],
   toolCalls: [],
@@ -95,15 +142,28 @@ export const useAppStore = create<AppState>((set) => ({
   svgContent: '',
   reportContent: '',
   simulationData: null,
+  moduleManifest: null,
   approvalPolicy: 'execution',
 
   setActiveTab: (tab) => set({ activeTab: tab }),
+  setChatOpen: (open) => set({ chatOpen: open }),
+  toggleChatOpen: () => set((s) => ({ chatOpen: !s.chatOpen })),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   toggleStagePanel: () => set((s) => ({ stagePanelCollapsed: !s.stagePanelCollapsed })),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setSetupWizardOpen: (open) => set({ setupWizardOpen: open }),
   setTheme: (theme) => set({ theme }),
   setActiveJobId: (id) => set({ activeJobId: id }),
+  setActiveProjectId: (id) => set({ activeProjectId: id }),
+  setActiveModuleId: (id) => set({ activeModuleId: id }),
+  setActiveWorkspace: (workspace) => set({ activeWorkspace: workspace }),
+  setWorkspaces: (workspaces) => set({ workspaces }),
+  setReferenceDocuments: (documents) => set({ referenceDocuments: documents }),
+  setCircuitProjects: (projects) => set({ circuitProjects: projects }),
+  setCircuitProject: (project) => set({ circuitProject: project }),
+  setCircuitBuild: (build) => set({ circuitBuild: build }),
+  setCircuitBusy: (busy) => set({ circuitBusy: busy }),
+  setCircuitError: (error) => set({ circuitError: error }),
   setApprovalPolicy: (policy) => set({ approvalPolicy: policy }),
   setIsRunning: (running) => set({ isRunning: running }),
   addMessage: (msg) =>
@@ -156,6 +216,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSvgContent: (content) => set({ svgContent: content }),
   setReportContent: (content) => set({ reportContent: content }),
   setSimulationData: (data) => set({ simulationData: data }),
+  setModuleManifest: (manifest) => set({ moduleManifest: manifest }),
   resetWorkflow: (options) =>
     set({
       outputText: '',
@@ -164,6 +225,7 @@ export const useAppStore = create<AppState>((set) => ({
       svgContent: '',
       reportContent: '',
       simulationData: null,
+      moduleManifest: null,
       ...(options?.preserveMessages ? {} : { messages: [] }),
       stages: [],
     }),

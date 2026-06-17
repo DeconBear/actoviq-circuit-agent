@@ -7,8 +7,11 @@ Used for partitioned (multi-module) designs. Write this during the architecture 
 ```json
 {
   "strategy": "single_block",
+  "project_name": "example_design",
   "complexity_score": 15,
   "shared_nets": ["vdd", "0"],
+  "top_level_input_nets": ["in"],
+  "top_level_output_nets": ["out"],
   "modules": [
     {
       "name": "input_stage",
@@ -43,3 +46,7 @@ Used for partitioned (multi-module) designs. Write this during the architecture 
 - Each module section starts with `* MODULE <order>: <name>`
 - Final netlist is a flat concatenation of all module sections
 - Module output nets must not be reused as intermediate nets in other modules
+- Component names must be globally unique.
+- Private nets must start with the module's `local_net_prefix`.
+- Non-top-level interface nets need one producer and at least one consumer.
+- Run `validate_module_interfaces.py` before `compose_modules.py`.

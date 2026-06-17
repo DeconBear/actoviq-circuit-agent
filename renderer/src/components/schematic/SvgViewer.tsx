@@ -2,7 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
 
 export function SvgViewer() {
-  const svgContent = useAppStore((s) => s.svgContent);
+  const workflowSvg = useAppStore((s) => s.svgContent);
+  const projectId = useAppStore((s) => s.activeProjectId);
+  const moduleId = useAppStore((s) => s.activeModuleId);
+  const bundle = useAppStore((s) => s.circuitProject);
+  const moduleRef = bundle?.project.modules.find((module) => module.id === moduleId);
+  const modulePreview = moduleId ? bundle?.module_previews[moduleId] : undefined;
+  const projectContext = Boolean(projectId && moduleId && bundle);
+  const svgContent = projectContext ? modulePreview?.svg ?? '' : workflowSvg;
+  const contextLabel = projectContext
+    ? `${moduleRef?.name ?? moduleId} · same module as Design and Netlist`
+    : 'Workflow schematic';
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -59,8 +69,11 @@ export function SvgViewer() {
     const a = document.createElement('a');
     a.href = url;
     a.download = 'schematic.svg';
+    a.style.display = 'none';
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, [svgContent]);
 
   if (!svgContent) {
@@ -69,8 +82,9 @@ export function SvgViewer() {
         <div style={styles.emptyIcon}>📐</div>
         <div style={styles.emptyTitle}>No Schematic Generated</div>
         <div style={styles.emptyDesc}>
-          Complete the rendering stage to see the SVG schematic.<br />
-          You can pan and zoom the schematic once generated.
+          {projectContext
+            ? 'Build or save the selected module Netlist notebook to generate its matching SVG.'
+            : 'Complete the rendering stage to see the workflow SVG schematic.'}
         </div>
       </div>
     );
@@ -79,7 +93,7 @@ export function SvgViewer() {
   return (
     <div style={styles.container}>
       <div style={styles.toolbar}>
-        <span style={styles.label}>Schematic</span>
+        <span style={styles.label} data-testid="svg-context-label">{contextLabel}</span>
         <div style={styles.toolGroup}>
           <button onClick={() => setScale((s) => Math.min(4, s + 0.25))} style={styles.btn}>+</button>
           <span style={styles.scaleText}>{Math.round(scale * 100)}%</span>
@@ -96,6 +110,7 @@ export function SvgViewer() {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        data-testid="schematic-svg-viewport"
       >
         <div
           style={{
@@ -159,24 +174,24 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '6px 16px',
-    backgroundColor: '#16213e',
-    borderBottom: '1px solid #0f3460',
+    backgroundColor: '#ffffff',
+    borderBottom: '1px solid #dfe3e8',
   },
-  label: { fontSize: 12, color: '#a0a0b0' },
+  label: { fontSize: 12, color: '#4f5965', fontWeight: 650 },
   toolGroup: { display: 'flex', alignItems: 'center', gap: 6 },
   btn: {
-    background: '#1a1a2e',
-    color: '#e0e0e0',
-    border: '1px solid #0f3460',
+    background: '#ffffff',
+    color: '#3f4a56',
+    border: '1px solid #c7ced6',
     borderRadius: 4,
     padding: '2px 10px',
     cursor: 'pointer',
     fontSize: 14,
   },
-  scaleText: { fontSize: 12, color: '#a0a0b0', minWidth: 44, textAlign: 'center' },
+  scaleText: { fontSize: 12, color: '#69727d', minWidth: 44, textAlign: 'center' },
   saveBtn: {
     padding: '4px 14px',
-    backgroundColor: '#e94560',
+    backgroundColor: '#2563eb',
     color: '#fff',
     border: 'none',
     borderRadius: 4,
@@ -188,7 +203,7 @@ const styles: Record<string, React.CSSProperties> = {
   viewport: {
     flex: 1,
     overflow: 'hidden',
-    backgroundColor: '#0d1117',
+    backgroundColor: '#f2f4f7',
     position: 'relative',
   },
   svgWrapper: {
@@ -197,7 +212,8 @@ const styles: Record<string, React.CSSProperties> = {
     top: 20,
     backgroundColor: '#ffffff',
     borderRadius: 4,
-    boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+    border: '1px solid #dfe3e8',
+    boxShadow: '0 4px 20px rgba(32, 42, 56, 0.12)',
     padding: 16,
   },
   empty: {
@@ -206,10 +222,10 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#606070',
+    color: '#7b8490',
     gap: 8,
   },
   emptyIcon: { fontSize: 40, opacity: 0.4 },
-  emptyTitle: { fontSize: 16, fontWeight: 600, color: '#808090' },
-  emptyDesc: { fontSize: 13, color: '#505060', textAlign: 'center', lineHeight: 1.6 },
+  emptyTitle: { fontSize: 16, fontWeight: 600, color: '#303741' },
+  emptyDesc: { fontSize: 13, color: '#7b8490', textAlign: 'center', lineHeight: 1.6, maxWidth: 520 },
 };

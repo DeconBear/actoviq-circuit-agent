@@ -131,6 +131,7 @@ export interface RunCircuitDesignWorkflowOptions {
   jobName?: string;
   resumeJob?: string;
   jobParentDir?: string;
+  rerunFromStage?: string;
 }
 
 export interface WorkflowRunSummary {
@@ -445,6 +446,15 @@ function determineResumeStageIndex(
     }
   }
   return stages.length;
+}
+
+function resolveStageIndex(stages: WorkflowStage[], stageKeyOrLabel: string): number {
+  const target = stageKeyOrLabel.trim().toLowerCase();
+  return stages.findIndex((stage) =>
+    stage.key.toLowerCase() === target ||
+    stage.label.toLowerCase() === target ||
+    stage.label.toLowerCase().includes(target)
+  );
 }
 
 async function inspectArtifacts(
@@ -1289,9 +1299,18 @@ export async function runCircuitDesignWorkflow(
   try {
     const stages = createWorkflowStages(paths, requirement);
     const state = await readWorkflowStateFile(paths.workflowStatePath);
-    const resumeIndex = determineResumeStageIndex(stages, state);
+    const requestedRerunStage = options.rerunFromStage?.trim();
+    const rerunIndex = requestedRerunStage ? resolveStageIndex(stages, requestedRerunStage) : -1;
+    if (requestedRerunStage && rerunIndex < 0) {
+      throw new Error(`Unknown workflow stage for rerun: ${requestedRerunStage}`);
+    }
+    const resumeIndex = rerunIndex >= 0 ? rerunIndex : determineResumeStageIndex(stages, state);
     const latestStatuses = latestStageStatusByKey(state);
     let lastStageLabel = resumeIndex > 0 ? (stages[resumeIndex - 1]?.label ?? '用户输入') : '用户输入';
+
+    if (isResume && rerunIndex >= 0) {
+      writeStdout(`[rerun-from-stage] ${stages[rerunIndex]!.key} (${stages[rerunIndex]!.label})\n`);
+    }
 
     if (isResume && resumeIndex >= stages.length) {
       writeStdout('[workflow] 所有阶段都已完成，本次 resume 无需继续执行。\n');
@@ -1380,6 +1399,5 @@ export async function runCircuitDesignWorkflow(
     await sdk.close();
   }
 }
-
 
 

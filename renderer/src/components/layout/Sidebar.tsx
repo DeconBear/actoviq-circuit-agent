@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
+import type { ReferenceDocument, WorkspaceSummary } from '../../types';
+import type { CircuitProjectSummary } from '../../types';
 
 interface JobEntry {
   jobId: string;
@@ -14,11 +16,39 @@ interface Props {
   activeJobId: string | null;
   onSelectJob: (jobId: string) => void;
   onNewDesign: () => void;
+  activeWorkspace: WorkspaceSummary | null;
+  workspaces: WorkspaceSummary[];
+  referenceDocuments: ReferenceDocument[];
+  onSelectWorkspace: (id: string) => void;
+  onCreateWorkspace: () => void;
+  onRefreshReferences: () => void;
+  circuitProjects: CircuitProjectSummary[];
+  activeProjectId: string | null;
+  onSelectProject: (projectId: string) => void;
+  onCreateProject: (demo: boolean) => void;
 }
 
-export function Sidebar({ collapsed, width, onToggle, activeJobId, onSelectJob, onNewDesign }: Props) {
+export function Sidebar({
+  collapsed,
+  width,
+  onToggle,
+  activeJobId,
+  onSelectJob,
+  onNewDesign,
+  activeWorkspace,
+  workspaces,
+  referenceDocuments,
+  onSelectWorkspace,
+  onCreateWorkspace,
+  onRefreshReferences,
+  circuitProjects,
+  activeProjectId,
+  onSelectProject,
+  onCreateProject,
+}: Props) {
   const [jobs, setJobs] = useState<JobEntry[]>([]);
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
+  const [ocrRunningPath, setOcrRunningPath] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const conversations = useAppStore((s) => s.conversations);
   const conversationId = useAppStore((s) => s.conversationId);
@@ -34,10 +64,27 @@ export function Sidebar({ collapsed, width, onToggle, activeJobId, onSelectJob, 
 
   useEffect(() => {
     refreshJobs();
-    // Refresh every 30 seconds
-    const interval = setInterval(refreshJobs, 30000);
+    // Keep externally generated skill jobs visible without requiring a manual refresh.
+    const interval = setInterval(refreshJobs, 5000);
     return () => clearInterval(interval);
-  }, [refreshJobs]);
+  }, [refreshJobs, activeWorkspace?.id]);
+
+  const handleRunOcr = useCallback(async (relativePath: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.electronAPI) return;
+    setOcrRunningPath(relativePath);
+    setNotice(null);
+    try {
+      const result = await window.electronAPI.runReferenceOcr(relativePath);
+      setNotice({ type: 'ok', text: `OCR saved: ${result.textPath}` });
+      onRefreshReferences();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotice({ type: 'error', text: `OCR failed: ${message}` });
+    } finally {
+      setOcrRunningPath(null);
+    }
+  }, [onRefreshReferences]);
 
   const handleSelectConversation = useCallback((convId: string) => {
     setConversationId(convId);
@@ -84,13 +131,34 @@ export function Sidebar({ collapsed, width, onToggle, activeJobId, onSelectJob, 
   return (
     <div style={{ ...styles.panel, width, minWidth: width }}>
       <div style={styles.header}>
-        <span style={styles.title}>Jobs</span>
+        <span style={styles.title}>Workspace</span>
         <div style={styles.headerActions}>
           <button onClick={refreshJobs} style={styles.refreshBtn} title="Refresh">↻</button>
           <button onClick={onToggle} style={styles.toggleBtn} title="Collapse sidebar">←</button>
         </div>
       </div>
-      <button onClick={onNewDesign} style={styles.newBtn}>+ New Design</button>
+      <div style={styles.workspaceBox}>
+        <select
+          value={activeWorkspace?.id ?? ''}
+          onChange={(event) => onSelectWorkspace(event.target.value)}
+          style={styles.workspaceSelect}
+        >
+          {workspaces.map((workspace) => (
+            <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+          ))}
+        </select>
+        <div style={styles.workspaceActions}>
+          <button onClick={onCreateWorkspace} style={styles.smallBtn}>+ Workspace</button>
+          <button onClick={() => window.electronAPI?.openWorkspaceRoot()} style={styles.smallBtn}>Open Root</button>
+        </div>
+        {activeWorkspace && (
+          <div style={styles.workspacePath}>{activeWorkspace.root}</div>
+        )}
+      </div>
+      <div style={styles.projectActions}>
+        <button onClick={() => onCreateProject(true)} style={styles.newBtn}>+ Demo Project</button>
+        <button onClick={() => onCreateProject(false)} style={styles.blankProjectBtn}>Blank</button>
+      </div>
       {notice && (
         <div style={{
           ...styles.notice,
@@ -100,6 +168,28 @@ export function Sidebar({ collapsed, width, onToggle, activeJobId, onSelectJob, 
         </div>
       )}
       <div style={styles.list}>
+        <div style={styles.sectionHeader}>Circuit Projects</div>
+        {circuitProjects.length === 0 && (
+          <div style={styles.empty}>No circuit projects yet</div>
+        )}
+        {circuitProjects.map((project) => (
+          <div
+            key={project.projectId}
+            onClick={() => onSelectProject(project.projectId)}
+            style={{
+              ...styles.item,
+              ...(activeProjectId === project.projectId ? styles.itemActive : {}),
+            }}
+            data-testid={`sidebar-project-${project.projectId}`}
+          >
+            <div style={styles.itemName}>{project.name}</div>
+            <div style={styles.itemMeta}>
+              <span>{project.moduleCount} modules</span>
+              <span>rev {project.revision}</span>
+            </div>
+          </div>
+        ))}
+        <button onClick={onNewDesign} style={styles.legacyDesignBtn}>Legacy chat design</button>
         {conversations.length > 0 && (
           <>
             <div style={styles.sectionHeader}>Conversations</div>
@@ -120,6 +210,32 @@ export function Sidebar({ collapsed, width, onToggle, activeJobId, onSelectJob, 
             ))}
           </>
         )}
+        <div style={styles.sectionHeader}>
+          References
+          <div style={styles.sectionActions}>
+            <button onClick={() => window.electronAPI?.openWorkspaceReferences()} style={styles.inlineActionBtn}>Open</button>
+            <button onClick={onRefreshReferences} style={styles.inlineActionBtn}>Refresh</button>
+          </div>
+        </div>
+        {referenceDocuments.length === 0 && (
+          <div style={styles.empty}>Put PDFs or images in references/</div>
+        )}
+        {referenceDocuments.slice(0, 8).map((doc) => (
+          <div key={doc.relativePath} style={styles.refItem}>
+            <div style={styles.refTitle}>{doc.relativePath}</div>
+            <div style={styles.refMeta}>
+              {Math.max(1, Math.round(doc.sizeBytes / 1024))} KB
+              {doc.ocrTextPath ? ' · OCR ready' : ''}
+            </div>
+            <button
+              onClick={(event) => handleRunOcr(doc.relativePath, event)}
+              style={styles.refOcrBtn}
+              disabled={ocrRunningPath === doc.relativePath}
+            >
+              {ocrRunningPath === doc.relativePath ? 'OCR...' : 'OCR'}
+            </button>
+          </div>
+        ))}
         <div style={styles.sectionHeader}>Jobs</div>
         {jobs.length === 0 && (
           <div style={styles.empty}>No jobs yet</div>
@@ -152,9 +268,9 @@ export function Sidebar({ collapsed, width, onToggle, activeJobId, onSelectJob, 
             <div style={styles.itemMeta}>
               <span style={{
                 ...styles.status,
-                color: job.status === 'completed' ? '#4caf50' :
-                       job.status === 'failed' ? '#e94560' :
-                       job.status === 'running' ? '#ff9800' : '#a0a0b0',
+                color: job.status === 'completed' ? '#267346' :
+                       job.status === 'failed' ? '#a32d38' :
+                       job.status === 'running' ? '#a26108' : '#69727d',
               }}>
                 {job.status}
               </span>
@@ -173,16 +289,17 @@ export function Sidebar({ collapsed, width, onToggle, activeJobId, onSelectJob, 
 
 const styles: Record<string, React.CSSProperties> = {
   panel: {
-    backgroundColor: '#16213e',
-    borderRight: '1px solid #0f3460',
+    backgroundColor: '#ffffff',
+    color: '#28313b',
+    borderRight: '1px solid #dfe3e8',
     display: 'flex',
     flexDirection: 'column',
   },
   collapsed: {
     width: 32,
     minWidth: 32,
-    backgroundColor: '#16213e',
-    borderRight: '1px solid #0f3460',
+    backgroundColor: '#ffffff',
+    borderRight: '1px solid #dfe3e8',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -193,14 +310,44 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '10px 12px',
-    borderBottom: '1px solid #0f3460',
+    borderBottom: '1px solid #dfe3e8',
   },
   title: { fontWeight: 600, fontSize: 14 },
   headerActions: { display: 'flex', gap: 4 },
+  workspaceBox: {
+    padding: '10px 12px 8px',
+    borderBottom: '1px solid #eef0f2',
+  },
+  workspaceSelect: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    color: '#303741',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    padding: '5px 6px',
+    fontSize: 12,
+  },
+  workspaceActions: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8 },
+  smallBtn: {
+    padding: '5px 6px',
+    backgroundColor: '#ffffff',
+    color: '#59636e',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    cursor: 'pointer',
+    fontSize: 11,
+  },
+  workspacePath: {
+    marginTop: 8,
+    color: '#8a929d',
+    fontSize: 10,
+    lineHeight: 1.35,
+    wordBreak: 'break-all',
+  },
   refreshBtn: {
     background: 'transparent',
     border: 'none',
-    color: '#a0a0b0',
+    color: '#69727d',
     cursor: 'pointer',
     fontSize: 14,
     padding: '2px 6px',
@@ -208,21 +355,41 @@ const styles: Record<string, React.CSSProperties> = {
   toggleBtn: {
     background: 'transparent',
     border: 'none',
-    color: '#a0a0b0',
+    color: '#69727d',
     cursor: 'pointer',
     fontSize: 14,
     padding: '2px 6px',
   },
+  projectActions: { display: 'grid', gridTemplateColumns: '1fr 62px', gap: 6, margin: '10px 12px' },
   newBtn: {
-    margin: '10px 12px',
     padding: '8px 0',
-    backgroundColor: '#e94560',
+    backgroundColor: '#2563eb',
     color: '#fff',
     border: 'none',
     borderRadius: 6,
     cursor: 'pointer',
     fontSize: 13,
     fontWeight: 600,
+  },
+  blankProjectBtn: {
+    padding: '8px 0',
+    backgroundColor: '#ffffff',
+    color: '#3f4a56',
+    border: '1px solid #c8cfd7',
+    borderRadius: 5,
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: 650,
+  },
+  legacyDesignBtn: {
+    margin: '8px 12px 4px',
+    padding: '6px',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    color: '#69727d',
+    background: 'transparent',
+    cursor: 'pointer',
+    fontSize: 10,
   },
   notice: {
     margin: '0 12px 8px',
@@ -233,23 +400,23 @@ const styles: Record<string, React.CSSProperties> = {
     wordBreak: 'break-all',
   },
   noticeOk: {
-    color: '#b7f7c4',
-    backgroundColor: '#15321e',
-    border: '1px solid #2f7d3a',
+    color: '#267346',
+    backgroundColor: '#edf8f1',
+    border: '1px solid #b8dec5',
   },
   noticeError: {
-    color: '#ffd0d6',
-    backgroundColor: '#40171d',
-    border: '1px solid #e94560',
+    color: '#a32d38',
+    backgroundColor: '#fff0f2',
+    border: '1px solid #e7b8be',
   },
   list: { flex: 1, overflowY: 'auto' },
   item: {
     padding: '10px 14px',
     cursor: 'pointer',
-    borderBottom: '1px solid #0f346033',
+    borderBottom: '1px solid #eef0f2',
     transition: 'background 0.1s',
   },
-  itemActive: { backgroundColor: '#0f3460' },
+  itemActive: { backgroundColor: '#eaf2ff', boxShadow: 'inset 3px 0 #2563eb' },
   itemHeader: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -266,32 +433,74 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '1px 4px',
     opacity: 0.7,
   },
-  itemMeta: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#808090' },
+  itemMeta: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#7b8490' },
   status: { fontWeight: 600 },
-  date: { color: '#606080' },
-  empty: { padding: 20, textAlign: 'center', color: '#606070', fontSize: 13 },
+  date: { color: '#8a929d' },
+  empty: { padding: 20, textAlign: 'center', color: '#8a929d', fontSize: 13 },
   sectionHeader: {
     padding: '10px 14px 6px',
     fontSize: 11,
     fontWeight: 600,
-    color: '#808090',
+    color: '#7b8490',
     textTransform: 'uppercase',
     letterSpacing: '0.5px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  sectionActions: { display: 'flex', gap: 4 },
+  inlineActionBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: '#2563eb',
+    cursor: 'pointer',
+    fontSize: 10,
+    padding: 0,
+    textTransform: 'none',
+    letterSpacing: 0,
+  },
+  refItem: {
+    position: 'relative',
+    padding: '8px 58px 8px 14px',
+    borderBottom: '1px solid #eef0f2',
+  },
+  refTitle: {
+    fontSize: 12,
+    color: '#303741',
+    wordBreak: 'break-all',
+    lineHeight: 1.35,
+  },
+  refMeta: {
+    marginTop: 2,
+    fontSize: 10,
+    color: '#8a929d',
+  },
+  refOcrBtn: {
+    position: 'absolute',
+    right: 10,
+    top: 10,
+    backgroundColor: '#ffffff',
+    color: '#59636e',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    cursor: 'pointer',
+    fontSize: 10,
+    padding: '3px 7px',
   },
   convItem: {
     padding: '8px 14px',
     cursor: 'pointer',
-    borderBottom: '1px solid #0f346033',
+    borderBottom: '1px solid #eef0f2',
     transition: 'background 0.1s',
   },
-  convItemActive: { backgroundColor: '#0f3460' },
+  convItemActive: { backgroundColor: '#eaf2ff' },
   convItemTitle: {
     fontSize: 12,
     fontWeight: 500,
-    color: '#e0e0e0',
+    color: '#303741',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
-  convItemMeta: { fontSize: 10, color: '#606080', marginTop: 2 },
+  convItemMeta: { fontSize: 10, color: '#8a929d', marginTop: 2 },
 };

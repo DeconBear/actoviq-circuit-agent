@@ -60,6 +60,15 @@ def resolve_ngspice_bin(cli_value: str) -> tuple[str, str]:
     return "ngspice", "path"
 
 
+def prefer_console_executable(executable: str) -> str:
+    path = Path(executable)
+    if os.name == "nt" and path.name.lower() == "ngspice.exe":
+        console_path = path.with_name("ngspice_con.exe")
+        if console_path.exists():
+            return str(console_path.resolve())
+    return executable
+
+
 def main() -> int:
     args = build_parser().parse_args()
     netlist = Path(args.netlist_path).resolve()
@@ -86,6 +95,8 @@ def main() -> int:
         resolved_executable = str(Path(ngspice_bin).resolve())
     else:
         resolved_executable = shutil.which(ngspice_bin) or ""
+    if resolved_executable:
+        resolved_executable = prefer_console_executable(resolved_executable)
 
     if not resolved_executable:
         result["stderr"] = (

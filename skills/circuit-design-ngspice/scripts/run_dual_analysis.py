@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from parse_results import parse_measurements
-from run_ngspice import resolve_ngspice_bin
+from run_ngspice import prefer_console_executable, resolve_ngspice_bin
 
 
 MAX_LOG_BYTES = 2_000_000
@@ -45,10 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
 def resolve_executable(cli_value: str) -> str:
     exe, _ = resolve_ngspice_bin(cli_value)
     if Path(exe).exists():
-        return str(Path(exe).resolve())
+        return prefer_console_executable(str(Path(exe).resolve()))
     from shutil import which
 
-    return which(exe) or ""
+    resolved = which(exe) or ""
+    return prefer_console_executable(resolved) if resolved else ""
 
 
 def read_text_limited(path: Path, max_bytes: int = MAX_LOG_BYTES) -> str:

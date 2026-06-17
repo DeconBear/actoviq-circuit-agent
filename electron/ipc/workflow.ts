@@ -2,6 +2,7 @@ import { app, BrowserWindow, IpcMain } from 'electron';
 import { ChildProcess, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getActiveWorkspaceRoot } from '../workspaceState.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -122,7 +123,7 @@ async function handleConfirmPrompt(
   });
 }
 
-function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): void {
+async function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): Promise<void> {
   // Kill any previous process to ensure clean state
   if (currentProcess) {
     resolvePendingConfirmation('n');
@@ -137,7 +138,7 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
 
   send(win, {
     type: 'stage-list',
-    data: { stageList: buildStageNames(ALL_STAGE_KEYS) },
+    data: { stageList: buildStageNames(ALL_STAGE_KEYS), rerunFromStage: params.rerunFromStage },
     timestamp: Date.now(),
   });
 
@@ -146,10 +147,22 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
     '--auto-approve',
     '--approval-policy',
     (params.approvalPolicy as string) || 'all',
-    '--requirement',
-    params.requirement as string,
   ];
 
+  if (params.resumeJob) {
+    args.push('--resume-job', params.resumeJob as string);
+  } else {
+    args.push('--requirement', params.requirement as string);
+  }
+  if (params.revisionBaseJob) {
+    args.push('--revision-base-job', params.revisionBaseJob as string);
+  }
+  if (params.jobParentDir) {
+    args.push('--job-parent-dir', params.jobParentDir as string);
+  }
+  if (params.rerunFromStage) {
+    args.push('--rerun-from-stage', params.rerunFromStage as string);
+  }
   if (params.jobName) {
     args.push('--job-name', params.jobName as string);
   }
@@ -159,10 +172,12 @@ function startWorkflow(win: BrowserWindow, params: Record<string, unknown>): voi
 
   const cliPath = resolveCliPath();
   const nodeBin = app.isPackaged ? process.execPath : 'node';
+  const workspaceRoot = await getActiveWorkspaceRoot();
   const proc = spawn(nodeBin, [cliPath, ...args], {
-    cwd: process.cwd(),
+    cwd: workspaceRoot,
     env: {
       ...process.env,
+      ACTOVIQ_CIRCUIT_AGENT_WORKSPACE_ROOT: workspaceRoot,
       NO_COLOR: '1',
       FORCE_COLOR: '0',
     },
@@ -353,7 +368,15 @@ export function registerWorkflowHandlers(ipcMain: IpcMain): void {
   ipcMain.on('workflow:start', (_event, params) => {
     const win = BrowserWindow.getAllWindows()[0];
     if (!win) return;
-    startWorkflow(win, params);
+    startWorkflow(win, params).catch((error: unknown) => {
+      send(win, {
+        type: 'stage-error',
+        stageKey: 'fatal',
+        stageName: 'Fatal Error',
+        data: { error: error instanceof Error ? error.message : String(error) },
+        timestamp: Date.now(),
+      });
+    });
   });
 
   ipcMain.on('workflow:pause', () => {
@@ -382,7 +405,17 @@ export function registerWorkflowHandlers(ipcMain: IpcMain): void {
     killProcess();
     isPaused = false;
     if (lastStartParams) {
-      setTimeout(() => startWorkflow(win, lastStartParams!), 200);
+      setTimeout(() => {
+        startWorkflow(win, lastStartParams!).catch((error: unknown) => {
+          send(win, {
+            type: 'stage-error',
+            stageKey: 'fatal',
+            stageName: 'Fatal Error',
+            data: { error: error instanceof Error ? error.message : String(error) },
+            timestamp: Date.now(),
+          });
+        });
+      }, 200);
     }
   });
 

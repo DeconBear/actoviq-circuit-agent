@@ -20,6 +20,114 @@ designs and SVG schematics. It wraps a suite of Python CLI scripts for
 ngspice simulation, netlist validation, and netlistsvg rendering into a
 step-by-step workflow that any AI coding agent can execute.
 
+## GUI Project Canvas Contract
+
+When the Actoviq desktop GUI is open, treat the active workspace as the
+handoff boundary between the coding agent and the visual app.
+
+- Create or use a project under `<workspace-root>/projects/<project-id>/`.
+- Put user-provided reference files under `<workspace-root>/references/`.
+- If OCR text exists, read it from `<workspace-root>/references/.ocr/`.
+- Treat `project.circuit.json` and each `modules/<id>/module.circuit.json` as
+  the only editable source of truth.
+- Use `scripts/circuit_project.py` for deterministic creation, modification,
+  revision, compilation, and simulation. Do not edit generated files under
+  `build/`.
+- The GUI watches project files and refreshes the corresponding canvas after
+  a successful atomic write.
+
+Create a project:
+
+```bash
+python scripts/circuit_project.py create \
+  --projects-root <workspace-root>/projects \
+  --name "<project name>"
+```
+
+Create the three-module power/amplifier/filter example:
+
+```bash
+python scripts/circuit_project.py create-demo \
+  --projects-root <workspace-root>/projects \
+  --name "<project name>"
+```
+
+Inspect before modifying:
+
+```bash
+python scripts/circuit_project.py summary \
+  --project-root <workspace-root>/projects/<project-id>
+```
+
+Apply a structured command:
+
+```bash
+python scripts/circuit_project.py apply \
+  --project-root <workspace-root>/projects/<project-id> \
+  --command-file <command.json>
+```
+
+Compile or simulate:
+
+```bash
+python scripts/circuit_project.py compile --project-root <project-root>
+python scripts/circuit_project.py simulate --project-root <project-root>
+python scripts/circuit_project.py compile-module --project-root <project-root> --module-id <id>
+python scripts/circuit_project.py simulate-module --project-root <project-root> --module-id <id>
+```
+
+Every command must use the current `base_revision`. A stale command must be
+rejected, not silently rebased. Supported initial operations are
+`move_module`, `resize_module`, `set_component_value`, `move_component`,
+`connect_ports`, `set_connection_network`, and `connect_pins`. Agents can construct larger designs with `upsert_module`,
+`remove_module`, `add_port`, `add_component`, and `remove_component`.
+Use `set_module_note`, `set_module_preview`, and `set_module_metadata` for the
+GUI card note, preview preference, name, kind, function summary, and parameter
+summary. Keep the stable module `id` unchanged when editing metadata.
+Schemas live under `schemas/`.
+
+The desktop module canvas is a netlistsvg viewer, not an independent schematic
+editor. After changing a module netlist, always run `compile-module`; this
+preserves the `netlist -> netlist_to_json -> netlistsvg SVG` flow and refreshes
+the GUI preview. Read `notes` on the module reference before editing. Users may
+address a module directly by its stable `id`.
+
+The Netlist tab uses `modules/<id>/netlist-notebook.md` when that file exists.
+It is an editable Markdown document: prose outside fenced code blocks is for
+notes and explanations, while fenced `spice`, `cir`, or `netlist` blocks are
+concatenated as the module netlist used by `compile-module`. When an Agent
+edits a notebook-backed module, update the notebook code block and run
+`compile-module` so the Design preview and SVG tab remain synchronized.
+
+Every inter-module electrical network must have one explicit system name.
+Pass `network` when using `connect_ports`, or use
+`set_connection_network` with a stable `connection_id`. Renaming one
+connection renames the entire connected group, so a source output such as
+`VDD` or `DAC#1` appears with the same label on every consuming module in
+the GUI. Keep each module's local `port.net` unchanged; the compiler maps
+the shared system name to SPICE-safe node names.
+
+For complex circuits, plan module boundaries and port contracts first. Keep
+power, input protection, analog front end, gain, filter, detector/control, and
+output stages separate when they have independent electrical responsibilities.
+Modify one module per command when practical, keep its external ports stable,
+compile after structural edits, and simulate before declaring completion.
+
+The older `<workspace-root>/jobs/` manifest workflow remains available only
+for compatibility with existing result bundles. Do not call the legacy
+built-in workflow for a project-canvas design.
+
+## Installation
+
+The same source skill supports Codex and Claude Code:
+
+```bash
+python scripts/install_skill.py --agent all --scope user
+```
+
+Use `--scope project --project-root <path>` for a repository-local install.
+Pass `--force` only when replacing an installed copy.
+
 **Scope**: schematic-level SPICE design, AC/power simulation, and SVG
 rendering. Not for PCB layout, IC mask layout, or production signoff.
 
@@ -158,6 +266,15 @@ Read `planning/spec.normalized.json` and `design/template.cir`. Write:
   spec requests it. For partitioned designs, list each module with its
   input/output nets, local net prefix, and component names.
 
+For partitioned designs, read
+[references/partitioned-design.md](references/partitioned-design.md), then
+run:
+
+```bash
+python scripts/validate_module_interfaces.py --job-root <job-root> --require-partitioned
+python scripts/compose_modules.py --job-root <job-root>
+```
+
 **Outputs**: `planning/architecture.md`, `planning/verification-plan.md`,
 `planning/module-plan.json`.
 
@@ -228,6 +345,9 @@ until all validations pass.
   ```bash
   python scripts/repair_module_interfaces.py --netlist-path design/design.final.cir --module-plan-path planning/module-plan.json --spec-path planning/spec.normalized.json --apply
   ```
+- Prefer `validate_module_interfaces.py` followed by `compose_modules.py`
+  over manual concatenation. These tools enforce module ownership, unique
+  component names, private net prefixes, and balanced interfaces.
 
 Write supporting artifacts:
 - `design/design-notes.md` (≤80 lines): device enumeration, parameter
@@ -323,6 +443,12 @@ Write `reports/manifest.json` listing all output files:
   "final_review": "verification/final-review.md",
   "final_summary": "reports/final-summary.md"
 }
+```
+
+Then publish the job to the GUI:
+
+```bash
+python scripts/publish_job.py --job-root <job-root> --job-id <slug>
 ```
 
 **Outputs**: `reports/final-summary.md`, `reports/manifest.json`.
@@ -543,6 +669,7 @@ design produces:
 ## References and Assets
 
 - [references/module-plan-schema.md](references/module-plan-schema.md) — Full module-plan.json schema and partitioning guide
+- [references/partitioned-design.md](references/partitioned-design.md) — Large-circuit partitioning and interface budgets
 - [references/spec-schema.md](references/spec-schema.md) — Specification JSON schema with examples
 - `assets/templates/` — 11 starter SPICE netlist templates (rc_filter, opamp_noninv, opamp_mos_cascode, oscillator_ring, lna_common_emitter, buck_converter, ldo_mos_series, filter_ladder_bpf, filter_pi_lpf, filter_t_hpf, buck_mos_power)
 - `assets/skins/analog.svg` — netlistsvg skin for analog circuit rendering

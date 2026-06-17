@@ -10,6 +10,8 @@ export interface StartInteractiveCliOptions {
   approvalPolicy?: ApprovalPolicy;
   jobName?: string;
   resumeJob?: string;
+  jobParentDir?: string;
+  rerunFromStage?: string;
 }
 
 export interface WorkflowReadline {
@@ -34,6 +36,8 @@ export async function startInteractiveCli(options: StartInteractiveCliOptions): 
       approvalPolicy: options.approvalPolicy,
       jobName: options.jobName,
       resumeJob: options.resumeJob,
+      jobParentDir: options.jobParentDir,
+      rerunFromStage: options.rerunFromStage,
     });
   } finally {
     rl.close();

@@ -6,20 +6,68 @@ import { SimulationTab } from './components/simulation/SimulationTab';
 import { ReportPreview } from './components/report/ReportPreview';
 import { Sidebar } from './components/layout/Sidebar';
 import { StagePanel } from './components/layout/StagePanel';
+import { ResultWorkbench } from './components/layout/ResultWorkbench';
+import { CircuitWorkbench } from './components/canvas/CircuitWorkbench';
 import { StageConfirmDialog } from './components/common/StageConfirmDialog';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { SetupWizard } from './components/settings/SetupWizard';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
-import { useAppStore, type TabKey } from './store/appStore';
-import type { StageDef } from './types';
+import { useAppStore, type SimulationMetric, type TabKey } from './store/appStore';
+import type { ModuleManifest, StageDef } from './types';
 
 const tabLabels: Record<TabKey, string> = {
-  chat: 'Chat',
+  design: 'Design',
   netlist: 'Netlist',
   svg: 'SVG',
   simulation: 'Sim',
   report: 'Report',
 };
+
+type WorkflowStartParams = Parameters<Window['electronAPI']['startWorkflow']>[0];
+
+interface DisplayDescriptor {
+  schematic_svg?: string;
+  netlist?: string;
+  summary?: string;
+  simulation_metrics?: string;
+  module_manifest?: string | null;
+}
+
+function parseJson<T>(content: string): T | null {
+  try {
+    return JSON.parse(content) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isSimulationMetricArray(value: unknown): value is SimulationMetric[] {
+  return Array.isArray(value) && value.every((entry) => (
+    typeof entry === 'object' &&
+    entry !== null &&
+    typeof (entry as SimulationMetric).name === 'string' &&
+    typeof (entry as SimulationMetric).target === 'string' &&
+    typeof (entry as SimulationMetric).measured === 'string' &&
+    typeof (entry as SimulationMetric).pass === 'boolean'
+  ));
+}
+
+const workflowStageKeys = [
+  'solution-analyst',
+  'doc-writer',
+  'librarian',
+  'architect',
+  'netlist-designer',
+  'simulation-verifier',
+  'netlistsvg-renderer',
+  'workflow-lead',
+];
+
+function normalizeWorkflowStage(stage?: string): string | undefined {
+  if (!stage) return undefined;
+  const normalized = stage.trim().toLowerCase();
+  return workflowStageKeys.find((key) => key === normalized);
+}
 
 export function App() {
   const store = useAppStore();
@@ -34,6 +82,9 @@ export function App() {
   const [stagePanelWidth, setStagePanelWidth] = useState(280);
   const resizing = useRef<'sidebar' | 'stage' | null>(null);
   const workflowConversationIdRef = useRef<string | null>(null);
+  const suppressAutoLoadRef = useRef(false);
+  const latestDiscoveredJobRef = useRef<string | null>(null);
+  const circuitLoadRequestRef = useRef(0);
   const setJobId = useCallback((id: string | null) => {
     setCurrentJobId(id);
     currentJobIdRef.current = id;
@@ -60,8 +111,16 @@ export function App() {
       const workflowConversationId = workflowConversationIdRef.current ?? state.conversationId;
       switch (event.type) {
         case 'stage-list': {
-          const list = (event.data as { stageList: StageDef[] }).stageList;
-          state.setStages(list.map((s) => ({ key: s.key, name: s.name, status: 'waiting' as const })));
+          const data = event.data as { stageList: StageDef[]; rerunFromStage?: string };
+          const list = data.stageList;
+          const rerunIndex = data.rerunFromStage
+            ? list.findIndex((s) => s.key === data.rerunFromStage)
+            : -1;
+          state.setStages(list.map((s, index) => ({
+            key: s.key,
+            name: s.name,
+            status: rerunIndex > 0 && index < rerunIndex ? 'done' as const : 'waiting' as const,
+          })));
           break;
         }
         case 'job-info': {
@@ -218,17 +277,118 @@ export function App() {
     return cleanup;
   }, []);
 
-  // Check if settings are configured on first mount — show wizard if no API token
+  // Load workspace state on first mount. Provider API keys are optional.
+  const refreshReferences = useCallback(async () => {
+    if (!window.electronAPI) return;
+    try {
+      const docs = await window.electronAPI.listReferenceDocuments();
+      useAppStore.getState().setReferenceDocuments(docs);
+    } catch {
+      useAppStore.getState().setReferenceDocuments([]);
+    }
+  }, []);
+
+  const refreshWorkspaces = useCallback(async () => {
+    if (!window.electronAPI) return;
+    try {
+      const [workspaces, activeWorkspace] = await Promise.all([
+        window.electronAPI.listWorkspaces(),
+        window.electronAPI.getActiveWorkspace(),
+      ]);
+      const state = useAppStore.getState();
+      state.setWorkspaces(workspaces);
+      state.setActiveWorkspace(activeWorkspace);
+      const projects = await window.electronAPI.listCircuitProjects();
+      state.setCircuitProjects(projects);
+      await refreshReferences();
+    } catch {
+      useAppStore.getState().setWorkspaces([]);
+    }
+  }, [refreshReferences]);
+
+  const refreshCircuitProjects = useCallback(async () => {
+    if (!window.electronAPI) return;
+    const projects = await window.electronAPI.listCircuitProjects();
+    useAppStore.getState().setCircuitProjects(projects);
+  }, []);
+
+  const loadCircuitProject = useCallback(async (projectId: string, openDesign = true) => {
+    if (!window.electronAPI) return;
+    const requestId = ++circuitLoadRequestRef.current;
+    const state = useAppStore.getState();
+    state.setCircuitBusy(true);
+    state.setCircuitError('');
+    state.setActiveProjectId(projectId);
+    state.setActiveJobId(null);
+    setJobId(null);
+    if (openDesign) state.setActiveTab('design');
+    try {
+      const bundle = await window.electronAPI.getCircuitProject(projectId);
+      if (requestId !== circuitLoadRequestRef.current) return;
+      const latest = useAppStore.getState();
+      latest.setCircuitProject(bundle);
+      latest.setActiveModuleId(
+        bundle.project.modules.some((module) => module.id === latest.activeModuleId)
+          ? latest.activeModuleId
+          : bundle.project.modules[0]?.id ?? null,
+      );
+      latest.setCircuitBuild(await window.electronAPI.readCircuitBuild(projectId));
+      await window.electronAPI.watchCircuitProject(projectId);
+      await refreshCircuitProjects();
+    } catch (error) {
+      if (requestId === circuitLoadRequestRef.current) {
+        useAppStore.getState().setCircuitError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (requestId === circuitLoadRequestRef.current) {
+        useAppStore.getState().setCircuitBusy(false);
+      }
+    }
+  }, [refreshCircuitProjects, setJobId]);
+
   useEffect(() => {
     if (!window.electronAPI) return;
-    window.electronAPI.getSettings().then((s) => {
-      if (!s.actoviqAuthToken.trim()) {
-        store.setSetupWizardOpen(true);
+    return window.electronAPI.onCircuitProjectChanged((event) => {
+      const state = useAppStore.getState();
+      if (event.projectId === state.activeProjectId && !state.circuitBusy) {
+        void loadCircuitProject(event.projectId, false);
       }
-    }).catch(() => {
-      store.setSetupWizardOpen(true);
+      void refreshCircuitProjects();
     });
-  }, []);
+  }, [loadCircuitProject, refreshCircuitProjects]);
+
+  useEffect(() => {
+    const state = useAppStore.getState();
+    if (!state.activeProjectId && state.circuitProjects[0]?.projectId) {
+      void loadCircuitProject(state.circuitProjects[0].projectId);
+    }
+  }, [store.circuitProjects, loadCircuitProject]);
+
+  const handleCreateCircuitProject = useCallback(async (demo: boolean) => {
+    if (!window.electronAPI) return;
+    const name = window.prompt('Circuit project name', demo ? 'Modular analog chain' : 'New circuit project');
+    if (!name?.trim()) return;
+    const state = useAppStore.getState();
+    state.setCircuitBusy(true);
+    state.setCircuitError('');
+    try {
+      const bundle = await window.electronAPI.createCircuitProject({ name: name.trim(), demo });
+      for (const module of bundle.project.modules) {
+        await window.electronAPI.compileCircuitModule(bundle.project.project_id, module.id);
+      }
+      await refreshCircuitProjects();
+      await loadCircuitProject(bundle.project.project_id);
+    } catch (error) {
+      state.setCircuitError(error instanceof Error ? error.message : String(error));
+    } finally {
+      state.setCircuitBusy(false);
+    }
+  }, [loadCircuitProject, refreshCircuitProjects]);
+
+  useEffect(() => {
+    if (!window.electronAPI) return;
+    refreshWorkspaces();
+  }, [refreshWorkspaces]);
 
   // Handle resize drag
   useEffect(() => {
@@ -255,49 +415,158 @@ export function App() {
   // Refresh job artifacts when a job is selected
   const refreshJobArtifacts = useCallback(async (jobId: string) => {
     const state = useAppStore.getState();
+    suppressAutoLoadRef.current = false;
+    state.setActiveProjectId(null);
+    state.setCircuitProject(null);
+    state.setCircuitBuild(null);
     state.setActiveJobId(jobId);
     setJobId(jobId);
     state.setNetlistContent('');
     state.setSvgContent('');
     state.setReportContent('');
     state.setSimulationData(null);
-    try {
-      const netlist = await window.electronAPI.readJobFile(jobId, 'design/design.final.cir');
-      useAppStore.getState().setNetlistContent(netlist || '');
-    } catch { useAppStore.getState().setNetlistContent(''); }
-    try {
-      const svg = await window.electronAPI.readJobFile(jobId, 'render/netlistsvg.svg');
-      useAppStore.getState().setSvgContent(svg || '');
-    } catch { useAppStore.getState().setSvgContent(''); }
-    try {
-      const report = await window.electronAPI.readJobFile(jobId, 'reports/final-summary.md');
-      useAppStore.getState().setReportContent(report || '');
-    } catch { useAppStore.getState().setReportContent(''); }
-    try {
-      const metricsRaw = await window.electronAPI.readJobFile(jobId, 'verification/final-simulation/metrics.json');
-      if (metricsRaw) {
-        const parsed = JSON.parse(metricsRaw);
-        if (Array.isArray(parsed)) {
-          useAppStore.getState().setSimulationData(parsed);
-        } else {
-          useAppStore.getState().setSimulationData(null);
-        }
-      } else {
-        useAppStore.getState().setSimulationData(null);
-      }
-    } catch { useAppStore.getState().setSimulationData(null); }
-  }, []);
+    state.setModuleManifest(null);
 
-  // "New Design" — reset and go to chat
+    const descriptorRaw = await window.electronAPI.readJobFile(jobId, 'reports/actoviq-display.json');
+    const descriptor = descriptorRaw ? parseJson<DisplayDescriptor>(descriptorRaw) : null;
+    const netlistPath = descriptor?.netlist ?? 'design/design.final.cir';
+    const svgPath = descriptor?.schematic_svg ?? 'render/netlistsvg.svg';
+    const summaryPath = descriptor?.summary ?? 'reports/final-summary.md';
+    const metricsPath = descriptor?.simulation_metrics ?? 'verification/final-simulation/gui-metrics.json';
+    const moduleManifestPath = descriptor?.module_manifest ?? 'design/module-manifest.json';
+
+    const [netlist, svg, report, metricsRaw, moduleManifestRaw] = await Promise.all([
+      window.electronAPI.readJobFile(jobId, netlistPath),
+      window.electronAPI.readJobFile(jobId, svgPath),
+      window.electronAPI.readJobFile(jobId, summaryPath),
+      window.electronAPI.readJobFile(jobId, metricsPath),
+      moduleManifestPath ? window.electronAPI.readJobFile(jobId, moduleManifestPath) : Promise.resolve(''),
+    ]);
+    const latestState = useAppStore.getState();
+    latestState.setNetlistContent(netlist || '');
+    latestState.setSvgContent(svg || '');
+    latestState.setReportContent(report || '');
+
+    let metrics = metricsRaw ? parseJson<unknown>(metricsRaw) : null;
+    if (!isSimulationMetricArray(metrics)) {
+      const legacyMetricsRaw = await window.electronAPI.readJobFile(
+        jobId,
+        'verification/final-simulation/metrics.json',
+      );
+      metrics = legacyMetricsRaw ? parseJson<unknown>(legacyMetricsRaw) : null;
+    }
+    latestState.setSimulationData(isSimulationMetricArray(metrics) ? metrics : null);
+    const moduleManifest = moduleManifestRaw
+      ? parseJson<ModuleManifest>(moduleManifestRaw)
+      : null;
+    latestState.setModuleManifest(moduleManifest);
+  }, [setJobId]);
+
+  // Auto-load newly published external agent results without overriding manual job selection.
+  useEffect(() => {
+    if (!window.electronAPI) return;
+    let cancelled = false;
+    latestDiscoveredJobRef.current = null;
+    const loadLatestAgentJob = async () => {
+      const state = useAppStore.getState();
+      if (suppressAutoLoadRef.current || state.isRunning || state.activeProjectId) {
+        return;
+      }
+      const jobs = await window.electronAPI!.listJobs();
+      if (cancelled || jobs.length === 0) {
+        return;
+      }
+      const latestState = useAppStore.getState();
+      if (latestState.activeProjectId || latestState.isRunning) {
+        return;
+      }
+      const latest = jobs[0];
+      if (latest?.jobId) {
+        const previousLatest = latestDiscoveredJobRef.current;
+        latestDiscoveredJobRef.current = latest.jobId;
+        if (!latestState.activeJobId || (previousLatest !== null && previousLatest !== latest.jobId)) {
+          await refreshJobArtifacts(latest.jobId);
+        }
+      }
+    };
+    loadLatestAgentJob();
+    const interval = window.setInterval(loadLatestAgentJob, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [refreshJobArtifacts, store.activeWorkspace?.id]);
+
   const handleNewDesign = useCallback(() => {
     const state = useAppStore.getState();
     state.resetWorkflow();
     state.setActiveJobId(null);
+    suppressAutoLoadRef.current = true;
     state.newConversation();
     workflowConversationIdRef.current = null;
     setJobId(null);
-    state.setActiveTab('chat');
+    state.setActiveTab('design');
+    state.setChatOpen(true);
   }, []);
+
+  const startWorkflowRun = useCallback((params: WorkflowStartParams, conversationId: string) => {
+    if (!window.electronAPI) return;
+    const latest = useAppStore.getState();
+    latest.resetWorkflow({ preserveMessages: true });
+    latest.setIsRunning(true);
+    latest.setActiveTab('design');
+    latest.setChatOpen(true);
+    workflowConversationIdRef.current = conversationId;
+    window.electronAPI.startWorkflow({
+      ...params,
+      approvalPolicy: params.approvalPolicy ?? latest.approvalPolicy,
+    });
+  }, []);
+
+  const handleValidateActiveJob = useCallback(() => {
+    const state = useAppStore.getState();
+    const jobId = currentJobIdRef.current ?? state.activeJobId;
+    let cid = state.conversationId;
+    if (!cid) {
+      cid = state.newConversation();
+    }
+
+    if (!jobId) {
+      state.addMessage({
+        id: `validate-no-job-${Date.now()}`,
+        role: 'system',
+        content: 'Select a job before running validation.',
+        timestamp: Date.now(),
+        isError: true,
+        conversationId: cid,
+      });
+      return;
+    }
+
+    if (state.isRunning) {
+      state.addMessage({
+        id: `validate-busy-${Date.now()}`,
+        role: 'system',
+        content: 'A workflow is already running. Stop it or wait for it to finish before starting validation.',
+        timestamp: Date.now(),
+        conversationId: cid,
+      });
+      return;
+    }
+
+    state.addMessage({
+      id: `validate-start-${Date.now()}`,
+      role: 'system',
+      content: `Starting quick validation from Simulation Verifier for ${jobId}.`,
+      timestamp: Date.now(),
+      conversationId: cid,
+    });
+    startWorkflowRun({
+      resumeJob: jobId,
+      rerunFromStage: 'simulation-verifier',
+      approvalPolicy: state.approvalPolicy,
+    }, cid);
+  }, [startWorkflowRun]);
 
   // Send a chat message — first checks intent, then decides chat vs workflow
   const handleSendMessage = useCallback(async (text: string) => {
@@ -341,7 +610,8 @@ export function App() {
         role: m.role === 'user' ? 'user' as const : 'assistant' as const,
         content: m.content,
       }));
-      const result = await window.electronAPI.sendChatMessage(trimmed, history);
+      const activeJobId = currentJobIdRef.current ?? state.activeJobId;
+      const result = await window.electronAPI.sendChatMessage(trimmed, history, { activeJobId });
 
       // Show the agent's chat response
       useAppStore.getState().addMessage({
@@ -353,8 +623,10 @@ export function App() {
         conversationId: cid,
       });
 
-      // If it's a design request, trigger the workflow
-      if (result.isDesignRequest && workflowWasRunning) {
+      const wantsWorkflow = result.isDesignRequest || result.isRevisionRequest;
+
+      // If it is a design or revision request, trigger the workflow
+      if (wantsWorkflow && workflowWasRunning) {
         useAppStore.getState().addMessage({
           id: `workflow-busy-${Date.now()}`,
           role: 'system',
@@ -362,19 +634,56 @@ export function App() {
           timestamp: Date.now(),
           conversationId: cid,
         });
+      } else if (result.isRevisionRequest) {
+        const latest = useAppStore.getState();
+        const baseJobId = activeJobId ?? latest.activeJobId;
+        if (!baseJobId) {
+          latest.addMessage({
+            id: `revision-no-job-${Date.now()}`,
+            role: 'system',
+            content: 'Select a completed job first, then ask for the change again.',
+            timestamp: Date.now(),
+            isError: true,
+            conversationId: cid,
+          });
+          return;
+        }
+        const targetStage = normalizeWorkflowStage(result.targetStage);
+        const revisionText = `${trimmed}\n${result.revisionRequest ?? ''}`;
+        const rerunOnly =
+          targetStage !== undefined &&
+          /rerun|validate|verify|simulation|simulate|render|summary|重跑|重新|验证|仿真|渲染|总结/i.test(revisionText) &&
+          !/modify|change|fix|tune|optimi[sz]e|adjust|修改|改成|调整|优化|修复|替换|增加|删除/i.test(revisionText);
+        latest.addMessage({
+          id: `revision-start-${Date.now()}`,
+          role: 'system',
+          content: rerunOnly
+            ? `Rerunning ${targetStage} for ${baseJobId}.`
+            : `Starting a revision workflow from ${baseJobId}${targetStage ? `, focusing on ${targetStage}` : ''}.`,
+          timestamp: Date.now(),
+          conversationId: cid,
+        });
+        if (rerunOnly) {
+          startWorkflowRun({
+            resumeJob: baseJobId,
+            rerunFromStage: targetStage,
+            approvalPolicy: latest.approvalPolicy,
+          }, cid);
+        } else {
+          startWorkflowRun({
+            requirement: result.revisionRequest || trimmed,
+            revisionBaseJob: baseJobId,
+            approvalPolicy: latest.approvalPolicy,
+          }, cid);
+        }
       } else if (result.isDesignRequest) {
         const requirement = result.formalizedRequirement || trimmed;
         const latest = useAppStore.getState();
-        latest.resetWorkflow({ preserveMessages: true });
-        latest.setIsRunning(true);
-        latest.setActiveTab('chat');
-        workflowConversationIdRef.current = cid;
-
-        window.electronAPI.startWorkflow({
+        startWorkflowRun({
           requirement,
           approvalPolicy: latest.approvalPolicy,
           jobName: undefined,
-        });
+        }, cid);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -389,7 +698,40 @@ export function App() {
     } finally {
       setIsChatPending(false);
     }
-  }, [isChatPending]);
+  }, [isChatPending, startWorkflowRun]);
+
+  const handleSelectWorkspace = useCallback(async (id: string) => {
+    if (!window.electronAPI) return;
+    const workspace = await window.electronAPI.selectWorkspace(id);
+    const state = useAppStore.getState();
+    suppressAutoLoadRef.current = false;
+    state.setActiveWorkspace(workspace);
+    state.setActiveJobId(null);
+    state.setActiveProjectId(null);
+    state.setCircuitProject(null);
+    state.setCircuitBuild(null);
+    state.resetWorkflow();
+    setJobId(null);
+    await refreshWorkspaces();
+  }, [refreshWorkspaces, setJobId]);
+
+  const handleCreateWorkspace = useCallback(async () => {
+    if (!window.electronAPI) return;
+    const name = window.prompt('Workspace name');
+    if (!name?.trim()) return;
+    const root = await window.electronAPI.chooseWorkspaceRoot();
+    const workspace = await window.electronAPI.createWorkspace({ name, root: root ?? undefined });
+    const state = useAppStore.getState();
+    suppressAutoLoadRef.current = false;
+    state.setActiveWorkspace(workspace);
+    state.setActiveJobId(null);
+    state.setActiveProjectId(null);
+    state.setCircuitProject(null);
+    state.setCircuitBuild(null);
+    state.resetWorkflow();
+    setJobId(null);
+    await refreshWorkspaces();
+  }, [refreshWorkspaces, setJobId]);
 
   return (
     <ErrorBoundary>
@@ -401,6 +743,16 @@ export function App() {
           activeJobId={store.activeJobId}
           onSelectJob={refreshJobArtifacts}
           onNewDesign={handleNewDesign}
+          activeWorkspace={store.activeWorkspace}
+          workspaces={store.workspaces}
+          referenceDocuments={store.referenceDocuments}
+          onSelectWorkspace={handleSelectWorkspace}
+          onCreateWorkspace={handleCreateWorkspace}
+          onRefreshReferences={refreshReferences}
+          circuitProjects={store.circuitProjects}
+          activeProjectId={store.activeProjectId}
+          onSelectProject={loadCircuitProject}
+          onCreateProject={handleCreateCircuitProject}
         />
 
         {!store.sidebarCollapsed && (
@@ -430,6 +782,16 @@ export function App() {
               </button>
             ))}
             <div style={styles.tabBarRight}>
+              <button
+                onClick={store.toggleChatOpen}
+                style={{
+                  ...styles.chatToggleBtn,
+                  ...(store.chatOpen ? styles.chatToggleBtnActive : {}),
+                }}
+                title={store.chatOpen ? 'Hide chat' : 'Open chat'}
+              >
+                {store.chatOpen ? 'Hide Chat' : 'Chat'}
+              </button>
               {store.isRunning && (
                 <button
                   onClick={() => {
@@ -472,10 +834,25 @@ export function App() {
           </div>
 
           <div style={styles.tabContent}>
-            {store.activeTab === 'chat' && (
-              <ChatView onSend={handleSendMessage} isPending={isChatPending} />
+            {store.activeTab === 'design' && (
+              <CircuitWorkbench
+                onCreateProject={handleCreateCircuitProject}
+                onReloadProject={async () => {
+                  const projectId = useAppStore.getState().activeProjectId;
+                  if (projectId) await loadCircuitProject(projectId, false);
+                }}
+              />
             )}
-            {store.activeTab === 'netlist' && <NetlistEditor />}
+            {store.activeTab === 'netlist' && (
+              <NetlistEditor
+                onValidate={handleValidateActiveJob}
+                isWorkflowRunning={store.isRunning}
+                onReloadProject={async () => {
+                  const projectId = useAppStore.getState().activeProjectId;
+                  if (projectId) await loadCircuitProject(projectId, false);
+                }}
+              />
+            )}
             {store.activeTab === 'svg' && <SvgViewer />}
             {store.activeTab === 'simulation' && <SimulationTab />}
             {store.activeTab === 'report' && <ReportPreview />}
@@ -499,6 +876,18 @@ export function App() {
           width={stagePanelWidth}
           onToggle={store.toggleStagePanel}
         />
+
+        {store.chatOpen && (
+          <div style={styles.chatDrawer}>
+            <div style={styles.chatDrawerHeader}>
+              <span style={styles.chatDrawerTitle}>Chat Workflow</span>
+              <button onClick={() => store.setChatOpen(false)} style={styles.chatCloseBtn}>Close</button>
+            </div>
+            <div style={styles.chatDrawerBody}>
+              <ChatView onSend={handleSendMessage} isPending={isChatPending} />
+            </div>
+          </div>
+        )}
 
         {store.settingsOpen && (
           <SettingsDialog onClose={() => store.setSettingsOpen(false)} />
@@ -532,8 +921,10 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     height: '100vh',
     width: '100vw',
-    backgroundColor: '#1a1a2e',
-    color: '#e0e0e0',
+    backgroundColor: '#f3f5f7',
+    color: '#28313b',
+    position: 'relative',
+    overflow: 'hidden',
   },
   mainContent: {
     flex: 1,
@@ -545,8 +936,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     height: 36,
-    backgroundColor: '#16213e',
-    borderBottom: '1px solid #0f3460',
+    backgroundColor: '#ffffff',
+    borderBottom: '1px solid #dfe3e8',
     paddingLeft: 8,
     gap: 2,
   },
@@ -554,15 +945,17 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 16px',
     border: 'none',
     background: 'transparent',
-    color: '#a0a0b0',
+    color: '#69727d',
     cursor: 'pointer',
     fontSize: 13,
-    borderBottom: '2px solid transparent',
+    borderBottomWidth: 2,
+    borderBottomStyle: 'solid',
+    borderBottomColor: 'transparent',
     transition: 'all 0.15s',
   },
   tabActive: {
-    color: '#e94560',
-    borderBottomColor: '#e94560',
+    color: '#2563eb',
+    borderBottomColor: '#2563eb',
   },
   tabBarRight: {
     marginLeft: 'auto',
@@ -572,16 +965,32 @@ const styles: Record<string, React.CSSProperties> = {
     paddingRight: 8,
   },
   policySelect: {
-    background: '#1a1a2e',
-    color: '#e0e0e0',
-    border: '1px solid #0f3460',
+    background: '#ffffff',
+    color: '#3f4a56',
+    border: '1px solid #c8cfd7',
     borderRadius: 4,
     padding: '3px 8px',
     fontSize: 12,
   },
+  chatToggleBtn: {
+    padding: '4px 12px',
+    backgroundColor: '#ffffff',
+    color: '#3f4a56',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#c8cfd7',
+    borderRadius: 4,
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 600,
+  },
+  chatToggleBtnActive: {
+    borderColor: '#2563eb',
+    color: '#1f5fbf',
+  },
   stopBtn: {
     padding: '4px 12px',
-    backgroundColor: '#e94560',
+    backgroundColor: '#c73b4a',
     color: '#fff',
     border: 'none',
     borderRadius: 4,
@@ -593,7 +1002,7 @@ const styles: Record<string, React.CSSProperties> = {
   folderBtn: {
     background: 'transparent',
     border: 'none',
-    color: '#a0a0b0',
+    color: '#69727d',
     cursor: 'pointer',
     fontSize: 14,
     padding: '2px 6px',
@@ -601,20 +1010,63 @@ const styles: Record<string, React.CSSProperties> = {
   settingsBtn: {
     background: 'transparent',
     border: 'none',
-    color: '#a0a0b0',
+    color: '#69727d',
     cursor: 'pointer',
     fontSize: 16,
     padding: '2px 6px',
   },
   tabContent: {
     flex: 1,
+    minHeight: 0,
     position: 'relative',
     overflow: 'hidden',
+  },
+  chatDrawer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: 'min(420px, calc(100vw - 64px))',
+    minWidth: 0,
+    height: '100%',
+    backgroundColor: '#ffffff',
+    borderLeft: '1px solid #dfe3e8',
+    display: 'flex',
+    flexDirection: 'column',
+    boxShadow: '-8px 0 24px rgba(32,42,56,0.12)',
+    zIndex: 20,
+  },
+  chatDrawerHeader: {
+    height: 36,
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '0 10px 0 14px',
+    borderBottom: '1px solid #dfe3e8',
+    backgroundColor: '#ffffff',
+  },
+  chatDrawerTitle: {
+    fontSize: 12,
+    color: '#69727d',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  chatCloseBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: '#2563eb',
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 700,
+  },
+  chatDrawerBody: {
+    flex: 1,
+    minHeight: 0,
   },
   dragHandle: {
     width: 4,
     cursor: 'col-resize',
-    backgroundColor: '#0f3460',
+    backgroundColor: '#dfe3e8',
     transition: 'background-color 0.15s',
     flexShrink: 0,
   },

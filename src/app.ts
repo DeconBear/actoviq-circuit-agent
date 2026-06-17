@@ -2,6 +2,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,8 @@ import {
 import { validateRuntimePaths } from './config/validateRuntimePaths.js';
 import { startTuiApp } from './tui/TuiApp.js';
 import { formatErrorMessage, writeError, writeStderr, writeStdout } from './utils/runtimeSupport.js';
+import { resolveJobReference } from './workflow/jobArtifacts.js';
+import { buildRevisionRequirement } from './workflow/revisionRequirement.js';
 import type { ApprovalPolicy } from './workflow/circuitDesignWorkflow.js';
 
 interface CliOptions {
@@ -28,6 +31,9 @@ interface CliOptions {
   jobName?: string;
   configPath?: string;
   resumeJob?: string;
+  revisionBaseJob?: string;
+  jobParentDir?: string;
+  rerunFromStage?: string;
   legacyCli: boolean;
   showHelp: boolean;
   showVersion: boolean;
@@ -53,6 +59,9 @@ function printHelp(): void {
       '  --job-name <name>      Provide a naming hint for the generated English job slug.',
       '  --config <path>        Load an explicit Actoviq JSON config file.',
       '  --resume-job <id|path> Resume an existing workflow job from the first incomplete stage.',
+      '  --revision-base-job <id|path> Start a revision based on an existing job.',
+      '  --job-parent-dir <path> Directory where a new workflow job should be created.',
+      '  --rerun-from-stage <key> With --resume-job, rerun from a specific workflow stage key.',
       '  --auto-approve         Skip y-confirmation between agent stages.',
       '  --approval-policy <mode> manual | execution | all.',
       '  --legacy-cli, --no-tui  Use the previous one-shot readline requirement prompt.',
@@ -83,7 +92,15 @@ function printHelp(): void {
 }
 
 type BooleanCliKey = 'autoApprove' | 'legacyCli' | 'showHelp' | 'showVersion';
-type ValueCliKey = 'requirement' | 'requirementFile' | 'jobName' | 'configPath' | 'resumeJob';
+type ValueCliKey =
+  | 'requirement'
+  | 'requirementFile'
+  | 'jobName'
+  | 'configPath'
+  | 'resumeJob'
+  | 'revisionBaseJob'
+  | 'jobParentDir'
+  | 'rerunFromStage';
 
 const BOOLEAN_FLAGS: Record<string, BooleanCliKey> = {
   '--auto-approve': 'autoApprove',
@@ -101,6 +118,9 @@ const VALUE_FLAGS: Record<string, ValueCliKey> = {
   '--job-name': 'jobName',
   '--config': 'configPath',
   '--resume-job': 'resumeJob',
+  '--revision-base-job': 'revisionBaseJob',
+  '--job-parent-dir': 'jobParentDir',
+  '--rerun-from-stage': 'rerunFromStage',
 };
 
 function readFlagValue(argv: string[], index: number, arg: string): { value?: string; error?: string } {
@@ -253,9 +273,28 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (options.resumeJob && options.revisionBaseJob) {
+    writeError('Error: use either --resume-job or --revision-base-job, not both.\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  if (options.rerunFromStage && !options.resumeJob) {
+    writeError('Error: --rerun-from-stage requires --resume-job.\n');
+    process.exitCode = 1;
+    return;
+  }
+
   const requirementFromFile = options.requirementFile?.trim()
     ? readFileSync(path.resolve(options.requirementFile.trim()), 'utf8')
     : undefined;
+  const requestedRequirement = requirementFromFile ?? options.requirement;
+
+  if (options.revisionBaseJob && !requestedRequirement?.trim()) {
+    writeError('Error: --revision-base-job requires --requirement or --requirement-file as the revision request.\n');
+    process.exitCode = 1;
+    return;
+  }
 
   const pathStatus = await validateRuntimePaths();
   const missing = pathStatus.filter((entry) => !entry.exists);
@@ -274,9 +313,28 @@ export async function main(): Promise<void> {
   writeStdout(`actoviq-circuit-agent v${packageVersion}\n`);
   writeStdout(`workspace: ${WORKSPACE_ROOT}\n`);
   checkNgspice();
-  if (!options.legacyCli && !options.requirement && !options.requirementFile && !options.resumeJob) {
+  if (!options.legacyCli && !options.requirement && !options.requirementFile && !options.resumeJob && !options.revisionBaseJob) {
     await startTuiApp();
     return;
+  }
+
+  let workflowRequirement = requestedRequirement;
+  let workflowJobName = options.jobName;
+  let workflowJobParentDir = options.jobParentDir?.trim()
+    ? path.resolve(options.jobParentDir.trim())
+    : undefined;
+
+  if (options.revisionBaseJob) {
+    const baseJob = await resolveJobReference(options.revisionBaseJob);
+    workflowJobParentDir = workflowJobParentDir ?? path.resolve(baseJob.jobRoot, 'revisions');
+    await mkdir(workflowJobParentDir, { recursive: true });
+    workflowJobName = workflowJobName ?? `revision-${baseJob.jobId}`;
+    workflowRequirement = await buildRevisionRequirement({
+      baseJobId: baseJob.jobId,
+      baseJobRoot: baseJob.jobRoot,
+      revisionRequest: requestedRequirement ?? '',
+    });
+    writeStdout(`[revision-base] ${baseJob.jobId} -> ${workflowJobParentDir}\n`);
   }
 
   writeStdout(
@@ -284,14 +342,16 @@ export async function main(): Promise<void> {
   );
 
   await startInteractiveCli({
-    requirement: requirementFromFile ?? options.requirement,
+    requirement: workflowRequirement,
     autoApprove: options.autoApprove,
     approvalPolicy: options.approvalPolicy,
-    jobName: options.jobName,
+    jobName: workflowJobName,
     resumeJob: options.resumeJob,
+    jobParentDir: workflowJobParentDir,
+    rerunFromStage: options.rerunFromStage,
   });
 
-  if (options.autoApprove || options.requirement || options.requirementFile || options.resumeJob) {
+  if (options.autoApprove || workflowRequirement || options.resumeJob) {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
