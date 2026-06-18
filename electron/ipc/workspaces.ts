@@ -58,21 +58,34 @@ async function runYunzhishengOcr(relativePath: string): Promise<{ textPath: stri
 
   const { absolutePath, ocrPath } = await resolveReferenceDocument(relativePath);
   const fileBuffer = await readFile(absolutePath);
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(settings.yunzhishengOcrApiKey.trim()
-        ? { Authorization: `Bearer ${settings.yunzhishengOcrApiKey.trim()}` }
-        : {}),
-    },
-    body: JSON.stringify({
-      model: settings.yunzhishengOcrModel.trim() || undefined,
-      file_name: path.basename(absolutePath),
-      mime_type: mimeTypeFor(absolutePath),
-      file_base64: fileBuffer.toString('base64'),
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(settings.yunzhishengOcrApiKey.trim()
+          ? { Authorization: `Bearer ${settings.yunzhishengOcrApiKey.trim()}` }
+          : {}),
+      },
+      body: JSON.stringify({
+        model: settings.yunzhishengOcrModel.trim() || undefined,
+        file_name: path.basename(absolutePath),
+        mime_type: mimeTypeFor(absolutePath),
+        file_base64: fileBuffer.toString('base64'),
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('Yunzhisheng OCR request timed out after 120s.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');

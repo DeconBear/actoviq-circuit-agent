@@ -40,7 +40,9 @@ function prepareSvg(svg: string): string {
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, '')
     .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '')
-    .replace(/\s(?:href|xlink:href)\s*=\s*["']\s*javascript:[^"']*["']/gi, '');
+    // Drop external/script-bearing refs (js:, data:, http(s):, protocol-relative);
+    // netlistsvg only uses internal "#id" references, which are preserved.
+    .replace(/\s(?:href|xlink:href)\s*=\s*["']\s*(?:javascript:|data:|https?:|\/\/)[^"']*["']/gi, '');
   return sanitized.replace(
     /<svg\b([^>]*)>/i,
     (_match, attributes: string) => {
@@ -390,9 +392,13 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
   }
 
   async function copyModuleId(moduleId: string) {
-    await navigator.clipboard.writeText(moduleId);
-    setCopiedId(moduleId);
-    window.setTimeout(() => setCopiedId(''), 1400);
+    try {
+      await navigator.clipboard.writeText(moduleId);
+      setCopiedId(moduleId);
+      window.setTimeout(() => setCopiedId(''), 1400);
+    } catch {
+      setError('Could not copy the module ID to the clipboard.');
+    }
   }
 
   function beginModuleDrag(event: ReactPointerEvent, module: CircuitModuleRef) {
@@ -404,7 +410,7 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
     let moved = false;
     const scale = zoom / 100;
     const move = (moveEvent: PointerEvent) => {
-      if (Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY) < 12) return;
+      if (!moved && Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY) < 12) return;
       moved = true;
       setModulePreviewPositions((current) => ({
         ...current,
@@ -454,7 +460,7 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
       height: Math.max(220, Math.min(640, origin.height + (clientY - startY) / scale)),
     });
     const move = (moveEvent: PointerEvent) => {
-      if (Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY) < 6) return;
+      if (!resized && Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY) < 6) return;
       resized = true;
       setModulePreviewSizes((current) => ({
         ...current,
@@ -548,8 +554,9 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
     const rect = panel.getBoundingClientRect();
     const scale = zoom / 100;
     setContextMenu({
-      x: event.clientX,
-      y: event.clientY,
+      // Clamp to the viewport so the menu never opens partly off-screen near an edge.
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 200)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 150)),
       moduleId,
       boardPosition: {
         x: Math.max(40, Math.round((panel.scrollLeft + event.clientX - rect.left - 20) / scale)),
@@ -1341,7 +1348,7 @@ function SimulationMetrics({
       {data.metrics?.map((metric) => (
         <div key={metric.name} style={styles.metricRow}>
           <span>{metric.name}</span>
-          <strong>{metric.value.toFixed(2)} {metric.unit}</strong>
+          <strong>{Number.isFinite(metric.value) ? metric.value.toFixed(2) : '—'} {metric.unit}</strong>
         </div>
       ))}
     </div>

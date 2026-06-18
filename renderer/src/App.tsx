@@ -85,6 +85,7 @@ export function App() {
   const suppressAutoLoadRef = useRef(false);
   const latestDiscoveredJobRef = useRef<string | null>(null);
   const circuitLoadRequestRef = useRef(0);
+  const jobLoadRequestRef = useRef(0);
   const setJobId = useCallback((id: string | null) => {
     setCurrentJobId(id);
     currentJobIdRef.current = id;
@@ -414,6 +415,7 @@ export function App() {
 
   // Refresh job artifacts when a job is selected
   const refreshJobArtifacts = useCallback(async (jobId: string) => {
+    const requestId = ++jobLoadRequestRef.current;
     const state = useAppStore.getState();
     suppressAutoLoadRef.current = false;
     state.setActiveProjectId(null);
@@ -442,6 +444,9 @@ export function App() {
       window.electronAPI.readJobFile(jobId, metricsPath),
       moduleManifestPath ? window.electronAPI.readJobFile(jobId, moduleManifestPath) : Promise.resolve(''),
     ]);
+    // Drop this response if a newer job load started while we were awaiting,
+    // so Design/Netlist/SVG/metrics never mix artifacts from two jobs.
+    if (requestId !== jobLoadRequestRef.current) return;
     const latestState = useAppStore.getState();
     latestState.setNetlistContent(netlist || '');
     latestState.setSvgContent(svg || '');
@@ -453,6 +458,7 @@ export function App() {
         jobId,
         'verification/final-simulation/metrics.json',
       );
+      if (requestId !== jobLoadRequestRef.current) return;
       metrics = legacyMetricsRaw ? parseJson<unknown>(legacyMetricsRaw) : null;
     }
     latestState.setSimulationData(isSimulationMetricArray(metrics) ? metrics : null);

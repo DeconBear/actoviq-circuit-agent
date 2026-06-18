@@ -119,15 +119,23 @@ async function readConfig(): Promise<WorkspaceConfig> {
   };
 }
 
-async function writeConfig(config: WorkspaceConfig): Promise<void> {
+async function persistConfig(config: WorkspaceConfig): Promise<void> {
   await mkdir(settingsDir, { recursive: true });
-  await Promise.all(config.workspaces.map(ensureWorkspaceDirs));
   await writeFile(workspaceConfigPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+async function writeConfig(config: WorkspaceConfig): Promise<void> {
+  await Promise.all(config.workspaces.map(ensureWorkspaceDirs));
+  await persistConfig(config);
 }
 
 export async function listWorkspaces(): Promise<WorkspaceSummary[]> {
   const config = await readConfig();
-  await writeConfig(config);
+  await Promise.all(config.workspaces.map(ensureWorkspaceDirs));
+  // Persist only on first-run defaulting; reads must not rewrite the config file.
+  if (!(await exists(workspaceConfigPath))) {
+    await persistConfig(config);
+  }
   return config.workspaces;
 }
 
@@ -138,6 +146,9 @@ export async function getActiveWorkspace(): Promise<WorkspaceSummary> {
     throw new Error('No workspace is configured.');
   }
   await ensureWorkspaceDirs(active);
+  if (!(await exists(workspaceConfigPath))) {
+    await persistConfig(config);
+  }
   return active;
 }
 

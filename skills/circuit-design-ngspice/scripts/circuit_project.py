@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -624,8 +625,17 @@ def apply_operation(
             pin for pin in find_component(module, second["component_id"])["pins"]
             if pin["id"] == second["pin_id"]
         )
-        old_net = second_pin["net"]
-        new_net = first_pin["net"]
+        net_a = first_pin["net"]
+        net_b = second_pin["net"]
+        if net_a == net_b:
+            changed_modules.add(module_id)
+            return
+        # Ground / node "0" must always survive a merge, regardless of click order,
+        # so connecting a signal pin to ground never renames the ground reference.
+        if net_b == "0":
+            new_net, old_net = "0", net_a
+        else:
+            new_net, old_net = net_a, net_b
         for component in module["components"]:
             for pin in component["pins"]:
                 if pin["net"] == old_net:
@@ -638,9 +648,58 @@ def apply_operation(
     raise ValueError(f"unsupported operation: {op}")
 
 
+class ProjectLock:
+    """Best-effort cross-process lock so concurrent edits cannot clobber a revision."""
+
+    def __init__(self, root: Path, timeout: float = 30.0) -> None:
+        self.path = root / ".project.lock"
+        self.timeout = timeout
+
+    def __enter__(self) -> "ProjectLock":
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode("ascii"))
+                os.close(fd)
+                return self
+            except FileExistsError:
+                try:
+                    stale = time.time() - self.path.stat().st_mtime > 60
+                except FileNotFoundError:
+                    continue
+                if stale:
+                    self.path.unlink(missing_ok=True)
+                    continue
+                if time.monotonic() >= deadline:
+                    raise ValueError("project is locked by another operation; retry shortly")
+                time.sleep(0.05)
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.path.unlink(missing_ok=True)
+
+
+def scan_driven_nodes(netlist: str) -> set[str]:
+    """Collect node names already driven by a V/I source in a raw netlist."""
+    driven: set[str] = set()
+    for raw in netlist.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("*") or line.startswith("."):
+            continue
+        tokens = line.split()
+        if len(tokens) >= 2 and tokens[0][:1].upper() in {"V", "I"}:
+            driven.add(tokens[1])
+    return driven
+
+
 def apply_command(root: Path, command: dict[str, Any]) -> dict[str, Any]:
     if command.get("schema") != COMMAND_SCHEMA:
         raise ValueError(f"command schema must be {COMMAND_SCHEMA}")
+    with ProjectLock(root):
+        return _apply_command_locked(root, command)
+
+
+def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]:
     project, modules = load_project(root)
     if command.get("project_id") != project["project_id"]:
         raise ValueError("command project_id does not match project")
@@ -780,6 +839,7 @@ def compile_project(root: Path) -> dict[str, Any]:
         "* Generated from actoviq.project.v1 by circuit_project.py",
     ]
     output_nodes: list[str] = []
+    input_nodes: list[str] = []
     for module_ref in project["modules"]:
         module_id = module_ref["id"]
         module = modules[module_id]
@@ -789,6 +849,8 @@ def compile_project(root: Path) -> dict[str, Any]:
             local_node_map[port["net"]] = global_names[root_key]
             if port.get("direction") == "output" and port.get("signal_type") == "analog":
                 output_nodes.append(global_names[root_key])
+            if port.get("direction") == "input" and port.get("signal_type") == "analog":
+                input_nodes.append(global_names[root_key])
         lines.append(f"* MODULE: {module_id} - {module['name']}")
         for component in module["components"]:
             component_name = sanitize_node(f"{module_id}_{component['name']}")
@@ -818,7 +880,9 @@ def compile_project(root: Path) -> dict[str, Any]:
         stop = float(ac.get("stop_hz", 1_000_000))
         lines.append(f".ac dec {points} {start:g} {stop:g}")
         if output_nodes:
-            output_node = output_nodes[-1]
+            consumed = set(input_nodes)
+            system_outputs = [node for node in output_nodes if node not in consumed]
+            output_node = (system_outputs or output_nodes)[-1]
             lines.append(f".meas ac output_1khz_db find vdb({output_node}) at=1k")
             lines.append(f".meas ac output_10khz_db find vdb({output_node}) at=10k")
             lines.append(f".print ac vdb({output_node})")
@@ -937,10 +1001,6 @@ def compile_module(root: Path, module_id: str) -> dict[str, Any]:
     if module_id not in modules:
         raise ValueError(f"unknown module: {module_id}")
     module = modules[module_id]
-    lines = [
-        f"* {project['name']} / {module['name']}",
-        "* Standalone module testbench generated by circuit_project.py",
-    ]
     node_map: dict[str, str] = {"0": "0"}
 
     def node_name(local_net: str) -> str:
@@ -948,45 +1008,59 @@ def compile_module(root: Path, module_id: str) -> dict[str, Any]:
             node_map[local_net] = sanitize_node(local_net)
         return node_map[local_net]
 
-    driven_nets: set[str] = set()
+    body_lines = [
+        f"* {project['name']} / {module['name']}",
+        "* Standalone module testbench generated by circuit_project.py",
+    ]
+    driven_nodes: set[str] = set()
     for component in module["components"]:
         component_name = sanitize_node(f"{module_id}_{component['name']}")
         component_type = component["type"]
         if not component_name.upper().startswith(component_type):
             component_name = f"{component_type}{component_name}"
         nodes = [node_name(pin["net"]) for pin in component["pins"]]
-        lines.append(" ".join([component_name, *nodes, str(component["value"])]))
+        body_lines.append(" ".join([component_name, *nodes, str(component["value"])]))
         if component_type in {"V", "I"} and component["pins"]:
-            driven_nets.add(component["pins"][0]["net"])
+            driven_nodes.add(node_name(component["pins"][0]["net"]))
 
-    analog_outputs: list[str] = []
-    for port in module.get("ports", []):
-        net = port["net"]
-        node = node_name(net)
-        if port["signal_type"] == "analog" and port["direction"] == "input" and net not in driven_nets:
-            lines.append(f"Vtest_{sanitize_node(port['id'])} {node} 0 DC 0 AC 1")
-            driven_nets.add(net)
-        elif port["signal_type"] == "power" and port["direction"] == "input" and net not in driven_nets:
-            lines.append(f"Vtest_{sanitize_node(port['id'])} {node} 0 DC 5")
-            driven_nets.add(net)
-        if port["signal_type"] == "analog" and port["direction"] == "output":
-            analog_outputs.append(node)
-            lines.append(f"Rload_{sanitize_node(port['id'])} {node} 0 1meg")
-
-    lines.append(".ac dec 20 10 1meg")
-    if analog_outputs:
-        output_node = analog_outputs[-1]
-        lines.append(f".meas ac module_output_1khz_db find vdb({output_node}) at=1k")
-        lines.append(f".meas ac module_output_10khz_db find vdb({output_node}) at=10k")
-        lines.append(f".print ac vdb({output_node})")
-    lines.append(".end")
+    def testbench_tail(existing_driven: set[str]) -> list[str]:
+        tail: list[str] = []
+        outputs: list[str] = []
+        local_driven = set(existing_driven)
+        for port in module.get("ports", []):
+            node = node_name(port["net"])
+            if port["signal_type"] == "analog" and port["direction"] == "input" and node not in local_driven:
+                tail.append(f"Vtest_{sanitize_node(port['id'])} {node} 0 DC 0 AC 1")
+                local_driven.add(node)
+            elif port["signal_type"] == "power" and port["direction"] == "input" and node not in local_driven:
+                tail.append(f"Vtest_{sanitize_node(port['id'])} {node} 0 DC 5")
+                local_driven.add(node)
+            if port["signal_type"] == "analog" and port["direction"] == "output":
+                outputs.append(node)
+                tail.append(f"Rload_{sanitize_node(port['id'])} {node} 0 1meg")
+        tail.append(".ac dec 20 10 1meg")
+        if outputs:
+            output_node = outputs[-1]
+            tail.append(f".meas ac module_output_1khz_db find vdb({output_node}) at=1k")
+            tail.append(f".meas ac module_output_10khz_db find vdb({output_node}) at=10k")
+            tail.append(f".print ac vdb({output_node})")
+        return tail
 
     notebook_path = root / "modules" / module_id / "netlist-notebook.md"
-    netlist_text = (
-        extract_notebook_netlist(notebook_path.read_text(encoding="utf-8"))
-        if notebook_path.exists()
-        else "\n".join(lines) + "\n"
-    )
+    if notebook_path.exists():
+        notebook_netlist = extract_notebook_netlist(notebook_path.read_text(encoding="utf-8"))
+        if re.search(r"(?im)^\s*\.meas\b", notebook_netlist):
+            # The notebook defines its own measurements; run it verbatim.
+            netlist_text = notebook_netlist
+        else:
+            # Wrap the user's schematic netlist with a generated testbench so the
+            # module still produces simulation metrics. Schematic rendering filters
+            # the Vtest_/Rload_ helpers out through the "schematic" view.
+            trimmed = re.sub(r"(?im)^\s*\.end\s*$", "", notebook_netlist).rstrip()
+            tail = testbench_tail(scan_driven_nodes(notebook_netlist))
+            netlist_text = "\n".join([trimmed, *tail, ".end"]) + "\n"
+    else:
+        netlist_text = "\n".join([*body_lines, *testbench_tail(driven_nodes), ".end"]) + "\n"
     build_root = root / "build" / "modules" / module_id
     build_root.mkdir(parents=True, exist_ok=True)
     netlist_path = build_root / "design.cir"

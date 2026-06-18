@@ -29,6 +29,13 @@ async function exists(targetPath: string): Promise<boolean> {
   }
 }
 
+function assertModuleId(moduleId: string): string {
+  if (typeof moduleId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(moduleId)) {
+    throw new Error(`Invalid module id: ${moduleId}`);
+  }
+  return moduleId;
+}
+
 async function projectsRoot(): Promise<string> {
   const workspace = await getActiveWorkspace();
   const root = path.resolve(workspace.root, 'projects');
@@ -256,6 +263,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   });
 
   ipcMain.handle('project:compile-module', async (_event, projectId: string, moduleId: string) => {
+    assertModuleId(moduleId);
     return runProjectTool([
       'compile-module',
       '--project-root', await resolveProjectRoot(projectId),
@@ -289,6 +297,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   );
 
   ipcMain.handle('project:simulate-module', async (_event, projectId: string, moduleId: string) => {
+    assertModuleId(moduleId);
     const settings = await loadSettings();
     return runProjectTool([
       'simulate-module',
