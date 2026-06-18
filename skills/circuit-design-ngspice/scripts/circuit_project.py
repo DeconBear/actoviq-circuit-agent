@@ -1059,6 +1059,11 @@ def compile_module(root: Path, module_id: str) -> dict[str, Any]:
             trimmed = re.sub(r"(?im)^\s*\.end\s*$", "", notebook_netlist).rstrip()
             tail = testbench_tail(scan_driven_nodes(notebook_netlist))
             netlist_text = "\n".join([trimmed, *tail, ".end"]) + "\n"
+        # SPICE treats the first line as the title and ignores it, so a notebook
+        # that starts with a component would lose that element in ngspice. Ensure
+        # a leading comment/title line whenever the user's netlist lacks one.
+        if not netlist_text.lstrip().startswith("*"):
+            netlist_text = f"* {project['name']} / {module['name']}\n{netlist_text}"
     else:
         netlist_text = "\n".join([*body_lines, *testbench_tail(driven_nodes), ".end"]) + "\n"
     build_root = root / "build" / "modules" / module_id
