@@ -313,11 +313,13 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     if (!(await exists(manifestPath))) return null;
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
     const simulationPath = path.resolve(root, 'build', 'system', 'simulation', 'result.json');
+    const reportPath = path.resolve(root, 'build', 'system', 'report.md');
     return {
       manifest,
       simulation: await exists(simulationPath)
         ? JSON.parse(await readFile(simulationPath, 'utf8')) as Record<string, unknown>
         : null,
+      report: await exists(reportPath) ? await readFile(reportPath, 'utf8') : '',
     };
   });
 

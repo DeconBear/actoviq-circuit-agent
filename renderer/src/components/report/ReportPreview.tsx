@@ -7,7 +7,11 @@ const reportMarkdown = createSafeMarkdownParser({
 });
 
 export function ReportPreview() {
-  const content = useAppStore((s) => s.reportContent);
+  const legacyContent = useAppStore((s) => s.reportContent);
+  const projectId = useAppStore((s) => s.activeProjectId);
+  const build = useAppStore((s) => s.circuitBuild);
+  const projectContext = Boolean(projectId);
+  const content = projectContext ? (build?.report ?? '') : legacyContent;
 
   const html = useMemo(() => {
     if (!content) return '';
@@ -24,17 +28,23 @@ export function ReportPreview() {
         <div style={styles.emptyIcon}>📋</div>
         <div style={styles.emptyTitle}>No Report Generated</div>
         <div style={styles.emptyDesc}>
-          Complete the summary stage to see the final report.<br />
-          The report includes design analysis, verification results, and recommendations.
+          {projectContext ? (
+            <>Build or simulate the project from the Design tab to generate its report.</>
+          ) : (
+            <>
+              Complete the summary stage to see the final report.<br />
+              The report includes design analysis, verification results, and recommendations.
+            </>
+          )}
         </div>
       </div>
     );
   }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} data-testid="project-report">
       <div style={styles.toolbar}>
-        <span style={styles.label}>Final Summary Report</span>
+        <span style={styles.label}>{projectContext ? 'Project Report' : 'Final Summary Report'}</span>
       </div>
       <div
         className="markdown-content"
@@ -70,6 +80,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
+    height: '100%',
     color: '#8a929d',
     gap: 8,
   },

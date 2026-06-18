@@ -776,6 +776,102 @@ def extract_notebook_netlist(markdown: str) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def build_report_markdown(
+    project: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+    netlist_text: str,
+    simulation: dict[str, Any] | None,
+) -> str:
+    lines: list[str] = [
+        f"# {project['name']}",
+        "",
+        f"Revision {project['revision']} · {len(project['modules'])} modules · "
+        f"{len(project.get('connections', []))} connections · generated {utc_now()}",
+        "",
+        "## Modules",
+        "",
+    ]
+    for module_ref in project["modules"]:
+        module = modules.get(module_ref["id"], {})
+        ports = module_ref.get("ports", [])
+
+        def nets(*, direction: str | None = None, ground: bool = False) -> str:
+            selected = {
+                port.get("net", "")
+                for port in ports
+                if (port.get("signal_type") == "ground") == ground
+                and (ground or port.get("direction") == direction)
+            }
+            return ", ".join(sorted(selected)) or "—"
+
+        lines.append(f"### {module_ref.get('name', module_ref['id'])} (`{module_ref['id']}`)")
+        if module_ref.get("kind"):
+            lines.append(f"- Kind: {module_ref['kind']}")
+        if module_ref.get("function"):
+            lines.append(f"- Function: {module_ref['function']}")
+        lines.append(
+            f"- IN: {nets(direction='input')} · OUT: {nets(direction='output')} · GND: {nets(ground=True)}"
+        )
+        params = module_ref.get("parameters") or {}
+        if params:
+            lines.append("- Parameters: " + ", ".join(f"{key} = {value}" for key, value in params.items()))
+        lines.append(f"- Components: {len(module.get('components', []))}")
+        if (module_ref.get("notes") or "").strip():
+            lines.append(f"- Agent note: {module_ref['notes'].strip()}")
+        lines.append("")
+
+    connections = project.get("connections", [])
+    if connections:
+        lines.extend(["## System networks", ""])
+        for connection in connections:
+            label = connection.get("network") or connection.get("id")
+            source = connection["from"]
+            target = connection["to"]
+            lines.append(
+                f"- **{label}**: `{source['module_id']}.{source['port_id']}`"
+                f" → `{target['module_id']}.{target['port_id']}`"
+            )
+        lines.append("")
+
+    lines.extend(["## Simulation", ""])
+    if simulation is None:
+        lines.append("_Not simulated yet. Run \"Simulate system\" to populate AC metrics._")
+    else:
+        status = "passed" if simulation.get("ok") else "failed"
+        lines.append(
+            f"ngspice **{status}** · {simulation.get('ngspice', '')} · {simulation.get('simulated_at', '')}"
+        )
+        lines.append("")
+        metrics = simulation.get("metrics") or []
+        if metrics:
+            lines.append("| Metric | Value | Status |")
+            lines.append("| --- | --- | --- |")
+            for metric in metrics:
+                unit = metric.get("unit", "")
+                verdict = "PASS" if metric.get("pass") else "FAIL"
+                lines.append(f"| {metric['name']} | {metric['value']:.4g} {unit} | {verdict} |")
+        else:
+            lines.append("_No AC measurements were produced._")
+    lines.extend(["", "## System netlist", "", "```spice", netlist_text.strip(), "```", ""])
+    return "\n".join(lines)
+
+
+def write_project_report(
+    root: Path,
+    project: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+    netlist_text: str,
+    simulation: dict[str, Any] | None,
+) -> Path:
+    report_path = root / "build" / "system" / "report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        build_report_markdown(project, modules, netlist_text, simulation),
+        encoding="utf-8",
+    )
+    return report_path
+
+
 def compile_project(root: Path) -> dict[str, Any]:
     project, modules = load_project(root)
     union = UnionFind()
@@ -903,6 +999,9 @@ def compile_project(root: Path) -> dict[str, Any]:
         "source_map": "system/source-map.json",
     }
     atomic_write_json(root / "build" / "build-manifest.json", manifest)
+    # Recompiling invalidates any prior run, so the report is design-only until
+    # the next simulate_project regenerates it with fresh AC metrics.
+    write_project_report(root, project, modules, "\n".join(lines) + "\n", None)
     return {
         "ok": True,
         "project_id": project["project_id"],
@@ -1165,6 +1264,14 @@ def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
     manifest["status"] = "simulated" if result["ok"] else "simulation_failed"
     manifest["simulation"] = "system/simulation/result.json"
     atomic_write_json(manifest_path, manifest)
+    report_project, report_modules = load_project(root)
+    write_project_report(
+        root,
+        report_project,
+        report_modules,
+        netlist_path.read_text(encoding="utf-8"),
+        result,
+    )
     return result
 
 

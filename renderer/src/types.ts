@@ -221,6 +221,7 @@ export interface CircuitBuildState {
     metrics?: Array<{ name: string; value: number; unit: string; pass: boolean }>;
     stderr?: string;
   } | null;
+  report?: string;
 }
 
 export interface ReferenceDocument {
