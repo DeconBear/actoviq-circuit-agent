@@ -2,9 +2,13 @@
 
 [English](./README.md) | [简体中文](./README-zh.md)
 
-Interactive ngspice-based circuit-design Agent built on the published `actoviq-agent-sdk` package.
+Agent-native ngspice circuit-design workbench. It turns natural-language requirements into SPICE-oriented schematic design artifacts: principle schematic design, netlist generation, ngspice simulation, netlistsvg schematic rendering, and engineering reports. It is not yet a PCB layout, IC layout, signoff, or production-hardware validation tool. Future work will add more practical design automation, richer component libraries, stronger schematic layout quality, and deeper verification flows.
 
-This project turns natural-language requirements into SPICE-oriented schematic design artifacts. It currently focuses on principle schematic design, netlist generation, ngspice simulation, SVG schematic rendering, and engineering report writing. It is not yet a PCB layout, IC layout, signoff, or production-hardware validation tool. Future work will add more practical design automation, richer component libraries, stronger schematic layout quality, and deeper verification flows.
+There are three ways to use it:
+
+- **Desktop GUI (recommended)** — an Electron workbench whose home screen is a modular schematic canvas. Claude Code / Codex drive the design through the portable skill, and results appear live in the GUI. No API key is required for this path.
+- **Portable skill** — `skills/circuit-design-ngspice/` runs inside Claude Code, OpenAI Codex, Cursor, or any agent that can read a Markdown prompt and run shell commands.
+- **Built-in CLI/TUI** — a self-contained chat/slash-command agent that talks to an Anthropic-compatible API (requires a provider token).
 
 ## What It Does
 
@@ -16,7 +20,32 @@ This project turns natural-language requirements into SPICE-oriented schematic d
 - Designs primitive-oriented SPICE netlists, runs ngspice verification, and renders netlistsvg schematics.
 - Bundles circuit templates, Python helpers, and render assets inside this package.
 
-## Quick Start
+## Desktop GUI (Agent-Native Workbench)
+
+The Electron desktop app is a result-first workbench: the home screen is a modular schematic canvas, and the chat panel is an optional drawer. The API key is only needed for the built-in chat workflow — opening the GUI, managing workspaces, and displaying results produced by Claude Code / Codex all work without one.
+
+Launch it from a source checkout:
+
+```powershell
+npm install
+npm run electron:dev
+```
+
+This compiles the Electron main process, starts Vite, and opens the window.
+
+**Tabs**
+
+- **Design** — each circuit module is an asset card showing its netlistsvg preview (or a function/parameter summary), its `IN` / `OUT` / `GND` system-network names, a copyable module ID, and an Agent note field. `Ctrl`+scroll zooms, the middle mouse button pans, right-click adds or edits a module, and the corner handle resizes a card. Double-click a card to open its full netlistsvg schematic.
+- **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Saving re-renders the module SVG.
+- **SVG** — the selected module's netlistsvg schematic (the same module shown in Design and Netlist).
+- **Sim** — system AC metrics from ngspice (status badge, table, chart) after *Simulate system*.
+- **Report** — a generated Markdown report (modules, interfaces, system networks, simulation metrics, and the system netlist).
+
+**Workspaces** — create multiple isolated workspaces, each with its own `projects/`, `jobs/`, and `references/`. The workspace root is user-selectable and defaults inside the repo under `workspace/` (git-ignored). Drop reference PDFs/images into `references/` and optionally run them through a configurable Yunzhisheng-compatible OCR endpoint (set in Settings).
+
+**How the agent drives it** — Claude Code / Codex use the `circuit-design-ngspice` skill to create and edit projects under the active workspace; the GUI watches those files and refreshes the affected card. See the *GUI Project Canvas Contract* in [SKILL.md](./skills/circuit-design-ngspice/SKILL.md).
+
+## Quick Start (CLI / TUI)
 
 ### 1. Install the CLI
 
@@ -285,6 +314,16 @@ Design a 1 kHz RC low-pass filter and render the schematic.
 The agent will create a workspace directory, run the 8-step workflow,
 and produce all design artifacts including `design/design.final.cir`,
 `render/netlistsvg.svg`, and `reports/final-summary.md`.
+
+**Canvas project model (used with the desktop GUI).** When the GUI is open, the
+agent works on the editable project model instead of the one-shot job workflow:
+`scripts/circuit_project.py` creates and revises a project under
+`<workspace>/projects/<id>/` (a `project.circuit.json` plus per-module
+`modules/<id>/module.circuit.json` and `netlist-notebook.md`), then compiles and
+simulates it. The GUI watches those files and refreshes the canvas, Netlist,
+SVG, Sim, and Report tabs live. The full command and operation contract is in
+[SKILL.md](./skills/circuit-design-ngspice/SKILL.md) under *GUI Project Canvas
+Contract*.
 
 ## Validation
 

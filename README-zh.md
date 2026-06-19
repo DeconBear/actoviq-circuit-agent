@@ -2,9 +2,15 @@
 
 [English](./README.md) | [简体中文](./README-zh.md)
 
-基于已发布的 `actoviq-agent-sdk` 构建的交互式、基于 ngspice 的电路设计 Agent。
+AI Agent 原生的、基于 ngspice 的电路设计工作台。
 
-本项目把自然语言电路需求转换为面向 SPICE 的原理图设计产物。目前重点覆盖原理图级设计、网表生成、ngspice 仿真、SVG 电路图渲染和工程报告编写。它还不是 PCB layout、IC layout、signoff 或生产级硬件验证工具。后续会继续开发更实用的设计自动化能力、更丰富的器件库、更高质量的原理图布局，以及更深入的验证流程。
+本项目把自然语言电路需求转换为面向 SPICE 的原理图设计产物：原理图级设计、网表生成、ngspice 仿真、netlistsvg 电路图渲染和工程报告。它还不是 PCB layout、IC layout、signoff 或生产级硬件验证工具。后续会继续开发更实用的设计自动化能力、更丰富的器件库、更高质量的原理图布局，以及更深入的验证流程。
+
+共有三种使用方式：
+
+- **桌面 GUI（推荐）**——一个 Electron 工作台，首页就是模块化原理图画布。Claude Code / Codex 通过可移植 skill 驱动设计，结果实时显示在 GUI 中。这条路径无需 API Key。
+- **可移植 skill**——`skills/circuit-design-ngspice/` 可在 Claude Code、OpenAI Codex、Cursor，或任何能读取 Markdown 提示并执行 shell 命令的 Agent 中运行。
+- **内置 CLI / TUI**——自带的对话 / 斜杠命令 Agent，通过 Anthropic 兼容 API 工作（需要 Provider Token）。
 
 ## 功能概览
 
@@ -16,7 +22,32 @@
 - 生成 primitive-oriented SPICE 网表，调用 ngspice 验证，并渲染 netlistsvg 原理图。
 - 内置电路模板、Python 辅助脚本和渲染资源。
 
-## 快速开始
+## 桌面 GUI（AI Agent 原生工作台）
+
+Electron 桌面应用是一个“结果优先”的工作台：首页是模块化原理图画布，聊天面板只是可选抽屉。只有内置对话工作流才需要 API Key——打开 GUI、管理工作空间、展示 Claude Code / Codex 生成的结果都无需 Key。
+
+从源码启动：
+
+```powershell
+npm install
+npm run electron:dev
+```
+
+该命令会先编译 Electron 主进程，启动 Vite，并打开窗口。
+
+**标签页**
+
+- **Design**——每个电路模块是一张资产卡片，显示其 netlistsvg 预览（或功能 / 参数摘要）、`IN` / `OUT` / `GND` 系统网络名、可复制的模块 ID 和 Agent 笔记。`Ctrl`+滚轮缩放，鼠标中键拖动画布，右键新增或编辑模块，右下角手柄缩放卡片。双击卡片进入完整的 netlistsvg 电路图。
+- **Netlist**——每个模块一份可编辑的 Markdown 笔记本：`spice` 代码块是网表，代码块之外的文字是笔记；保存后会重新渲染该模块 SVG。
+- **SVG**——当前选中模块的 netlistsvg 电路图（与 Design、Netlist 是同一个模块）。
+- **Sim**——执行 *Simulate system* 后，展示 ngspice 的系统级 AC 指标（状态徽章、表格、图表）。
+- **Report**——自动生成的 Markdown 报告（模块、接口、系统网络、仿真指标和系统网表）。
+
+**工作空间**——可创建多个相互隔离的工作空间，每个都有独立的 `projects/`、`jobs/` 和 `references/`。工作空间根目录可由用户选择，默认在仓库内 `workspace/`（已被 git 忽略）。把参考 PDF / 图片放进 `references/`，可选地通过可配置的云知声兼容 OCR 接口识别（在设置中配置）。
+
+**Agent 如何驱动**——Claude Code / Codex 使用 `circuit-design-ngspice` skill 在当前工作空间下创建和修改项目；GUI 监听这些文件并刷新对应卡片。详见 [SKILL.md](./skills/circuit-design-ngspice/SKILL.md) 中的 *GUI Project Canvas Contract*。
+
+## 快速开始（CLI / TUI）
 
 ### 1. 安装 CLI
 
@@ -281,6 +312,8 @@ netlistsvg --help
 
 Agent 会创建工作目录，执行 8 步工作流，产出所有设计文件，包括
 `design/design.final.cir`、`render/netlistsvg.svg` 和 `reports/final-summary.md`。
+
+**画布项目模型（配合桌面 GUI 使用）。** 当 GUI 打开时，Agent 操作的是可编辑的项目模型，而非一次性的 job 工作流：`scripts/circuit_project.py` 在 `<workspace>/projects/<id>/` 下创建并修订项目（一份 `project.circuit.json`，以及每个模块的 `modules/<id>/module.circuit.json` 和 `netlist-notebook.md`），随后编译和仿真。GUI 监听这些文件，实时刷新画布、Netlist、SVG、Sim 和 Report 各标签页。完整的命令与操作约定见 [SKILL.md](./skills/circuit-design-ngspice/SKILL.md) 的 *GUI Project Canvas Contract* 一节。
 
 ## 验证
 

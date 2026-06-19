@@ -113,6 +113,16 @@ output stages separate when they have independent electrical responsibilities.
 Modify one module per command when practical, keep its external ports stable,
 compile after structural edits, and simulate before declaring completion.
 
+The GUI surfaces a project through five tabs: Design (the module canvas),
+Netlist (the selected module's notebook), SVG (the selected module's
+netlistsvg), Sim, and Report. `compile` and `simulate` write
+`build/system/report.md` (modules, interfaces, system networks, AC metrics, and
+the system netlist), which the Report tab renders. `simulate` also writes
+`build/system/simulation/result.json`; its `metrics` feed the Sim tab and the
+Design inspector. Module-level metrics from `simulate-module` appear in the
+Design inspector. There is no separate publish step for the canvas model —
+writing these build files is what refreshes the GUI.
+
 The older `<workspace-root>/jobs/` manifest workflow remains available only
 for compatibility with existing result bundles. Do not call the legacy
 built-in workflow for a project-canvas design.
