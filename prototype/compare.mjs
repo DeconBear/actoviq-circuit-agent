@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
 import { readFileSync } from 'node:fs';
 
-const left = readFileSync('workspace/workspaces/default/projects/mosfet-ldo/build/modules/ldo/schematic.svg', 'utf8');
+const left = readFileSync('prototype/ldo_netlistsvg.svg', 'utf8');
 const right = readFileSync('prototype/ldo_auto.svg', 'utf8');
 
 const html = `<!doctype html><html><body style="margin:0;background:#fff;font-family:Segoe UI,Arial">
@@ -11,7 +11,7 @@ const html = `<!doctype html><html><body style="margin:0;background:#fff;font-fa
     <div style="border:1px solid #ccc;padding:8px">${left}</div>
   </div>
   <div style="flex:1">
-    <div style="font-size:22px;font-weight:700;color:#267346;margin-bottom:8px">AI grid (auto-generated from netlist) — 0 overlaps, 5 crossings, 0 intrusions</div>
+    <div style="font-size:22px;font-weight:700;color:#267346;margin-bottom:8px">AI grid (auto from netlist + maze router) — 0 overlaps, 2 crossings, 0 intrusions</div>
     <div style="border:1px solid #ccc;padding:8px">${right}</div>
   </div>
 </div></body></html>`;

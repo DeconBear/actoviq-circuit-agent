@@ -18,7 +18,8 @@ run through component bodies. The fix is a division of labour:
 - **Deterministic code owns geometry** (`grid_render.py`):
   - one device per cell → **overlaps are structurally impossible**
   - power/ground **rails** → most wires leave the body area
-  - orthogonal **comb routing** in the channels between cells
+  - a crossing-aware **maze router** (Dijkstra on a fine channel grid, with
+    orthogonal pin escapes) routes the rest, minimising crossings
   - a built-in geometry self-check (crossings / body intrusions)
 
 schemdraw is used only as the symbol pen. We do **not** make schemdraw smarter;
@@ -29,7 +30,7 @@ we give it an AI-authored placement front-end.
 | Metric              | netlistsvg (current) | AI grid (auto from netlist) |
 | ------------------- | -------------------- | --------------------------- |
 | device overlaps     | 7                    | **0**                       |
-| wire crossings      | 9                    | **5**                       |
+| wire crossings      | 9                    | **2**                       |
 | wire-body intrusions| 46                   | **0**                       |
 | readability         | unreadable blob      | clean, labelled             |
 
@@ -79,11 +80,12 @@ schemdraw is an optional dependency: if it is missing, `render_grid` returns
 
 ## Status / next steps
 
-- [x] grid renderer + rails + orthogonal routing + geometry self-check
+- [x] grid renderer + rails + geometry self-check
 - [x] auto-derive the layout-IR from the netlist via idiom recognition
 - [x] **integrated into `circuit_project.py compile-module` -> shows in the GUI**
-- [~] crossing-minimising router: a maze/A* attempt regressed (pin-access and
-      obstacle modelling near devices), so the clean comb router is kept
-      (0 overlaps, 0 intrusions, 5 clean crossings). A proper channel router
-      with pin-aware obstacles is real future work.
-- [ ] broaden idioms (cascode, folded-cascode, multi-stage)
+- [x] **crossing-aware maze router** (Dijkstra on a fine channel grid with
+      orthogonal pin escapes): comb 5 crossings -> 2, still 0 overlaps /
+      0 intrusions. Earlier naive A* attempt regressed; the fix was proper
+      obstacle sizing + orthogonal escapes + a wider cell pitch.
+- [ ] broaden idioms (cascode, folded-cascode, multi-stage); tidy the
+      diff-pair source loops; optional crossover "hops" for the last crossings

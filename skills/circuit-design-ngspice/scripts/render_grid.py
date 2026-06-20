@@ -6,7 +6,7 @@ flat netlist and tangle transistor-level analog circuits. This renderer instead
 recognises the common analog idioms (current mirror, differential pair, tail
 source, pass device, feedback divider, output loads, rails) straight from
 connectivity, places one device per grid cell (so overlaps are impossible),
-draws power/ground rails, and routes the rest orthogonally in the channels.
+draws power/ground rails, and routes the rest with a crossing-aware maze router.
 
     python render_grid.py --netlist design.cir --svg-path schematic.svg
 
@@ -16,8 +16,10 @@ so the caller can fall back to netlistsvg.
 from __future__ import annotations
 
 import argparse
+import heapq
 import json
 import re
+from collections import defaultdict
 from pathlib import Path
 
 try:
@@ -27,8 +29,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     _SCHEMDRAW_OK = False
 
-COL_W = 4.0
-ROW_H = 4.0
+COL_W = 6.0
+ROW_H = 5.0
 LEAD = 1.1
 WIRE = "#222"
 ACCENT = "#165c7d"
@@ -250,28 +252,149 @@ def place_device(d, dev):
     raise ValueError(f"unknown device kind: {kind}")
 
 
-def snap_channel(value, step):
-    return (round(value / step - 0.5) + 0.5) * step
-
-
 def add_segment(segments, a, b):
     if abs(a[0] - b[0]) > 1e-6 or abs(a[1] - b[1]) > 1e-6:
         segments.append((a, b))
 
 
-def route_comb(net_pins, segments):
-    xs = [p[0] for p in net_pins]
-    ys = [p[1] for p in net_pins]
-    if max(xs) - min(xs) >= max(ys) - min(ys):
-        trunk_y = snap_channel(sorted(ys)[len(ys) // 2], ROW_H)
-        add_segment(segments, (min(xs), trunk_y), (max(xs), trunk_y))
-        for px, py in net_pins:
-            add_segment(segments, (px, py), (px, trunk_y))
-    else:
-        trunk_x = snap_channel(sorted(xs)[len(xs) // 2], COL_W)
-        add_segment(segments, (trunk_x, min(ys)), (trunk_x, max(ys)))
-        for px, py in net_pins:
-            add_segment(segments, (px, py), (trunk_x, py))
+# --------------------------- crossing-aware maze router -------------------- #
+RSTEP = 1.0
+R_TURN = 0.5
+R_CROSS = 4.0
+R_SHARE = 25.0
+
+
+def _route_axes(x_lo, x_hi, y_lo, y_hi):
+    nx = max(1, round((x_hi - x_lo) / RSTEP))
+    ny = max(1, round((y_hi - y_lo) / RSTEP))
+    xs = [round(x_lo + i * RSTEP, 1) for i in range(nx + 1)]
+    ys = [round(y_lo + j * RSTEP, 1) for j in range(ny + 1)]
+    return xs, ys
+
+
+def _in_box(n, box, m=1e-6):
+    return box[0] - m <= n[0] <= box[2] + m and box[1] - m <= n[1] <= box[3] + m
+
+
+def _merge_iv(intervals):
+    intervals = sorted(intervals)
+    out = []
+    for a, b in intervals:
+        if out and a <= out[-1][1] + 1e-6:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _merge_net(edges):
+    adj = defaultdict(set)
+    horiz, vert = defaultdict(list), defaultdict(list)
+    for u, v in edges:
+        adj[u].add(v)
+        adj[v].add(u)
+        if abs(u[1] - v[1]) < 1e-6:
+            horiz[u[1]].append(tuple(sorted((u[0], v[0]))))
+        else:
+            vert[u[0]].append(tuple(sorted((u[1], v[1]))))
+    segs = []
+    for y, ivs in horiz.items():
+        segs += [((a, y), (b, y)) for a, b in _merge_iv(ivs)]
+    for x, ivs in vert.items():
+        segs += [((x, a), (x, b)) for a, b in _merge_iv(ivs)]
+    juncs = [n for n in adj if len(adj[n]) >= 3]
+    return segs, juncs
+
+
+def maze_route(nets, route_boxes, x_lo, x_hi, y_lo, y_hi):
+    xs, ys = _route_axes(x_lo, x_hi, y_lo, y_hi)
+    xset, yset = set(xs), set(ys)
+    blocked = {(x, y) for x in xs for y in ys if any(_in_box((x, y), b) for b in route_boxes)}
+    huse, vuse = defaultdict(set), defaultdict(set)
+    route_segs, juncs, stubs = [], [], []
+
+    def snap(v, axis):
+        return min(axis, key=lambda a: abs(a - v))
+
+    def valid(n):
+        return n[0] in xset and n[1] in yset and n not in blocked
+
+    def escape(pin, center):
+        px, py = pin
+        cx, cy = center
+        if abs(py - cy) >= abs(px - cx):
+            d = (0.0, RSTEP if py >= cy else -RSTEP)
+        else:
+            d = (RSTEP if px >= cx else -RSTEP, 0.0)
+        n = (snap(px, xs), snap(py, ys))
+        for _ in range(12):
+            if valid(n):
+                return n
+            n = (round(n[0] + d[0], 1), round(n[1] + d[1], 1))
+        return n
+
+    def neighbours(node):
+        x, y = node
+        for dx, dy, orient in ((RSTEP, 0, 1), (-RSTEP, 0, 1), (0, RSTEP, 2), (0, -RSTEP, 2)):
+            m = (round(x + dx, 1), round(y + dy, 1))
+            if valid(m):
+                yield m, orient
+
+    for net, pin_centers in nets:
+        escapes = [escape(p, c) for p, c in pin_centers]
+        for (p, _c), e in zip(pin_centers, escapes):
+            stubs.append((p, e))
+        tree = {escapes[0]}
+        net_edges = set()
+        for target in escapes[1:]:
+            if target in tree:
+                continue
+            pq = [(0.0, 0, target, 0, None)]
+            best, prev, cnt, goal = {}, {}, 1, None
+            while pq:
+                cost, _, node, ld, par = heapq.heappop(pq)
+                key = (node, ld)
+                if key in best and best[key] <= cost:
+                    continue
+                best[key] = cost
+                prev[key] = par
+                if node in tree:
+                    goal = key
+                    break
+                for m, orient in neighbours(node):
+                    nc = cost + RSTEP
+                    if ld and ld != orient:
+                        nc += R_TURN
+                    oh = any(s != net for s in huse.get(m, ()))
+                    ov = any(s != net for s in vuse.get(m, ()))
+                    if orient == 1 and ov:
+                        nc += R_CROSS
+                    if orient == 2 and oh:
+                        nc += R_CROSS
+                    if orient == 1 and oh:
+                        nc += R_SHARE
+                    if orient == 2 and ov:
+                        nc += R_SHARE
+                    heapq.heappush(pq, (nc, cnt, m, orient, key))
+                    cnt += 1
+            if goal is None:
+                continue
+            path, k = [], goal
+            while k is not None:
+                path.append(k[0])
+                k = prev.get(k)
+            for u, v in zip(path, path[1:]):
+                net_edges.add((u, v))
+                tree.add(u)
+                tree.add(v)
+                if abs(u[1] - v[1]) < 1e-6:
+                    huse[u].add(net); huse[v].add(net)
+                else:
+                    vuse[u].add(net); vuse[v].add(net)
+        segs, jn = _merge_net(net_edges)
+        route_segs += segs
+        juncs += jn
+    return route_segs, juncs, stubs
 
 
 def _seg_is_h(s):
@@ -307,13 +430,14 @@ def render(layout, svg_path: Path) -> dict:
     d.config(fontsize=FS, lw=2, color=WIRE, bgcolor=BG, margin=0.4)
 
     net_pins: dict[str, list] = {}
-    boxes: list = []
+    route_boxes, check_boxes = [], []
     for dev in layout["devices"]:
         anchors = place_device(d, dev)
         cx, cy = cell_xy(dev["cell"])
-        boxes.append((cx - 1.3, cy - 1.6, cx + 1.3, cy + 1.6))
+        route_boxes.append((cx - 1.6, cy - 2.0, cx + 1.6, cy + 2.0))
+        check_boxes.append((cx - 1.3, cy - 1.6, cx + 1.3, cy + 1.6))
         for pin_name, net in dev["pins"].items():
-            net_pins.setdefault(net, []).append(anchors[pin_name])
+            net_pins.setdefault(net, []).append((anchors[pin_name], (cx, cy)))
 
     cols = [dev["cell"][0] for dev in layout["devices"]]
     rows = [dev["cell"][1] for dev in layout["devices"]]
@@ -321,29 +445,32 @@ def render(layout, svg_path: Path) -> dict:
     y_top = -(min(rows) * ROW_H) + ROW_H * 0.85
     y_bot = -(max(rows) * ROW_H) - ROW_H * 0.85
 
-    segments: list = []
-    junctions: list = []
+    rail_segs, stub_segs, route_segs, junctions = [], [], [], []
     for net, side in rails.items():
         rail_y = y_top if side == "top" else y_bot
-        add_segment(segments, (x_lo, rail_y), (x_hi, rail_y))
-        for px, py in net_pins.get(net, []):
-            add_segment(segments, (px, py), (px, rail_y))
+        add_segment(rail_segs, (x_lo, rail_y), (x_hi, rail_y))
+        for (px, py), _c in net_pins.get(net, []):
+            add_segment(stub_segs, (px, py), (px, rail_y))
             junctions.append((px, rail_y))
         d.add(elm.Label().at(((x_lo + x_hi) / 2, rail_y + (0.4 if side == "top" else -0.7)))
               .label(net.upper(), fontsize=FS, color=ACCENT))
 
-    for net, pins in net_pins.items():
-        if net not in rails and len(pins) >= 2:
-            route_comb(pins, segments)
+    non_rail = [(net, pcs) for net, pcs in net_pins.items() if net not in rails and len(pcs) >= 2]
+    non_rail.sort(key=lambda kv: (max(p[0] for p, _ in kv[1]) - min(p[0] for p, _ in kv[1])) +
+                                 (max(p[1] for p, _ in kv[1]) - min(p[1] for p, _ in kv[1])))
+    rsegs, rjuncs, rstubs = maze_route(non_rail, route_boxes, x_lo, x_hi, y_bot, y_top)
+    route_segs += rsegs
+    stub_segs += rstubs
+    junctions += rjuncs
 
-    for a, b in segments:
+    for a, b in rail_segs + route_segs + stub_segs:
         d.add(elm.Line().at(a).to(b).color(WIRE))
     for jx, jy in junctions:
         d.add(elm.Dot().at((jx, jy)).color(WIRE))
 
     svg_path.parent.mkdir(parents=True, exist_ok=True)
     d.save(str(svg_path), transparent=False)
-    return geometry_check(segments, boxes)
+    return geometry_check(rail_segs + route_segs, check_boxes)
 
 
 def main() -> int:
@@ -364,7 +491,7 @@ def main() -> int:
         print(json.dumps({"ok": True, "svg_path": str(Path(args.svg_path).resolve()),
                           "renderer": "grid", "metrics": metrics,
                           "devices": len(layout["devices"])}, ensure_ascii=False))
-    except Exception as exc:  # keep the caller's fallback path working
+    except Exception as exc:
         print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}))
     return 0
 
