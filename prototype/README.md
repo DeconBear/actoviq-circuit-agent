@@ -26,29 +26,50 @@ we give it an AI-authored placement front-end.
 
 ## Result (LDO: PMOS pass + 5T OTA, 5 MOSFETs)
 
-| Metric              | netlistsvg (current) | AI grid prototype |
-| ------------------- | -------------------- | ----------------- |
-| device overlaps     | 7                    | **0**             |
-| wire crossings      | 9                    | **4**             |
-| wire-body intrusions| 46                   | **0**             |
-| readability         | unreadable blob      | clean, labelled   |
+| Metric              | netlistsvg (current) | AI grid (auto from netlist) |
+| ------------------- | -------------------- | --------------------------- |
+| device overlaps     | 7                    | **0**                       |
+| wire crossings      | 9                    | **5**                       |
+| wire-body intrusions| 46                   | **0**                       |
+| readability         | unreadable blob      | clean, labelled             |
 
-See `comparison.png`.
+See `comparison.png` (left: netlistsvg; right: auto-generated from the same netlist).
 
 ## Run
 
+Fully automatic (netlist -> idiom recognition -> layout-IR -> schematic):
+
 ```bash
-python prototype/grid_render.py --layout prototype/ldo.layout.json \
-    --svg-path prototype/ldo_grid.svg
-node prototype/rasterize.mjs prototype/ldo_grid.svg prototype/ldo_grid.png
+python prototype/auto_layout.py \
+    --netlist <project>/modules/ldo/netlist-notebook.md \
+    --out prototype/ldo_auto.layout.json
+python prototype/grid_render.py --layout prototype/ldo_auto.layout.json \
+    --svg-path prototype/ldo_auto.svg
+node prototype/rasterize.mjs prototype/ldo_auto.svg prototype/ldo_auto.png
 node prototype/compare.mjs        # side-by-side vs the netlistsvg output
 ```
 
-## To productionise
+`prototype/ldo.layout.json` is the original hand-authored layout, kept for
+reference. `auto_layout.py` reproduces it (and more) straight from the netlist.
 
-1. Have the design agent emit the `layout.json` directly (it already authors the
-   netlist), or derive a first guess from the netlist + a topology-idiom library
-   (diff-pair / mirror / cascode) and let the agent refine it.
-2. Close the loop: feed the geometry self-check back to the agent so it nudges
-   cells until crossings hit zero.
-3. Add a `render_grid` option to `circuit_project.py` alongside netlistsvg.
+## How the auto-placer works (`auto_layout.py`)
+
+Parses the SPICE netlist and recognises the common analog idioms purely from
+connectivity, then places them with known-good relative positions:
+
+- **current mirror** — same-type FETs sharing a gate net, one diode-connected
+- **differential pair** — same-type FETs sharing a (non-rail) source net
+- **tail source / reference / pass device / feedback divider / output loads**
+- **rails** — the supply (highest source fan-out net) and ground become buses;
+  the supply-defining source is drawn as the rail, not an inline battery
+
+Unrecognised devices fall back to a spare row so the drawing always closes.
+
+## Status / next steps
+
+- [x] grid renderer + rails + orthogonal routing + geometry self-check
+- [x] **auto-derive the layout-IR from the netlist via idiom recognition**
+- [ ] close the loop: feed the geometry score back so cells nudge until
+      crossings hit zero (the 5 here are the long `fb`/`eaout` trunks)
+- [ ] broaden idioms (cascode, folded-cascode, multi-stage) + a real
+      channel router; then add a `render_grid` option to `circuit_project.py`
