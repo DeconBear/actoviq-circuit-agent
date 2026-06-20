@@ -18,8 +18,11 @@ run through component bodies. The fix is a division of labour:
 - **Deterministic code owns geometry** (`grid_render.py`):
   - one device per cell → **overlaps are structurally impossible**
   - power/ground **rails** → most wires leave the body area
+  - **idiom routing** for known sub-circuits — the diff-pair *tail* (both
+    sources drop to one bar, then a single wire to the tail source) and a local
+    *diode jumper* for the mirror reference — so they draw the textbook way
   - a crossing-aware **maze router** (Dijkstra on a fine channel grid, with
-    orthogonal pin escapes) routes the rest, minimising crossings
+    orthogonal pin escapes) routes everything else, minimising crossings
   - crossover **hops** (little semicircle bumps) render the remaining inter-net
     crossings unambiguously, the way engineers draw them
   - a built-in geometry self-check (crossings / body intrusions)
@@ -89,9 +92,8 @@ schemdraw is an optional dependency: if it is missing, `render_grid` returns
       orthogonal pin escapes): comb 5 crossings -> 2, still 0 overlaps /
       0 intrusions. Earlier naive A* attempt regressed; the fix was proper
       obstacle sizing + orthogonal escapes + a wider cell pitch.
-- [x] **crossover hops** for the remaining inter-net crossings + shallower
-      pin escapes for tidier diff-pair source routing
-- [ ] broaden idioms (cascode, folded-cascode, multi-stage). The diff-pair
-      source-to-tail loops remain a minor cosmetic item: they are inherent to
-      the escape clearance that guarantees zero body intrusions, and would need
-      idiom-specific tail routing (join the two sources at one point) to remove.
+- [x] **crossover hops** for the remaining inter-net crossings
+- [x] **idiom routing**: diff-pair tail bar (kills the source loops) + a local
+      diode jumper for the mirror reference (kills the gate-drain detour)
+- [ ] broaden idioms (cascode, folded-cascode, multi-stage); a mirror gate-bus
+      idiom would further tidy the `n1` routing into M4

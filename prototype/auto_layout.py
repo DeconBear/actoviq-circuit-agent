@@ -202,6 +202,7 @@ def auto_layout(devices: list[dict]) -> dict:
             spare += 1
 
     return {"title": "auto layout", "rails": rails,
+            "tail_net": diff["tail"] if diff else None,
             "devices": [placed[d["ref"]] for d in devices if d["ref"] in placed]}
 
 

@@ -20,7 +20,7 @@ import heapq
 import json
 import math
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 try:
@@ -205,7 +205,8 @@ def auto_layout(devices: list[dict]) -> dict:
             place(d["ref"], (spare, 4), orient="down")
             spare += 1
 
-    return {"rails": rails, "devices": [placed[d["ref"]] for d in devices if d["ref"] in placed]}
+    return {"rails": rails, "tail_net": diff["tail"] if diff else None,
+            "devices": [placed[d["ref"]] for d in devices if d["ref"] in placed]}
 
 
 # --------------------------------------------------------------------------- #
@@ -424,6 +425,23 @@ def geometry_check(segments, boxes):
     return {"device_overlaps": 0, "wire_crossings": crossings, "wire_body_intrusions": intrusions}
 
 
+def route_tail(net, pin_centers, route_segs, junctions):
+    """Idiom routing for a differential-pair tail: drop both sources to one
+    horizontal bar, then a single wire down to the tail source - no loops."""
+    pts = sorted((p for p, _c in pin_centers), key=lambda p: p[1])
+    tail_pin, sources = pts[0], pts[1:]
+    bar_y = round((min(s[1] for s in sources) + tail_pin[1]) / 2, 2)
+    xs = [s[0] for s in sources] + [tail_pin[0]]
+    route_segs.append((net, (min(xs), bar_y), (max(xs), bar_y)))
+    for s in sources:
+        route_segs.append((net, (s[0], s[1]), (s[0], bar_y)))
+    route_segs.append((net, (tail_pin[0], tail_pin[1]), (tail_pin[0], bar_y)))
+    counts = Counter(xs)
+    for x in set(xs):
+        if counts[x] >= 2 or min(xs) < x < max(xs):
+            junctions.append((x, bar_y))
+
+
 def draw_wires(d, segments, hop_r=0.35, steps=10):
     """Draw tagged (net, a, b) segments. Where a horizontal wire crosses a
     vertical wire of a different net, draw a small semicircle 'hop' so the
@@ -462,14 +480,22 @@ def render(layout, svg_path: Path) -> dict:
     d.config(fontsize=FS, lw=2, color=WIRE, bgcolor=BG, margin=0.4)
 
     net_pins: dict[str, list] = {}
-    route_boxes, check_boxes = [], []
+    route_boxes, check_boxes, diode_segs = [], [], []
     for dev in layout["devices"]:
         anchors = place_device(d, dev)
         cx, cy = cell_xy(dev["cell"])
         route_boxes.append((cx - 1.6, cy - 1.8, cx + 1.6, cy + 1.8))
         check_boxes.append((cx - 1.3, cy - 1.6, cx + 1.3, cy + 1.6))
-        for pin_name, net in dev["pins"].items():
+        pins = dev["pins"]
+        diode = dev["kind"] in {"nmos", "pmos"} and pins.get("G") == pins.get("D")
+        for pin_name, net in pins.items():
+            if diode and pin_name == "G":
+                continue  # gate tied to drain by a short local jumper, below
             net_pins.setdefault(net, []).append((anchors[pin_name], (cx, cy)))
+        if diode:
+            g, dr = anchors["G"], anchors["D"]
+            diode_segs.append((pins["D"], (g[0], g[1]), (g[0], dr[1])))
+            diode_segs.append((pins["D"], (g[0], dr[1]), (dr[0], dr[1])))
 
     cols = [dev["cell"][0] for dev in layout["devices"]]
     rows = [dev["cell"][1] for dev in layout["devices"]]
@@ -489,7 +515,13 @@ def render(layout, svg_path: Path) -> dict:
         d.add(elm.Label().at(((x_lo + x_hi) / 2, rail_y + (0.4 if side == "top" else -0.7)))
               .label(net.upper(), fontsize=FS, color=ACCENT))
 
-    non_rail = [(net, pcs) for net, pcs in net_pins.items() if net not in rails and len(pcs) >= 2]
+    handled = set(rails)
+    tail_net = layout.get("tail_net")
+    if tail_net and len(net_pins.get(tail_net, [])) >= 3:
+        route_tail(tail_net, net_pins[tail_net], route_segs, junctions)
+        handled.add(tail_net)
+
+    non_rail = [(net, pcs) for net, pcs in net_pins.items() if net not in handled and len(pcs) >= 2]
     non_rail.sort(key=lambda kv: (max(p[0] for p, _ in kv[1]) - min(p[0] for p, _ in kv[1])) +
                                  (max(p[1] for p, _ in kv[1]) - min(p[1] for p, _ in kv[1])))
     rsegs, rjuncs, rstubs = maze_route(non_rail, route_boxes, x_lo, x_hi, y_bot, y_top)
@@ -497,7 +529,7 @@ def render(layout, svg_path: Path) -> dict:
     stub_segs += rstubs
     junctions += rjuncs
 
-    draw_wires(d, rail_segs + route_segs + stub_segs)
+    draw_wires(d, rail_segs + route_segs + stub_segs + diode_segs)
     for jx, jy in junctions:
         d.add(elm.Dot().at((jx, jy)).color(WIRE))
 
