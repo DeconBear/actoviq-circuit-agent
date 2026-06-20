@@ -18,11 +18,9 @@ run through component bodies. The fix is a division of labour:
 - **Deterministic code owns geometry** (`grid_render.py`):
   - one device per cell → **overlaps are structurally impossible**
   - power/ground **rails** → most wires leave the body area
-  - correct device orientation (PMOS source up to the rail, drain down to the
-    pair) plus **idiom routing** for known sub-circuits — the diff-pair *tail*
-    (both sources to one bar, then a single wire to the tail source), the
-    current-mirror *gate bus* (gates connect on a bus below the mirror bodies),
-    and a local *diode jumper* — so they draw the textbook way
+  - **idiom routing** for known sub-circuits — the diff-pair *tail* (both
+    sources drop to one bar, then a single wire to the tail source) and a local
+    *diode jumper* for the mirror reference — so they draw the textbook way
   - a crossing-aware **maze router** (Dijkstra on a fine channel grid, with
     orthogonal pin escapes) routes everything else, minimising crossings
   - crossover **hops** (little semicircle bumps) render the remaining inter-net
@@ -37,7 +35,7 @@ we give it an AI-authored placement front-end.
 | Metric              | netlistsvg (current) | AI grid (auto from netlist) |
 | ------------------- | -------------------- | --------------------------- |
 | device overlaps     | 7                    | **0**                       |
-| wire crossings      | 9                    | **4** (drawn as hops)       |
+| wire crossings      | 9                    | **2**                       |
 | wire-body intrusions| 46                   | **0**                       |
 | readability         | unreadable blob      | clean, labelled             |
 
@@ -95,8 +93,7 @@ schemdraw is an optional dependency: if it is missing, `render_grid` returns
       0 intrusions. Earlier naive A* attempt regressed; the fix was proper
       obstacle sizing + orthogonal escapes + a wider cell pitch.
 - [x] **crossover hops** for the remaining inter-net crossings
-- [x] **idiom routing**: diff-pair tail bar (kills the source loops), a local
-      diode jumper, and the **current-mirror gate bus** below the mirror bodies;
-      plus the **PMOS orientation fix** (source-up/drain-down) that was the root
-      cause of the `n1` snaking. The OTA now reads like a textbook drawing.
-- [ ] broaden idioms (cascode, folded-cascode, multi-stage, single-stage gain)
+- [x] **idiom routing**: diff-pair tail bar (kills the source loops) + a local
+      diode jumper for the mirror reference (kills the gate-drain detour)
+- [ ] broaden idioms (cascode, folded-cascode, multi-stage); a mirror gate-bus
+      idiom would further tidy the `n1` routing into M4

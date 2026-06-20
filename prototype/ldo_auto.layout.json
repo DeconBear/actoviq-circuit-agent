@@ -5,7 +5,6 @@
     "vin": "top"
   },
   "tail_net": "tail",
-  "mirror_net": "n1",
   "devices": [
     {
       "ref": "Vref",
