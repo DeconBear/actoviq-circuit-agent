@@ -1,0 +1,34 @@
+{
+  "title": "PMOS-pass LDO (5T OTA) - AI grid layout",
+  "rails": { "vin": "top", "0": "bottom" },
+  "devices": [
+    { "ref": "Vref", "kind": "vsrc", "cell": [0, 2], "orient": "down",
+      "value": "1.2V", "pins": { "p": "vref", "n": "0" } },
+
+    { "ref": "M3", "kind": "pmos", "cell": [1, 1],
+      "value": "40/1", "pins": { "D": "n1", "G": "n1", "S": "vin" } },
+    { "ref": "M4", "kind": "pmos", "cell": [2, 1], "flip": true,
+      "value": "40/1", "pins": { "D": "eaout", "G": "n1", "S": "vin" } },
+
+    { "ref": "M1", "kind": "nmos", "cell": [1, 2],
+      "value": "20/1", "pins": { "D": "n1", "G": "fb", "S": "tail" } },
+    { "ref": "M2", "kind": "nmos", "cell": [2, 2], "flip": true,
+      "value": "20/1", "pins": { "D": "eaout", "G": "vref", "S": "tail" } },
+
+    { "ref": "Itail", "kind": "isrc", "cell": [1, 3], "orient": "down",
+      "value": "20u", "pins": { "p": "tail", "n": "0" } },
+
+    { "ref": "MP", "kind": "pmos", "cell": [4, 1],
+      "value": "2000/0.5", "pins": { "D": "vout", "G": "eaout", "S": "vin" } },
+
+    { "ref": "Rload", "kind": "res", "cell": [4, 3], "orient": "down",
+      "value": "330", "pins": { "1": "vout", "2": "0" } },
+    { "ref": "Cout", "kind": "cap", "cell": [5, 3], "orient": "down",
+      "value": "1u", "pins": { "1": "vout", "2": "0" } },
+
+    { "ref": "Rtop", "kind": "res", "cell": [6, 2], "orient": "down",
+      "value": "210k", "pins": { "1": "vout", "2": "fb" } },
+    { "ref": "Rbot", "kind": "res", "cell": [6, 3], "orient": "down",
+      "value": "120k", "pins": { "1": "fb", "2": "0" } }
+  ]
+}
