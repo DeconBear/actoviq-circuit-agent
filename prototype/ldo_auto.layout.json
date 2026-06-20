@@ -4,6 +4,7 @@
     "0": "bottom",
     "vin": "top"
   },
+  "tail_net": "tail",
   "devices": [
     {
       "ref": "Vref",
