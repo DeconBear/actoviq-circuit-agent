@@ -77,10 +77,12 @@ def place_device(d: schemdraw.Drawing, dev: dict) -> dict[str, tuple[float, floa
         }
 
     if kind in {"nmos", "pmos"}:
-        if kind == "nmos":
-            element = elm.NFet().reverse().anchor("center").at((cx, cy)).color(WIRE)
-        else:
-            element = elm.PFet().theta(180).anchor("center").at((cx, cy)).color(WIRE)
+        # Both reversed so the gate sits on the left; this also puts the NMOS
+        # drain / PMOS source at the top and the NMOS source / PMOS drain at the
+        # bottom, which matches a PMOS-load-over-NMOS-pair stack (source->top
+        # rail, drain->the pair below).
+        element = (elm.NFet() if kind == "nmos" else elm.PFet()).reverse()
+        element = element.anchor("center").at((cx, cy)).color(WIRE)
         if dev.get("flip"):
             element = element.flip()
         added = d.add(element)
@@ -194,9 +196,9 @@ def maze_route(nets, route_boxes, x_lo, x_hi, y_lo, y_hi):
                 yield m, orient
 
     for net, pin_centers in nets:
-        escapes = [escape(p, c) for p, c in pin_centers]
-        for (p, _c), e in zip(pin_centers, escapes):
-            stubs.append((net, p, e))
+        escapes = [escape(pc[0], pc[1]) for pc in pin_centers]
+        for pc, e in zip(pin_centers, escapes):
+            stubs.append((net, pc[0], e))
         tree = {escapes[0]}
         net_edges = set()
         for target in escapes[1:]:
@@ -281,7 +283,7 @@ def geometry_check(segments, boxes):
 def route_tail(net, pin_centers, route_segs, junctions):
     """Idiom routing for a differential-pair tail: drop both sources to one
     horizontal bar, then a single wire down to the tail source — no loops."""
-    pts = sorted((p for p, _c in pin_centers), key=lambda p: p[1])
+    pts = sorted((pc[0] for pc in pin_centers), key=lambda p: p[1])
     tail_pin, sources = pts[0], pts[1:]          # lowest pin is the tail source
     bar_y = round((min(s[1] for s in sources) + tail_pin[1]) / 2, 2)
     xs = [s[0] for s in sources] + [tail_pin[0]]
@@ -293,6 +295,32 @@ def route_tail(net, pin_centers, route_segs, junctions):
     for x in set(xs):
         if counts[x] >= 2 or min(xs) < x < max(xs):
             junctions.append((x, bar_y))
+
+
+def route_mirror(net, pins, route_segs, junctions):
+    """Current-mirror gate-bus idiom: connect the mirror gates and drains on a
+    bus that runs just below the mirror bodies, so the gate connection clears the
+    devices instead of snaking around them. Returns False if unrecognised."""
+    gates = [(p, c) for p, c, r in pins if r == "G"]
+    drains = [(p, c) for p, c, r in pins if r == "D"]
+    if len(gates) < 2 or not drains:
+        return False
+    bus_y = round(min(c[1] for _p, c in gates) - 2.3, 2)
+    xs = []
+    for (px, py), _c in drains:                     # drains drop/raise to the bus
+        route_segs.append((net, (px, py), (px, bus_y)))
+        xs.append(round(px, 2))
+    for (px, py), (ccx, _ccy) in gates:             # gates jog out, then to the bus
+        jog_x = round(ccx - 2.5, 2)
+        route_segs.append((net, (px, py), (jog_x, py)))
+        route_segs.append((net, (jog_x, py), (jog_x, bus_y)))
+        xs.append(jog_x)
+    route_segs.append((net, (min(xs), bus_y), (max(xs), bus_y)))
+    counts = Counter(xs)
+    for x in set(xs):
+        if counts[x] >= 2 or min(xs) < x < max(xs):
+            junctions.append((x, bus_y))
+    return True
 
 
 def draw_wires(d, segments, hop_r=0.35, steps=10):
@@ -339,6 +367,7 @@ def main() -> int:
     d = schemdraw.Drawing(show=False, transparent=False)
     d.config(fontsize=FS, lw=2, color=WIRE, bgcolor=BG, margin=0.4)
 
+    mirror_net = layout.get("mirror_net")
     net_pins: dict[str, list] = {}
     route_boxes, check_boxes, diode_segs = [], [], []
     for dev in layout["devices"]:
@@ -348,11 +377,12 @@ def main() -> int:
         check_boxes.append((cx - 1.3, cy - 1.6, cx + 1.3, cy + 1.6))
         pins = dev["pins"]
         diode = dev["kind"] in {"nmos", "pmos"} and pins.get("G") == pins.get("D")
+        local_diode = diode and pins.get("G") != mirror_net  # mirror handles its own
         for pin_name, net in pins.items():
-            if diode and pin_name == "G":
-                continue  # gate is tied to drain by a short local jumper, below
-            net_pins.setdefault(net, []).append((anchors[pin_name], (cx, cy)))
-        if diode:
+            if local_diode and pin_name == "G":
+                continue  # gate tied to drain by a short local jumper, below
+            net_pins.setdefault(net, []).append((anchors[pin_name], (cx, cy), pin_name))
+        if local_diode:
             g, dr = anchors["G"], anchors["D"]
             diode_segs.append((pins["D"], (g[0], g[1]), (g[0], dr[1])))
             diode_segs.append((pins["D"], (g[0], dr[1]), (dr[0], dr[1])))
@@ -370,25 +400,28 @@ def main() -> int:
         rail_y = y_top if side == "top" else y_bot
         if abs(x_lo - x_hi) > 1e-6:
             rail_segs.append((net, (x_lo, rail_y), (x_hi, rail_y)))
-        for (px, py), _c in net_pins.get(net, []):
+        for (px, py), _c, _r in net_pins.get(net, []):
             if abs(py - rail_y) > 1e-6:
                 stub_segs.append((net, (px, py), (px, rail_y)))
             junctions.append((px, rail_y))
         d.add(elm.Label().at(((x_lo + x_hi) / 2, rail_y + (0.4 if side == "top" else -0.7)))
               .label(net.upper(), fontsize=FS, color=ACCENT))
 
-    # Differential-pair tail: routed as an explicit idiom (no loops).
+    # Known sub-circuits routed as explicit idioms (no loops, clean buses).
     handled = set(rails)
     tail_net = layout.get("tail_net")
     if tail_net and len(net_pins.get(tail_net, [])) >= 3:
         route_tail(tail_net, net_pins[tail_net], route_segs, junctions)
         handled.add(tail_net)
+    if mirror_net and len(net_pins.get(mirror_net, [])) >= 3:
+        if route_mirror(mirror_net, net_pins[mirror_net], route_segs, junctions):
+            handled.add(mirror_net)
 
     # Remaining signal nets: crossing-aware maze routing.
     non_rail = [(net, pcs) for net, pcs in net_pins.items()
                 if net not in handled and len(pcs) >= 2]
-    non_rail.sort(key=lambda kv: (max(p[0] for p, _ in kv[1]) - min(p[0] for p, _ in kv[1])) +
-                                 (max(p[1] for p, _ in kv[1]) - min(p[1] for p, _ in kv[1])))
+    non_rail.sort(key=lambda kv: (max(p[0] for p, *_ in kv[1]) - min(p[0] for p, *_ in kv[1])) +
+                                 (max(p[1] for p, *_ in kv[1]) - min(p[1] for p, *_ in kv[1])))
     rsegs, rjuncs, rstubs = maze_route(non_rail, route_boxes, x_lo, x_hi, y_bot, y_top)
     route_segs += rsegs
     stub_segs += rstubs
