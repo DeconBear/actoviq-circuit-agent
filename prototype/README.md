@@ -35,7 +35,7 @@ we give it an AI-authored placement front-end.
 | Metric              | netlistsvg (current) | AI grid (auto from netlist) |
 | ------------------- | -------------------- | --------------------------- |
 | device overlaps     | 7                    | **0**                       |
-| wire crossings      | 9                    | **2**                       |
+| wire crossings      | 9                    | **3** (drawn as hops)       |
 | wire-body intrusions| 46                   | **0**                       |
 | readability         | unreadable blob      | clean, labelled             |
 
@@ -94,6 +94,8 @@ schemdraw is an optional dependency: if it is missing, `render_grid` returns
       obstacle sizing + orthogonal escapes + a wider cell pitch.
 - [x] **crossover hops** for the remaining inter-net crossings
 - [x] **idiom routing**: diff-pair tail bar (kills the source loops) + a local
-      diode jumper for the mirror reference (kills the gate-drain detour)
-- [ ] broaden idioms (cascode, folded-cascode, multi-stage); a mirror gate-bus
-      idiom would further tidy the `n1` routing into M4
+      diode jumper. The diode reference is routed through its **gate** (which
+      sits at mid-height, near the pair) rather than its top drain, so the mirror
+      net stays local instead of looping up over the device. (A full mirror
+      gate-bus idiom was tried and reverted - it added clutter, not clarity.)
+- [ ] broaden idioms (cascode, folded-cascode, multi-stage, single-stage gain)

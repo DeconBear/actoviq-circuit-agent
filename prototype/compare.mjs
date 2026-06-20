@@ -11,7 +11,7 @@ const html = `<!doctype html><html><body style="margin:0;background:#fff;font-fa
     <div style="border:1px solid #ccc;padding:8px">${left}</div>
   </div>
   <div style="flex:1">
-    <div style="font-size:22px;font-weight:700;color:#267346;margin-bottom:8px">AI grid (auto from netlist + maze router + hops) — 0 overlaps, 2 crossings, 0 intrusions</div>
+    <div style="font-size:22px;font-weight:700;color:#267346;margin-bottom:8px">AI grid (auto from netlist + idioms + maze router) — 0 overlaps, 3 crossings, 0 intrusions</div>
     <div style="border:1px solid #ccc;padding:8px">${right}</div>
   </div>
 </div></body></html>`;

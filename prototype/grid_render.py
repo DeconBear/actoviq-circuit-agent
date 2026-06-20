@@ -349,8 +349,8 @@ def main() -> int:
         pins = dev["pins"]
         diode = dev["kind"] in {"nmos", "pmos"} and pins.get("G") == pins.get("D")
         for pin_name, net in pins.items():
-            if diode and pin_name == "G":
-                continue  # gate is tied to drain by a short local jumper, below
+            if diode and pin_name == "D":
+                continue  # drain is tied to gate by a short local jumper, below
             net_pins.setdefault(net, []).append((anchors[pin_name], (cx, cy)))
         if diode:
             g, dr = anchors["G"], anchors["D"]
