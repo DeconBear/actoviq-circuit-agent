@@ -20,6 +20,8 @@ run through component bodies. The fix is a division of labour:
   - power/ground **rails** → most wires leave the body area
   - a crossing-aware **maze router** (Dijkstra on a fine channel grid, with
     orthogonal pin escapes) routes the rest, minimising crossings
+  - crossover **hops** (little semicircle bumps) render the remaining inter-net
+    crossings unambiguously, the way engineers draw them
   - a built-in geometry self-check (crossings / body intrusions)
 
 schemdraw is used only as the symbol pen. We do **not** make schemdraw smarter;
@@ -87,5 +89,9 @@ schemdraw is an optional dependency: if it is missing, `render_grid` returns
       orthogonal pin escapes): comb 5 crossings -> 2, still 0 overlaps /
       0 intrusions. Earlier naive A* attempt regressed; the fix was proper
       obstacle sizing + orthogonal escapes + a wider cell pitch.
-- [ ] broaden idioms (cascode, folded-cascode, multi-stage); tidy the
-      diff-pair source loops; optional crossover "hops" for the last crossings
+- [x] **crossover hops** for the remaining inter-net crossings + shallower
+      pin escapes for tidier diff-pair source routing
+- [ ] broaden idioms (cascode, folded-cascode, multi-stage). The diff-pair
+      source-to-tail loops remain a minor cosmetic item: they are inherent to
+      the escape clearance that guarantees zero body intrusions, and would need
+      idiom-specific tail routing (join the two sources at one point) to remove.

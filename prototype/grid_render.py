@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import heapq
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 
@@ -195,7 +196,7 @@ def maze_route(nets, route_boxes, x_lo, x_hi, y_lo, y_hi):
     for net, pin_centers in nets:
         escapes = [escape(p, c) for p, c in pin_centers]
         for (p, _c), e in zip(pin_centers, escapes):
-            stubs.append((p, e))
+            stubs.append((net, p, e))
         tree = {escapes[0]}
         net_edges = set()
         for target in escapes[1:]:
@@ -244,7 +245,7 @@ def maze_route(nets, route_boxes, x_lo, x_hi, y_lo, y_hi):
                 else:
                     vuse[u].add(net); vuse[v].add(net)
         segs, jn = _merge_net(net_edges)
-        route_segs += segs
+        route_segs += [(net, a, b) for a, b in segs]
         juncs += jn
     return route_segs, juncs, stubs
 
@@ -277,6 +278,37 @@ def geometry_check(segments, boxes):
     return {"device_overlaps": 0, "wire_crossings": crossings, "wire_body_intrusions": intrusions}
 
 
+def draw_wires(d, segments, hop_r=0.35, steps=10):
+    """Draw tagged (net, a, b) segments. Where a horizontal wire crosses a
+    vertical wire of a *different* net, draw a small semicircle 'hop' so the
+    crossing is unambiguously a non-connection (standard schematic practice)."""
+    H = [(net, a, b) for net, a, b in segments
+         if abs(a[1] - b[1]) < 1e-6 and abs(a[0] - b[0]) > 1e-6]
+    V = [(net, a, b) for net, a, b in segments
+         if abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) > 1e-6]
+    for _net, a, b in V:
+        d.add(elm.Line().at(a).to(b).color(WIRE))
+    for net, a, b in H:
+        y = a[1]
+        x0, x1 = sorted((a[0], b[0]))
+        hops = sorted({
+            va[0] for (vnet, va, vb) in V
+            if vnet != net and x0 + 1e-6 < va[0] < x1 - 1e-6
+            and min(va[1], vb[1]) + 1e-6 < y < max(va[1], vb[1]) - 1e-6
+        })
+        cur = x0
+        for hx in hops:
+            if hx - hop_r > cur + 1e-6:
+                d.add(elm.Line().at((cur, y)).to((hx - hop_r, y)).color(WIRE))
+            arc = [(hx + hop_r * math.cos(math.pi * (1 - i / steps)),
+                    y + hop_r * math.sin(math.pi * (1 - i / steps))) for i in range(steps + 1)]
+            for p, q in zip(arc, arc[1:]):
+                d.add(elm.Line().at(p).to(q).color(WIRE))
+            cur = hx + hop_r
+        if x1 > cur + 1e-6:
+            d.add(elm.Line().at((cur, y)).to((x1, y)).color(WIRE))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--layout", required=True)
@@ -295,7 +327,7 @@ def main() -> int:
     for dev in layout["devices"]:
         anchors = place_device(d, dev)
         cx, cy = cell_xy(dev["cell"])
-        route_boxes.append((cx - 1.6, cy - 2.0, cx + 1.6, cy + 2.0))
+        route_boxes.append((cx - 1.6, cy - 1.8, cx + 1.6, cy + 1.8))
         check_boxes.append((cx - 1.3, cy - 1.6, cx + 1.3, cy + 1.6))
         for pin_name, net in dev["pins"].items():
             net_pins.setdefault(net, []).append((anchors[pin_name], (cx, cy)))
@@ -311,9 +343,11 @@ def main() -> int:
     # Power/ground rails: one horizontal bus, each pin stubbed to it.
     for net, side in rails.items():
         rail_y = y_top if side == "top" else y_bot
-        add_segment(rail_segs, (x_lo, rail_y), (x_hi, rail_y))
+        if abs(x_lo - x_hi) > 1e-6:
+            rail_segs.append((net, (x_lo, rail_y), (x_hi, rail_y)))
         for (px, py), _c in net_pins.get(net, []):
-            add_segment(stub_segs, (px, py), (px, rail_y))
+            if abs(py - rail_y) > 1e-6:
+                stub_segs.append((net, (px, py), (px, rail_y)))
             junctions.append((px, rail_y))
         d.add(elm.Label().at(((x_lo + x_hi) / 2, rail_y + (0.4 if side == "top" else -0.7)))
               .label(net.upper(), fontsize=FS, color=ACCENT))
@@ -328,15 +362,14 @@ def main() -> int:
     stub_segs += rstubs
     junctions += rjuncs
 
-    for a, b in rail_segs + route_segs + stub_segs:
-        d.add(elm.Line().at(a).to(b).color(WIRE))
+    draw_wires(d, rail_segs + route_segs + stub_segs)
     for jx, jy in junctions:
         d.add(elm.Dot().at((jx, jy)).color(WIRE))
 
     Path(args.svg_path).parent.mkdir(parents=True, exist_ok=True)
     d.save(args.svg_path, transparent=False)
 
-    metrics = geometry_check(rail_segs + route_segs, check_boxes)
+    metrics = geometry_check([(a, b) for _net, a, b in rail_segs + route_segs], check_boxes)
     metrics.update({"ok": True, "svg_path": args.svg_path,
                     "devices": len(layout["devices"]), "nets": len(net_pins)})
     print(json.dumps(metrics, ensure_ascii=False))
