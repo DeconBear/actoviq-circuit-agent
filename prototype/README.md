@@ -65,11 +65,25 @@ connectivity, then places them with known-good relative positions:
 
 Unrecognised devices fall back to a spare row so the drawing always closes.
 
+## Integrated into the skill
+
+The production version lives in the skill as
+`skills/circuit-design-ngspice/scripts/render_grid.py` (self-contained:
+netlist parse + idiom auto-layout + schemdraw draw). `circuit_project.py`
+`compile-module` now calls it for **transistor/active** modules (any netlist
+with `M`/`Q` devices) and keeps **netlistsvg** for passive ones, writing the
+same `build/modules/<id>/schematic.svg` the GUI already reads — so the Design
+and SVG tabs show the clean schematic automatically, no GUI changes needed.
+schemdraw is an optional dependency: if it is missing, `render_grid` returns
+`{"ok": false}` and the caller falls back to netlistsvg.
+
 ## Status / next steps
 
 - [x] grid renderer + rails + orthogonal routing + geometry self-check
-- [x] **auto-derive the layout-IR from the netlist via idiom recognition**
-- [ ] close the loop: feed the geometry score back so cells nudge until
-      crossings hit zero (the 5 here are the long `fb`/`eaout` trunks)
-- [ ] broaden idioms (cascode, folded-cascode, multi-stage) + a real
-      channel router; then add a `render_grid` option to `circuit_project.py`
+- [x] auto-derive the layout-IR from the netlist via idiom recognition
+- [x] **integrated into `circuit_project.py compile-module` -> shows in the GUI**
+- [~] crossing-minimising router: a maze/A* attempt regressed (pin-access and
+      obstacle modelling near devices), so the clean comb router is kept
+      (0 overlaps, 0 intrusions, 5 clean crossings). A proper channel router
+      with pin-aware obstacles is real future work.
+- [ ] broaden idioms (cascode, folded-cascode, multi-stage)

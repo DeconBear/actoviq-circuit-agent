@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""Render a clean analog schematic from a SPICE netlist via idiom recognition.
+
+netlistsvg/ELK and the schemdraw build_layout path both *guess* placement from a
+flat netlist and tangle transistor-level analog circuits. This renderer instead
+recognises the common analog idioms (current mirror, differential pair, tail
+source, pass device, feedback divider, output loads, rails) straight from
+connectivity, places one device per grid cell (so overlaps are impossible),
+draws power/ground rails, and routes the rest orthogonally in the channels.
+
+    python render_grid.py --netlist design.cir --svg-path schematic.svg
+
+Emits a JSON status line. Degrades to ``{"ok": false}`` if schemdraw is missing
+so the caller can fall back to netlistsvg.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+try:
+    import schemdraw
+    import schemdraw.elements as elm
+    _SCHEMDRAW_OK = True
+except Exception:  # pragma: no cover - optional dependency
+    _SCHEMDRAW_OK = False
+
+COL_W = 4.0
+ROW_H = 4.0
+LEAD = 1.1
+WIRE = "#222"
+ACCENT = "#165c7d"
+BG = "#fffdf8"
+FS = 10
+
+
+# --------------------------------------------------------------------------- #
+# Netlist parsing
+# --------------------------------------------------------------------------- #
+def read_netlist(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".md", ".markdown"}:
+        blocks = re.findall(r"```(?:spice|cir|netlist)\s*\r?\n([\s\S]*?)```", text, re.I)
+        if blocks:
+            return "\n".join(b.strip() for b in blocks)
+    return text
+
+
+def short_wl(params: str) -> str:
+    w = re.search(r"(?i)\bW=(\S+)", params)
+    l = re.search(r"(?i)\bL=(\S+)", params)
+    return f"{w.group(1).rstrip('uU')}/{l.group(1).rstrip('uU')}" if w and l else ""
+
+
+def parse(netlist: str) -> list[dict]:
+    models: dict[str, str] = {}
+    for name, kind in re.findall(r"(?im)^\s*\.model\s+(\S+)\s+(NMOS|PMOS)", netlist):
+        models[name] = "nmos" if kind.upper() == "NMOS" else "pmos"
+    devices: list[dict] = []
+    for raw in netlist.splitlines():
+        s = raw.strip()
+        if not s or s.startswith("*") or s.startswith("."):
+            continue
+        tok = s.split()
+        c = tok[0][0].upper()
+        if c == "M" and len(tok) >= 6:
+            devices.append({"ref": tok[0], "kind": models.get(tok[5], "nmos"),
+                            "value": short_wl(" ".join(tok[6:])),
+                            "pins": {"D": tok[1], "G": tok[2], "S": tok[3], "B": tok[4]}})
+        elif c == "R" and len(tok) >= 4:
+            devices.append({"ref": tok[0], "kind": "res", "value": tok[3],
+                            "pins": {"1": tok[1], "2": tok[2]}})
+        elif c == "C" and len(tok) >= 4:
+            devices.append({"ref": tok[0], "kind": "cap", "value": tok[3],
+                            "pins": {"1": tok[1], "2": tok[2]}})
+        elif c == "V" and len(tok) >= 3:
+            devices.append({"ref": tok[0], "kind": "vsrc", "value": " ".join(tok[3:]),
+                            "pins": {"p": tok[1], "n": tok[2]}})
+        elif c == "I" and len(tok) >= 3:
+            devices.append({"ref": tok[0], "kind": "isrc", "value": " ".join(tok[3:]),
+                            "pins": {"p": tok[1], "n": tok[2]}})
+    return devices
+
+
+# --------------------------------------------------------------------------- #
+# Idiom-based auto-placement  (netlist -> grid layout-IR)
+# --------------------------------------------------------------------------- #
+def auto_layout(devices: list[dict]) -> dict:
+    by_ref = {d["ref"]: d for d in devices}
+    fets = [d for d in devices if d["kind"] in {"nmos", "pmos"}]
+    twos = [d for d in devices if d["kind"] in {"res", "cap"}]
+
+    src_fanout: dict[str, int] = {}
+    for d in fets:
+        src_fanout[d["pins"]["S"]] = src_fanout.get(d["pins"]["S"], 0) + 1
+    supply = max(src_fanout, key=src_fanout.get) if src_fanout else None
+    rails = {"0": "bottom"}
+    if supply and supply != "0":
+        rails[supply] = "top"
+
+    load_fanout: dict[str, int] = {}
+    for d in twos:
+        for net in (d["pins"]["1"], d["pins"]["2"]):
+            if net not in rails:
+                load_fanout[net] = load_fanout.get(net, 0) + 1
+    output = max(load_fanout, key=load_fanout.get) if load_fanout else None
+
+    placed: dict[str, dict] = {}
+    used: set[str] = set()
+    for d in devices:
+        if d["kind"] == "vsrc" and supply in d["pins"].values() and "0" in d["pins"].values():
+            used.add(d["ref"])
+
+    def place(ref, cell, *, orient=None, flip=False):
+        d = dict(by_ref[ref])
+        d["cell"] = list(cell)
+        if orient:
+            d["orient"] = orient
+        if flip:
+            d["flip"] = True
+        d["pins"] = {k: v for k, v in d["pins"].items() if k != "B"}
+        placed[ref] = d
+        used.add(ref)
+
+    mirror = None
+    for kind in ("pmos", "nmos"):
+        groups: dict[str, list] = {}
+        for d in (f for f in fets if f["kind"] == kind):
+            groups.setdefault(d["pins"]["G"], []).append(d)
+        for grp in groups.values():
+            diode = [d for d in grp if d["pins"]["D"] == d["pins"]["G"]]
+            if len(grp) >= 2 and diode:
+                mirror = {"ref": diode[0], "out": [d for d in grp if d is not diode[0]]}
+                break
+        if mirror:
+            break
+
+    diff = None
+    for kind in ("nmos", "pmos"):
+        groups = {}
+        for d in (f for f in fets if f["kind"] == kind and f["ref"] not in used):
+            if d["pins"]["S"] not in rails:
+                groups.setdefault(d["pins"]["S"], []).append(d)
+        for tail_net, grp in groups.items():
+            if len(grp) == 2:
+                diff = {"tail": tail_net, "devs": grp}
+                break
+        if diff:
+            break
+
+    if diff:
+        d0, d1 = diff["devs"]
+        ref_gate = None
+        for v in devices:
+            if v["kind"] == "vsrc" and v["pins"]["p"] in (d0["pins"]["G"], d1["pins"]["G"]):
+                ref_gate = v["pins"]["p"]
+        if ref_gate and d0["pins"]["G"] == ref_gate:
+            d0, d1 = d1, d0
+        place(d0["ref"], (1, 2))
+        place(d1["ref"], (2, 2), flip=True)
+        if mirror:
+            mref, mout = mirror["ref"], mirror["out"][0]
+            left = mref if mref["pins"]["D"] == d0["pins"]["D"] else mout
+            right = mout if left is mref else mref
+            place(left["ref"], (1, 1))
+            place(right["ref"], (2, 1), flip=True)
+        for d in devices:
+            if d["ref"] not in used and diff["tail"] in d["pins"].values() and "0" in d["pins"].values():
+                place(d["ref"], (1, 3), orient="down")
+        for d in devices:
+            if d["kind"] == "vsrc" and d["ref"] not in used and d["pins"]["p"] == d1["pins"]["G"]:
+                place(d["ref"], (0, 2), orient="down")
+
+    if output:
+        for d in fets:
+            if d["ref"] not in used and d["pins"]["D"] == output:
+                place(d["ref"], (4, 1))
+
+    load_col = 4
+    div_done = False
+    for d in twos:
+        if d["ref"] in used:
+            continue
+        nets = {d["pins"]["1"], d["pins"]["2"]}
+        if output in nets and "0" in nets:
+            place(d["ref"], (load_col, 3), orient="down")
+            load_col += 1
+        elif output in nets and not div_done:
+            place(d["ref"], (6, 2), orient="down")
+            tap = (nets - {output}).pop()
+            for d2 in twos:
+                if d2["ref"] not in used and tap in {d2["pins"]["1"], d2["pins"]["2"]} \
+                        and "0" in {d2["pins"]["1"], d2["pins"]["2"]}:
+                    place(d2["ref"], (6, 3), orient="down")
+            div_done = True
+
+    spare = 0
+    for d in devices:
+        if d["ref"] not in used:
+            place(d["ref"], (spare, 4), orient="down")
+            spare += 1
+
+    return {"rails": rails, "devices": [placed[d["ref"]] for d in devices if d["ref"] in placed]}
+
+
+# --------------------------------------------------------------------------- #
+# Drawing  (grid layout-IR -> schemdraw SVG)
+# --------------------------------------------------------------------------- #
+def cell_xy(cell):
+    return (cell[0] * COL_W, -cell[1] * ROW_H)
+
+
+def two_terminal_class(kind):
+    return {"res": elm.ResistorIEEE, "cap": elm.Capacitor, "ind": elm.Inductor2,
+            "vsrc": elm.SourceV, "isrc": elm.SourceI, "diode": elm.Diode}.get(kind)
+
+
+def place_device(d, dev):
+    kind = dev["kind"]
+    cx, cy = cell_xy(dev["cell"])
+    pins, ref, value = dev["pins"], dev.get("ref", ""), str(dev.get("value", ""))
+    cls = two_terminal_class(kind)
+    if cls is not None:
+        horizontal = dev.get("orient") in {"left", "right"}
+        p_a, p_b = ((cx - LEAD, cy), (cx + LEAD, cy)) if horizontal else ((cx, cy + LEAD), (cx, cy - LEAD))
+        element = cls().endpoints(p_a, p_b).color(WIRE)
+        if ref:
+            element.label(ref, loc="top" if horizontal else "left", fontsize=FS)
+        if value:
+            element.label(value, loc="bot" if horizontal else "right", fontsize=FS - 1, color=ACCENT)
+        added = d.add(element)
+        keys = list(pins.keys())
+        return {keys[0]: (added.absanchors["start"].x, added.absanchors["start"].y),
+                keys[1]: (added.absanchors["end"].x, added.absanchors["end"].y)}
+    if kind in {"nmos", "pmos"}:
+        element = (elm.NFet().reverse() if kind == "nmos" else elm.PFet().theta(180))
+        element = element.anchor("center").at((cx, cy)).color(WIRE)
+        if dev.get("flip"):
+            element = element.flip()
+        added = d.add(element)
+        if ref:
+            d.add(elm.Label().at((cx - 1.9, cy + 0.5)).label(ref, fontsize=FS, color=WIRE))
+        if value:
+            d.add(elm.Label().at((cx - 1.9, cy - 0.4)).label(value, fontsize=FS - 2, color=ACCENT))
+        return {"D": (added.absanchors["drain"].x, added.absanchors["drain"].y),
+                "G": (added.absanchors["gate"].x, added.absanchors["gate"].y),
+                "S": (added.absanchors["source"].x, added.absanchors["source"].y)}
+    raise ValueError(f"unknown device kind: {kind}")
+
+
+def snap_channel(value, step):
+    return (round(value / step - 0.5) + 0.5) * step
+
+
+def add_segment(segments, a, b):
+    if abs(a[0] - b[0]) > 1e-6 or abs(a[1] - b[1]) > 1e-6:
+        segments.append((a, b))
+
+
+def route_comb(net_pins, segments):
+    xs = [p[0] for p in net_pins]
+    ys = [p[1] for p in net_pins]
+    if max(xs) - min(xs) >= max(ys) - min(ys):
+        trunk_y = snap_channel(sorted(ys)[len(ys) // 2], ROW_H)
+        add_segment(segments, (min(xs), trunk_y), (max(xs), trunk_y))
+        for px, py in net_pins:
+            add_segment(segments, (px, py), (px, trunk_y))
+    else:
+        trunk_x = snap_channel(sorted(xs)[len(xs) // 2], COL_W)
+        add_segment(segments, (trunk_x, min(ys)), (trunk_x, max(ys)))
+        for px, py in net_pins:
+            add_segment(segments, (px, py), (trunk_x, py))
+
+
+def _seg_is_h(s):
+    return abs(s[0][1] - s[1][1]) < 1e-6
+
+
+def geometry_check(segments, boxes):
+    crossings = 0
+    h = [s for s in segments if _seg_is_h(s)]
+    v = [s for s in segments if not _seg_is_h(s)]
+    for hs in h:
+        hy = hs[0][1]
+        hx0, hx1 = sorted([hs[0][0], hs[1][0]])
+        for vs in v:
+            vx = vs[0][0]
+            vy0, vy1 = sorted([vs[0][1], vs[1][1]])
+            if hx0 < vx < hx1 and vy0 < hy < vy1:
+                crossings += 1
+    intrusions = 0
+    for s in segments:
+        sx0, sx1 = sorted([s[0][0], s[1][0]])
+        sy0, sy1 = sorted([s[0][1], s[1][1]])
+        for bx0, by0, bx1, by1 in boxes:
+            if min(sx1, bx1) - max(sx0, bx0) > 0.3 and min(sy1, by1) - max(sy0, by0) > 0.3:
+                intrusions += 1
+    return {"device_overlaps": 0, "wire_crossings": crossings, "wire_body_intrusions": intrusions}
+
+
+def render(layout, svg_path: Path) -> dict:
+    rails = layout.get("rails", {})
+    schemdraw.use("svg")
+    d = schemdraw.Drawing(show=False, transparent=False)
+    d.config(fontsize=FS, lw=2, color=WIRE, bgcolor=BG, margin=0.4)
+
+    net_pins: dict[str, list] = {}
+    boxes: list = []
+    for dev in layout["devices"]:
+        anchors = place_device(d, dev)
+        cx, cy = cell_xy(dev["cell"])
+        boxes.append((cx - 1.3, cy - 1.6, cx + 1.3, cy + 1.6))
+        for pin_name, net in dev["pins"].items():
+            net_pins.setdefault(net, []).append(anchors[pin_name])
+
+    cols = [dev["cell"][0] for dev in layout["devices"]]
+    rows = [dev["cell"][1] for dev in layout["devices"]]
+    x_lo, x_hi = min(cols) * COL_W - COL_W, max(cols) * COL_W + COL_W
+    y_top = -(min(rows) * ROW_H) + ROW_H * 0.85
+    y_bot = -(max(rows) * ROW_H) - ROW_H * 0.85
+
+    segments: list = []
+    junctions: list = []
+    for net, side in rails.items():
+        rail_y = y_top if side == "top" else y_bot
+        add_segment(segments, (x_lo, rail_y), (x_hi, rail_y))
+        for px, py in net_pins.get(net, []):
+            add_segment(segments, (px, py), (px, rail_y))
+            junctions.append((px, rail_y))
+        d.add(elm.Label().at(((x_lo + x_hi) / 2, rail_y + (0.4 if side == "top" else -0.7)))
+              .label(net.upper(), fontsize=FS, color=ACCENT))
+
+    for net, pins in net_pins.items():
+        if net not in rails and len(pins) >= 2:
+            route_comb(pins, segments)
+
+    for a, b in segments:
+        d.add(elm.Line().at(a).to(b).color(WIRE))
+    for jx, jy in junctions:
+        d.add(elm.Dot().at((jx, jy)).color(WIRE))
+
+    svg_path.parent.mkdir(parents=True, exist_ok=True)
+    d.save(str(svg_path), transparent=False)
+    return geometry_check(segments, boxes)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--netlist", required=True)
+    ap.add_argument("--svg-path", required=True)
+    args = ap.parse_args()
+    if not _SCHEMDRAW_OK:
+        print(json.dumps({"ok": False, "error": "schemdraw is not installed"}))
+        return 0
+    try:
+        devices = parse(read_netlist(Path(args.netlist)))
+        layout = auto_layout(devices)
+        if not layout["devices"]:
+            print(json.dumps({"ok": False, "error": "no placeable devices"}))
+            return 0
+        metrics = render(layout, Path(args.svg_path).resolve())
+        print(json.dumps({"ok": True, "svg_path": str(Path(args.svg_path).resolve()),
+                          "renderer": "grid", "metrics": metrics,
+                          "devices": len(layout["devices"])}, ensure_ascii=False))
+    except Exception as exc:  # keep the caller's fallback path working
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

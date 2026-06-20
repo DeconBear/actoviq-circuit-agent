@@ -1043,6 +1043,25 @@ def render_module_schematic(
     module: dict[str, Any],
 ) -> dict[str, Any]:
     scripts_root = Path(__file__).resolve().parent
+    svg_path = build_root / "schematic.svg"
+    # Transistor-level / active designs: netlistsvg (ELK) tangles analog
+    # placement, so render those with the idiom-aware grid renderer. Passive
+    # modules fall through to the netlistsvg flow below.
+    netlist_text = netlist_path.read_text(encoding="utf-8", errors="replace")
+    if re.search(r"(?im)^\s*[mq]\w", netlist_text):
+        grid = run_json_script(
+            scripts_root / "render_grid.py",
+            ["--netlist", str(netlist_path), "--svg-path", str(svg_path)],
+            timeout_sec=60,
+        )
+        if grid.get("ok") and svg_path.exists():
+            return {
+                "ok": True,
+                "json_path": "",
+                "svg_path": str(svg_path),
+                "renderer": "grid",
+                "details": grid,
+            }
     input_port = next(
         (
             port for port in module.get("ports", [])
@@ -1058,7 +1077,6 @@ def render_module_schematic(
         None,
     )
     json_path = build_root / "design.json"
-    svg_path = build_root / "schematic.svg"
     convert_args = [
         "--netlist-path", str(netlist_path),
         "--json-path", str(json_path),
