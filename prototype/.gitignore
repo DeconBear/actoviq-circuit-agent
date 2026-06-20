@@ -1,0 +1,6 @@
+# Regenerable render intermediates (auto_layout -> grid_render -> rasterize).
+# comparison.png is committed as the frozen evidence; these are not.
+ldo_grid.svg
+ldo_grid.png
+ldo_auto.svg
+ldo_auto.png
