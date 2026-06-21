@@ -399,6 +399,58 @@ test('netlistsvg renderer keeps the partitioned timeout fallback path wired', as
   assert.match(script, /check_geometry/);
 });
 
+test('grid renderer keeps BJT, diode, inductor, and supply rails visible', async () => {
+  const root = path.resolve(process.cwd(), '.tmp-unit-tests', `grid-renderer-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  const netlistPath = path.resolve(root, 'mixed-active.cir');
+  const svgPath = path.resolve(root, 'mixed-active.svg');
+  const scriptPath = path.resolve(
+    process.cwd(),
+    'skills',
+    'circuit-design-ngspice',
+    'scripts',
+    'render_grid.py',
+  );
+  try {
+    await writeFile(netlistPath, [
+      '* mixed primitive schematic',
+      '.model QNPN NPN(IS=1e-15 BF=120)',
+      '.model DCL D(IS=1e-15)',
+      'VCC vcc 0 DC 12',
+      'VIN src 0 AC 1',
+      'RSRC src in 50',
+      'CIN in b 68p',
+      'RB1 vcc b 22k',
+      'RB2 b 0 4.7k',
+      'Q1 c b e QNPN',
+      'RE e 0 39',
+      'CE e 0 4.7n',
+      'RC vcc c 680',
+      'DCLAMP b 0 DCL',
+      'LLOAD c out 1u',
+      'RLOAD out 0 50',
+      '.end',
+      '',
+    ].join('\n'), 'utf8');
+    const result = spawnSync('python', [scriptPath, '--netlist', netlistPath, '--svg-path', svgPath], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout.trim()) as Record<string, any>;
+    assert.equal(payload.ok, true);
+    assert.equal(payload.renderer, 'grid');
+    assert.equal(payload.devices, 12);
+    const svg = await readFile(svgPath, 'utf8');
+    assert.match(svg, /Q1/);
+    assert.match(svg, /DCLAMP/);
+    assert.match(svg, /LLOAD/);
+    assert.match(svg, /VCC/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('markdown fallback artifacts remain explicit placeholders, not silent success', async () => {
   const workflowPath = path.resolve(process.cwd(), 'src', 'workflow', 'circuitDesignWorkflow.ts');
   const workflowSource = await readFile(workflowPath, 'utf8');
@@ -597,6 +649,32 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
         .then((value) => JSON.parse(value).base_revision),
       0,
     );
+    const sensorNotebookPath = path.resolve(projectRoot, 'modules', 'sensor', 'netlist-notebook.md');
+    await writeFile(
+      sensorNotebookPath,
+      [
+        '# Active sensor notebook',
+        '',
+        '```spice',
+        '.model NMTEST NMOS(LEVEL=1 VTO=0.8 KP=120u)',
+        'VDD vdd 0 DC 5',
+        'M1 out in 0 0 NMTEST W=10u L=1u',
+        'RLOAD out 0 1k',
+        '.end',
+        '```',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const activeCompiled = runTool([
+      'compile-module',
+      '--project-root', projectRoot,
+      '--module-id', 'sensor',
+    ]);
+    assert.equal(activeCompiled.render.ok, true);
+    assert.equal(activeCompiled.render.renderer, 'grid');
+    const buildManifest = JSON.parse(await readFile(path.resolve(projectRoot, 'build', 'build-manifest.json'), 'utf8'));
+    assert.equal(buildManifest.modules.sensor.renderer, 'grid');
   } finally {
     await rm(projectsRoot, { recursive: true, force: true });
   }

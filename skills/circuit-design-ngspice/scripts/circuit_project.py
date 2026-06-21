@@ -1255,7 +1255,7 @@ def compile_module(root: Path, module_id: str) -> dict[str, Any]:
         "revision": module["revision"],
         "netlist": f"modules/{module_id}/design.cir",
         "schematic": f"modules/{module_id}/schematic.svg" if render_result.get("ok") else None,
-        "renderer": "netlistsvg",
+        "renderer": render_result.get("renderer", "netlistsvg"),
         "render_ok": bool(render_result.get("ok")),
     }
     atomic_write_json(manifest_path, manifest)

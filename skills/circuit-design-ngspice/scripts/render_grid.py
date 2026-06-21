@@ -60,8 +60,13 @@ def short_wl(params: str) -> str:
 
 def parse(netlist: str) -> list[dict]:
     models: dict[str, str] = {}
-    for name, kind in re.findall(r"(?im)^\s*\.model\s+(\S+)\s+(NMOS|PMOS)", netlist):
-        models[name] = "nmos" if kind.upper() == "NMOS" else "pmos"
+    for name, kind in re.findall(r"(?im)^\s*\.model\s+(\S+)\s+(NMOS|PMOS|NPN|PNP)", netlist):
+        models[name] = {
+            "NMOS": "nmos",
+            "PMOS": "pmos",
+            "NPN": "npn",
+            "PNP": "pnp",
+        }[kind.upper()]
     devices: list[dict] = []
     for raw in netlist.splitlines():
         s = raw.strip()
@@ -73,11 +78,23 @@ def parse(netlist: str) -> list[dict]:
             devices.append({"ref": tok[0], "kind": models.get(tok[5], "nmos"),
                             "value": short_wl(" ".join(tok[6:])),
                             "pins": {"D": tok[1], "G": tok[2], "S": tok[3], "B": tok[4]}})
+        elif c == "Q" and len(tok) >= 5:
+            model = tok[4]
+            if len(tok) >= 6 and model not in models:
+                model = tok[5]
+            devices.append({"ref": tok[0], "kind": models.get(model, "npn"), "value": model,
+                            "pins": {"C": tok[1], "B": tok[2], "E": tok[3]}})
         elif c == "R" and len(tok) >= 4:
             devices.append({"ref": tok[0], "kind": "res", "value": tok[3],
                             "pins": {"1": tok[1], "2": tok[2]}})
         elif c == "C" and len(tok) >= 4:
             devices.append({"ref": tok[0], "kind": "cap", "value": tok[3],
+                            "pins": {"1": tok[1], "2": tok[2]}})
+        elif c == "L" and len(tok) >= 4:
+            devices.append({"ref": tok[0], "kind": "ind", "value": tok[3],
+                            "pins": {"1": tok[1], "2": tok[2]}})
+        elif c == "D" and len(tok) >= 4:
+            devices.append({"ref": tok[0], "kind": "diode", "value": tok[3],
                             "pins": {"1": tok[1], "2": tok[2]}})
         elif c == "V" and len(tok) >= 3:
             devices.append({"ref": tok[0], "kind": "vsrc", "value": " ".join(tok[3:]),
@@ -94,12 +111,37 @@ def parse(netlist: str) -> list[dict]:
 def auto_layout(devices: list[dict]) -> dict:
     by_ref = {d["ref"]: d for d in devices}
     fets = [d for d in devices if d["kind"] in {"nmos", "pmos"}]
-    twos = [d for d in devices if d["kind"] in {"res", "cap"}]
+    bjts = [d for d in devices if d["kind"] in {"npn", "pnp"}]
+    twos = [d for d in devices if d["kind"] in {"res", "cap", "ind", "diode"}]
 
-    src_fanout: dict[str, int] = {}
+    source_fanout: dict[str, int] = {}
     for d in fets:
-        src_fanout[d["pins"]["S"]] = src_fanout.get(d["pins"]["S"], 0) + 1
-    supply = max(src_fanout, key=src_fanout.get) if src_fanout else None
+        source_fanout[d["pins"]["S"]] = source_fanout.get(d["pins"]["S"], 0) + 1
+    for d in bjts:
+        key = "E" if d["kind"] == "pnp" else "C"
+        source_fanout[d["pins"][key]] = source_fanout.get(d["pins"][key], 0) + 1
+
+    def supply_score(net: str) -> float:
+        lower = net.lower()
+        score = source_fanout.get(net, 0) * 8.0
+        if lower in {"vdd", "vcc", "vin", "vbat", "vp", "vplus"} or lower.startswith(("vdd", "vcc", "vin")):
+            score += 100.0
+        if lower.startswith(("vref", "ref", "vb", "vbias", "bias")):
+            score -= 45.0
+        for d in devices:
+            pins = d["pins"]
+            if d["kind"] == "vsrc" and pins.get("p") == net and pins.get("n") == "0":
+                score += 60.0
+            elif d["kind"] == "vsrc" and pins.get("n") == net and pins.get("p") == "0":
+                score -= 20.0
+            elif d["kind"] == "isrc" and net in pins.values():
+                score += 5.0
+        return score
+
+    candidates = {net for d in devices for net in d["pins"].values() if net != "0"}
+    supply = max(candidates, key=supply_score) if candidates else None
+    if supply and supply_score(supply) < 50.0:
+        supply = None
     rails = {"0": "bottom"}
     if supply and supply != "0":
         rails[supply] = "top"
@@ -177,6 +219,42 @@ def auto_layout(devices: list[dict]) -> dict:
             if d["kind"] == "vsrc" and d["ref"] not in used and d["pins"]["p"] == d1["pins"]["G"]:
                 place(d["ref"], (0, 2), orient="down")
 
+    common_bjt = None
+    if not diff and bjts:
+        common_bjt = bjts[0]
+        place(common_bjt["ref"], (3, 2))
+        base = common_bjt["pins"]["B"]
+        collector = common_bjt["pins"]["C"]
+        emitter = common_bjt["pins"]["E"]
+        for d in devices:
+            if d["ref"] in used:
+                continue
+            pins = set(d["pins"].values())
+            if d["kind"] == "vsrc" and base in pins:
+                place(d["ref"], (0, 2), orient="down")
+            elif d["kind"] in {"res", "cap", "ind", "diode"} and base in pins and supply in pins:
+                place(d["ref"], (2, 1), orient="down")
+            elif d["kind"] in {"res", "cap", "ind", "diode"} and base in pins and "0" in pins:
+                place(d["ref"], (2, 3), orient="down")
+            elif d["kind"] in {"res", "cap", "ind", "diode"} and collector in pins and supply in pins:
+                place(d["ref"], (3, 1), orient="down")
+            elif d["kind"] in {"res", "cap"} and emitter in pins and "0" in pins:
+                place(d["ref"], (3 if d["kind"] == "res" else 4, 3), orient="down")
+            elif d["kind"] in {"res", "cap", "ind", "diode"} and collector in pins:
+                place(d["ref"], (5, 2), orient="right")
+            elif d["kind"] in {"res", "cap", "ind", "diode"} and base in pins:
+                place(d["ref"], (1, 2), orient="right")
+
+    if bjts and not common_bjt:
+        for d in bjts:
+            if d["ref"] in used:
+                continue
+            pins = d["pins"]
+            if supply and pins["C"] not in rails and pins["E"] not in rails:
+                place(d["ref"], (2, 2))
+                continue
+            place(d["ref"], (2, 2))
+
     if output:
         for d in fets:
             if d["ref"] not in used and d["pins"]["D"] == output:
@@ -252,6 +330,19 @@ def place_device(d, dev):
         return {"D": (added.absanchors["drain"].x, added.absanchors["drain"].y),
                 "G": (added.absanchors["gate"].x, added.absanchors["gate"].y),
                 "S": (added.absanchors["source"].x, added.absanchors["source"].y)}
+    if kind in {"npn", "pnp"}:
+        element = elm.BjtNpn() if kind == "npn" else elm.BjtPnp()
+        element = element.anchor("center").at((cx, cy)).color(WIRE)
+        if dev.get("flip"):
+            element = element.flip()
+        added = d.add(element)
+        if ref:
+            d.add(elm.Label().at((cx - 2.0, cy + 0.6)).label(ref, fontsize=FS + 1, color=WIRE))
+        if value:
+            d.add(elm.Label().at((cx - 2.0, cy - 0.5)).label(value, fontsize=FS, color=ACCENT))
+        return {"C": (added.absanchors["collector"].x, added.absanchors["collector"].y),
+                "B": (added.absanchors["base"].x, added.absanchors["base"].y),
+                "E": (added.absanchors["emitter"].x, added.absanchors["emitter"].y)}
     raise ValueError(f"unknown device kind: {kind}")
 
 
@@ -438,6 +529,8 @@ def geometry_check(segments, boxes):
         sx0, sx1 = sorted([s[0][0], s[1][0]])
         sy0, sy1 = sorted([s[0][1], s[1][1]])
         for bx0, by0, bx1, by1 in boxes:
+            if _in_box(s[0], (bx0, by0, bx1, by1), 1e-6) or _in_box(s[1], (bx0, by0, bx1, by1), 1e-6):
+                continue
             if min(sx1, bx1) - max(sx0, bx0) > 0.3 and min(sy1, by1) - max(sy0, by0) > 0.3:
                 intrusions += 1
     return {"device_overlaps": 0, "wire_crossings": crossings, "wire_body_intrusions": intrusions}
@@ -610,7 +703,7 @@ def render(layout, svg_path: Path) -> dict:
 
     svg_path.parent.mkdir(parents=True, exist_ok=True)
     d.save(str(svg_path), transparent=False)
-    return geometry_check([(a, b) for _net, a, b in rail_segs + route_segs], check_boxes)
+    return geometry_check([(a, b) for _net, a, b in all_segs], check_boxes)
 
 
 def main() -> int:
