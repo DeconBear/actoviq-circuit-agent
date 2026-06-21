@@ -99,6 +99,24 @@ concatenated as the module netlist used by `compile-module`. When an Agent
 edits a notebook-backed module, update the notebook code block and run
 `compile-module` so the Design preview and SVG tab remain synchronized.
 
+Notebook modules also drive **system-level** simulation. `compile`/`simulate`
+splice each notebook module's devices and `.model` cards into
+`build/system/design.final.cir` and hoist its analysis/measurement directives
+(`.dc`, `.tran`, `.op`, `.ac`, `.meas`, `.print`, `.options`, ...) to the top
+of the deck, so a DC regulator, transient, or MOSFET/active design simulates at
+the system level instead of only through the auto-generated AC bench. Use this
+path for anything needing models or a non-AC analysis: the structured
+`components` list has no `.model` mechanism, so active devices (`M`, `Q`, `D`)
+belong in a notebook. A notebook module is treated as a self-contained
+sub-circuit — its local node names are kept verbatim and are not remapped to
+system networks, so keep one self-contained design (or modules that share node
+names intentionally) per project when mixing notebook netlists. Two gotchas:
+ngspice `.meas ... FIND <expr> AT=<x>` cannot evaluate at the exact sweep
+endpoint (sweep slightly past the point you measure), and a metric's `pass`
+flag reports whether ngspice **evaluated** the measurement, not spec
+conformance — a measurement ngspice could not compute is surfaced as a failed
+metric instead of vanishing.
+
 Every inter-module electrical network must have one explicit system name.
 Pass `network` when using `connect_ports`, or use
 `set_connection_network` with a stable `connection_id`. Renaming one
@@ -116,8 +134,8 @@ compile after structural edits, and simulate before declaring completion.
 The GUI surfaces a project through five tabs: Design (the module canvas),
 Netlist (the selected module's notebook), SVG (the selected module's
 netlistsvg), Sim, and Report. `compile` and `simulate` write
-`build/system/report.md` (modules, interfaces, system networks, AC metrics, and
-the system netlist), which the Report tab renders. `simulate` also writes
+`build/system/report.md` (modules, interfaces, system networks, simulation
+metrics, and the system netlist), which the Report tab renders. `simulate` also writes
 `build/system/simulation/result.json`; its `metrics` feed the Sim tab and the
 Design inspector. Module-level metrics from `simulate-module` appear in the
 Design inspector. There is no separate publish step for the canvas model —

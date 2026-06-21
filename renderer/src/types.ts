@@ -218,7 +218,7 @@ export interface CircuitBuildState {
   };
   simulation: {
     ok: boolean;
-    metrics?: Array<{ name: string; value: number; unit: string; pass: boolean }>;
+    metrics?: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
     stderr?: string;
   } | null;
   report?: string;

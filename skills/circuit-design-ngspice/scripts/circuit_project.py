@@ -22,6 +22,17 @@ MODULE_SCHEMA = "actoviq.module.v1"
 COMMAND_SCHEMA = "actoviq.command.v1"
 ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I"}
 
+# SPICE control/analysis/measurement directives that a notebook module may
+# declare. compile_project hoists these to the top-level system deck (instead of
+# treating them as device lines) so DC/transient/active designs can drive the
+# system-level simulation, not just the auto-generated AC test bench.
+ANALYSIS_DIRECTIVE_PREFIXES = (
+    ".ac", ".dc", ".tran", ".op", ".sp", ".noise", ".pz", ".disto",
+    ".sens", ".tf", ".four", ".meas", ".measure", ".print", ".plot",
+    ".probe", ".save", ".ic", ".nodeset", ".options", ".option",
+    ".temp", ".control", ".endc",
+)
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -849,9 +860,11 @@ def build_report_markdown(
             for metric in metrics:
                 unit = metric.get("unit", "")
                 verdict = "PASS" if metric.get("pass") else "FAIL"
-                lines.append(f"| {metric['name']} | {metric['value']:.4g} {unit} | {verdict} |")
+                value = metric.get("value")
+                shown = f"{value:.4g} {unit}".strip() if isinstance(value, (int, float)) else "failed"
+                lines.append(f"| {metric['name']} | {shown} | {verdict} |")
         else:
-            lines.append("_No AC measurements were produced._")
+            lines.append("_No measurements were produced._")
     lines.extend(["", "## System netlist", "", "```spice", netlist_text.strip(), "```", ""])
     return "\n".join(lines)
 
@@ -934,55 +947,96 @@ def compile_project(root: Path) -> dict[str, Any]:
         f"* {project['name']}",
         "* Generated from actoviq.project.v1 by circuit_project.py",
     ]
+    model_lines: list[str] = []
+    notebook_directives: list[str] = []
     output_nodes: list[str] = []
     input_nodes: list[str] = []
     for module_ref in project["modules"]:
         module_id = module_ref["id"]
         module = modules[module_id]
-        local_node_map: dict[str, str] = {"0": "0"}
-        for port in module.get("ports", []):
-            root_key = union.find(f"{module_id}::{port['id']}")
-            local_node_map[port["net"]] = global_names[root_key]
-            if port.get("direction") == "output" and port.get("signal_type") == "analog":
-                output_nodes.append(global_names[root_key])
-            if port.get("direction") == "input" and port.get("signal_type") == "analog":
-                input_nodes.append(global_names[root_key])
         lines.append(f"* MODULE: {module_id} - {module['name']}")
-        for component in module["components"]:
-            component_name = sanitize_node(f"{module_id}_{component['name']}")
-            component_type = component["type"]
-            if not component_name.upper().startswith(component_type):
-                component_name = f"{component_type}{component_name}"
-            node_values = []
-            for pin in component["pins"]:
-                local_net = pin["net"]
-                node = local_node_map.get(local_net)
-                if node is None:
-                    node = sanitize_node(f"{module_id}_{local_net}")
-                    local_node_map[local_net] = node
-                node_values.append(node)
-            lines.append(" ".join([component_name, *node_values, str(component["value"])]))
-            source_map["components"][component_name] = {
-                "module_id": module_id,
-                "component_id": component["id"],
-            }
-        for local_net, global_node in local_node_map.items():
-            source_map["nodes"][global_node] = {"module_id": module_id, "local_net": local_net}
+        if module["components"]:
+            local_node_map: dict[str, str] = {"0": "0"}
+            for port in module.get("ports", []):
+                root_key = union.find(f"{module_id}::{port['id']}")
+                local_node_map[port["net"]] = global_names[root_key]
+                if port.get("direction") == "output" and port.get("signal_type") == "analog":
+                    output_nodes.append(global_names[root_key])
+                if port.get("direction") == "input" and port.get("signal_type") == "analog":
+                    input_nodes.append(global_names[root_key])
+            for component in module["components"]:
+                component_name = sanitize_node(f"{module_id}_{component['name']}")
+                component_type = component["type"]
+                if not component_name.upper().startswith(component_type):
+                    component_name = f"{component_type}{component_name}"
+                node_values = []
+                for pin in component["pins"]:
+                    local_net = pin["net"]
+                    node = local_node_map.get(local_net)
+                    if node is None:
+                        node = sanitize_node(f"{module_id}_{local_net}")
+                        local_node_map[local_net] = node
+                    node_values.append(node)
+                lines.append(" ".join([component_name, *node_values, str(component["value"])]))
+                source_map["components"][component_name] = {
+                    "module_id": module_id,
+                    "component_id": component["id"],
+                }
+            for local_net, global_node in local_node_map.items():
+                source_map["nodes"][global_node] = {"module_id": module_id, "local_net": local_net}
+        else:
+            # Notebook-backed module: splice its SPICE body (devices + models)
+            # and hoist its analysis/measurement directives to the system deck so
+            # MOSFET/active and DC/transient designs simulate at the system level,
+            # not only through the auto-generated AC test bench. Local node names
+            # are kept verbatim (a notebook module is a self-contained sub-circuit).
+            notebook_path = root / "modules" / module_id / "netlist-notebook.md"
+            if notebook_path.exists():
+                for raw in extract_notebook_netlist(
+                    notebook_path.read_text(encoding="utf-8")
+                ).splitlines():
+                    stripped = raw.strip()
+                    if not stripped or stripped.startswith("*"):
+                        continue
+                    low = stripped.lower()
+                    if low == ".end":
+                        continue
+                    if low.startswith(".model"):
+                        if stripped not in model_lines:
+                            model_lines.append(stripped)
+                    elif low.startswith(ANALYSIS_DIRECTIVE_PREFIXES):
+                        notebook_directives.append(stripped)
+                    else:
+                        lines.append(stripped)
 
-    ac = project.get("analyses", {}).get("ac", {})
-    if ac.get("enabled", True):
-        points = int(ac.get("points_per_decade", 20))
-        start = float(ac.get("start_hz", 10))
-        stop = float(ac.get("stop_hz", 1_000_000))
-        lines.append(f".ac dec {points} {start:g} {stop:g}")
-        if output_nodes:
-            consumed = set(input_nodes)
-            system_outputs = [node for node in output_nodes if node not in consumed]
-            output_node = (system_outputs or output_nodes)[-1]
-            lines.append(f".meas ac output_1khz_db find vdb({output_node}) at=1k")
-            lines.append(f".meas ac output_10khz_db find vdb({output_node}) at=10k")
-            lines.append(f".print ac vdb({output_node})")
-            source_map["primary_output_node"] = output_node
+    if model_lines:
+        lines.append("* Device models")
+        lines.extend(model_lines)
+
+    if notebook_directives:
+        # The design author specified the analysis; use it verbatim.
+        lines.append("* Analysis (from module notebooks)")
+        lines.extend(notebook_directives)
+        probed = re.findall(
+            r"(?i)v(?:db)?\(\s*([a-z0-9_.:+\-]+)", " ".join(notebook_directives)
+        )
+        if probed:
+            source_map["primary_output_node"] = probed[-1]
+    else:
+        ac = project.get("analyses", {}).get("ac", {})
+        if ac.get("enabled", True):
+            points = int(ac.get("points_per_decade", 20))
+            start = float(ac.get("start_hz", 10))
+            stop = float(ac.get("stop_hz", 1_000_000))
+            lines.append(f".ac dec {points} {start:g} {stop:g}")
+            if output_nodes:
+                consumed = set(input_nodes)
+                system_outputs = [node for node in output_nodes if node not in consumed]
+                output_node = (system_outputs or output_nodes)[-1]
+                lines.append(f".meas ac output_1khz_db find vdb({output_node}) at=1k")
+                lines.append(f".meas ac output_10khz_db find vdb({output_node}) at=10k")
+                lines.append(f".print ac vdb({output_node})")
+                source_map["primary_output_node"] = output_node
     lines.append(".end")
     build_root = root / "build" / "system"
     build_root.mkdir(parents=True, exist_ok=True)
@@ -1244,6 +1298,37 @@ def resolve_ngspice(value: str) -> str:
     raise ValueError("ngspice executable not found; configure Settings, NGSPICE_BIN, or tool_paths.json")
 
 
+def parse_measurements(netlist_text: str, log_text: str) -> list[dict[str, Any]]:
+    """Surface every ``.meas``/``.measure`` result from an ngspice batch log.
+
+    Measurement names are read from the netlist so this works for any analysis
+    (ac/dc/tran) and any user-defined measurement name, not just the AC dB
+    metrics the generated test benches happen to emit. A measurement that
+    ngspice could not evaluate (e.g. ``find ... at=`` outside the swept
+    interval) is reported as a failed metric instead of silently vanishing.
+    """
+    metrics: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for name in re.findall(r"(?im)^\s*\.meas(?:ure)?\s+\w+\s+([a-z_]\w*)", netlist_text):
+        if name in seen:
+            continue
+        seen.add(name)
+        match = re.search(rf"(?im)^\s*{re.escape(name)}\s*=\s*([-+0-9.eE]+)", log_text)
+        value: float | None = None
+        if match:
+            try:
+                value = float(match.group(1))
+            except ValueError:
+                value = None
+        metrics.append({
+            "name": name,
+            "value": value,
+            "unit": "dB" if name.lower().endswith("_db") else "",
+            "pass": value is not None,
+        })
+    return metrics
+
+
 def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
     compile_result = compile_project(root)
     executable = resolve_ngspice(ngspice_bin)
@@ -1260,12 +1345,7 @@ def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
         check=False,
     )
     log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
-    metrics = []
-    for name, value in re.findall(
-        r"(?im)^\s*(output_(?:1khz|10khz)_db)\s*=\s*([-+0-9.eE]+)",
-        log_text,
-    ):
-        metrics.append({"name": name, "value": float(value), "unit": "dB", "pass": True})
+    metrics = parse_measurements(netlist_path.read_text(encoding="utf-8", errors="replace"), log_text)
     result = {
         "schema": "actoviq.simulation.v1",
         "ok": completed.returncode == 0,
@@ -1309,13 +1389,7 @@ def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, A
         check=False,
     )
     log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
-    metrics = [
-        {"name": name, "value": float(value), "unit": "dB", "pass": True}
-        for name, value in re.findall(
-            r"(?im)^\s*(module_output_(?:1khz|10khz)_db)\s*=\s*([-+0-9.eE]+)",
-            log_text,
-        )
-    ]
+    metrics = parse_measurements(netlist_path.read_text(encoding="utf-8", errors="replace"), log_text)
     result = {
         "schema": "actoviq.module-simulation.v1",
         "ok": completed.returncode == 0,

@@ -231,7 +231,7 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
   const [moduleSimulation, setModuleSimulation] = useState<{
     ok: boolean;
     module_id: string;
-    metrics: Array<{ name: string; value: number; unit: string; pass: boolean }>;
+    metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
   } | null>(null);
 
   const project = bundle?.project ?? null;
@@ -354,13 +354,16 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
     setError('');
     setNotice(simulate ? 'Running system simulation...' : 'Building netlist and module SVG previews...');
     try {
+      // Always assemble the system netlist and refresh every module SVG so the
+      // Design and SVG tabs stay populated, then simulate when requested. The
+      // module SVGs live on disk under build/modules/<id>/; simulate does not
+      // remove them, so this keeps previews and metrics in sync after one click.
+      await window.electronAPI.compileCircuitProject(activeProjectId);
+      for (const module of project.modules) {
+        await window.electronAPI.compileCircuitModule(activeProjectId, module.id);
+      }
       if (simulate) {
         await window.electronAPI.simulateCircuitProject(activeProjectId);
-      } else {
-        await window.electronAPI.compileCircuitProject(activeProjectId);
-        for (const module of project.modules) {
-          await window.electronAPI.compileCircuitModule(activeProjectId, module.id);
-        }
       }
       setBuild(await window.electronAPI.readCircuitBuild(activeProjectId));
       await onReloadProject();
@@ -1247,11 +1250,11 @@ function ModuleInspector({
   moduleSimulation: {
     ok: boolean;
     module_id: string;
-    metrics: Array<{ name: string; value: number; unit: string; pass: boolean }>;
+    metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
   } | null;
   systemSimulation: {
     ok: boolean;
-    metrics?: Array<{ name: string; value: number; unit: string; pass: boolean }>;
+    metrics?: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
   } | null;
   busy: boolean;
 }) {
@@ -1338,7 +1341,7 @@ function SimulationMetrics({
   title: string;
   data: {
     ok: boolean;
-    metrics?: Array<{ name: string; value: number; unit: string; pass: boolean }>;
+    metrics?: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
   };
 }) {
   return (
@@ -1348,7 +1351,7 @@ function SimulationMetrics({
       {data.metrics?.map((metric) => (
         <div key={metric.name} style={styles.metricRow}>
           <span>{metric.name}</span>
-          <strong>{Number.isFinite(metric.value) ? metric.value.toFixed(2) : '—'} {metric.unit}</strong>
+          <strong>{typeof metric.value === 'number' ? metric.value.toFixed(2) : '—'} {metric.unit}</strong>
         </div>
       ))}
     </div>

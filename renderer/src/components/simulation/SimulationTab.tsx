@@ -6,7 +6,7 @@ import { useAppStore, type SimulationMetric } from '../../store/appStore';
 
 interface ProjectMetric {
   name: string;
-  value: number;
+  value: number | null;
   unit: string;
   pass: boolean;
 }
@@ -52,7 +52,9 @@ function ProjectSimulation({
 
   const passCount = metrics.filter((m) => m.pass).length;
   const overallPass = simulation.ok && passCount === metrics.length;
-  const chartData = metrics.map((m) => ({ name: m.name, value: m.value, pass: m.pass }));
+  const chartData = metrics
+    .filter((m): m is ProjectMetric & { value: number } => Number.isFinite(m.value))
+    .map((m) => ({ name: m.name, value: m.value, pass: m.pass }));
 
   return (
     <div style={styles.container} data-testid="project-simulation">
@@ -80,7 +82,7 @@ function ProjectSimulation({
             <tr key={row.name} style={styles.tr}>
               <td style={styles.td}>{row.name}</td>
               <td style={{ ...styles.td, ...styles.tdMono }}>
-                {Number.isFinite(row.value) ? row.value.toFixed(4) : '—'} {row.unit}
+                {typeof row.value === 'number' ? row.value.toFixed(4) : '—'} {row.unit}
               </td>
               <td style={styles.td}>
                 <span style={{

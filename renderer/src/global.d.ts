@@ -61,7 +61,7 @@ declare global {
       }>;
       simulateCircuitProject(projectId: string): Promise<{
         ok: boolean;
-        metrics: Array<{ name: string; value: number; unit: string; pass: boolean }>;
+        metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
         stderr?: string;
       }>;
       compileCircuitModule(projectId: string, moduleId: string): Promise<{
@@ -93,7 +93,7 @@ declare global {
       simulateCircuitModule(projectId: string, moduleId: string): Promise<{
         ok: boolean;
         module_id: string;
-        metrics: Array<{ name: string; value: number; unit: string; pass: boolean }>;
+        metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
         stderr?: string;
       }>;
       readCircuitBuild(projectId: string): Promise<CircuitBuildState | null>;
