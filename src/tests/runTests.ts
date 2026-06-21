@@ -440,12 +440,40 @@ test('grid renderer keeps BJT, diode, inductor, and supply rails visible', async
     const payload = JSON.parse(result.stdout.trim()) as Record<string, any>;
     assert.equal(payload.ok, true);
     assert.equal(payload.renderer, 'grid');
+    assert.equal(payload.metrics.hard_errors, 0);
     assert.equal(payload.devices, 12);
+    assert.match(String(payload.geometry_path), /mixed-active\.geometry\.json$/);
     const svg = await readFile(svgPath, 'utf8');
     assert.match(svg, /Q1/);
     assert.match(svg, /DCLAMP/);
     assert.match(svg, /LLOAD/);
     assert.match(svg, /VCC/);
+    const fixtures = [
+      'ldo_mos_series_bench.cir',
+      'opamp_mos_cascode_eval.cir',
+      'lna_common_emitter_rf_bench.cir',
+    ];
+    for (const fixture of fixtures) {
+      const fixtureSvgPath = path.resolve(root, `${fixture}.svg`);
+      const fixtureResult = spawnSync('python', [
+        scriptPath,
+        '--netlist',
+        path.resolve(process.cwd(), 'embedded', 'circuit-design', 'assets', 'templates', fixture),
+        '--svg-path',
+        fixtureSvgPath,
+      ], {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      });
+      assert.equal(fixtureResult.status, 0, fixtureResult.stderr || fixtureResult.stdout);
+      const fixturePayload = JSON.parse(fixtureResult.stdout.trim()) as Record<string, any>;
+      assert.equal(fixturePayload.ok, true, fixture);
+      assert.equal(fixturePayload.metrics.hard_errors, 0, fixture);
+      assert.equal(fixturePayload.metrics.device_overlaps, 0, fixture);
+      assert.equal(fixturePayload.metrics.wire_body_intrusions, 0, fixture);
+      const geometry = JSON.parse(await readFile(String(fixturePayload.geometry_path), 'utf8')) as Record<string, any>;
+      assert.equal(geometry.ok, true, fixture);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

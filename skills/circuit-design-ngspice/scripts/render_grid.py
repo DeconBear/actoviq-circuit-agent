@@ -38,6 +38,9 @@ ACCENT = "#0d4a66"
 BG = "#fffdf8"
 FS = 10
 JEPS = 1e-3          # geometry tolerance for junction / collinear tests
+ACTIVE_KINDS = {"nmos", "pmos", "npn", "pnp"}
+TWO_TERMINAL_KINDS = {"res", "cap", "ind", "diode"}
+SOURCE_KINDS = {"vsrc", "isrc"}
 
 
 # --------------------------------------------------------------------------- #
@@ -105,15 +108,24 @@ def parse(netlist: str) -> list[dict]:
     return devices
 
 
-# --------------------------------------------------------------------------- #
-# Idiom-based auto-placement  (netlist -> grid layout-IR)
-# --------------------------------------------------------------------------- #
-def auto_layout(devices: list[dict]) -> dict:
-    by_ref = {d["ref"]: d for d in devices}
-    fets = [d for d in devices if d["kind"] in {"nmos", "pmos"}]
-    bjts = [d for d in devices if d["kind"] in {"npn", "pnp"}]
-    twos = [d for d in devices if d["kind"] in {"res", "cap", "ind", "diode"}]
+def device_nets(device: dict) -> list[str]:
+    return list(device.get("pins", {}).values())
 
+
+def build_net_index(devices: list[dict]) -> dict[str, list[tuple[dict, str]]]:
+    index: dict[str, list[tuple[dict, str]]] = defaultdict(list)
+    for device in devices:
+        for pin, net in device["pins"].items():
+            index[net].append((device, pin))
+    return index
+
+
+def two_terminal_nets(device: dict) -> set[str]:
+    pins = device.get("pins", {})
+    return {pins.get("1", ""), pins.get("2", "")} - {""}
+
+
+def infer_supply(devices: list[dict], fets: list[dict], bjts: list[dict]) -> str | None:
     source_fanout: dict[str, int] = {}
     for d in fets:
         source_fanout[d["pins"]["S"]] = source_fanout.get(d["pins"]["S"], 0) + 1
@@ -138,37 +150,101 @@ def auto_layout(devices: list[dict]) -> dict:
                 score += 5.0
         return score
 
-    candidates = {net for d in devices for net in d["pins"].values() if net != "0"}
+    candidates = {net for d in devices for net in device_nets(d) if net != "0"}
     supply = max(candidates, key=supply_score) if candidates else None
-    if supply and supply_score(supply) < 50.0:
-        supply = None
+    return supply if supply and supply_score(supply) >= 50.0 else None
+
+
+def infer_output(twos: list[dict], rails: dict[str, str]) -> str | None:
+    load_fanout: dict[str, float] = {}
+    for d in twos:
+        for net in two_terminal_nets(d):
+            if net not in rails:
+                lower = net.lower()
+                score = 1.0
+                if lower in {"out", "vout", "rf_out", "alarm_n"} or lower.endswith("_out"):
+                    score += 20.0
+                if lower in {"in", "vin", "src", "b", "base", "gate"}:
+                    score -= 5.0
+                load_fanout[net] = load_fanout.get(net, 0.0) + score
+    return max(load_fanout, key=load_fanout.get) if load_fanout else None
+
+
+def detect_mos_stack(fets: list[dict], rails: dict[str, str]) -> dict | None:
+    best: tuple[int, dict, dict] | None = None
+    for lower in fets:
+        for upper in fets:
+            if lower is upper or lower["kind"] != upper["kind"]:
+                continue
+            if lower["pins"]["D"] != upper["pins"]["S"]:
+                continue
+            score = 10
+            if lower["pins"]["S"] not in rails:
+                score += 2
+            if upper["pins"]["D"] not in rails:
+                score += 3
+            if upper["pins"]["G"].lower().startswith(("vb", "bias")):
+                score += 2
+            candidate = (score, lower, upper)
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+    if not best:
+        return None
+    return {"lower": best[1], "upper": best[2], "kind": "mos_stack"}
+
+
+# --------------------------------------------------------------------------- #
+# Idiom-based auto-placement  (netlist -> grid layout-IR)
+# --------------------------------------------------------------------------- #
+def auto_layout(devices: list[dict]) -> dict:
+    by_ref = {d["ref"]: d for d in devices}
+    fets = [d for d in devices if d["kind"] in {"nmos", "pmos"}]
+    bjts = [d for d in devices if d["kind"] in {"npn", "pnp"}]
+    twos = [d for d in devices if d["kind"] in TWO_TERMINAL_KINDS]
+    net_index = build_net_index(devices)
+    supply = infer_supply(devices, fets, bjts)
     rails = {"0": "bottom"}
     if supply and supply != "0":
         rails[supply] = "top"
-
-    load_fanout: dict[str, int] = {}
-    for d in twos:
-        for net in (d["pins"]["1"], d["pins"]["2"]):
-            if net not in rails:
-                load_fanout[net] = load_fanout.get(net, 0) + 1
-    output = max(load_fanout, key=load_fanout.get) if load_fanout else None
+    output = infer_output(twos, rails)
 
     placed: dict[str, dict] = {}
     used: set[str] = set()
+    occupied: set[tuple[int, int]] = set()
     for d in devices:
         if d["kind"] == "vsrc" and supply in d["pins"].values() and "0" in d["pins"].values():
             used.add(d["ref"])
 
+    def nearest_free_cell(cell):
+        x, y = cell
+        if (x, y) not in occupied:
+            return (x, y)
+        for radius in range(1, 16):
+            for dx, dy in ((radius, 0), (-radius, 0), (0, radius), (0, -radius)):
+                candidate = (x + dx, y + dy)
+                if candidate[1] >= 0 and candidate not in occupied:
+                    return candidate
+            for dx in range(1, radius):
+                dy = radius - dx
+                for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+                    candidate = (x + sx * dx, y + sy * dy)
+                    if candidate[1] >= 0 and candidate not in occupied:
+                        return candidate
+        return (x + len(occupied) + 1, y)
+
     def place(ref, cell, *, orient=None, flip=False):
         d = dict(by_ref[ref])
-        d["cell"] = list(cell)
+        resolved_cell = nearest_free_cell(cell)
+        d["cell"] = list(resolved_cell)
         if orient:
             d["orient"] = orient
         if flip:
             d["flip"] = True
-        d["pins"] = {k: v for k, v in d["pins"].items() if k != "B"}
+        if d["kind"] in {"nmos", "pmos"}:
+            d["pins"] = {k: v for k, v in d["pins"].items() if k != "B"}
         placed[ref] = d
         used.add(ref)
+        occupied.add(resolved_cell)
 
     mirror = None
     for kind in ("pmos", "nmos"):
@@ -249,11 +325,48 @@ def auto_layout(devices: list[dict]) -> dict:
         for d in bjts:
             if d["ref"] in used:
                 continue
-            pins = d["pins"]
-            if supply and pins["C"] not in rails and pins["E"] not in rails:
-                place(d["ref"], (2, 2))
-                continue
             place(d["ref"], (2, 2))
+
+    mos_stack = None
+    if not diff and not common_bjt:
+        mos_stack = detect_mos_stack([d for d in fets if d["ref"] not in used], rails)
+        if mos_stack:
+            lower = mos_stack["lower"]
+            upper = mos_stack["upper"]
+            place(lower["ref"], (3, 3))
+            place(upper["ref"], (3, 2))
+            gate_cols = {lower["pins"]["G"]: 0, upper["pins"]["G"]: 1}
+            stack_mid = lower["pins"]["D"]
+            stack_out = upper["pins"]["D"]
+            stack_source = lower["pins"]["S"]
+            for d in devices:
+                if d["ref"] in used:
+                    continue
+                pins = set(device_nets(d))
+                if d["kind"] == "vsrc" and lower["pins"]["G"] in pins:
+                    place(d["ref"], (gate_cols[lower["pins"]["G"]], 3), orient="down")
+                elif d["kind"] == "vsrc" and upper["pins"]["G"] in pins:
+                    place(d["ref"], (gate_cols[upper["pins"]["G"]], 3), orient="down")
+                elif d["kind"] == "isrc" and stack_source in pins:
+                    place(d["ref"], (2, 4), orient="down")
+                elif d["kind"] in TWO_TERMINAL_KINDS and stack_source in pins and "0" in pins:
+                    place(d["ref"], (3, 4), orient="down")
+                elif d["kind"] in TWO_TERMINAL_KINDS and stack_out in pins and supply in pins:
+                    place(d["ref"], (4, 1), orient="down")
+                elif d["kind"] in TWO_TERMINAL_KINDS and stack_out in pins and "0" in pins:
+                    place(d["ref"], (4, 4), orient="down")
+                elif d["kind"] in TWO_TERMINAL_KINDS and stack_out in pins and lower["pins"]["G"] in pins:
+                    place(d["ref"], (5, 3), orient="right")
+                elif d["kind"] in TWO_TERMINAL_KINDS and stack_out in pins:
+                    other = next(iter(pins - {stack_out}), "")
+                    place(d["ref"], (6, 3), orient="right")
+                    for d2 in devices:
+                        if d2["ref"] in used or d2["kind"] not in TWO_TERMINAL_KINDS:
+                            continue
+                        if other and other in device_nets(d2) and "0" in device_nets(d2):
+                            place(d2["ref"], (7, 4), orient="down")
+                elif d["kind"] in TWO_TERMINAL_KINDS and stack_mid in pins:
+                    place(d["ref"], (2, 2), orient="right")
 
     if output:
         for d in fets:
@@ -265,7 +378,7 @@ def auto_layout(devices: list[dict]) -> dict:
     for d in twos:
         if d["ref"] in used:
             continue
-        nets = {d["pins"]["1"], d["pins"]["2"]}
+        nets = two_terminal_nets(d)
         if output in nets and "0" in nets:
             place(d["ref"], (load_col, 3), orient="down")
             load_col += 1
@@ -273,8 +386,7 @@ def auto_layout(devices: list[dict]) -> dict:
             place(d["ref"], (6, 2), orient="down")
             tap = (nets - {output}).pop()
             for d2 in twos:
-                if d2["ref"] not in used and tap in {d2["pins"]["1"], d2["pins"]["2"]} \
-                        and "0" in {d2["pins"]["1"], d2["pins"]["2"]}:
+                if d2["ref"] not in used and tap in two_terminal_nets(d2) and "0" in two_terminal_nets(d2):
                     place(d2["ref"], (6, 3), orient="down")
             div_done = True
 
@@ -285,6 +397,19 @@ def auto_layout(devices: list[dict]) -> dict:
             spare += 1
 
     return {"rails": rails, "tail_net": diff["tail"] if diff else None,
+            "topology": {
+                "supply": supply,
+                "output": output,
+                "net_count": len(net_index),
+                "device_count": len(devices),
+                "active_count": len([d for d in devices if d["kind"] in ACTIVE_KINDS]),
+                "idioms": [name for name, value in {
+                    "diff_pair": diff,
+                    "current_mirror": mirror,
+                    "common_bjt": common_bjt,
+                    "mos_stack": mos_stack,
+                }.items() if value],
+            },
             "devices": [placed[d["ref"]] for d in devices if d["ref"] in placed]}
 
 
@@ -354,8 +479,8 @@ def add_segment(segments, a, b):
 # --------------------------- crossing-aware maze router -------------------- #
 RSTEP = 1.0
 R_TURN = 0.5
-R_CROSS = 4.0
-R_SHARE = 25.0
+R_CROSS = 8.0
+R_SHARE = 80.0
 
 
 def _route_axes(x_lo, x_hi, y_lo, y_hi):
@@ -512,28 +637,89 @@ def _seg_is_h(s):
     return abs(s[0][1] - s[1][1]) < 1e-6
 
 
-def geometry_check(segments, boxes):
-    crossings = 0
-    h = [s for s in segments if _seg_is_h(s)]
-    v = [s for s in segments if not _seg_is_h(s)]
-    for hs in h:
-        hy = hs[0][1]
-        hx0, hx1 = sorted([hs[0][0], hs[1][0]])
-        for vs in v:
-            vx = vs[0][0]
-            vy0, vy1 = sorted([vs[0][1], vs[1][1]])
+def _box_overlap(a, b, pad=0.0):
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return min(ax1, bx1) - max(ax0, bx0) > pad and min(ay1, by1) - max(ay0, by0) > pad
+
+
+def geometry_check(segments, device_boxes, pin_boxes):
+    wire_hops = 0
+    same_net_junctions = 0
+    false_contacts: set[tuple] = set()
+    body_boxes = [box for _ref, box in device_boxes]
+    overlap_pairs = []
+
+    def inside_any_box(point):
+        return any(_in_box(point, box, 1e-6) for box in pin_boxes)
+
+    for left_index, (left_ref, left_box) in enumerate(device_boxes):
+        for right_ref, right_box in device_boxes[left_index + 1:]:
+            if _box_overlap(left_box, right_box, 0.1):
+                overlap_pairs.append({"devices": [left_ref, right_ref]})
+
+    h = [s for s in segments if _seg_is_h((s[1], s[2]))]
+    v = [s for s in segments if not _seg_is_h((s[1], s[2]))]
+    for hnet, ha, hb in h:
+        hy = ha[1]
+        hx0, hx1 = sorted([ha[0], hb[0]])
+        for vnet, va, vb in v:
+            vx = va[0]
+            vy0, vy1 = sorted([va[1], vb[1]])
             if hx0 < vx < hx1 and vy0 < hy < vy1:
-                crossings += 1
+                if hnet == vnet:
+                    same_net_junctions += 1
+                else:
+                    wire_hops += 1
+
+    for left_index, (left_net, la, lb) in enumerate(segments):
+        for right_net, ra, rb in segments[left_index + 1:]:
+            if left_net == right_net:
+                continue
+            for p in (la, lb):
+                if not inside_any_box(p) and (_pt_eq(p, ra) or _pt_eq(p, rb)):
+                    false_contacts.add((round(p[0], 3), round(p[1], 3), left_net, right_net))
+            for p in (ra, rb):
+                if not inside_any_box(p) and (_pt_eq(p, la) or _pt_eq(p, lb)):
+                    false_contacts.add((round(p[0], 3), round(p[1], 3), left_net, right_net))
+            if _seg_is_h((la, lb)) and _seg_is_h((ra, rb)) and abs(la[1] - ra[1]) < JEPS:
+                lo = max(min(la[0], lb[0]), min(ra[0], rb[0]))
+                hi = min(max(la[0], lb[0]), max(ra[0], rb[0]))
+                mid = ((lo + hi) / 2, la[1])
+                if hi - lo > JEPS and not any(inside_any_box(p) for p in (la, lb, ra, rb, mid)):
+                    false_contacts.add((round(lo, 3), round(la[1], 3), left_net, right_net))
+            if not _seg_is_h((la, lb)) and not _seg_is_h((ra, rb)) and abs(la[0] - ra[0]) < JEPS:
+                lo = max(min(la[1], lb[1]), min(ra[1], rb[1]))
+                hi = min(max(la[1], lb[1]), max(ra[1], rb[1]))
+                mid = (la[0], (lo + hi) / 2)
+                if hi - lo > JEPS and not any(inside_any_box(p) for p in (la, lb, ra, rb, mid)):
+                    false_contacts.add((round(la[0], 3), round(lo, 3), left_net, right_net))
+
     intrusions = 0
-    for s in segments:
-        sx0, sx1 = sorted([s[0][0], s[1][0]])
-        sy0, sy1 = sorted([s[0][1], s[1][1]])
-        for bx0, by0, bx1, by1 in boxes:
-            if _in_box(s[0], (bx0, by0, bx1, by1), 1e-6) or _in_box(s[1], (bx0, by0, bx1, by1), 1e-6):
+    for _net, a, b in segments:
+        sx0, sx1 = sorted([a[0], b[0]])
+        sy0, sy1 = sorted([a[1], b[1]])
+        for bx0, by0, bx1, by1 in body_boxes:
+            if _in_box(a, (bx0, by0, bx1, by1), 1e-6) or _in_box(b, (bx0, by0, bx1, by1), 1e-6):
                 continue
             if min(sx1, bx1) - max(sx0, bx0) > 0.3 and min(sy1, by1) - max(sy0, by0) > 0.3:
                 intrusions += 1
-    return {"device_overlaps": 0, "wire_crossings": crossings, "wire_body_intrusions": intrusions}
+    unresolved = len(false_contacts)
+    device_overlaps = len(overlap_pairs)
+    hard_errors = device_overlaps + unresolved + intrusions
+    return {
+        "device_overlaps": device_overlaps,
+        "device_overlap_pairs": overlap_pairs[:10],
+        "wire_crossings": unresolved,
+        "wire_contact_points": [
+            {"x": item[0], "y": item[1], "nets": [item[2], item[3]]}
+            for item in sorted(false_contacts)[:10]
+        ],
+        "wire_hops": wire_hops,
+        "same_net_junctions": same_net_junctions,
+        "wire_body_intrusions": intrusions,
+        "hard_errors": hard_errors,
+    }
 
 
 def route_tail(net, pin_centers, route_segs, junctions):
@@ -647,12 +833,13 @@ def render(layout, svg_path: Path) -> dict:
     d.config(fontsize=FS, lw=2, color=WIRE, bgcolor=BG, margin=0.4)
 
     net_pins: dict[str, list] = {}
-    route_boxes, check_boxes, diode_segs = [], [], []
+    route_boxes, check_boxes, pin_boxes, diode_segs = [], [], [], []
     for dev in layout["devices"]:
         anchors = place_device(d, dev)
         cx, cy = cell_xy(dev["cell"])
         route_boxes.append((cx - 1.6, cy - 1.8, cx + 1.6, cy + 1.8))
-        check_boxes.append((cx - 1.3, cy - 1.6, cx + 1.3, cy + 1.6))
+        check_boxes.append((dev["ref"], (cx - 1.3, cy - 1.6, cx + 1.3, cy + 1.6)))
+        pin_boxes.append((cx - 2.4, cy - 2.4, cx + 2.4, cy + 2.4))
         pins = dev["pins"]
         diode = dev["kind"] in {"nmos", "pmos"} and pins.get("G") == pins.get("D")
         for pin_name, net in pins.items():
@@ -691,7 +878,11 @@ def render(layout, svg_path: Path) -> dict:
     non_rail = [(net, pcs) for net, pcs in net_pins.items() if net not in handled and len(pcs) >= 2]
     non_rail.sort(key=lambda kv: (max(p[0] for p, _ in kv[1]) - min(p[0] for p, _ in kv[1])) +
                                  (max(p[1] for p, _ in kv[1]) - min(p[1] for p, _ in kv[1])))
-    rsegs, rjuncs, rstubs = maze_route(non_rail, route_boxes, x_lo, x_hi, y_bot, y_top)
+    route_y_lo = y_bot + RSTEP
+    route_y_hi = y_top - RSTEP
+    if route_y_hi <= route_y_lo:
+        route_y_lo, route_y_hi = y_bot, y_top
+    rsegs, rjuncs, rstubs = maze_route(non_rail, route_boxes, x_lo, x_hi, route_y_lo, route_y_hi)
     route_segs += rsegs
     stub_segs += rstubs
     junctions += rjuncs
@@ -703,7 +894,18 @@ def render(layout, svg_path: Path) -> dict:
 
     svg_path.parent.mkdir(parents=True, exist_ok=True)
     d.save(str(svg_path), transparent=False)
-    return geometry_check([(a, b) for _net, a, b in all_segs], check_boxes)
+    metrics = geometry_check(all_segs, check_boxes, pin_boxes)
+    report = {
+        "ok": metrics["hard_errors"] == 0,
+        "metrics": metrics,
+        "rails": rails,
+        "segments": len(all_segs),
+        "drawn_devices": len(layout["devices"]),
+        "topology": layout.get("topology", {}),
+    }
+    svg_path.with_suffix(".geometry.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    svg_path.with_suffix(".layout.json").write_text(json.dumps(layout, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return metrics
 
 
 def main() -> int:
@@ -721,7 +923,10 @@ def main() -> int:
             print(json.dumps({"ok": False, "error": "no placeable devices"}))
             return 0
         metrics = render(layout, Path(args.svg_path).resolve())
-        print(json.dumps({"ok": True, "svg_path": str(Path(args.svg_path).resolve()),
+        svg_path = Path(args.svg_path).resolve()
+        print(json.dumps({"ok": metrics.get("hard_errors", 0) == 0, "svg_path": str(Path(args.svg_path).resolve()),
+                          "geometry_path": str(svg_path.with_suffix(".geometry.json")),
+                          "layout_path": str(svg_path.with_suffix(".layout.json")),
                           "renderer": "grid", "metrics": metrics,
                           "devices": len(layout["devices"])}, ensure_ascii=False))
     except Exception as exc:
