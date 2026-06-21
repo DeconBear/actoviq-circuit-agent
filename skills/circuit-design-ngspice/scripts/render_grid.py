@@ -34,9 +34,10 @@ COL_W = 6.0
 ROW_H = 5.0
 LEAD = 1.1
 WIRE = "#222"
-ACCENT = "#165c7d"
+ACCENT = "#0d4a66"
 BG = "#fffdf8"
 FS = 10
+JEPS = 1e-3          # geometry tolerance for junction / collinear tests
 
 
 # --------------------------------------------------------------------------- #
@@ -231,9 +232,9 @@ def place_device(d, dev):
         p_a, p_b = ((cx - LEAD, cy), (cx + LEAD, cy)) if horizontal else ((cx, cy + LEAD), (cx, cy - LEAD))
         element = cls().endpoints(p_a, p_b).color(WIRE)
         if ref:
-            element.label(ref, loc="top" if horizontal else "left", fontsize=FS)
+            element.label(ref, loc="top" if horizontal else "left", fontsize=FS + 1)
         if value:
-            element.label(value, loc="bot" if horizontal else "right", fontsize=FS - 1, color=ACCENT)
+            element.label(value, loc="bot" if horizontal else "right", fontsize=FS + 1, color=ACCENT)
         added = d.add(element)
         keys = list(pins.keys())
         return {keys[0]: (added.absanchors["start"].x, added.absanchors["start"].y),
@@ -245,9 +246,9 @@ def place_device(d, dev):
             element = element.flip()
         added = d.add(element)
         if ref:
-            d.add(elm.Label().at((cx - 1.9, cy + 0.5)).label(ref, fontsize=FS, color=WIRE))
+            d.add(elm.Label().at((cx - 2.0, cy + 0.6)).label(ref, fontsize=FS + 1, color=WIRE))
         if value:
-            d.add(elm.Label().at((cx - 1.9, cy - 0.4)).label(value, fontsize=FS - 2, color=ACCENT))
+            d.add(elm.Label().at((cx - 2.0, cy - 0.5)).label(value, fontsize=FS, color=ACCENT))
         return {"D": (added.absanchors["drain"].x, added.absanchors["drain"].y),
                 "G": (added.absanchors["gate"].x, added.absanchors["gate"].y),
                 "S": (added.absanchors["source"].x, added.absanchors["source"].y)}
@@ -459,6 +460,62 @@ def route_tail(net, pin_centers, route_segs, junctions):
             junctions.append((x, bar_y))
 
 
+def _pt_eq(p, q):
+    return abs(p[0] - q[0]) < JEPS and abs(p[1] - q[1]) < JEPS
+
+
+def _on_seg(p, a, b):
+    """True if p lies on the axis-aligned segment a-b (endpoints included)."""
+    if abs(a[1] - b[1]) < JEPS:        # horizontal
+        return abs(p[1] - a[1]) < JEPS and min(a[0], b[0]) - JEPS <= p[0] <= max(a[0], b[0]) + JEPS
+    if abs(a[0] - b[0]) < JEPS:        # vertical
+        return abs(p[0] - a[0]) < JEPS and min(a[1], b[1]) - JEPS <= p[1] <= max(a[1], b[1]) + JEPS
+    return False
+
+
+def merge_collinear(segments):
+    """Merge each net's collinear, overlapping/touching segments into maximal
+    runs so every wire draws as one continuous line (no visual breaks where the
+    router, rails and pin stubs meet)."""
+    horiz, vert, out = defaultdict(list), defaultdict(list), []
+    for net, a, b in segments:
+        if abs(a[1] - b[1]) < JEPS and abs(a[0] - b[0]) > JEPS:
+            horiz[(net, round(a[1], 3))].append(tuple(sorted((a[0], b[0]))))
+        elif abs(a[0] - b[0]) < JEPS and abs(a[1] - b[1]) > JEPS:
+            vert[(net, round(a[0], 3))].append(tuple(sorted((a[1], b[1]))))
+        else:
+            out.append((net, a, b))    # diagonal/degenerate: keep verbatim
+    for (net, y), ivs in horiz.items():
+        out += [(net, (lo, y), (hi, y)) for lo, hi in _merge_iv(ivs)]
+    for (net, x), ivs in vert.items():
+        out += [(net, (x, lo), (x, hi)) for lo, hi in _merge_iv(ivs)]
+    return out
+
+
+def compute_junctions(segments):
+    """A connection dot belongs wherever 3+ wire 'arms' of the SAME net meet
+    (a T-tap or multi-way node). Derived geometrically from the final wires, so
+    rail taps, pin-stub/trunk joins and idiom bars all get a dot; a pin terminus
+    (one arm) and a cross of different nets (a hop) do not."""
+    by_net = defaultdict(list)
+    for net, a, b in segments:
+        by_net[net].append((a, b))
+    dots = []
+    for segs in by_net.values():
+        cand = {(round(a[0], 3), round(a[1], 3)) for a, _ in segs}
+        cand |= {(round(b[0], 3), round(b[1], 3)) for _, b in segs}
+        for p in cand:
+            arms = 0
+            for a, b in segs:
+                if _pt_eq(p, a) or _pt_eq(p, b):
+                    arms += 1
+                elif _on_seg(p, a, b):
+                    arms += 2
+            if arms >= 3:
+                dots.append(p)
+    return dots
+
+
 def draw_wires(d, segments, hop_r=0.35, steps=10):
     """Draw tagged (net, a, b) segments. Where a horizontal wire crosses a
     vertical wire of a different net, draw a small semicircle 'hop' so the
@@ -528,9 +585,9 @@ def render(layout, svg_path: Path) -> dict:
         for (px, py), _c in net_pins.get(net, []):
             if abs(py - rail_y) > 1e-6:
                 stub_segs.append((net, (px, py), (px, rail_y)))
-            junctions.append((px, rail_y))
-        d.add(elm.Label().at(((x_lo + x_hi) / 2, rail_y + (0.4 if side == "top" else -0.7)))
-              .label(net.upper(), fontsize=FS, color=ACCENT))
+        label = "GND" if net == "0" else net.upper()
+        d.add(elm.Label().at((x_lo + 1.3, rail_y + (0.8 if side == "top" else -1.0)))
+              .label(label, fontsize=FS + 4, color=WIRE))
 
     handled = set(rails)
     tail_net = layout.get("tail_net")
@@ -546,9 +603,10 @@ def render(layout, svg_path: Path) -> dict:
     stub_segs += rstubs
     junctions += rjuncs
 
-    draw_wires(d, rail_segs + route_segs + stub_segs + diode_segs)
-    for jx, jy in junctions:
-        d.add(elm.Dot().at((jx, jy)).color(WIRE))
+    all_segs = merge_collinear(rail_segs + route_segs + stub_segs + diode_segs)
+    draw_wires(d, all_segs)
+    for jx, jy in compute_junctions(all_segs):
+        d.add(elm.Dot(radius=0.12).at((jx, jy)).color(WIRE))
 
     svg_path.parent.mkdir(parents=True, exist_ok=True)
     d.save(str(svg_path), transparent=False)

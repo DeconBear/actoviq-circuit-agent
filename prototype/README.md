@@ -101,6 +101,10 @@ schemdraw is an optional dependency: if it is missing, `render_grid` returns
       exactly vertical/horizontal and trunks meet the gate/drain/source head-on,
       fixing the snap-induced diagonal kinks where wires landed *beside* a pin.
       Same metrics (0 overlaps / 3 crossings / 0 intrusions).
+- [x] **readability polish**: junction dots derived *geometrically* (a dot
+      wherever 3+ same-net wire arms meet — every rail tap, pin-stub/trunk join
+      and idiom bar), same-net segments merged into continuous wires, larger
+      R/C and W/L value labels, and bold `VIN`/`GND` rail labels.
 - [x] **idiom routing**: diff-pair tail bar (kills the source loops) + a local
       diode jumper. The diode reference is routed through its **gate** (which
       sits at mid-height, near the pair) rather than its top drain, so the mirror
