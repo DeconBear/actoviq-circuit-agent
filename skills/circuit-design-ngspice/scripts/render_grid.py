@@ -310,37 +310,54 @@ def _merge_net(edges):
 
 def maze_route(nets, route_boxes, x_lo, x_hi, y_lo, y_hi):
     xs, ys = _route_axes(x_lo, x_hi, y_lo, y_hi)
+    # Pin-aware (Hanan) augmentation: every routed pin's exact x and y becomes a
+    # grid line, so each pin sits *on* the lattice. Access stubs are then true
+    # orthogonal segments and trunks meet the terminal head-on -- no snap-induced
+    # diagonal kinks beside the gate/drain/source.
+    for _net, pin_centers in nets:
+        for (px, py), _c in pin_centers:
+            xs.append(px)
+            ys.append(py)
+    xs, ys = sorted(set(xs)), sorted(set(ys))
+    xi = {x: i for i, x in enumerate(xs)}
+    yi = {y: i for i, y in enumerate(ys)}
     xset, yset = set(xs), set(ys)
     blocked = {(x, y) for x in xs for y in ys if any(_in_box((x, y), b) for b in route_boxes)}
     huse, vuse = defaultdict(set), defaultdict(set)
     route_segs, juncs, stubs = [], [], []
 
-    def snap(v, axis):
-        return min(axis, key=lambda a: abs(a - v))
-
     def valid(n):
         return n[0] in xset and n[1] in yset and n not in blocked
 
     def escape(pin, center):
+        # Walk straight out of the body along the pin's exit axis to the first
+        # free node. The pin's own coordinate is now a grid line, so the stub
+        # stays exactly vertical (drain/source) or horizontal (gate).
         px, py = pin
         cx, cy = center
-        if abs(py - cy) >= abs(px - cx):
-            d = (0.0, RSTEP if py >= cy else -RSTEP)
-        else:
-            d = (RSTEP if px >= cx else -RSTEP, 0.0)
-        n = (snap(px, xs), snap(py, ys))
-        for _ in range(12):
-            if valid(n):
-                return n
-            n = (round(n[0] + d[0], 1), round(n[1] + d[1], 1))
+        if abs(py - cy) >= abs(px - cx):            # vertical exit
+            j, step, n = yi[py], (1 if py >= cy else -1), (px, py)
+            while not valid(n) and 0 <= j + step < len(ys):
+                j += step
+                n = (px, ys[j])
+        else:                                       # horizontal exit
+            i, step, n = xi[px], (1 if px >= cx else -1), (px, py)
+            while not valid(n) and 0 <= i + step < len(xs):
+                i += step
+                n = (xs[i], py)
         return n
 
     def neighbours(node):
         x, y = node
-        for dx, dy, orient in ((RSTEP, 0, 1), (-RSTEP, 0, 1), (0, RSTEP, 2), (0, -RSTEP, 2)):
-            m = (round(x + dx, 1), round(y + dy, 1))
-            if valid(m):
-                yield m, orient
+        i, j = xi[x], yi[y]
+        if i > 0:
+            yield (xs[i - 1], y), 1
+        if i < len(xs) - 1:
+            yield (xs[i + 1], y), 1
+        if j > 0:
+            yield (x, ys[j - 1]), 2
+        if j < len(ys) - 1:
+            yield (x, ys[j + 1]), 2
 
     for net, pin_centers in nets:
         escapes = [escape(p, c) for p, c in pin_centers]
@@ -364,7 +381,7 @@ def maze_route(nets, route_boxes, x_lo, x_hi, y_lo, y_hi):
                     goal = key
                     break
                 for m, orient in neighbours(node):
-                    nc = cost + RSTEP
+                    nc = cost + abs(m[0] - node[0]) + abs(m[1] - node[1])
                     if ld and ld != orient:
                         nc += R_TURN
                     oh = any(s != net for s in huse.get(m, ()))

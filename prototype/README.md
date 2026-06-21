@@ -21,8 +21,11 @@ run through component bodies. The fix is a division of labour:
   - **idiom routing** for known sub-circuits — the diff-pair *tail* (both
     sources drop to one bar, then a single wire to the tail source) and a local
     *diode jumper* for the mirror reference — so they draw the textbook way
-  - a crossing-aware **maze router** (Dijkstra on a fine channel grid, with
-    orthogonal pin escapes) routes everything else, minimising crossings
+  - a crossing-aware **maze router** (Dijkstra on a *pin-aware* grid: every
+    device pin's exact x/y is added as a grid line, so each terminal sits *on*
+    the lattice — access stubs are truly orthogonal and trunks meet the
+    gate/drain/source head-on, never beside it) routes everything else,
+    minimising crossings
   - crossover **hops** (little semicircle bumps) render the remaining inter-net
     crossings unambiguously, the way engineers draw them
   - a built-in geometry self-check (crossings / body intrusions)
@@ -93,6 +96,11 @@ schemdraw is an optional dependency: if it is missing, `render_grid` returns
       0 intrusions. Earlier naive A* attempt regressed; the fix was proper
       obstacle sizing + orthogonal escapes + a wider cell pitch.
 - [x] **crossover hops** for the remaining inter-net crossings
+- [x] **pin-aware (Hanan) routing grid**: every routed pin's exact x/y becomes a
+      grid line, so each terminal sits *on* the lattice. Access stubs are then
+      exactly vertical/horizontal and trunks meet the gate/drain/source head-on,
+      fixing the snap-induced diagonal kinks where wires landed *beside* a pin.
+      Same metrics (0 overlaps / 3 crossings / 0 intrusions).
 - [x] **idiom routing**: diff-pair tail bar (kills the source loops) + a local
       diode jumper. The diode reference is routed through its **gate** (which
       sits at mid-height, near the pair) rather than its top drain, so the mirror
