@@ -1362,6 +1362,74 @@ def add_terminal_symbol(cells: dict, label: str, bit: int, *, direction: str) ->
     }
 
 
+def hidden_source_terminal_label(comp: dict, node: str) -> str:
+    lower = node.strip().lower()
+    source_name = str(comp.get("name") or "").strip().lower()
+    explicit_labels = {
+        "gate": "GATE",
+        "vgate": "GATE",
+        "vref": "VREF",
+        "ref": "VREF",
+        "vbias": "VBIAS",
+        "bias": "BIAS",
+        "tail": "ITAIL",
+        "itail": "ITAIL",
+    }
+    if lower in explicit_labels:
+        return explicit_labels[lower]
+
+    cleaned = sanitize_id(node).upper()
+    if str(comp.get("type") or "") == "current_source" and not cleaned.startswith("I"):
+        return f"I{cleaned}"
+    if source_name.startswith("v") and not cleaned.startswith("V"):
+        return f"V{cleaned}"
+    return cleaned
+
+
+def hidden_source_terminal_nodes(
+    components: list[dict],
+    component_records: list[dict],
+    node_to_bit: dict[str, int],
+    *,
+    inferred_input: str | None,
+    inferred_output: str | None,
+) -> list[tuple[str, str]]:
+    """Expose hidden bench/control source nodes that still drive visible parts."""
+    visible_node_by_lower = {node.lower(): node for node in node_to_bit}
+    visible_ref_count: dict[str, int] = {}
+    for record in component_records:
+        for node in record.get("schematic_nodes") or record.get("nodes") or []:
+            visible_ref_count[str(node).lower()] = visible_ref_count.get(str(node).lower(), 0) + 1
+
+    io_nodes = {str(node).lower() for node in (inferred_input, inferred_output) if node}
+    seen_nodes: set[str] = set()
+    terminals: list[tuple[str, str]] = []
+
+    for comp in [enrich_component_record(c) for c in components]:
+        if comp.get("type") not in {"voltage_source", "current_source"}:
+            continue
+        if should_include_component_in_view(comp, "schematic"):
+            continue
+
+        for raw_node in comp.get("nodes", []):
+            node = visible_node_by_lower.get(str(raw_node).lower())
+            if node is None:
+                continue
+            lower = node.lower()
+            if comp.get("type") == "current_source" and lower not in {"tail", "itail", "ibias", "bias"}:
+                continue
+            if lower in seen_nodes or lower in io_nodes:
+                continue
+            if rail_symbol_for_node(node) is not None:
+                continue
+            if visible_ref_count.get(lower, 0) < 1:
+                continue
+            seen_nodes.add(lower)
+            terminals.append((hidden_source_terminal_label(comp, node), node))
+
+    return terminals
+
+
 def is_ground_node(node: str) -> bool:
     return rail_symbol_for_node(node) == "gnd"
 
@@ -1538,6 +1606,17 @@ def build_netlistsvg_payload(
             add_terminal_symbol(cells, "IN", node_to_bit[inferred_input], direction="input")
     if inferred_output and inferred_output in node_to_bit:
         add_terminal_symbol(cells, "OUT", node_to_bit[inferred_output], direction="output")
+    hidden_terminal_nodes: list[tuple[str, str]] = []
+    if view == "schematic":
+        hidden_terminal_nodes = hidden_source_terminal_nodes(
+            components,
+            component_records,
+            node_to_bit,
+            inferred_input=inferred_input,
+            inferred_output=inferred_output,
+        )
+        for label, node in hidden_terminal_nodes:
+            add_terminal_symbol(cells, label, node_to_bit[node], direction="input")
 
     module_name = sanitize_id(netlist_path.stem) or "top"
     interfaces = {
@@ -1579,6 +1658,7 @@ def build_netlistsvg_payload(
             "testbench_excluded_count": len(
                 [c for c in component_records if c.get("mount_policy") == "testbench_exclude"]
             ),
+            "hidden_source_terminal_count": len(hidden_terminal_nodes),
         },
         "io_inference": {
             "input_node": inferred_input,

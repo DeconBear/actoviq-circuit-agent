@@ -1168,6 +1168,7 @@ def apply_buck_converter_placements(root: ET.Element, payload: dict[str, object]
         set_group_anchor(groups["IN"], (80.0, 150.0))
     if "OUT" in groups:
         set_group_anchor(groups["OUT"], (580.0, 200.0))
+    set_terminal_group_anchor(groups, ("GATE", "VGATE"), (92.0, 175.0))
 
 
 def apply_cascode_amplifier_placements(root: ET.Element, payload: dict[str, object]) -> None:
@@ -1206,6 +1207,7 @@ def apply_cascode_amplifier_placements(root: ET.Element, payload: dict[str, obje
         set_group_anchor(groups["IN"], (130.0, 255.0))
     if "OUT" in groups:
         set_group_anchor(groups["OUT"], (620.0, 150.0))
+    set_terminal_group_anchor(groups, ("VB", "VBIAS"), (215.0, 220.0))
 
 
 def apply_ring_oscillator_placements(root: ET.Element, payload: dict[str, object]) -> None:
@@ -1397,7 +1399,14 @@ def apply_ldo_placements(root: ET.Element, payload: dict[str, object]) -> None:
     if "IN" in groups:
         set_group_xy(groups["IN"], 24.0, 185.0)
     if "OUT" in groups:
-        set_group_xy(groups["OUT"], 705.0, 210.0)
+        set_group_xy(groups["OUT"], 880.0, 210.0)
+    vref_anchor = (360.0, 240.0)
+    for component in components if isinstance(components, list) else []:
+        if isinstance(component, dict) and component_type(component) == "bjt" and has_any_node(component, "vref", "ref"):
+            vref_anchor = (220.0, 240.0)
+            break
+    set_terminal_group_anchor(groups, ("VREF", "REF"), vref_anchor)
+    set_terminal_group_anchor(groups, ("ITAIL", "TAIL", "IBIAS"), (330.0, 315.0))
 
     for name, group in groups.items():
         if name.startswith("vcc_"):
@@ -1687,6 +1696,20 @@ def set_group_anchor(group: ET.Element, anchor: tuple[float, float]) -> bool:
     dy = current_anchor[1] - transform[1]
     set_group_xy(group, anchor[0] - dx, anchor[1] - dy)
     return True
+
+
+def set_terminal_group_anchor(
+    groups: dict[str, ET.Element],
+    labels: tuple[str, ...],
+    anchor: tuple[float, float],
+) -> bool:
+    normalized = tuple(label.upper() for label in labels)
+    updated = False
+    for name, group in groups.items():
+        upper_name = name.upper()
+        if upper_name in normalized or any(upper_name.startswith(f"{label}_") for label in normalized):
+            updated = set_group_anchor(group, anchor) or updated
+    return updated
 
 
 def relabel_cloned_cell(group: ET.Element, old_cell_class: str, new_cell_class: str) -> None:
@@ -2007,6 +2030,8 @@ def add_buck_custom_net(
         return add_side_ground_symbols_net(root, net_class, raw_points)
     if lower in {input_node.lower(), "vin"}:
         return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 150.0)
+    if lower in {"gate", "vgate"}:
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 175.0)
     if lower in {output_node.lower(), "out", "vout", "sw"}:
         return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 200.0)
     return None
@@ -2296,12 +2321,8 @@ def add_ldo_custom_net(
         return line_count
 
     if lower in {"vref", "ref"}:
-        mid_x = (min(point[0] for point in raw_points) + max(point[0] for point in raw_points)) / 2
-        for point in raw_points:
-            end = (point[0] + 28.0, point[1]) if point[0] < mid_x else (point[0] - 28.0, point[1])
-            line_count += append_counted_net_line(root, net_class, point, end)
-            append_net_label(root, net_class, "VREF", end[0] - 8.0, end[1] - 5.0)
-        return line_count
+        signal_y = sorted(point[1] for point in raw_points)[len(raw_points) // 2]
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, signal_y)
 
     if lower == "tail":
         bus_y = min(max(point[1] for point in raw_points) + 20.0, 285.0)
