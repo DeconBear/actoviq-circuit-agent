@@ -443,10 +443,11 @@ def place_device(d, dev):
         return {keys[0]: (added.absanchors["start"].x, added.absanchors["start"].y),
                 keys[1]: (added.absanchors["end"].x, added.absanchors["end"].y)}
     if kind in {"nmos", "pmos"}:
-        element = (elm.NFet().reverse() if kind == "nmos" else elm.PFet().theta(180))
+        if kind == "nmos":
+            element = elm.NFet() if dev.get("flip") else elm.NFet().reverse()
+        else:
+            element = elm.PFet() if dev.get("flip") else elm.PFet().reverse()
         element = element.anchor("center").at((cx, cy)).color(WIRE)
-        if dev.get("flip"):
-            element = element.flip()
         added = d.add(element)
         if ref:
             d.add(elm.Label().at((cx - 2.0, cy + 0.6)).label(ref, fontsize=FS + 1, color=WIRE))

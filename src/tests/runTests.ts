@@ -479,6 +479,51 @@ test('grid renderer keeps BJT, diode, inductor, and supply rails visible', async
   }
 });
 
+test('grid MOS renderer preserves drain/source anchors when mirrored', () => {
+  const scriptPath = path.resolve(
+    process.cwd(),
+    'skills',
+    'circuit-design-ngspice',
+    'scripts',
+    'render_grid.py',
+  );
+  const code = [
+    'import importlib.util, json, schemdraw, sys',
+    'spec = importlib.util.spec_from_file_location("render_grid", sys.argv[1])',
+    'mod = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(mod)',
+    'cases = {',
+    '  "nmos_left": {"kind": "nmos", "ref": "MN1", "value": "", "pins": {"D": "d", "G": "g", "S": "s"}, "cell": [0, 0]},',
+    '  "nmos_right": {"kind": "nmos", "ref": "MN2", "value": "", "pins": {"D": "d", "G": "g", "S": "s"}, "cell": [0, 0], "flip": True},',
+    '  "pmos_left": {"kind": "pmos", "ref": "MP1", "value": "", "pins": {"D": "d", "G": "g", "S": "s"}, "cell": [0, 0]},',
+    '  "pmos_right": {"kind": "pmos", "ref": "MP2", "value": "", "pins": {"D": "d", "G": "g", "S": "s"}, "cell": [0, 0], "flip": True},',
+    '}',
+    'out = {}',
+    'for name, dev in cases.items():',
+    '  drawing = schemdraw.Drawing(show=False)',
+    '  out[name] = mod.place_device(drawing, dev)',
+    'print(json.dumps(out))',
+  ].join('\n');
+  const result = spawnSync('python', ['-c', code, scriptPath], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const anchors = JSON.parse(result.stdout.trim()) as Record<string, Record<string, [number, number]>>;
+  const nmosLeft = anchors.nmos_left!;
+  const nmosRight = anchors.nmos_right!;
+  const pmosLeft = anchors.pmos_left!;
+  const pmosRight = anchors.pmos_right!;
+  assert.ok(nmosLeft.D![1] > nmosLeft.S![1]);
+  assert.ok(nmosRight.D![1] > nmosRight.S![1]);
+  assert.ok(pmosLeft.S![1] > pmosLeft.D![1]);
+  assert.ok(pmosRight.S![1] > pmosRight.D![1]);
+  assert.ok(nmosLeft.G![0] < 0);
+  assert.ok(pmosLeft.G![0] < 0);
+  assert.ok(nmosRight.G![0] > 0);
+  assert.ok(pmosRight.G![0] > 0);
+});
+
 test('markdown fallback artifacts remain explicit placeholders, not silent success', async () => {
   const workflowPath = path.resolve(process.cwd(), 'src', 'workflow', 'circuitDesignWorkflow.ts');
   const workflowSource = await readFile(workflowPath, 'utf8');
