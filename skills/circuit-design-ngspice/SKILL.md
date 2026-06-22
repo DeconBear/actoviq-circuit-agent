@@ -92,6 +92,12 @@ preserves the `netlist -> netlist_to_json -> netlistsvg SVG` flow and refreshes
 the GUI preview. Read `notes` on the module reference before editing. Users may
 address a module directly by its stable `id`.
 
+In schematic view, bench-only voltage/current sources are intentionally hidden.
+If a hidden source drives a visible non-rail control or bias node, the renderer
+must expose that node as a named terminal such as `GATE`, `VREF`, `ITAIL`, or
+`VB`; these terminals are part of the real netlistsvg connectivity and must not
+be replaced by floating text labels.
+
 The Netlist tab uses `modules/<id>/netlist-notebook.md` when that file exists.
 It is an editable Markdown document: prose outside fenced code blocks is for
 notes and explanations, while fenced `spice`, `cir`, or `netlist` blocks are
@@ -439,6 +445,8 @@ stage uses a pull-up/pull-down resistor network (not an ideal model).
    - Applies the analog skin profile (`assets/skins/analog.svg`)
    - Replaces generic rectangles with recognisable op-amp/comparator symbols
    - Performs wire routing (horizontal trunks + vertical taps)
+   - Exposes hidden control/bias source nodes as connected terminals such as
+     `GATE`, `VREF`, `ITAIL`, and `VB`
    - Generates `render/netlistsvg.geometry.json` and `render/netlistsvg.layout.json`
    - Checks SVG geometry for readability
 

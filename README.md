@@ -226,6 +226,13 @@ Large designs are partitioned by function during the design stage. The workflow 
 The workflow generates schematics via the netlistsvg backend:
 
 - `render/netlistsvg.svg`: primary schematic output for all circuits.
+- In schematic view, bench-only voltage/current sources are hidden to keep the
+  drawing readable. When one of those hidden sources drives a visible
+  non-rail control or bias node, the renderer exposes a named terminal such as
+  `GATE`, `VREF`, `ITAIL`, or `VB` and routes it as a real net connection.
+- Rendering writes geometry/readability reports next to the SVG. These reports
+  check missing pin connections, wire crossings, component overlaps, wire-body
+  intrusions, and tight spacing.
 
 `netlistsvg` is a Node.js package required for rendering. Install it once:
 
