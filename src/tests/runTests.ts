@@ -745,9 +745,9 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
       '--module-id', 'sensor',
     ]);
     assert.equal(activeCompiled.render.ok, true);
-    assert.equal(activeCompiled.render.renderer, 'grid');
+    assert.equal(activeCompiled.render.renderer, 'netlistsvg');
     const buildManifest = JSON.parse(await readFile(path.resolve(projectRoot, 'build', 'build-manifest.json'), 'utf8'));
-    assert.equal(buildManifest.modules.sensor.renderer, 'grid');
+    assert.equal(buildManifest.modules.sensor.renderer, 'netlistsvg');
   } finally {
     await rm(projectsRoot, { recursive: true, force: true });
   }

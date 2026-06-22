@@ -1091,18 +1091,21 @@ def run_json_script(script_path: Path, args: list[str], timeout_sec: int = 90) -
     return result
 
 
+def resolve_netlistsvg_bin() -> str:
+    repo_root = Path(__file__).resolve().parents[3]
+    local_bin = repo_root / "node_modules" / ".bin" / ("netlistsvg.cmd" if os.name == "nt" else "netlistsvg")
+    return str(local_bin) if local_bin.exists() else "netlistsvg"
+
+
 def render_module_schematic(
     build_root: Path,
     netlist_path: Path,
     module: dict[str, Any],
+    renderer: str = "netlistsvg",
 ) -> dict[str, Any]:
     scripts_root = Path(__file__).resolve().parent
     svg_path = build_root / "schematic.svg"
-    # Transistor-level / active designs: netlistsvg (ELK) tangles analog
-    # placement, so render those with the idiom-aware grid renderer. Passive
-    # modules fall through to the netlistsvg flow below.
-    netlist_text = netlist_path.read_text(encoding="utf-8", errors="replace")
-    if re.search(r"(?im)^\s*[mq]\w", netlist_text):
+    if renderer == "grid-experimental":
         grid = run_json_script(
             scripts_root / "render_grid.py",
             ["--netlist", str(netlist_path), "--svg-path", str(svg_path)],
@@ -1113,9 +1116,16 @@ def render_module_schematic(
                 "ok": True,
                 "json_path": "",
                 "svg_path": str(svg_path),
-                "renderer": "grid",
+                "renderer": "grid-experimental",
                 "details": grid,
             }
+        return {
+            "ok": False,
+            "json_path": "",
+            "svg_path": str(svg_path) if svg_path.exists() else "",
+            "renderer": "grid-experimental",
+            "details": grid,
+        }
     input_port = next(
         (
             port for port in module.get("ports", [])
@@ -1152,7 +1162,7 @@ def render_module_schematic(
         [
             "--json-path", str(json_path),
             "--svg-path", str(svg_path),
-            "--netlistsvg-bin", "netlistsvg",
+            "--netlistsvg-bin", resolve_netlistsvg_bin(),
             "--skin-profile", "analog",
             "--timeout-sec", "45",
         ],
@@ -1167,7 +1177,7 @@ def render_module_schematic(
     }
 
 
-def compile_module(root: Path, module_id: str) -> dict[str, Any]:
+def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> dict[str, Any]:
     project, modules = load_project(root)
     if module_id not in modules:
         raise ValueError(f"unknown module: {module_id}")
@@ -1241,7 +1251,7 @@ def compile_module(root: Path, module_id: str) -> dict[str, Any]:
     build_root.mkdir(parents=True, exist_ok=True)
     netlist_path = build_root / "design.cir"
     netlist_path.write_text(netlist_text, encoding="utf-8")
-    render_result = render_module_schematic(build_root, netlist_path, module)
+    render_result = render_module_schematic(build_root, netlist_path, module, renderer)
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path) if manifest_path.exists() else {
         "schema": "actoviq.build.v1",
@@ -1455,6 +1465,11 @@ def build_parser() -> argparse.ArgumentParser:
     compile_module_parser = subparsers.add_parser("compile-module")
     compile_module_parser.add_argument("--project-root", required=True)
     compile_module_parser.add_argument("--module-id", required=True)
+    compile_module_parser.add_argument(
+        "--renderer",
+        default="netlistsvg",
+        choices=["netlistsvg", "grid-experimental"],
+    )
 
     simulate_parser = subparsers.add_parser("simulate")
     simulate_parser.add_argument("--project-root", required=True)
@@ -1485,7 +1500,7 @@ def main() -> int:
         elif args.command == "compile":
             result = compile_project(Path(args.project_root).resolve())
         elif args.command == "compile-module":
-            result = compile_module(Path(args.project_root).resolve(), args.module_id)
+            result = compile_module(Path(args.project_root).resolve(), args.module_id, args.renderer)
         elif args.command == "simulate":
             result = simulate_project(Path(args.project_root).resolve(), args.ngspice_bin)
         elif args.command == "simulate-module":
