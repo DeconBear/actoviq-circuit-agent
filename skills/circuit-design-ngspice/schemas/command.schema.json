@@ -24,6 +24,8 @@
               "resize_module",
               "set_component_value",
               "move_component",
+              "move_schematic_item",
+              "reset_schematic_item",
               "connect_ports",
               "set_connection_network",
               "connect_pins",

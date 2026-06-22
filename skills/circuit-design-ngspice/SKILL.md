@@ -79,18 +79,25 @@ python scripts/circuit_project.py simulate-module --project-root <project-root> 
 Every command must use the current `base_revision`. A stale command must be
 rejected, not silently rebased. Supported initial operations are
 `move_module`, `resize_module`, `set_component_value`, `move_component`,
-`connect_ports`, `set_connection_network`, and `connect_pins`. Agents can construct larger designs with `upsert_module`,
+`move_schematic_item`, `reset_schematic_item`, `connect_ports`,
+`set_connection_network`, and `connect_pins`. Agents can construct larger designs with `upsert_module`,
 `remove_module`, `add_port`, `add_component`, and `remove_component`.
 Use `set_module_note`, `set_module_preview`, and `set_module_metadata` for the
 GUI card note, preview preference, name, kind, function summary, and parameter
 summary. Keep the stable module `id` unchanged when editing metadata.
 Schemas live under `schemas/`.
 
-The desktop module canvas is a netlistsvg viewer, not an independent schematic
-editor. After changing a module netlist, always run `compile-module`; this
-preserves the `netlist -> netlist_to_json -> netlistsvg SVG` flow and refreshes
-the GUI preview. Read `notes` on the module reference before editing. Users may
-address a module directly by its stable `id`.
+The desktop module canvas uses netlistsvg as the electrical rendering backend.
+It supports layout-only user edits in the full schematic view: moving a symbol
+or terminal writes `modules/<id>/schematic.overrides.json`, and `compile-module`
+applies those positions before re-routing wires. These overrides are not
+electrical edits; the module notebook/netlist remains the source of truth for
+SPICE connectivity. Preserve the override file when regenerating a module, and
+do not edit generated `build/` SVGs directly. After changing a module netlist,
+always run `compile-module`; this preserves the
+`netlist -> netlist_to_json -> netlistsvg SVG` flow and refreshes the GUI
+preview. Read `notes` on the module reference before editing. Users may address
+a module directly by its stable `id`.
 
 In schematic view, bench-only voltage/current sources are intentionally hidden.
 If a hidden source drives a visible non-rail control or bias node, the renderer
@@ -445,6 +452,8 @@ stage uses a pull-up/pull-down resistor network (not an ideal model).
    - Applies the analog skin profile (`assets/skins/analog.svg`)
    - Replaces generic rectangles with recognisable op-amp/comparator symbols
    - Performs wire routing (horizontal trunks + vertical taps)
+   - Applies user schematic layout overrides from
+     `modules/<id>/schematic.overrides.json` before routing, when present
    - Exposes hidden control/bias source nodes as connected terminals such as
      `GATE`, `VREF`, `ITAIL`, and `VB`
    - Generates `render/netlistsvg.geometry.json` and `render/netlistsvg.layout.json`

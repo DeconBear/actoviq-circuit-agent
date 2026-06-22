@@ -1531,6 +1531,54 @@ def apply_profile_placements(root: ET.Element, payload: dict[str, object], profi
     return False
 
 
+def load_schematic_overrides(path_value: str) -> dict[str, object] | None:
+    if not path_value.strip():
+        return None
+    path = Path(path_value).expanduser().resolve()
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if data.get("schema") != "actoviq.schematic-overrides.v1":
+        raise ValueError(f"unsupported schematic overrides schema: {path}")
+    if not isinstance(data.get("items"), dict):
+        raise ValueError(f"schematic overrides items must be an object: {path}")
+    return data
+
+
+def apply_schematic_overrides(root: ET.Element, overrides: dict[str, object] | None) -> dict[str, object]:
+    if not overrides:
+        return {"updated": False, "reason": "no_overrides"}
+    items = overrides.get("items")
+    if not isinstance(items, dict) or not items:
+        return {"updated": False, "reason": "empty_overrides"}
+
+    groups = find_cell_groups(root)
+    moved: list[str] = []
+    skipped: list[str] = []
+    for item_id, record in items.items():
+        if not isinstance(record, dict):
+            skipped.append(str(item_id))
+            continue
+        group = groups.get(str(item_id))
+        if group is None:
+            skipped.append(str(item_id))
+            continue
+        try:
+            x = float(record["x"])
+            y = float(record["y"])
+        except (KeyError, TypeError, ValueError):
+            skipped.append(str(item_id))
+            continue
+        set_group_xy(group, x, y)
+        moved.append(str(item_id))
+
+    return {
+        "updated": bool(moved),
+        "moved": moved,
+        "skipped": skipped,
+    }
+
+
 def cell_pin_points(root: ET.Element) -> dict[str, dict[str, tuple[float, float]]]:
     result: dict[str, dict[str, tuple[float, float]]] = {}
     for name, group in find_cell_groups(root).items():
@@ -2708,7 +2756,11 @@ def add_stage_annotations(root: ET.Element, profile: str, payload: dict[str, obj
     return {"updated": True, "count": len(annotations)}
 
 
-def format_signal_chain_schematic(svg_path: Path, json_path: Path) -> dict[str, object]:
+def format_signal_chain_schematic(
+    svg_path: Path,
+    json_path: Path,
+    overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
     if not svg_path.exists() or not json_path.exists():
         return {"updated": False, "reason": "missing_inputs"}
     payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
@@ -2723,6 +2775,7 @@ def format_signal_chain_schematic(svg_path: Path, json_path: Path) -> dict[str, 
     blockwise = apply_blockwise_module_placements(root, payload)
     if not blockwise.get("updated") and not apply_profile_placements(root, payload, profile):
         return {"updated": False, "reason": "unsupported_profile", "profile": profile}
+    schematic_overrides = apply_schematic_overrides(root, overrides)
     nets = add_formatted_nets(root, payload)
     resize_svg_to_cells(root)
     annotations = add_stage_annotations(root, profile, payload if blockwise.get("updated") else None)
@@ -2732,6 +2785,7 @@ def format_signal_chain_schematic(svg_path: Path, json_path: Path) -> dict[str, 
         "updated": True,
         "profile": profile,
         "blockwise": blockwise,
+        "schematic_overrides": schematic_overrides,
         "nets": nets,
         "annotations": annotations,
         "background": background,
@@ -4519,6 +4573,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--skin-path", default="", help="Explicit netlistsvg skin path")
     parser.add_argument("--timeout-sec", type=int, default=30, help="Process timeout")
+    parser.add_argument(
+        "--overrides-path",
+        default="",
+        help="Optional schematic.overrides.json with locked cell positions",
+    )
     return parser
 
 
@@ -4656,11 +4715,19 @@ def main() -> int:
     json_path = Path(args.json_path).resolve()
     svg_path = Path(args.svg_path).resolve()
     result = {"ok": False, "svg_path": str(svg_path), "skin_path": "", "stderr": ""}
+    schematic_overrides: dict[str, object] | None = None
 
     if not json_path.exists():
         result["stderr"] = f"json not found: {json_path}"
         print(json.dumps(result, ensure_ascii=False))
         return 1
+    try:
+        schematic_overrides = load_schematic_overrides(str(args.overrides_path))
+    except Exception as exc:
+        result["stderr"] = str(exc)
+        print(json.dumps(result, ensure_ascii=False))
+        return 1
+
     try:
         payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
         result["planner"] = plan_payload(payload)
@@ -4725,7 +4792,7 @@ def main() -> int:
     if result["ok"]:
         result["io_terminal_layout"] = enforce_io_terminal_sides(svg_path)
         result["symbolic_cells"] = enhance_symbolic_cells(svg_path, json_path)
-        result["formatted_layout"] = format_signal_chain_schematic(svg_path, json_path)
+        result["formatted_layout"] = format_signal_chain_schematic(svg_path, json_path, schematic_overrides)
         result["net_cleanup"] = simplify_net_segments(svg_path)
         payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
         flat_geometry_check = check_geometry(svg_path, json_path)

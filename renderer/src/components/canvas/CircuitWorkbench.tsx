@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -325,6 +326,20 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
       return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function moveSchematicItem(moduleId: string, itemId: string, x: number, y: number): Promise<void> {
+    const saved = await applyOperations(`Move schematic item ${itemId}`, [{
+      op: 'move_schematic_item',
+      module_id: moduleId,
+      item_id: itemId,
+      x: Math.round(x * 10) / 10,
+      y: Math.round(y * 10) / 10,
+    }]);
+    if (saved) {
+      await buildModulePreview(moduleId, false);
+      setNotice(`Moved ${itemId}`);
     }
   }
 
@@ -792,6 +807,7 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
               svg={selectedPreview?.svg ?? ''}
               busy={busy}
               onBuild={() => buildModulePreview(selectedRef.id)}
+              onMoveItem={(itemId, x, y) => moveSchematicItem(selectedRef.id, itemId, x, y)}
             />
           ) : null}
         </div>
@@ -1185,12 +1201,153 @@ function ModuleSchematic({
   svg,
   busy,
   onBuild,
+  onMoveItem,
 }: {
   module: CircuitModuleRef;
   svg: string;
   busy: boolean;
   onBuild: () => void;
+  onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
 }) {
+  const [editLayout, setEditLayout] = useState(false);
+  const [draggedItem, setDraggedItem] = useState('');
+  const svgContainerRef = useRef<HTMLDivElement | null>(null);
+  const editLayoutRef = useRef(editLayout);
+  const busyRef = useRef(busy);
+  const onMoveItemRef = useRef(onMoveItem);
+  const nativeDragHandlersRef = useRef<{
+    node: HTMLDivElement;
+    pointerDown: (event: PointerEvent) => void;
+    mouseDown: (event: MouseEvent) => void;
+  } | null>(null);
+  const dragRef = useRef<{
+    itemId: string;
+    group: SVGGElement;
+    startClient: { x: number; y: number };
+    origin: { x: number; y: number };
+    scale: { x: number; y: number };
+  } | null>(null);
+
+  editLayoutRef.current = editLayout;
+  busyRef.current = busy;
+  onMoveItemRef.current = onMoveItem;
+
+  function svgClientDeltaScale(svgElement: SVGSVGElement): { x: number; y: number } {
+    const matrix = svgElement.getScreenCTM();
+    if (!matrix) return { x: 1, y: 1 };
+    const scaleX = Math.hypot(matrix.a, matrix.b);
+    const scaleY = Math.hypot(matrix.c, matrix.d);
+    return {
+      x: scaleX > 0 ? 1 / scaleX : 1,
+      y: scaleY > 0 ? 1 / scaleY : 1,
+    };
+  }
+
+  function parseSvgTranslate(transform: string | null): { x: number; y: number } | null {
+    const match = /translate\(\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*\)/.exec(transform ?? '');
+    if (!match) return null;
+    return { x: Number.parseFloat(match[1] ?? '0'), y: Number.parseFloat(match[2] ?? '0') };
+  }
+
+  function findSchematicCellGroup(
+    target: Element | null,
+    container: HTMLDivElement,
+    clientX: number,
+    clientY: number,
+  ): SVGGElement | null {
+    const directGroup = target?.closest('g[id^="cell_"]') as SVGGElement | null;
+    if (directGroup) return directGroup;
+
+    const groups = Array.from(container.querySelectorAll('svg g[id^="cell_"]')) as SVGGElement[];
+    let best: { group: SVGGElement; distance: number } | null = null;
+    const padding = 8;
+    for (const group of groups) {
+      const rect = group.getBoundingClientRect();
+      if (
+        clientX < rect.left - padding ||
+        clientX > rect.right + padding ||
+        clientY < rect.top - padding ||
+        clientY > rect.bottom + padding
+      ) {
+        continue;
+      }
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const distance = (clientX - centerX) ** 2 + (clientY - centerY) ** 2;
+      if (!best || distance < best.distance) best = { group, distance };
+    }
+    return best?.group ?? null;
+  }
+
+  function beginSchematicItemDrag(event: PointerEvent | MouseEvent, container: HTMLDivElement) {
+    if (!editLayoutRef.current || busyRef.current || event.button !== 0) return;
+    if (dragRef.current) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const group = findSchematicCellGroup(target, container, event.clientX, event.clientY);
+    const svgElement = group?.ownerSVGElement;
+    if (!group || !svgElement) return;
+    const cellId = group.id.replace(/^cell_/, '');
+    const origin = parseSvgTranslate(group.getAttribute('transform'));
+    if (!cellId || !origin) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const scale = svgClientDeltaScale(svgElement);
+    dragRef.current = {
+      itemId: cellId,
+      group,
+      startClient: { x: event.clientX, y: event.clientY },
+      origin,
+      scale,
+    };
+    setDraggedItem(cellId);
+
+    const isPointerDrag = 'pointerId' in event;
+    const moveEventName = isPointerDrag ? 'pointermove' : 'mousemove';
+    const upEventName = isPointerDrag ? 'pointerup' : 'mouseup';
+    const move = (moveEvent: PointerEvent | MouseEvent) => {
+      const current = dragRef.current;
+      if (!current) return;
+      const nextX = current.origin.x + (moveEvent.clientX - current.startClient.x) * current.scale.x;
+      const nextY = current.origin.y + (moveEvent.clientY - current.startClient.y) * current.scale.y;
+      current.group.setAttribute('transform', `translate(${nextX.toFixed(3)},${nextY.toFixed(3)})`);
+    };
+    const up = (upEvent: PointerEvent | MouseEvent) => {
+      window.removeEventListener(moveEventName, move as EventListener);
+      window.removeEventListener(upEventName, up as EventListener);
+      const current = dragRef.current;
+      dragRef.current = null;
+      if (!current) {
+        setDraggedItem('');
+        return;
+      }
+      const nextX = current.origin.x + (upEvent.clientX - current.startClient.x) * current.scale.x;
+      const nextY = current.origin.y + (upEvent.clientY - current.startClient.y) * current.scale.y;
+      current.group.setAttribute('transform', `translate(${nextX.toFixed(3)},${nextY.toFixed(3)})`);
+      setDraggedItem('');
+      void onMoveItemRef.current(current.itemId, nextX, nextY);
+    };
+    window.addEventListener(moveEventName, move as EventListener);
+    window.addEventListener(upEventName, up as EventListener, { once: true });
+  }
+
+  const setSvgContainer = useCallback((node: HTMLDivElement | null) => {
+    const existing = nativeDragHandlersRef.current;
+    if (existing) {
+      existing.node.removeEventListener('pointerdown', existing.pointerDown, true);
+      existing.node.removeEventListener('mousedown', existing.mouseDown, true);
+      nativeDragHandlersRef.current = null;
+    }
+    svgContainerRef.current = node;
+    if (!node) return;
+
+    const pointerDown = (event: PointerEvent) => beginSchematicItemDrag(event, node);
+    const mouseDown = (event: MouseEvent) => beginSchematicItemDrag(event, node);
+    node.addEventListener('pointerdown', pointerDown, true);
+    node.addEventListener('mousedown', mouseDown, true);
+    nativeDragHandlersRef.current = { node, pointerDown, mouseDown };
+  }, []);
+
   return (
     <div style={styles.moduleViewer} data-testid="module-canvas">
       <div style={styles.moduleViewerHeader}>
@@ -1199,16 +1356,33 @@ function ModuleSchematic({
           <h2 style={styles.moduleViewerTitle}>{module.name}</h2>
           <span style={styles.moduleViewerId}>Module ID: {module.id}</span>
         </div>
-        <button style={styles.secondaryButton} onClick={onBuild} disabled={busy} data-testid="rebuild-module-svg">
-          Rebuild SVG
-        </button>
+        <div style={styles.moduleViewerActions}>
+          <button
+            style={editLayout ? styles.primaryButton : styles.secondaryButton}
+            onClick={() => setEditLayout((value) => !value)}
+            disabled={busy || !svg}
+            aria-pressed={editLayout}
+            data-testid="toggle-schematic-layout-edit"
+          >
+            {editLayout ? 'Done' : 'Edit layout'}
+          </button>
+          <button style={styles.secondaryButton} onClick={onBuild} disabled={busy} data-testid="rebuild-module-svg">
+            Rebuild SVG
+          </button>
+        </div>
       </div>
       <div style={styles.fullSvgStage}>
         {svg ? (
           <div
-            style={styles.fullSvg}
+            style={{
+              ...styles.fullSvg,
+              ...(editLayout ? styles.fullSvgEditing : {}),
+            }}
+            ref={setSvgContainer}
             dangerouslySetInnerHTML={{ __html: prepareSvg(svg) }}
             data-testid="module-netlistsvg"
+            data-layout-editing={editLayout ? 'true' : 'false'}
+            data-dragged-item={draggedItem}
           />
         ) : (
           <div style={styles.fullSvgEmpty}>
@@ -1542,10 +1716,12 @@ const styles: Record<string, CSSProperties> = {
   metricRow: { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '5px 0', fontSize: 9, borderBottom: '1px solid #eceff2' },
   moduleViewer: { minWidth: 720, minHeight: '100%', display: 'flex', flexDirection: 'column', padding: 16 },
   moduleViewerHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  moduleViewerActions: { display: 'flex', alignItems: 'center', gap: 8 },
   moduleViewerTitle: { margin: '2px 0', fontSize: 18 },
   moduleViewerId: { color: '#7b8490', fontFamily: 'Consolas, monospace', fontSize: 10 },
   fullSvgStage: { flex: 1, minHeight: 520, display: 'flex', background: '#fff', border: '1px solid #d9dde3', boxShadow: '0 2px 8px rgba(27, 38, 51, 0.08)', overflow: 'auto' },
   fullSvg: { flex: 1, minWidth: 680, minHeight: 500, padding: 18 },
+  fullSvgEditing: { outline: '2px solid rgba(37, 99, 235, 0.32)', outlineOffset: -2, cursor: 'move', touchAction: 'none' },
   fullSvgEmpty: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 10, color: '#7b8490', fontSize: 12 },
   contextMenu: {
     position: 'fixed',

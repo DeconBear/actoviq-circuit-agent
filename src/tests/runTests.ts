@@ -770,8 +770,43 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
     const moduleSvg = await readFile(String(moduleCompiled.schematic_path), 'utf8');
     assert.match(moduleSvg, /<svg\b/);
     assert.doesNotMatch(moduleSvg, /Rload_/);
+    const schematicMove = runTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify({
+        schema: 'actoviq.command.v1',
+        command_id: 'test-schematic-move',
+        actor: 'unit-test',
+        project_id: created.project.project_id,
+        base_revision: 2,
+        message: 'Move rendered capacitor symbol',
+        operations: [{
+          op: 'move_schematic_item',
+          module_id: 'filter',
+          item_id: 'Cfilter_Cfilter',
+          x: 260,
+          y: 180,
+        }],
+      }),
+    ]);
+    assert.equal(schematicMove.revision, 3);
+    assert.deepEqual(schematicMove.changed_modules, ['filter']);
+    const overrides = JSON.parse(
+      await readFile(path.resolve(projectRoot, 'modules', 'filter', 'schematic.overrides.json'), 'utf8'),
+    );
+    assert.equal(overrides.schema, 'actoviq.schematic-overrides.v1');
+    assert.deepEqual(overrides.items.Cfilter_Cfilter, { x: 260, y: 180, locked: true });
+    const movedModuleCompiled = runTool([
+      'compile-module',
+      '--project-root', projectRoot,
+      '--module-id', 'filter',
+    ]);
+    assert.equal(movedModuleCompiled.render.ok, true);
+    const movedModuleSvg = await readFile(String(movedModuleCompiled.schematic_path), 'utf8');
+    assert.match(movedModuleSvg, /id="cell_Cfilter_Cfilter"/);
+    assert.match(movedModuleSvg, /transform="translate\(260,180\)" id="cell_Cfilter_Cfilter"/);
     const notebookPath = path.resolve(projectRoot, 'modules', 'filter', 'netlist-notebook.md');
-    const notebookNetlist = await readFile(String(moduleCompiled.netlist_path), 'utf8');
+    const notebookNetlist = await readFile(String(movedModuleCompiled.netlist_path), 'utf8');
     await writeFile(
       notebookPath,
       [

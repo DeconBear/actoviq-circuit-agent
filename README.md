@@ -35,7 +35,7 @@ This compiles the Electron main process, starts Vite, and opens the window.
 
 **Tabs**
 
-- **Design** — each circuit module is an asset card showing its netlistsvg preview (or a function/parameter summary), its `IN` / `OUT` / `GND` system-network names, a copyable module ID, and an Agent note field. `Ctrl`+scroll zooms, the middle mouse button pans, right-click adds or edits a module, and the corner handle resizes a card. Double-click a card to open its full netlistsvg schematic.
+- **Design** — each circuit module is an asset card showing its netlistsvg preview (or a function/parameter summary), its `IN` / `OUT` / `GND` system-network names, a copyable module ID, and an Agent note field. `Ctrl`+scroll zooms, the middle mouse button pans, right-click adds or edits a module, and the corner handle resizes a card. Double-click a card to open its full netlistsvg schematic. In the full schematic view, enable *Edit layout* to drag symbols/terminals; the GUI stores those layout-only edits in `modules/<id>/schematic.overrides.json` and re-renders the wires without changing the SPICE netlist.
 - **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Saving re-renders the module SVG.
 - **SVG** — the selected module's netlistsvg schematic (the same module shown in Design and Netlist).
 - **Sim** — system AC metrics from ngspice (status badge, table, chart) after *Simulate system*.
@@ -230,6 +230,10 @@ The workflow generates schematics via the netlistsvg backend:
   drawing readable. When one of those hidden sources drives a visible
   non-rail control or bias node, the renderer exposes a named terminal such as
   `GATE`, `VREF`, `ITAIL`, or `VB` and routes it as a real net connection.
+- Module schematic layout edits from the GUI are saved separately in
+  `modules/<id>/schematic.overrides.json`. They move rendered cells before the
+  router runs, so wires reconnect to the moved anchors while the module netlist
+  remains the electrical source of truth.
 - Rendering writes geometry/readability reports next to the SVG. These reports
   check missing pin connections, wire crossings, component overlaps, wire-body
   intrusions, and tight spacing.

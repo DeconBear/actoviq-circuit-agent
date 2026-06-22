@@ -20,6 +20,7 @@ from typing import Any
 PROJECT_SCHEMA = "actoviq.project.v1"
 MODULE_SCHEMA = "actoviq.module.v1"
 COMMAND_SCHEMA = "actoviq.command.v1"
+SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
 ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I"}
 
 # SPICE control/analysis/measurement directives that a notebook module may
@@ -69,6 +70,10 @@ def project_path(root: Path) -> Path:
 
 def module_path(root: Path, module_id: str) -> Path:
     return root / "modules" / module_id / "module.circuit.json"
+
+
+def schematic_overrides_path(root: Path, module_id: str) -> Path:
+    return root / "modules" / module_id / "schematic.overrides.json"
 
 
 def ensure_inside(root: Path, candidate: Path) -> None:
@@ -138,6 +143,44 @@ def validate_module(module: dict[str, Any]) -> None:
     port_ids = [port.get("id") for port in module.get("ports", [])]
     if len(port_ids) != len(set(port_ids)) or any(not value for value in port_ids):
         raise ValueError("module port ids must be present and unique")
+
+
+def default_schematic_overrides(project: dict[str, Any], module_id: str) -> dict[str, Any]:
+    return {
+        "schema": SCHEMATIC_OVERRIDES_SCHEMA,
+        "project_id": project["project_id"],
+        "module_id": module_id,
+        "updated_at": utc_now(),
+        "items": {},
+    }
+
+
+def read_schematic_overrides(root: Path, project: dict[str, Any], module_id: str) -> dict[str, Any]:
+    path = schematic_overrides_path(root, module_id)
+    if not path.exists():
+        return default_schematic_overrides(project, module_id)
+    overrides = read_json(path)
+    if overrides.get("schema") != SCHEMATIC_OVERRIDES_SCHEMA:
+        raise ValueError(f"schematic overrides schema must be {SCHEMATIC_OVERRIDES_SCHEMA}")
+    if overrides.get("module_id") != module_id:
+        raise ValueError(f"schematic overrides module mismatch: {module_id}")
+    if not isinstance(overrides.get("items"), dict):
+        raise ValueError("schematic overrides items must be an object")
+    return overrides
+
+
+def normalize_schematic_item_id(value: Any) -> str:
+    item_id = str(value or "").strip()
+    if not re.match(r"^[A-Za-z0-9_.$:-]+$", item_id):
+        raise ValueError(f"invalid schematic item id: {item_id}")
+    return item_id
+
+
+def schematic_position(value: Any, name: str) -> float:
+    number = float(value)
+    if number < -10000 or number > 10000:
+        raise ValueError(f"{name} is outside the editable schematic range")
+    return round(number, 3)
 
 
 def load_project(root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
@@ -390,6 +433,12 @@ def snapshot_revision(root: Path, project: dict[str, Any], modules: dict[str, di
     atomic_write_json(snapshot_root / "project.circuit.json", project)
     for module_id, module in modules.items():
         atomic_write_json(snapshot_root / "modules" / module_id / "module.circuit.json", module)
+        overrides_path = schematic_overrides_path(root, module_id)
+        if overrides_path.exists():
+            atomic_write_json(
+                snapshot_root / "modules" / module_id / "schematic.overrides.json",
+                read_json(overrides_path),
+            )
     atomic_write_json(revision_root / "command.json", command)
     atomic_write_json(revision_root / "metadata.json", {
         "schema": "actoviq.revision.v1",
@@ -455,10 +504,12 @@ def find_component(module: dict[str, Any], component_id: str) -> dict[str, Any]:
 
 
 def apply_operation(
+    root: Path,
     project: dict[str, Any],
     modules: dict[str, dict[str, Any]],
     operation: dict[str, Any],
     changed_modules: set[str],
+    schematic_override_writes: dict[str, dict[str, Any]],
 ) -> None:
     op = operation.get("op")
     if op == "upsert_module":
@@ -578,6 +629,52 @@ def apply_operation(
         module_id = operation["module_id"]
         component = find_component(modules[module_id], operation["component_id"])
         component["position"] = {"x": float(operation["x"]), "y": float(operation["y"])}
+        changed_modules.add(module_id)
+        return
+    if op == "move_schematic_item":
+        module_id = str(operation["module_id"])
+        find_module_ref(project, module_id)
+        if module_id not in modules:
+            raise ValueError(f"unknown module: {module_id}")
+        item_id = normalize_schematic_item_id(operation.get("item_id"))
+        overrides = schematic_override_writes.get(module_id)
+        if overrides is None:
+            overrides = read_schematic_overrides(root, project, module_id)
+        items = dict(overrides.get("items") or {})
+        items[item_id] = {
+            "x": schematic_position(operation.get("x"), "x"),
+            "y": schematic_position(operation.get("y"), "y"),
+            "locked": bool(operation.get("locked", True)),
+        }
+        overrides.update({
+            "schema": SCHEMATIC_OVERRIDES_SCHEMA,
+            "project_id": project["project_id"],
+            "module_id": module_id,
+            "updated_at": utc_now(),
+            "items": items,
+        })
+        schematic_override_writes[module_id] = overrides
+        changed_modules.add(module_id)
+        return
+    if op == "reset_schematic_item":
+        module_id = str(operation["module_id"])
+        find_module_ref(project, module_id)
+        if module_id not in modules:
+            raise ValueError(f"unknown module: {module_id}")
+        item_id = normalize_schematic_item_id(operation.get("item_id"))
+        overrides = schematic_override_writes.get(module_id)
+        if overrides is None:
+            overrides = read_schematic_overrides(root, project, module_id)
+        items = dict(overrides.get("items") or {})
+        items.pop(item_id, None)
+        overrides.update({
+            "schema": SCHEMATIC_OVERRIDES_SCHEMA,
+            "project_id": project["project_id"],
+            "module_id": module_id,
+            "updated_at": utc_now(),
+            "items": items,
+        })
+        schematic_override_writes[module_id] = overrides
         changed_modules.add(module_id)
         return
     if op == "connect_ports":
@@ -724,8 +821,9 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
 
     snapshot_revision(root, project, modules, command)
     changed_modules: set[str] = set()
+    schematic_override_writes: dict[str, dict[str, Any]] = {}
     for operation in operations:
-        apply_operation(project, modules, operation, changed_modules)
+        apply_operation(root, project, modules, operation, changed_modules, schematic_override_writes)
 
     project["revision"] += 1
     project["updated_at"] = utc_now()
@@ -735,6 +833,8 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
     validate_project(project)
     for module_id in changed_modules:
         atomic_write_json(module_path(root, module_id), modules[module_id])
+    for module_id, overrides in schematic_override_writes.items():
+        atomic_write_json(schematic_overrides_path(root, module_id), overrides)
     atomic_write_json(project_path(root), project)
     command_id = command.get("command_id") or f"command-{project['revision']:06d}"
     applied_path = root / "commands" / "applied" / f"{command_id}.json"
@@ -1157,15 +1257,20 @@ def render_module_schematic(
             "stage": "netlist_to_json",
             "error": converted.get("error") or converted.get("stderr"),
         }
+    project_root = build_root.parents[2]
+    overrides_path = schematic_overrides_path(project_root, module["module_id"])
+    render_args = [
+        "--json-path", str(json_path),
+        "--svg-path", str(svg_path),
+        "--netlistsvg-bin", resolve_netlistsvg_bin(),
+        "--skin-profile", "analog",
+        "--timeout-sec", "45",
+    ]
+    if overrides_path.exists():
+        render_args.extend(["--overrides-path", str(overrides_path)])
     rendered = run_json_script(
         scripts_root / "render_netlistsvg.py",
-        [
-            "--json-path", str(json_path),
-            "--svg-path", str(svg_path),
-            "--netlistsvg-bin", resolve_netlistsvg_bin(),
-            "--skin-profile", "analog",
-            "--timeout-sec", "45",
-        ],
+        render_args,
         timeout_sec=60,
     )
     return {
