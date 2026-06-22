@@ -16,6 +16,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from check_svg_geometry import check_geometry
+from schematic_planner import plan_payload
 
 SVG_NS = "http://www.w3.org/2000/svg"
 NETLISTSVG_NS = "https://github.com/nturley/netlistsvg"
@@ -874,27 +875,47 @@ def placement_for_ldo_component(component: dict[str, object], input_node: str, o
     name = str(component.get("name") or "").lower()
     ctype = component_type(component)
     nodes = component_nodes(component)
+    lower_nodes = [node.lower() for node in nodes]
+    node_set = set(lower_nodes)
     has_ground = any(rail_symbol_for_format(node) == "gnd" for node in nodes)
     has_power_like = has_any_node(component, input_node, "vin", "vdd", "vcc")
 
+    if ctype == "voltage_source" and has_any_node(component, input_node, "vin", "vdd", "vcc"):
+        return 60.0, 185.0
+    if ctype == "voltage_source" and has_any_node(component, "vref", "ref"):
+        return 120.0, 300.0
+    if ctype == "current_source" and has_ground:
+        return 320.0, 330.0
+    if ctype in {"bjt", "mosfet"} and len(lower_nodes) >= 3:
+        drain, gate, source = lower_nodes[:3]
+        if drain == output_node.lower() and (source == input_node.lower() or rail_symbol_for_format(source) == "vcc" or source.startswith("vin")):
+            return 500.0, 128.0
+        if gate in {"fb", "vn"} or "fb" in node_set:
+            return 260.0, 215.0
+        if gate in {"vref", "ref", "vp"} or "vref" in node_set:
+            return 380.0, 215.0
+        if drain == gate:
+            return 260.0, 110.0
+        if source == input_node.lower() or rail_symbol_for_format(source) == "vcc" or source.startswith("vin"):
+            return 380.0, 110.0
     if name.startswith(("qerr", "merr")) or (ctype in {"bjt", "mosfet"} and has_any_node(component, "vref", "fb")):
-        return 330.0, 170.0
+        return 320.0, 215.0
     if name.startswith(("mpass", "m_pass", "qpass", "q_pass")) or (ctype == "mosfet" and has_any_node(component, "gate", "vin", "out")):
-        return 210.0, 170.0
+        return 500.0, 128.0
     if name.startswith(("rpu", "rgate")) or (has_any_node(component, "gate") and has_power_like):
         return 80.0, 105.0
     if name.startswith(("rfb1", "rtop")) or (has_any_node(component, output_node, "out") and has_any_node(component, "fb")):
-        return 360.0, 220.0
+        return 620.0, 220.0
     if name.startswith(("rfb2", "rbot")) or (has_any_node(component, "fb") and has_ground):
-        return 360.0, 288.0
+        return 620.0, 304.0
     if name.startswith(("cout", "ccomp")) or (has_node(component, output_node) and has_ground and ctype == "capacitor"):
-        return 480.0, 288.0
+        return 730.0, 304.0
     if name.startswith(("rload", "rl")) or (has_node(component, output_node) and has_ground and ctype == "resistor"):
-        return 550.0, 288.0
+        return 800.0, 304.0
     if has_node(component, input_node):
         return 60.0, 185.0
     if has_node(component, output_node):
-        return 620.0, 185.0
+        return 720.0, 210.0
     return None
 
 
@@ -1736,26 +1757,22 @@ def add_ldo_custom_net(
     net_class: str,
     raw_points: list[tuple[float, float]],
     junction_counts: dict[tuple[float, float, str], int],
+    *,
+    input_node: str = "",
+    output_node: str = "",
+    gate_nodes: set[str] | None = None,
 ) -> int | None:
     lower = node.lower()
+    gate_nodes = {item.lower() for item in (gate_nodes or set())}
     line_count = 0
 
-    if lower == "gate":
-        bus_y = 90.0
-        left_escape_x = 18.0
+    if lower == input_node.lower():
+        bus_y = min(point[1] for point in raw_points) - 35.0
         bus_points: list[tuple[float, float]] = []
         for point in raw_points:
-            if 190.0 <= point[0] <= 230.0 and point[1] > 180.0:
-                lower_lane = (point[0], point[1] + 15.0)
-                elbow = (left_escape_x, lower_lane[1])
-                bus_point = (left_escape_x, bus_y)
-                line_count += append_counted_net_line(root, net_class, point, lower_lane)
-                line_count += append_counted_net_line(root, net_class, lower_lane, elbow)
-                line_count += append_counted_net_line(root, net_class, elbow, bus_point)
-            else:
-                bus_point = (point[0], bus_y)
-                if not nearly_equal(point[1], bus_y):
-                    line_count += append_counted_net_line(root, net_class, point, bus_point)
+            bus_point = (point[0], bus_y)
+            if not nearly_equal(point[1], bus_y):
+                line_count += append_counted_net_line(root, net_class, point, bus_point)
             junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
             bus_points.append(bus_point)
         xs = sorted(set(point[0] for point in bus_points))
@@ -1763,8 +1780,24 @@ def add_ldo_custom_net(
             line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
         return line_count
 
-    if lower == "out":
-        bus_y = 220.0
+    if lower == "gate" or lower in gate_nodes:
+        min_x = min(point[0] for point in raw_points)
+        max_x = max(point[0] for point in raw_points)
+        bus_x = max(min_x + 45.0, max_x - 45.0)
+        bus_points: list[tuple[float, float]] = []
+        for point in raw_points:
+            bus_point = (bus_x, point[1])
+            if not nearly_equal(point[0], bus_x):
+                line_count += append_counted_net_line(root, net_class, point, bus_point)
+            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            bus_points.append(bus_point)
+        ys = sorted(set(point[1] for point in bus_points))
+        for start_y, end_y in zip(ys, ys[1:]):
+            line_count += append_counted_net_line(root, net_class, (bus_x, start_y), (bus_x, end_y))
+        return line_count
+
+    if lower == "out" or lower == output_node.lower():
+        bus_y = max(180.0, min(point[1] for point in raw_points) + 7.0)
         bus_points: list[tuple[float, float]] = []
         for point in raw_points:
             bus_point = (point[0], bus_y)
@@ -1778,28 +1811,41 @@ def add_ldo_custom_net(
         return line_count
 
     if lower == "fb":
-        local_x = 340.0
-        detour_x = 740.0
-        lower_y = 430.0
-        high_ys: set[float] = set()
+        left_x = min(point[0] for point in raw_points) - 25.0
+        right_x = max(point[0] for point in raw_points) - 35.0
+        lower_y = max(point[1] for point in raw_points) + 130.0
         for point in raw_points:
-            if point[1] < 240.0:
-                detour_point = (detour_x, point[1])
-                line_count += append_counted_net_line(root, net_class, point, detour_point)
-                junction_counts[(detour_point[0], detour_point[1], net_class)] += 1
-                high_ys.add(point[1])
+            if point[0] < (left_x + right_x) / 2:
+                side_point = (left_x, point[1])
             else:
-                side_point = (local_x, point[1])
-                lower_side = (local_x, lower_y)
-                lower_detour = (detour_x, lower_y)
-                line_count += append_counted_net_line(root, net_class, point, side_point)
-                line_count += append_counted_net_line(root, net_class, side_point, lower_side)
-                line_count += append_counted_net_line(root, net_class, lower_side, lower_detour)
-                junction_counts[(side_point[0], side_point[1], net_class)] += 1
-                junction_counts[(lower_detour[0], lower_detour[1], net_class)] += 1
-        ys = sorted(set([lower_y, *high_ys]))
-        for start_y, end_y in zip(ys, ys[1:]):
-            line_count += append_counted_net_line(root, net_class, (detour_x, start_y), (detour_x, end_y))
+                side_point = (right_x, point[1])
+            lower_point = (side_point[0], lower_y)
+            line_count += append_counted_net_line(root, net_class, point, side_point)
+            line_count += append_counted_net_line(root, net_class, side_point, lower_point)
+            junction_counts[(side_point[0], side_point[1], net_class)] += 1
+        line_count += append_counted_net_line(root, net_class, (left_x, lower_y), (right_x, lower_y))
+        return line_count
+
+    if lower in {"vref", "ref"}:
+        mid_x = (min(point[0] for point in raw_points) + max(point[0] for point in raw_points)) / 2
+        for point in raw_points:
+            end = (point[0] + 28.0, point[1]) if point[0] < mid_x else (point[0] - 28.0, point[1])
+            line_count += append_counted_net_line(root, net_class, point, end)
+            append_net_label(root, net_class, "VREF", end[0] - 8.0, end[1] - 5.0)
+        return line_count
+
+    if lower == "tail":
+        bus_y = min(max(point[1] for point in raw_points) + 20.0, 285.0)
+        bus_points: list[tuple[float, float]] = []
+        for point in raw_points:
+            bus_point = (point[0], bus_y)
+            if not nearly_equal(point[1], bus_y):
+                line_count += append_counted_net_line(root, net_class, point, bus_point)
+            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            bus_points.append(bus_point)
+        xs = sorted(set(point[0] for point in bus_points))
+        for start_x, end_x in zip(xs, xs[1:]):
+            line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
         return line_count
 
     return None
@@ -1879,6 +1925,13 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
     io = payload.get("io_inference", {}) if isinstance(payload.get("io_inference"), dict) else {}
     input_node = str(interfaces.get("input_node") or io.get("input_node") or "")
     output_node = str(interfaces.get("output_node") or io.get("output_node") or "")
+    intent = payload.get("schematic_intent", {}) if isinstance(payload.get("schematic_intent"), dict) else {}
+    aliases = intent.get("net_aliases", {}) if isinstance(intent.get("net_aliases"), dict) else {}
+    ldo_gate_nodes = {
+        str(node)
+        for node in aliases.get("ldo_gate", [])
+        if isinstance(node, (str, int, float))
+    }
     profile = schematic_profile(payload)
 
     remove_existing_net_artifacts(root)
@@ -1901,7 +1954,16 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
             line_count += blockwise_line_count
             continue
         if profile == "ldo_regulator":
-            custom_line_count = add_ldo_custom_net(root, node, net_class, raw_points, junction_counts)
+            custom_line_count = add_ldo_custom_net(
+                root,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                input_node=input_node,
+                output_node=output_node,
+                gate_nodes=ldo_gate_nodes,
+            )
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
@@ -4047,6 +4109,13 @@ def main() -> int:
         result["stderr"] = f"json not found: {json_path}"
         print(json.dumps(result, ensure_ascii=False))
         return 1
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
+        result["planner"] = plan_payload(payload)
+        json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:
+        result["planner"] = {"updated": False, "error": str(exc)}
+
     resolved_bin = shutil.which(args.netlistsvg_bin)
     if resolved_bin is None and os.name == "nt":
         # npm on Windows usually exposes a .cmd shim.

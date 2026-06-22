@@ -399,6 +399,84 @@ test('netlistsvg renderer keeps the partitioned timeout fallback path wired', as
   assert.match(script, /check_geometry/);
 });
 
+test('netlistsvg analog planner renders LDO without hard geometry errors', async () => {
+  const root = path.resolve(process.cwd(), '.tmp-unit-tests', `netlistsvg-planner-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  const netlistPath = path.resolve(root, 'ldo.cir');
+  const jsonPath = path.resolve(root, 'ldo.design.json');
+  const svgPath = path.resolve(root, 'ldo.svg');
+  const netlistToJsonPath = path.resolve(
+    process.cwd(),
+    'embedded',
+    'circuit-design',
+    'scripts',
+    'netlist_to_json.py',
+  );
+  const renderPath = path.resolve(
+    process.cwd(),
+    'embedded',
+    'circuit-design',
+    'scripts',
+    'render_netlistsvg.py',
+  );
+  const netlistsvgBin = path.resolve(
+    process.cwd(),
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'netlistsvg.cmd' : 'netlistsvg',
+  );
+  try {
+    await writeFile(netlistPath, [
+      '* MOSFET LDO fixture',
+      '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+      '.model PMOS1 PMOS (LEVEL=1 VTO=-0.7 KP=40u)',
+      'Vin vin 0 DC 5',
+      'Vref vref 0 DC 1.2',
+      'Itail tail 0 DC 20u',
+      'M1 n1 fb tail 0 NMOS1 W=20u L=1u',
+      'M2 eaout vref tail 0 NMOS1 W=20u L=1u',
+      'M3 n1 n1 vin vin PMOS1 W=40u L=1u',
+      'M4 eaout n1 vin vin PMOS1 W=40u L=1u',
+      'MP vout eaout vin vin PMOS1 W=2000u L=0.5u',
+      'Rtop fb vout 210k',
+      'Rbot fb 0 120k',
+      'Rload vout 0 330',
+      'Cout vout 0 1u',
+      '.end',
+      '',
+    ].join('\n'), 'utf8');
+    const converted = spawnSync('python', [
+      netlistToJsonPath,
+      '--netlist-path', netlistPath,
+      '--json-path', jsonPath,
+      '--view', 'schematic',
+      '--input-node', 'vin',
+      '--output-node', 'vout',
+    ], { cwd: process.cwd(), encoding: 'utf8' });
+    assert.equal(converted.status, 0, converted.stderr || converted.stdout);
+    const rendered = spawnSync('python', [
+      renderPath,
+      '--json-path', jsonPath,
+      '--svg-path', svgPath,
+      '--netlistsvg-bin', netlistsvgBin,
+      '--skin-profile', 'analog',
+      '--timeout-sec', '45',
+    ], { cwd: process.cwd(), encoding: 'utf8' });
+    assert.equal(rendered.status, 0, rendered.stderr || rendered.stdout);
+    const payload = JSON.parse(rendered.stdout.trim()) as Record<string, any>;
+    assert.equal(payload.ok, true);
+    assert.equal(payload.planner.profile, 'ldo_regulator');
+    assert.equal(payload.geometry_check.ok, true);
+    assert.equal(payload.geometry_check.summary.missing_pin_connections, 0);
+    assert.equal(payload.geometry_check.summary.wire_crossings, 0);
+    assert.equal(payload.geometry_check.summary.component_overlaps, 0);
+    assert.equal(payload.geometry_check.summary.wire_body_intrusions, 0);
+    assert.ok(payload.layout_report.readability_score >= 85);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('grid renderer keeps BJT, diode, inductor, and supply rails visible', async () => {
   const root = path.resolve(process.cwd(), '.tmp-unit-tests', `grid-renderer-${Date.now()}`);
   await mkdir(root, { recursive: true });
