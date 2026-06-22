@@ -11,6 +11,11 @@ import { parseTuiCommand } from '../tui/commandParser.js';
 import { TuiStateStore } from '../tui/TuiState.js';
 import { classifyError } from '../utils/errors.js';
 import {
+  listSavedDesignFlows,
+  listSavedDesignTemplates,
+  resolveSavedTemplateNetlist,
+} from '../utils/designMemory.js';
+import {
   composeFinalNetlistFromModules,
   formatCompactScalar,
   parseMeasurementLines,
@@ -326,6 +331,55 @@ test('deterministic comparator fallback stays primitive-only', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('design memory helpers list and resolve saved templates and flows', async () => {
+  const root = path.resolve(process.cwd(), 'output', 'tests', 'design-memory');
+  const templateRoot = path.resolve(root, 'templates');
+  const flowRoot = path.resolve(root, 'flows');
+  await rm(root, { recursive: true, force: true });
+  const templateDir = path.resolve(templateRoot, 'rc-filter-template');
+  const flowDir = path.resolve(flowRoot, 'rc-filter-flow');
+  await mkdir(templateDir, { recursive: true });
+  await mkdir(flowDir, { recursive: true });
+  await writeFile(
+    path.resolve(templateDir, 'template.json'),
+    `${JSON.stringify({
+      schema: 'actoviq.design-template.v1',
+      id: 'rc-filter-template',
+      name: 'RC Filter Template',
+      source_project_id: 'rc-filter',
+      source_revision: 4,
+    }, null, 2)}\n`,
+    'utf8',
+  );
+  await writeFile(path.resolve(templateDir, 'template.cir'), 'R1 in out 1k\nC1 out 0 1u\n', 'utf8');
+  await writeFile(path.resolve(templateDir, 'agent-guide.md'), '# Agent Guide\n', 'utf8');
+  await writeFile(
+    path.resolve(flowDir, 'flow.json'),
+    `${JSON.stringify({
+      schema: 'actoviq.design-flow.v1',
+      id: 'rc-filter-flow',
+      name: 'RC Filter Flow',
+      source_project_id: 'rc-filter',
+      source_revision: 4,
+    }, null, 2)}\n`,
+    'utf8',
+  );
+  await writeFile(path.resolve(flowDir, 'design-flow.md'), '# Flow\n', 'utf8');
+
+  const templates = await listSavedDesignTemplates(templateRoot);
+  assert.equal(templates.length, 1);
+  assert.equal(templates[0]?.id, 'rc-filter-template');
+  assert.equal(templates[0]?.sourceRevision, 4);
+  const resolvedById = await resolveSavedTemplateNetlist('rc-filter-template', templateRoot);
+  assert.equal(resolvedById?.templateNetlistPath, path.resolve(templateDir, 'template.cir'));
+  const resolvedByRelativePath = await resolveSavedTemplateNetlist('rc-filter-template/template.cir', templateRoot);
+  assert.equal(resolvedByRelativePath?.id, 'rc-filter-template');
+  const flows = await listSavedDesignFlows(flowRoot);
+  assert.equal(flows.length, 1);
+  assert.equal(flows[0]?.flowPath, path.resolve(flowDir, 'design-flow.md'));
+  await rm(root, { recursive: true, force: true });
 });
 
 test('module composition builds a flat primitive final netlist and manifest', async () => {

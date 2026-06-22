@@ -1,6 +1,6 @@
 import { app, BrowserWindow, type IpcMain, shell } from 'electron';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
-import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { access, copyFile, cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
@@ -14,6 +14,18 @@ interface ProjectSummary {
   updatedAt: string;
   projectRoot: string;
   moduleCount: number;
+}
+
+interface SavedDesignMemorySummary {
+  ok: true;
+  id: string;
+  kind: 'template' | 'flow';
+  name: string;
+  rootPath: string;
+  relativePath: string;
+  guidePath?: string;
+  templatePath?: string;
+  flowPath?: string;
 }
 
 let activeWatcher: FSWatcher | null = null;
@@ -54,6 +66,310 @@ async function resolveProjectRoot(projectId: string): Promise<string> {
     throw new Error(`Circuit project not found: ${projectId}`);
   }
   return candidate;
+}
+
+function timestampForId(date = new Date()): string {
+  const yyyy = String(date.getFullYear());
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}-${hh}${mi}${ss}`;
+}
+
+function slugify(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'circuit-design';
+}
+
+function relativeReferencePath(referencesDir: string, targetPath: string): string {
+  return path.relative(referencesDir, targetPath).replace(/\\/g, '/');
+}
+
+async function copyFileIfExists(source: string, target: string): Promise<boolean> {
+  if (!(await exists(source))) return false;
+  await mkdir(path.dirname(target), { recursive: true });
+  await copyFile(source, target);
+  return true;
+}
+
+async function copyDirectoryIfExists(source: string, target: string): Promise<boolean> {
+  if (!(await exists(source))) return false;
+  await mkdir(path.dirname(target), { recursive: true });
+  await cp(source, target, { recursive: true });
+  return true;
+}
+
+async function readJsonFile<T>(targetPath: string): Promise<T> {
+  return JSON.parse(await readFile(targetPath, 'utf8')) as T;
+}
+
+async function designMemoryTargetRoot(
+  kind: 'templates' | 'flows',
+  project: { name: string; revision: number },
+): Promise<{ workspaceReferencesDir: string; targetRoot: string; memoryId: string }> {
+  const workspace = await getActiveWorkspace();
+  const memoryId = `${slugify(project.name)}-r${project.revision}-${timestampForId()}`;
+  const targetRoot = path.resolve(workspace.referencesDir, 'design-memory', kind, memoryId);
+  await mkdir(targetRoot, { recursive: false });
+  return { workspaceReferencesDir: workspace.referencesDir, targetRoot, memoryId };
+}
+
+function renderModuleSummary(project: {
+  modules?: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    function?: string;
+    parameters?: Record<string, string>;
+    ports?: Array<{ name: string; direction: string; signal_type: string; net: string; network?: string }>;
+  }>;
+}): string {
+  return (project.modules ?? []).map((module) => {
+    const ports = (module.ports ?? [])
+      .map((port) => `${port.direction} ${port.name}=${port.network ?? port.net} (${port.signal_type})`)
+      .join('; ');
+    const parameters = Object.entries(module.parameters ?? {})
+      .map(([key, value]) => `${key}: ${value}`)
+      .join('; ');
+    return [
+      `- ${module.id} (${module.kind}): ${module.name}`,
+      module.function ? `  Function: ${module.function}` : '',
+      parameters ? `  Parameters: ${parameters}` : '',
+      ports ? `  Ports: ${ports}` : '',
+    ].filter(Boolean).join('\n');
+  }).join('\n');
+}
+
+function buildTemplateGuide(input: {
+  memoryId: string;
+  project: {
+    project_id: string;
+    name: string;
+    revision: number;
+    modules?: unknown[];
+    connections?: unknown[];
+  };
+  hasSystemNetlist: boolean;
+  hasReport: boolean;
+}): string {
+  return [
+    `# Saved Design Template: ${input.project.name}`,
+    '',
+    `Template id: ${input.memoryId}`,
+    `Source project: ${input.project.project_id}`,
+    `Source revision: ${input.project.revision}`,
+    '',
+    '## How To Reuse',
+    '',
+    '- Prefer this template when the requested circuit matches the topology, module partitioning, or sizing strategy below.',
+    '- Start from `template.cir` when present; otherwise inspect `project.circuit.json` and `modules/`.',
+    '- Preserve the module boundary and port naming pattern unless the new requirement clearly needs a different architecture.',
+    '- Treat `modules/<id>/schematic.overrides.json` as layout memory only; do not infer electrical connectivity from it.',
+    '',
+    '## Files',
+    '',
+    '- `template.json`: structured metadata for agents.',
+    '- `template.cir`: reusable flat SPICE starter netlist when the source project had a compiled system netlist.',
+    '- `project.circuit.json`: saved module canvas and system connectivity.',
+    '- `modules/`: module JSON, notebooks, and schematic layout overrides.',
+    input.hasReport ? '- `source-report.md`: generated report from the source project.' : '',
+    '',
+    '## Module Summary',
+    '',
+    renderModuleSummary(input.project as Parameters<typeof renderModuleSummary>[0]) || '- No modules recorded.',
+    '',
+    '## Reuse Notes',
+    '',
+    `- Module count: ${input.project.modules?.length ?? 0}`,
+    `- Connection count: ${input.project.connections?.length ?? 0}`,
+    `- System netlist saved: ${input.hasSystemNetlist ? 'yes' : 'no'}`,
+    `- Source report saved: ${input.hasReport ? 'yes' : 'no'}`,
+    '',
+  ].filter((line) => line !== '').join('\n');
+}
+
+async function readAppliedCommands(projectRoot: string): Promise<Array<{
+  file: string;
+  command_id?: string;
+  message?: string;
+  operations?: Array<{ op?: string; module_id?: string }>;
+}>> {
+  const commandsRoot = path.resolve(projectRoot, 'commands', 'applied');
+  if (!(await exists(commandsRoot))) return [];
+  const entries = (await readdir(commandsRoot)).filter((entry) => entry.endsWith('.json')).sort();
+  const commands = [];
+  for (const entry of entries) {
+    try {
+      const command = await readJsonFile<{
+        command_id?: string;
+        message?: string;
+        operations?: Array<{ op?: string; module_id?: string }>;
+      }>(path.resolve(commandsRoot, entry));
+      commands.push({ file: entry, ...command });
+    } catch {
+      // Ignore partially written command records.
+    }
+  }
+  return commands;
+}
+
+function buildFlowMarkdown(input: {
+  memoryId: string;
+  project: {
+    project_id: string;
+    name: string;
+    revision: number;
+    modules?: unknown[];
+    connections?: unknown[];
+  };
+  commands: Awaited<ReturnType<typeof readAppliedCommands>>;
+}): string {
+  const commandLines = input.commands.length > 0
+    ? input.commands.map((command, index) => {
+        const ops = (command.operations ?? [])
+          .map((operation) => operation.module_id ? `${operation.op}:${operation.module_id}` : operation.op)
+          .filter(Boolean)
+          .join(', ');
+        return [
+          `${index + 1}. ${command.command_id ?? command.file}`,
+          command.message ? `   Intent: ${command.message}` : '',
+          ops ? `   Operations: ${ops}` : '',
+        ].filter(Boolean).join('\n');
+      }).join('\n')
+    : '1. No applied GUI command log was recorded for this project.';
+  return [
+    `# Saved Design Flow: ${input.project.name}`,
+    '',
+    `Flow id: ${input.memoryId}`,
+    `Source project: ${input.project.project_id}`,
+    `Source revision: ${input.project.revision}`,
+    '',
+    '## When To Reuse',
+    '',
+    '- Use this flow as a process reference for similar circuit families, module partitioning, naming conventions, and verification order.',
+    '- Re-run validation and simulation for new requirements; this flow is guidance, not a proof of correctness for a new design.',
+    '',
+    '## Source Architecture',
+    '',
+    renderModuleSummary(input.project as Parameters<typeof renderModuleSummary>[0]) || '- No modules recorded.',
+    '',
+    '## Applied Command Flow',
+    '',
+    commandLines,
+    '',
+    '## Agent Checklist',
+    '',
+    '- Start from the closest saved template or bundled starter netlist.',
+    '- Preserve useful module and net naming from this flow when it improves readability.',
+    '- Compile modules after netlist changes, then inspect schematic geometry before accepting the design.',
+    '- Save any new reusable topology back into design memory after verification.',
+    '',
+  ].join('\n');
+}
+
+async function saveDesignTemplate(projectId: string): Promise<SavedDesignMemorySummary> {
+  const projectRoot = await resolveProjectRoot(projectId);
+  const project = await readJsonFile<{
+    project_id: string;
+    name: string;
+    revision: number;
+    modules?: unknown[];
+    connections?: unknown[];
+  }>(path.resolve(projectRoot, 'project.circuit.json'));
+  const { workspaceReferencesDir, targetRoot, memoryId } = await designMemoryTargetRoot('templates', project);
+
+  await copyFile(path.resolve(projectRoot, 'project.circuit.json'), path.resolve(targetRoot, 'project.circuit.json'));
+  await copyDirectoryIfExists(path.resolve(projectRoot, 'modules'), path.resolve(targetRoot, 'modules'));
+  await copyFileIfExists(path.resolve(projectRoot, 'build', 'build-manifest.json'), path.resolve(targetRoot, 'build-manifest.json'));
+  const hasSystemNetlist = await copyFileIfExists(
+    path.resolve(projectRoot, 'build', 'system', 'design.final.cir'),
+    path.resolve(targetRoot, 'template.cir'),
+  );
+  const hasReport = await copyFileIfExists(
+    path.resolve(projectRoot, 'build', 'system', 'report.md'),
+    path.resolve(targetRoot, 'source-report.md'),
+  );
+
+  const manifest = {
+    schema: 'actoviq.design-template.v1',
+    id: memoryId,
+    name: project.name,
+    source_project_id: project.project_id,
+    source_revision: project.revision,
+    created_at: new Date().toISOString(),
+    files: {
+      agent_guide: 'agent-guide.md',
+      template_netlist: hasSystemNetlist ? 'template.cir' : null,
+      project: 'project.circuit.json',
+      modules: 'modules/',
+      source_report: hasReport ? 'source-report.md' : null,
+    },
+  };
+  await writeFile(path.resolve(targetRoot, 'template.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeFile(
+    path.resolve(targetRoot, 'agent-guide.md'),
+    buildTemplateGuide({ memoryId, project, hasSystemNetlist, hasReport }),
+    'utf8',
+  );
+
+  return {
+    ok: true,
+    id: memoryId,
+    kind: 'template',
+    name: project.name,
+    rootPath: targetRoot,
+    relativePath: relativeReferencePath(workspaceReferencesDir, targetRoot),
+    guidePath: path.resolve(targetRoot, 'agent-guide.md'),
+    templatePath: hasSystemNetlist ? path.resolve(targetRoot, 'template.cir') : undefined,
+  };
+}
+
+async function saveDesignFlow(projectId: string): Promise<SavedDesignMemorySummary> {
+  const projectRoot = await resolveProjectRoot(projectId);
+  const project = await readJsonFile<{
+    project_id: string;
+    name: string;
+    revision: number;
+    modules?: unknown[];
+    connections?: unknown[];
+  }>(path.resolve(projectRoot, 'project.circuit.json'));
+  const commands = await readAppliedCommands(projectRoot);
+  const { workspaceReferencesDir, targetRoot, memoryId } = await designMemoryTargetRoot('flows', project);
+
+  await copyDirectoryIfExists(path.resolve(projectRoot, 'commands', 'applied'), path.resolve(targetRoot, 'commands', 'applied'));
+  await copyFileIfExists(path.resolve(projectRoot, 'build', 'build-manifest.json'), path.resolve(targetRoot, 'build-manifest.json'));
+  const flowPath = path.resolve(targetRoot, 'design-flow.md');
+  const manifest = {
+    schema: 'actoviq.design-flow.v1',
+    id: memoryId,
+    name: project.name,
+    source_project_id: project.project_id,
+    source_revision: project.revision,
+    created_at: new Date().toISOString(),
+    command_count: commands.length,
+    files: {
+      design_flow: 'design-flow.md',
+      applied_commands: 'commands/applied/',
+    },
+  };
+  await writeFile(path.resolve(targetRoot, 'flow.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeFile(flowPath, buildFlowMarkdown({ memoryId, project, commands }), 'utf8');
+
+  return {
+    ok: true,
+    id: memoryId,
+    kind: 'flow',
+    name: project.name,
+    rootPath: targetRoot,
+    relativePath: relativeReferencePath(workspaceReferencesDir, targetRoot),
+    flowPath,
+  };
 }
 
 function projectScriptPath(): string {
@@ -321,6 +637,14 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
         : null,
       report: await exists(reportPath) ? await readFile(reportPath, 'utf8') : '',
     };
+  });
+
+  ipcMain.handle('project:save-design-template', async (_event, projectId: string) => {
+    return saveDesignTemplate(projectId);
+  });
+
+  ipcMain.handle('project:save-design-flow', async (_event, projectId: string) => {
+    return saveDesignFlow(projectId);
   });
 
   ipcMain.handle('project:watch', async (_event, projectId: string) => {

@@ -843,6 +843,7 @@ export function App() {
             {store.activeTab === 'design' && (
               <CircuitWorkbench
                 onCreateProject={handleCreateCircuitProject}
+                onReferencesChanged={refreshReferences}
                 onReloadProject={async () => {
                   const projectId = useAppStore.getState().activeProjectId;
                   if (projectId) await loadCircuitProject(projectId, false);

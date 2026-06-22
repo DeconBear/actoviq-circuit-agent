@@ -101,12 +101,12 @@ function buildStages(paths: JobPaths, requirement: string): WorkflowStage[] {
       buildPrompt: (p) => [
         'Hard execution rules for this stage:',
         '- Call describe_project_assets and list_available_templates once each.',
-        '- Read only the brief, normalized spec, and the selected template if needed.',
+        '- Read only the brief, normalized spec, selected template, and directly relevant saved design-memory guide/flow if needed.',
         '- Write asset-reuse-plan.md as a concise markdown file: no tables, 80 lines maximum.',
         '- Use copy_template_netlist(template_name, output_path) to create template.cir; never paste the netlist with Write.',
         '- Stop after asset-reuse-plan.md and template.cir both exist.',
         '',
-        '目标: 复用当前项目内置 bundled assets 的能力，并准备一个最合适的起始 netlist 模板。',
+        '目标: 复用当前项目内置 bundled assets 和 workspace 保存的 design-memory，并准备一个最合适的起始 netlist 模板。',
         `输入 brief: ${p.requirementBriefPath}`,
         `输入 normalized spec: ${p.specNormalizedPath}`,
         `输出 asset reuse plan: ${p.assetReusePlanPath}`,
@@ -115,12 +115,12 @@ function buildStages(paths: JobPaths, requirement: string): WorkflowStage[] {
         '请使用 describe_project_assets 和 list_available_templates 检查可复用能力。',
         '然后:',
         '1. 写出 asset-reuse-plan.md',
-        '内容要求: 当前 bundled assets 提供了哪些模板、脚本和校验能力，为什么适合该需求，以及对应到哪个工作流阶段。',
+        '内容要求: 当前 bundled assets 与保存的 design-memory 提供了哪些模板、流程、脚本和校验能力，为什么适合该需求，以及对应到哪个工作流阶段。',
         '2. 选择最合适的模板并复制到 template.cir。',
         '',
         '规则:',
         '- 如果 raw spec 中已经给出了 recommended_template，优先验证它是否合理。',
-        '- 如果没有绝对匹配模板，也要选一个最接近的模板作为起点，并在文档中解释改造点。',
+        '- 优先考虑与需求匹配的 saved_design_templates 和 saved_flows；如果没有绝对匹配模板，也要选一个最接近的模板作为起点，并在文档中解释改造点。',
         '- 输出文档用中文。',
       ].join('\n'),
     },
@@ -318,7 +318,7 @@ function withStrictLibrarianPrompt(stages: WorkflowStage[]): WorkflowStage[] {
     return {
       ...stage,
       buildPrompt: (p) => [
-        'Goal: select the best bundled starter netlist and prepare a concise reuse plan.',
+        'Goal: select the best bundled starter netlist or saved design-memory starter from bundled assets and prepare a concise reuse plan.',
         `Input brief: ${p.requirementBriefPath}`,
         `Input normalized spec: ${p.specNormalizedPath}`,
         `Output asset reuse plan: ${p.assetReusePlanPath}`,
@@ -326,8 +326,9 @@ function withStrictLibrarianPrompt(stages: WorkflowStage[]): WorkflowStage[] {
         '',
         'Hard execution rules:',
         '- Call describe_project_assets and list_available_templates once each.',
-        '- Read only the brief, normalized spec, and the selected template if needed.',
+        '- Read only the brief, normalized spec, selected template, and directly relevant saved design-memory guide/flow if needed.',
         '- Prefer the recommended_template in normalized spec when it is available.',
+        '- Prefer a relevant saved_design_template or saved_flow from design_memory when it better matches the requirement than a bundled starter.',
         '- Write asset-reuse-plan.md as concise Chinese markdown: no tables, 80 lines maximum.',
         '- Use copy_template_netlist with template_name and output_path to create template.cir.',
         '- Never paste template netlist text with Write.',
@@ -581,4 +582,3 @@ function withRobustCircuitPromptOverrides(stages: WorkflowStage[]): WorkflowStag
 export function createWorkflowStages(paths: JobPaths, requirement: string): WorkflowStage[] {
   return withRobustCircuitPromptOverrides(buildStages(paths, requirement));
 }
-

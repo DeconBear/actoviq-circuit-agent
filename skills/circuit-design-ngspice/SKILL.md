@@ -99,6 +99,15 @@ always run `compile-module`; this preserves the
 preview. Read `notes` on the module reference before editing. Users may address
 a module directly by its stable `id`.
 
+The GUI can save reusable design memory under the active workspace's
+`references/design-memory/` folder. `templates/<id>/` contains
+`template.json`, `agent-guide.md`, `template.cir` when the source project was
+compiled, `project.circuit.json`, and module files. `flows/<id>/` contains
+`flow.json`, `design-flow.md`, and applied command logs when present. In future
+designs, inspect these saved templates and flows during asset reuse before
+inventing a new topology; treat them as reusable guidance that still requires
+fresh simulation and schematic verification.
+
 In schematic view, bench-only voltage/current sources are intentionally hidden.
 If a hidden source drives a visible non-rail control or bias node, the renderer
 must expose that node as a named terminal such as `GATE`, `VREF`, `ITAIL`, or

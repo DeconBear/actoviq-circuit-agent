@@ -1,11 +1,26 @@
-import { copyFile, mkdir, readdir } from 'node:fs/promises';
+import { access, copyFile, mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { tool } from 'actoviq-agent-sdk';
 import { z } from 'zod';
 
 import { SCRIPT_ROOT, TEMPLATE_ROOT } from '../config/projectPaths.js';
+import { listSavedDesignTemplates, resolveSavedTemplateNetlist } from '../utils/designMemory.js';
 import { runPythonJson } from '../utils/processUtils.js';
+
+async function exists(targetPath: string): Promise<boolean> {
+  try {
+    await access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
 
 export function createListTemplatesTool() {
   return tool(
@@ -16,8 +31,17 @@ export function createListTemplatesTool() {
     },
     async () => {
       const entries = await readdir(TEMPLATE_ROOT);
+      const savedDesignTemplates = await listSavedDesignTemplates();
       return {
         templates: entries.filter((entry) => entry.endsWith('.cir')).sort(),
+        saved_design_templates: savedDesignTemplates.map((template) => ({
+          id: template.id,
+          name: template.name,
+          source_project_id: template.sourceProjectId,
+          source_revision: template.sourceRevision,
+          template_netlist_path: template.templateNetlistPath,
+          agent_guide_path: template.agentGuidePath,
+        })),
       };
     },
   );
@@ -34,7 +58,14 @@ export function createCopyTemplateTool() {
       }),
     },
     async ({ template_name, output_path }) => {
-      const source = path.resolve(TEMPLATE_ROOT, template_name);
+      let source = path.resolve(TEMPLATE_ROOT, template_name);
+      if (!isPathInside(TEMPLATE_ROOT, source) || !(await exists(source))) {
+        const savedTemplate = await resolveSavedTemplateNetlist(template_name);
+        if (!savedTemplate) {
+          throw new Error(`Template not found: ${template_name}`);
+        }
+        source = savedTemplate.templateNetlistPath;
+      }
       const target = path.resolve(output_path);
       await mkdir(path.dirname(target), { recursive: true });
       await copyFile(source, target);

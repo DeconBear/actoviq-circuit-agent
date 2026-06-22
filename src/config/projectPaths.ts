@@ -23,6 +23,9 @@ export const WORKSPACE_ROOT = resolveEnvOrFallback(
   defaultWorkspaceRoot,
 );
 export const JOBS_ROOT = path.resolve(WORKSPACE_ROOT, 'jobs');
+export const DESIGN_MEMORY_ROOT = path.resolve(WORKSPACE_ROOT, 'references', 'design-memory');
+export const SAVED_TEMPLATE_ROOT = path.resolve(DESIGN_MEMORY_ROOT, 'templates');
+export const SAVED_FLOW_ROOT = path.resolve(DESIGN_MEMORY_ROOT, 'flows');
 
 export const TEMPLATE_ROOT = path.resolve(CIRCUIT_ASSETS_ROOT, 'assets', 'templates');
 export const SKIN_ROOT = path.resolve(CIRCUIT_ASSETS_ROOT, 'assets', 'skins');

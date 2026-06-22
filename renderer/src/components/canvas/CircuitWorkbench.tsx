@@ -20,6 +20,7 @@ import type {
 interface Props {
   onCreateProject: (demo: boolean) => void;
   onReloadProject: () => Promise<void>;
+  onReferencesChanged?: () => Promise<void>;
 }
 
 interface ModuleEditorState {
@@ -197,7 +198,7 @@ function parseParameters(value: string): Record<string, string> {
   );
 }
 
-export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
+export function CircuitWorkbench({ onCreateProject, onReloadProject, onReferencesChanged }: Props) {
   const bundle = useAppStore((state) => state.circuitProject);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeModuleId = useAppStore((state) => state.activeModuleId);
@@ -385,6 +386,34 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
       setNotice(simulate ? 'System simulation complete' : 'Netlist and previews updated');
     } catch (buildError) {
       setError(buildError instanceof Error ? buildError.message : String(buildError));
+      setNotice('');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveDesignMemory(kind: 'template' | 'flow') {
+    if (!activeProjectId) return;
+    setBusy(true);
+    setError('');
+    setNotice(kind === 'template' ? 'Saving reusable design template...' : 'Saving design flow...');
+    try {
+      if (kind === 'template') {
+        await window.electronAPI.compileCircuitProject(activeProjectId);
+        setBuild(await window.electronAPI.readCircuitBuild(activeProjectId));
+        await onReloadProject();
+      }
+      const result = kind === 'template'
+        ? await window.electronAPI.saveCircuitDesignTemplate(activeProjectId)
+        : await window.electronAPI.saveCircuitDesignFlow(activeProjectId);
+      await onReferencesChanged?.();
+      setNotice(
+        kind === 'template'
+          ? `Saved template ${result.id}`
+          : `Saved flow ${result.id}`,
+      );
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
       setNotice('');
     } finally {
       setBusy(false);
@@ -759,6 +788,22 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject }: Props) {
           </button>
           <button style={styles.primaryButton} onClick={() => runBuild(true)} disabled={busy} data-testid="simulate-project">
             Simulate system
+          </button>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => saveDesignMemory('template')}
+            disabled={busy}
+            data-testid="save-design-template"
+          >
+            Save template
+          </button>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => saveDesignMemory('flow')}
+            disabled={busy}
+            data-testid="save-design-flow"
+          >
+            Save flow
           </button>
           <button
             style={styles.iconButton}

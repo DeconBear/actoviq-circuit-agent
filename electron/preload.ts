@@ -192,6 +192,14 @@ const electronAPI = {
     return ipcRenderer.invoke('project:read-build', projectId);
   },
 
+  saveCircuitDesignTemplate(projectId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:save-design-template', projectId);
+  },
+
+  saveCircuitDesignFlow(projectId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:save-design-flow', projectId);
+  },
+
   watchCircuitProject(projectId: string): Promise<void> {
     return ipcRenderer.invoke('project:watch', projectId);
   },

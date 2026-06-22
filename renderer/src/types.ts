@@ -224,6 +224,18 @@ export interface CircuitBuildState {
   report?: string;
 }
 
+export interface SavedDesignMemorySummary {
+  ok: true;
+  id: string;
+  kind: 'template' | 'flow';
+  name: string;
+  rootPath: string;
+  relativePath: string;
+  guidePath?: string;
+  templatePath?: string;
+  flowPath?: string;
+}
+
 export interface ReferenceDocument {
   name: string;
   relativePath: string;
