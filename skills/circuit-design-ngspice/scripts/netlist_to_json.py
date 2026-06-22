@@ -600,11 +600,9 @@ def infer_mount_policy(comp: dict) -> str:
     comp_type = str(comp.get("type", ""))
     name = str(comp.get("name", "")).lower()
     nodes = [str(node).lower() for node in comp.get("nodes", [])]
-    if comp_type in {"voltage_source", "current_source"} and name.startswith(
-        ("vtest", "itest", "vprobe", "iprobe")
-    ):
+    if comp_type in {"voltage_source", "current_source"}:
         return "testbench_exclude"
-    if name.startswith(("rload", "rprobe", "vprobe", "iprobe", "rsrc", "rsource")):
+    if name.startswith(("rprobe", "vprobe", "iprobe", "rsrc", "rsource", "rload_")):
         return "optional_testbench"
     if name.startswith(("cdec", "cvdd", "cvcc", "cdd", "cbyp")) and any(
         node.startswith(("vcc", "vdd")) for node in nodes
@@ -942,6 +940,14 @@ def infer_schematic_profile(
     has_digitizer = "comparator" in hints or any(node.endswith("_n") for node in nodes)
     if has_rf_frontend and has_detector and has_digitizer:
         return "rf_mixed_signal"
+    if "mosfet" in types and sum(1 for name in names if name.startswith("m")) >= 4 and {"n1", "n2", "n3"} <= nodes:
+        return "ring_oscillator"
+    if "inductor" in types and "diode" in types and output_node:
+        return "buck_converter"
+    cascode_markers = {"nd", "no", "ns"}
+    mosfet_names = [name for name in names if name.startswith("m")]
+    if "mosfet" in types and len(mosfet_names) >= 2 and len(cascode_markers & nodes) >= 2:
+        return "cascode_amplifier"
     if any(name.startswith(("mpass", "m_pass", "qpass", "q_pass")) for name in names) and {"fb", "gate"} & nodes:
         return "ldo_regulator"
     if "opamp" in hints and ({"vn", "fb"} & nodes or any(name.startswith(("r1f", "r2f", "rfb")) for name in names)):

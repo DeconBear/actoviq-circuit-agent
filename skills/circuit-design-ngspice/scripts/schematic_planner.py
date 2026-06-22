@@ -71,9 +71,22 @@ def detect_ldo(payload: dict[str, Any]) -> dict[str, Any] | None:
         for node in component_nodes(comp)
         if node.lower() not in {output_lower, input_lower} and not is_ground(node)
     }
-    has_feedback = any(output_lower in node_set(comp) and node.lower() in node_set(comp)
-                       for node in feedback_nodes for comp in components)
-    if not has_feedback and "fb" not in {node.lower() for node in feedback_nodes}:
+    resistor_node_sets = [
+        node_set(comp)
+        for comp in components
+        if str(comp.get("type") or "").lower() == "resistor"
+    ]
+    has_feedback_top = any(
+        output_lower in nodes and feedback.lower() in nodes
+        for feedback in feedback_nodes
+        for nodes in resistor_node_sets
+    )
+    has_feedback_bottom = any(
+        feedback.lower() in nodes and any(is_ground(node) for node in nodes)
+        for feedback in feedback_nodes
+        for nodes in resistor_node_sets
+    )
+    if not (has_feedback_top and has_feedback_bottom):
         return None
 
     return {

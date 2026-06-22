@@ -278,6 +278,12 @@ def is_rf_mixed_signal_payload(payload: dict[str, object]) -> bool:
     return has_rf_frontend and has_detector and has_digitizer
 
 
+def output_node_from_payload(payload: dict[str, object]) -> str:
+    interfaces = payload.get("interfaces", {}) if isinstance(payload.get("interfaces"), dict) else {}
+    io = payload.get("io_inference", {}) if isinstance(payload.get("io_inference"), dict) else {}
+    return str(interfaces.get("output_node") or io.get("output_node") or "")
+
+
 SUPPORTED_FORMATTED_PROFILES = {
     "signal_chain_comparator",
     "rf_mixed_signal",
@@ -285,9 +291,13 @@ SUPPORTED_FORMATTED_PROFILES = {
     "window_comparator_detail",
     "opamp_feedback",
     "ldo_regulator",
+    "buck_converter",
+    "cascode_amplifier",
+    "ring_oscillator",
     "lna_common_emitter",
     "single_stage_amplifier",
     "opamp",
+    "generic",
 }
 
 
@@ -318,6 +328,13 @@ def schematic_profile(payload: dict[str, object]) -> str:
         if isinstance(comp, dict)
         for node in component_nodes(comp)
     }
+    if "mosfet" in types and sum(1 for name in names if name.startswith("m")) >= 4 and {"n1", "n2", "n3"} <= nodes:
+        return "ring_oscillator"
+    if "inductor" in types and "diode" in types and output_node_from_payload(payload):
+        return "buck_converter"
+    cascode_markers = {"nd", "no", "ns"}
+    if "mosfet" in types and len([name for name in names if name.startswith("m")]) >= 2 and len(cascode_markers & nodes) >= 2:
+        return "cascode_amplifier"
     if any(name.startswith(("mpass", "m_pass", "qpass", "q_pass")) for name in names) and {"fb", "gate"} & nodes:
         return "ldo_regulator"
     if "opamp" in hints and ({"vn", "fb"} & nodes or any(name.startswith(("r1f", "r2f", "rfb")) for name in names)):
@@ -934,6 +951,301 @@ def rail_symbol_for_format(node: str) -> str | None:
     return None
 
 
+def group_pin_offsets(group: ET.Element) -> dict[str, tuple[float, float]]:
+    offsets: dict[str, tuple[float, float]] = {}
+    for child in group.iter():
+        if child is group or local_name(child.tag) != "g":
+            continue
+        pid = get_attr(child, "pid")
+        if not pid:
+            continue
+        offsets[pid] = (parse_float(get_attr(child, "x")), parse_float(get_attr(child, "y")))
+    return offsets
+
+
+def set_group_pin(group: ET.Element, pin: str, target: tuple[float, float]) -> bool:
+    offsets = group_pin_offsets(group)
+    offset = offsets.get(pin)
+    if offset is None:
+        return False
+    set_group_xy(group, target[0] - offset[0], target[1] - offset[1])
+    return True
+
+
+def set_group_first_pin(group: ET.Element, target: tuple[float, float]) -> bool:
+    offsets = group_pin_offsets(group)
+    if not offsets:
+        return False
+    pin = next(iter(offsets))
+    return set_group_pin(group, pin, target)
+
+
+def cell_pin_node_map(payload: dict[str, object]) -> dict[str, dict[str, str]]:
+    node_names = bit_to_node_name(payload)
+    module = first_module_payload(payload)
+    cells = module.get("cells", {}) if isinstance(module, dict) else {}
+    if not isinstance(cells, dict):
+        return {}
+    mapping: dict[str, dict[str, str]] = {}
+    for cell_name, cell in cells.items():
+        if not isinstance(cell, dict):
+            continue
+        connections = cell.get("connections", {})
+        if not isinstance(connections, dict):
+            continue
+        pin_nodes: dict[str, str] = {}
+        for pin, bits in connections.items():
+            if not isinstance(bits, list) or not bits:
+                continue
+            bit = bits[0]
+            if isinstance(bit, int) and bit in node_names:
+                pin_nodes[str(pin)] = node_names[bit]
+        mapping[str(cell_name)] = pin_nodes
+    return mapping
+
+
+def pin_for_node(pin_nodes: dict[str, str], node: str) -> str | None:
+    node_lower = node.lower()
+    for pin, pin_node in pin_nodes.items():
+        if pin_node.lower() == node_lower:
+            return pin
+    return None
+
+
+def component_by_name(payload: dict[str, object]) -> dict[str, dict[str, object]]:
+    components = payload.get("components", [])
+    result: dict[str, dict[str, object]] = {}
+    for comp in components if isinstance(components, list) else []:
+        if not isinstance(comp, dict):
+            continue
+        result[str(comp.get("name") or "")] = comp
+    return result
+
+
+def place_component_node_pin(
+    groups: dict[str, ET.Element],
+    pin_nodes_by_cell: dict[str, dict[str, str]],
+    component_name: str,
+    node: str,
+    target: tuple[float, float],
+) -> bool:
+    group = groups.get(component_name)
+    if group is None:
+        return False
+    pin = pin_for_node(pin_nodes_by_cell.get(component_name, {}), node)
+    if pin is None:
+        return set_group_first_pin(group, target)
+    return set_group_pin(group, pin, target)
+
+
+def signal_pin_names(pin_nodes: dict[str, str]) -> list[tuple[str, str]]:
+    return [(pin, node) for pin, node in pin_nodes.items() if rail_symbol_for_format(node) is None]
+
+
+def generic_passive_components(payload: dict[str, object]) -> list[dict[str, object]]:
+    components = payload.get("components", [])
+    allowed = {"resistor", "capacitor", "inductor", "diode"}
+    result: list[dict[str, object]] = []
+    for comp in components if isinstance(components, list) else []:
+        if not isinstance(comp, dict):
+            continue
+        if component_type(comp) not in allowed:
+            return []
+        result.append(comp)
+    return result
+
+
+def apply_generic_passive_placements(root: ET.Element, payload: dict[str, object]) -> bool:
+    components = generic_passive_components(payload)
+    if not components:
+        return False
+
+    groups = find_cell_groups(root)
+    pin_nodes_by_cell = cell_pin_node_map(payload)
+    main_y = 160.0
+    branch_y = main_y + 50.0
+    cursor_x = 90.0
+    node_xs: dict[str, list[float]] = defaultdict(list)
+    shunt_index: dict[str, int] = defaultdict(int)
+
+    series_components: list[dict[str, object]] = []
+    shunt_components: list[dict[str, object]] = []
+    for comp in components:
+        name = str(comp.get("name") or "")
+        signal_pins = signal_pin_names(pin_nodes_by_cell.get(name, {}))
+        if len(signal_pins) >= 2:
+            series_components.append(comp)
+        else:
+            shunt_components.append(comp)
+
+    for comp in series_components:
+        name = str(comp.get("name") or "")
+        group = groups.get(name)
+        if group is None:
+            continue
+        signal_pins = signal_pin_names(pin_nodes_by_cell.get(name, {}))
+        if len(signal_pins) < 2:
+            continue
+        first_pin, first_node = signal_pins[0]
+        if not set_group_pin(group, first_pin, (cursor_x, main_y)):
+            continue
+        offsets = group_pin_offsets(group)
+        transform = parse_translate(group.get("transform"))
+        if transform is None:
+            continue
+        for pin, node in signal_pins[:2]:
+            offset = offsets.get(pin)
+            if offset is None:
+                continue
+            node_xs[node].append(transform[0] + offset[0])
+        cursor_x = max((transform[0] + offset[0] for offset in offsets.values()), default=cursor_x) + 90.0
+        node_xs.setdefault(first_node, [])
+
+    if not series_components:
+        seen_nodes: list[str] = []
+        for comp in components:
+            for node in component_nodes(comp):
+                if rail_symbol_for_format(node) is None and node not in seen_nodes:
+                    seen_nodes.append(node)
+        for node in seen_nodes:
+            node_xs[node].append(cursor_x)
+            cursor_x += 90.0
+
+    for comp in shunt_components:
+        name = str(comp.get("name") or "")
+        group = groups.get(name)
+        if group is None:
+            continue
+        signal_pins = signal_pin_names(pin_nodes_by_cell.get(name, {}))
+        if not signal_pins:
+            continue
+        pin, node = signal_pins[0]
+        base_x = max(node_xs.get(node, [cursor_x]))
+        branch_x = base_x + 56.0 * shunt_index[node]
+        shunt_index[node] += 1
+        if set_group_pin(group, pin, (branch_x, branch_y)):
+            node_xs[node].append(branch_x)
+
+    interfaces = payload.get("interfaces", {}) if isinstance(payload.get("interfaces"), dict) else {}
+    io = payload.get("io_inference", {}) if isinstance(payload.get("io_inference"), dict) else {}
+    input_node = str(interfaces.get("input_node") or io.get("input_node") or "")
+    output_node = str(interfaces.get("output_node") or io.get("output_node") or "")
+    if "IN" in groups and input_node in node_xs:
+        set_group_anchor(groups["IN"], (min(node_xs[input_node]) - 70.0, main_y))
+    if "OUT" in groups and output_node in node_xs:
+        set_group_anchor(groups["OUT"], (max(node_xs[output_node]) + 90.0, main_y))
+
+    return True
+
+
+def apply_buck_converter_placements(root: ET.Element, payload: dict[str, object]) -> None:
+    groups = find_cell_groups(root)
+    pin_nodes_by_cell = cell_pin_node_map(payload)
+    components = component_by_name(payload)
+
+    for name, comp in components.items():
+        ctype = component_type(comp)
+        nodes = component_nodes(comp)
+        lower = name.lower()
+        if ctype == "mosfet":
+            place_component_node_pin(groups, pin_nodes_by_cell, name, nodes[0], (180.0, 150.0))
+        elif ctype == "diode" or lower.startswith("d"):
+            nonrails = [node for node in nodes if rail_symbol_for_format(node) is None]
+            if nonrails:
+                place_component_node_pin(groups, pin_nodes_by_cell, name, nonrails[0], (235.0, 200.0))
+        elif ctype == "inductor":
+            place_component_node_pin(groups, pin_nodes_by_cell, name, nodes[0], (300.0, 200.0))
+        elif ctype == "capacitor":
+            nonrails = [node for node in nodes if rail_symbol_for_format(node) is None]
+            if nonrails:
+                place_component_node_pin(groups, pin_nodes_by_cell, name, nonrails[0], (410.0, 200.0))
+        elif ctype == "resistor":
+            nonrails = [node for node in nodes if rail_symbol_for_format(node) is None]
+            if nonrails:
+                place_component_node_pin(groups, pin_nodes_by_cell, name, nonrails[0], (470.0, 200.0))
+
+    if "IN" in groups:
+        set_group_anchor(groups["IN"], (80.0, 150.0))
+    if "OUT" in groups:
+        set_group_anchor(groups["OUT"], (580.0, 200.0))
+
+
+def apply_cascode_amplifier_placements(root: ET.Element, payload: dict[str, object]) -> None:
+    groups = find_cell_groups(root)
+    pin_nodes_by_cell = cell_pin_node_map(payload)
+    components = component_by_name(payload)
+    interfaces = payload.get("interfaces", {}) if isinstance(payload.get("interfaces"), dict) else {}
+    io = payload.get("io_inference", {}) if isinstance(payload.get("io_inference"), dict) else {}
+    input_node = str(interfaces.get("input_node") or io.get("input_node") or "")
+    output_node = str(interfaces.get("output_node") or io.get("output_node") or "")
+
+    for name, comp in components.items():
+        ctype = component_type(comp)
+        nodes = component_nodes(comp)
+        lower = name.lower()
+        node_lowers = [node.lower() for node in nodes]
+        if ctype == "mosfet" and len(nodes) >= 3:
+            if input_node and nodes[1].lower() == input_node.lower():
+                place_component_node_pin(groups, pin_nodes_by_cell, name, nodes[0], (300.0, 230.0))
+            else:
+                place_component_node_pin(groups, pin_nodes_by_cell, name, nodes[2], (300.0, 200.0))
+        elif lower.startswith("rs") and "ns" in node_lowers:
+            place_component_node_pin(groups, pin_nodes_by_cell, name, "ns", (300.0, 315.0))
+        elif lower.startswith("rl") and "no" in node_lowers:
+            place_component_node_pin(groups, pin_nodes_by_cell, name, "no", (300.0, 150.0))
+        elif lower.startswith("cint") and "no" in node_lowers:
+            place_component_node_pin(groups, pin_nodes_by_cell, name, "no", (360.0, 150.0))
+        elif lower.startswith("ccomp") and "no" in node_lowers:
+            place_component_node_pin(groups, pin_nodes_by_cell, name, "no", (190.0, 150.0))
+        elif lower.startswith("rout") and "no" in node_lowers:
+            place_component_node_pin(groups, pin_nodes_by_cell, name, "no", (430.0, 150.0))
+        elif lower.startswith(("cload", "cout")) and output_node:
+            place_component_node_pin(groups, pin_nodes_by_cell, name, output_node, (520.0, 150.0))
+
+    if "IN" in groups:
+        set_group_anchor(groups["IN"], (130.0, 255.0))
+    if "OUT" in groups:
+        set_group_anchor(groups["OUT"], (620.0, 150.0))
+
+
+def apply_ring_oscillator_placements(root: ET.Element, payload: dict[str, object]) -> None:
+    groups = find_cell_groups(root)
+    pin_nodes_by_cell = cell_pin_node_map(payload)
+    components = component_by_name(payload)
+    stage_x = {"n1": 180.0, "n2": 360.0, "n3": 540.0}
+    shunt_counts: dict[str, int] = defaultdict(int)
+
+    for name, comp in components.items():
+        ctype = component_type(comp)
+        nodes = component_nodes(comp)
+        lower = name.lower()
+        if ctype == "mosfet" and len(nodes) >= 3:
+            drain = nodes[0].lower()
+            source = nodes[2]
+            x = stage_x.get(drain, 180.0)
+            drain_y = 110.0 if rail_symbol_for_format(source) == "vcc" else 230.0
+            place_component_node_pin(groups, pin_nodes_by_cell, name, nodes[0], (x, drain_y))
+            continue
+        if ctype in {"capacitor", "resistor"}:
+            nonrails = [node for node in nodes if rail_symbol_for_format(node) is None]
+            if not nonrails:
+                continue
+            node = nonrails[0].lower()
+            x = stage_x.get(node, 180.0) + 52.0 + 44.0 * shunt_counts[node]
+            shunt_counts[node] += 1
+            place_component_node_pin(groups, pin_nodes_by_cell, name, nonrails[0], (x, 310.0))
+
+    if "IN" in groups:
+        set_group_anchor(groups["IN"], (78.0, 330.0))
+    if "OUT" in groups:
+        set_group_anchor(groups["OUT"], (680.0, 330.0))
+    for name, group in groups.items():
+        if name.startswith("vcc_"):
+            set_group_anchor(group, (96.0, 70.0))
+        elif name.startswith("gnd_"):
+            set_group_anchor(group, (96.0, 420.0))
+
+
 def apply_signal_chain_placements(root: ET.Element, payload: dict[str, object]) -> None:
     groups = find_cell_groups(root)
     components = payload.get("components", [])
@@ -1175,6 +1487,8 @@ def apply_window_comparator_detail_placements(root: ET.Element, payload: dict[st
 
 
 def apply_profile_placements(root: ET.Element, payload: dict[str, object], profile: str) -> bool:
+    if profile == "generic":
+        return apply_generic_passive_placements(root, payload)
     if profile == "signal_chain_comparator":
         apply_signal_chain_placements(root, payload)
         return True
@@ -1189,6 +1503,15 @@ def apply_profile_placements(root: ET.Element, payload: dict[str, object], profi
         return True
     if profile in {"opamp_feedback", "opamp"}:
         apply_opamp_feedback_placements(root, payload)
+        return True
+    if profile == "buck_converter":
+        apply_buck_converter_placements(root, payload)
+        return True
+    if profile == "cascode_amplifier":
+        apply_cascode_amplifier_placements(root, payload)
+        return True
+    if profile == "ring_oscillator":
+        apply_ring_oscillator_placements(root, payload)
         return True
     if profile in {"lna_common_emitter", "single_stage_amplifier"}:
         apply_lna_placements(root, payload)
@@ -1475,6 +1798,14 @@ def add_local_ground_net(
             anchor = (point[0] + 80.0, point[1])
             append_side_ground_symbol(root, net_class, anchor)
             route = [(point, anchor)]
+        elif point[1] < 170.0:
+            anchor = (point[0], point[1] - 28.0)
+            route = [(point, anchor)]
+            if standard_symbol_count == 0:
+                set_group_anchor(template, anchor)
+            else:
+                clone_ground_symbol(root, template, standard_symbol_count, anchor)
+            standard_symbol_count += 1
         else:
             anchor = (point[0], point[1] + 28.0)
             route = [(point, anchor)]
@@ -1621,6 +1952,144 @@ def add_rf_mixed_custom_net(
         return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, signal_y)
 
     return None
+
+
+def add_side_ground_symbols_net(
+    root: ET.Element,
+    net_class: str,
+    raw_points: list[tuple[float, float]],
+) -> int:
+    line_count = 0
+    used: set[tuple[float, float]] = set()
+    for point in sorted(raw_points):
+        anchor = (point[0] + 30.0, point[1])
+        if anchor in used:
+            anchor = (anchor[0] + 18.0, anchor[1])
+        used.add(anchor)
+        line_count += append_counted_net_line(root, net_class, point, anchor)
+        append_side_ground_symbol(root, net_class, anchor)
+    return line_count
+
+
+def add_vertical_bus_net(
+    root: ET.Element,
+    net_class: str,
+    raw_points: list[tuple[float, float]],
+    junction_counts: dict[tuple[float, float, str], int],
+    bus_x: float,
+) -> int:
+    line_count = 0
+    bus_points: list[tuple[float, float]] = []
+    for point in raw_points:
+        bus_point = (bus_x, point[1])
+        if not nearly_equal(point[0], bus_x):
+            line_count += append_counted_net_line(root, net_class, point, bus_point)
+        junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+        bus_points.append(bus_point)
+    ys = sorted(set(point[1] for point in bus_points))
+    for start_y, end_y in zip(ys, ys[1:]):
+        line_count += append_counted_net_line(root, net_class, (bus_x, start_y), (bus_x, end_y))
+    return line_count
+
+
+def add_buck_custom_net(
+    root: ET.Element,
+    node: str,
+    net_class: str,
+    raw_points: list[tuple[float, float]],
+    junction_counts: dict[tuple[float, float, str], int],
+    *,
+    input_node: str,
+    output_node: str,
+) -> int | None:
+    lower = node.lower()
+    if rail_symbol_for_format(lower) == "gnd":
+        return add_side_ground_symbols_net(root, net_class, raw_points)
+    if lower in {input_node.lower(), "vin"}:
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 150.0)
+    if lower in {output_node.lower(), "out", "vout", "sw"}:
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 200.0)
+    return None
+
+
+def add_cascode_custom_net(
+    root: ET.Element,
+    node: str,
+    net_class: str,
+    raw_points: list[tuple[float, float]],
+    junction_counts: dict[tuple[float, float, str], int],
+    *,
+    input_node: str,
+    output_node: str,
+) -> int | None:
+    lower = node.lower()
+    if rail_symbol_for_format(lower) == "gnd":
+        return add_side_ground_symbols_net(root, net_class, raw_points)
+    if lower in {input_node.lower(), "in"}:
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 255.0)
+    if lower in {output_node.lower(), "out", "no"}:
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 150.0)
+    if lower in {"nd", "ns"}:
+        bus_x = raw_points[0][0]
+        return add_vertical_bus_net(root, net_class, raw_points, junction_counts, bus_x)
+    return None
+
+
+def add_side_power_label_net(
+    root: ET.Element,
+    node: str,
+    net_class: str,
+    raw_points: list[tuple[float, float]],
+) -> int:
+    line_count = 0
+    label = node.upper()
+    used: set[tuple[float, float]] = set()
+    for point in sorted(raw_points):
+        end = (point[0] + 28.0, point[1])
+        if end in used:
+            end = (end[0] + 18.0, end[1])
+        used.add(end)
+        line_count += append_counted_net_line(root, net_class, point, end)
+        append_net_label(root, net_class, label, end[0] + 4.0, end[1] - 4.0)
+    return line_count
+
+
+def ring_stub_endpoint(point: tuple[float, float]) -> tuple[float, float]:
+    x, y = point
+    if x < 120.0:
+        return (x - 28.0, y)
+    if x > 640.0:
+        return (x + 28.0, y)
+    if y < 100.0:
+        return (x - 28.0, y)
+    if y <= 150.0:
+        return (x + 28.0, y)
+    if 220.0 <= y <= 240.0:
+        return (x, y - 26.0)
+    if 245.0 <= y <= 285.0:
+        return (x - 28.0, y)
+    return (x + 28.0, y)
+
+
+def add_ring_oscillator_custom_net(
+    root: ET.Element,
+    node: str,
+    net_class: str,
+    raw_points: list[tuple[float, float]],
+) -> int | None:
+    rail = rail_symbol_for_format(node)
+    if rail == "gnd":
+        return add_side_ground_symbols_net(root, net_class, raw_points)
+    if rail in {"vcc", "vee"}:
+        return add_side_power_label_net(root, node, net_class, raw_points)
+
+    line_count = 0
+    for point in sorted(raw_points):
+        end = ring_stub_endpoint(point)
+        line_count += append_counted_net_line(root, net_class, point, end)
+        label_x = end[0] + (4.0 if end[0] >= point[0] else -24.0)
+        append_net_label(root, net_class, node, label_x, end[1] - 4.0)
+    return line_count
 
 
 def add_linear_chain_custom_net(
@@ -1943,6 +2412,37 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
             continue
         node = node_names.get(bit, f"net_{bit}")
         net_class = f"net_{bit}"
+        if profile == "buck_converter" and rail_symbol_for_format(node) == "gnd":
+            custom_line_count = add_buck_custom_net(
+                root,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                input_node=input_node,
+                output_node=output_node,
+            )
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
+        if profile == "cascode_amplifier" and rail_symbol_for_format(node) == "gnd":
+            custom_line_count = add_cascode_custom_net(
+                root,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                input_node=input_node,
+                output_node=output_node,
+            )
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
+        if profile == "ring_oscillator" and rail_symbol_for_format(node) is not None:
+            custom_line_count = add_ring_oscillator_custom_net(root, node, net_class, raw_points)
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
         if rail_symbol_for_format(node) == "gnd":
             line_count += add_local_ground_net(root, net_class, raw_points, junction_counts)
             continue
@@ -1964,6 +2464,37 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 output_node=output_node,
                 gate_nodes=ldo_gate_nodes,
             )
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
+        if profile == "buck_converter":
+            custom_line_count = add_buck_custom_net(
+                root,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                input_node=input_node,
+                output_node=output_node,
+            )
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
+        if profile == "cascode_amplifier":
+            custom_line_count = add_cascode_custom_net(
+                root,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                input_node=input_node,
+                output_node=output_node,
+            )
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
+        if profile == "ring_oscillator":
+            custom_line_count = add_ring_oscillator_custom_net(root, node, net_class, raw_points)
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
