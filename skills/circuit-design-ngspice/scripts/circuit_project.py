@@ -22,6 +22,27 @@ MODULE_SCHEMA = "actoviq.module.v1"
 COMMAND_SCHEMA = "actoviq.command.v1"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
 ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I"}
+EDITABLE_PIN_NAMES = {
+    "R": [("a", "1"), ("b", "2")],
+    "C": [("a", "1"), ("b", "2")],
+    "L": [("a", "1"), ("b", "2")],
+    "D": [("a", "A"), ("b", "K")],
+    "V": [("p", "+"), ("n", "-")],
+    "I": [("p", "+"), ("n", "-")],
+    "Q": [("c", "C"), ("b", "B"), ("e", "E")],
+    "M": [("d", "D"), ("g", "G"), ("s", "S"), ("b", "B")],
+}
+EDITABLE_NODE_COUNTS = {
+    "R": 2,
+    "C": 2,
+    "L": 2,
+    "D": 2,
+    "V": 2,
+    "I": 2,
+    "Q": 3,
+    "M": 4,
+}
+EDITABLE_TESTBENCH_PREFIXES = ("vtest_", "rload_")
 
 # SPICE control/analysis/measurement directives that a notebook module may
 # declare. compile_project hoists these to the top-level system deck (instead of
@@ -917,6 +938,252 @@ def extract_notebook_netlist(markdown: str) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def strip_spice_comment(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith(("*", ";", "//", "$")):
+        return ""
+    in_quote = False
+    result: list[str] = []
+    for char in line:
+        if char == "'":
+            in_quote = not in_quote
+        if char == ";" and not in_quote:
+            break
+        result.append(char)
+    return "".join(result).strip()
+
+
+def merged_spice_lines(netlist_text: str) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for raw in netlist_text.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            if current:
+                lines.append(current)
+                current = ""
+            continue
+        if stripped.startswith("+"):
+            if current:
+                current = f"{current} {stripped[1:].strip()}"
+            continue
+        if current:
+            lines.append(current)
+        current = raw
+    if current:
+        lines.append(current)
+    return lines
+
+
+def compiled_component_name(module_id: str, component: dict[str, Any]) -> str:
+    component_name = sanitize_node(f"{module_id}_{component['name']}")
+    component_type = str(component["type"])
+    if not component_name.upper().startswith(component_type):
+        component_name = f"{component_type}{component_name}"
+    return component_name
+
+
+def editable_component_name(module_id: str, instance_name: str) -> str:
+    component_type = instance_name[:1].upper()
+    rest = instance_name[1:]
+    module_prefix = f"{module_id}_".lower()
+    if rest.lower().startswith(module_prefix):
+        tail = rest[len(module_prefix):]
+        return tail if tail.upper().startswith(component_type) else f"{component_type}{tail}"
+    return instance_name
+
+
+def editable_component_id(name: str, used_ids: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9_]+", "_", name.lower()).strip("_") or "component"
+    candidate = base
+    suffix = 2
+    while candidate in used_ids:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used_ids.add(candidate)
+    return candidate
+
+
+def parse_editable_netlist_components(
+    module_id: str,
+    netlist_text: str,
+    existing_module: dict[str, Any],
+) -> list[dict[str, Any]]:
+    existing_by_name = {
+        str(component.get("name", "")).lower(): component
+        for component in existing_module.get("components", [])
+    }
+    existing_by_compiled = {
+        compiled_component_name(module_id, component).lower(): component
+        for component in existing_module.get("components", [])
+        if component.get("name") and component.get("type")
+    }
+    used_ids: set[str] = set()
+    parsed: list[dict[str, Any]] = []
+    grid_index = 0
+
+    for raw in merged_spice_lines(netlist_text):
+        line = strip_spice_comment(raw)
+        if not line or line.startswith("."):
+            continue
+        tokens = line.split()
+        if len(tokens) < 3:
+            continue
+        instance = tokens[0]
+        component_type = instance[:1].upper()
+        if component_type not in EDITABLE_NODE_COUNTS:
+            continue
+        if instance.lower().startswith(EDITABLE_TESTBENCH_PREFIXES):
+            continue
+        node_count = EDITABLE_NODE_COUNTS[component_type]
+        if len(tokens) < 1 + node_count:
+            continue
+        nodes = tokens[1:1 + node_count]
+        value = " ".join(tokens[1 + node_count:]).strip() or "1"
+        name = editable_component_name(module_id, instance)
+        existing = existing_by_compiled.get(instance.lower()) or existing_by_name.get(name.lower())
+        if existing:
+            component_id = str(existing.get("id") or editable_component_id(name, used_ids))
+            if component_id in used_ids:
+                component_id = editable_component_id(name, used_ids)
+            else:
+                used_ids.add(component_id)
+            position = existing.get("position") if isinstance(existing.get("position"), dict) else None
+            rotation = existing.get("rotation", 0)
+        else:
+            component_id = editable_component_id(name, used_ids)
+            position = {
+                "x": 140 + (grid_index % 4) * 180,
+                "y": 120 + (grid_index // 4) * 140,
+            }
+            rotation = 0
+        grid_index += 1
+        pin_names = EDITABLE_PIN_NAMES[component_type]
+        pins = [
+            {
+                "id": pin_names[index][0] if index < len(pin_names) else f"p{index + 1}",
+                "name": pin_names[index][1] if index < len(pin_names) else str(index + 1),
+                "net": node,
+            }
+            for index, node in enumerate(nodes)
+        ]
+        parsed.append({
+            "id": component_id,
+            "type": component_type,
+            "name": name,
+            "value": value,
+            "position": position,
+            "rotation": rotation,
+            "pins": pins,
+        })
+    return parsed
+
+
+def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    nodes: list[str] = []
+    for component in components:
+        for pin in component.get("pins", []):
+            node = str(pin.get("net", "")).strip()
+            if node and node not in nodes:
+                nodes.append(node)
+
+    ports: list[dict[str, Any]] = []
+    used_port_ids: set[str] = set()
+    for port in existing_ports:
+        port_id = str(port.get("id", "")).strip()
+        if not port_id or port_id in used_port_ids:
+            continue
+        used_port_ids.add(port_id)
+        ports.append(port)
+
+    existing_nets = {str(port.get("net", "")) for port in ports}
+
+    def add_port(port_id: str, name: str, direction: str, signal_type: str, net: str) -> None:
+        if net in existing_nets or port_id in used_port_ids:
+            return
+        used_port_ids.add(port_id)
+        existing_nets.add(net)
+        ports.append(make_port(port_id, name, direction, signal_type, net))
+
+    lower_to_node = {node.lower(): node for node in nodes}
+    if "0" in nodes:
+        add_port("gnd", "GND", "bidirectional", "ground", "0")
+    for rail in ("vdd", "vcc", "vee", "vss"):
+        if rail in lower_to_node:
+            add_port(rail, rail.upper(), "input", "power", lower_to_node[rail])
+    for label in ("in", "vin", "input", "rf_in"):
+        if label in lower_to_node:
+            add_port("input", "IN", "input", "analog", lower_to_node[label])
+            break
+    for label in ("out", "vout", "output", "rf_out"):
+        if label in lower_to_node:
+            add_port("output", "OUT", "output", "analog", lower_to_node[label])
+            break
+    return ports
+
+
+def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
+    project, modules = load_project(root)
+    if module_id not in modules:
+        raise ValueError(f"unknown module: {module_id}")
+    notebook_path = root / "modules" / module_id / "netlist-notebook.md"
+    if not notebook_path.exists():
+        return {"ok": True, "project_id": project["project_id"], "module_id": module_id, "changed": False}
+    module_file = module_path(root, module_id)
+    if module_file.exists() and notebook_path.stat().st_mtime <= module_file.stat().st_mtime:
+        return {"ok": True, "project_id": project["project_id"], "module_id": module_id, "changed": False}
+
+    module = modules[module_id]
+    netlist_text = extract_notebook_netlist(notebook_path.read_text(encoding="utf-8"))
+    components = parse_editable_netlist_components(module_id, netlist_text, module)
+    if not components:
+        return {"ok": True, "project_id": project["project_id"], "module_id": module_id, "changed": False}
+    ports = infer_editable_ports(list(module.get("ports", [])), components)
+    next_module = {
+        **module,
+        "components": components,
+        "ports": ports,
+        "wires": [],
+        "annotations": module.get("annotations", []),
+    }
+    validate_module(next_module)
+
+    comparable_keys = ("components", "ports", "wires", "annotations")
+    before = {key: module.get(key) for key in comparable_keys}
+    after = {key: next_module.get(key) for key in comparable_keys}
+    changed = json.dumps(before, ensure_ascii=False, sort_keys=True) != json.dumps(after, ensure_ascii=False, sort_keys=True)
+    if not changed:
+        return {"ok": True, "project_id": project["project_id"], "module_id": module_id, "changed": False}
+
+    with ProjectLock(root):
+        project, modules = load_project(root)
+        module = modules[module_id]
+        next_module = {
+            **module,
+            "components": components,
+            "ports": ports,
+            "wires": [],
+            "annotations": module.get("annotations", []),
+            "revision": int(module.get("revision", 0)) + 1,
+        }
+        validate_module(next_module)
+        modules[module_id] = next_module
+        module_ref = find_module_ref(project, module_id)
+        module_ref["ports"] = ports
+        project["revision"] = int(project.get("revision", 0)) + 1
+        project["updated_at"] = utc_now()
+        atomic_write_json(project_path(root), project)
+        atomic_write_json(module_path(root, module_id), next_module)
+    return {
+        "ok": True,
+        "project_id": project["project_id"],
+        "module_id": module_id,
+        "changed": True,
+        "revision": project["revision"],
+        "module_revision": next_module["revision"],
+    }
+
+
 def build_report_markdown(
     project: dict[str, Any],
     modules: dict[str, dict[str, Any]],
@@ -1313,6 +1580,7 @@ def render_module_schematic(
 
 
 def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> dict[str, Any]:
+    sync_module_from_netlist(root, module_id)
     project, modules = load_project(root)
     if module_id not in modules:
         raise ValueError(f"unknown module: {module_id}")

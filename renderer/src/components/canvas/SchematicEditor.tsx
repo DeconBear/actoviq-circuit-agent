@@ -70,7 +70,7 @@ interface WireDragState {
 }
 
 export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
-  const [draft, setDraft] = useState(() => cloneModule(module));
+  const [draft, setDraft] = useState(() => createEditableModule(module));
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
   const [placeType, setPlaceType] = useState<PlaceType>('R');
@@ -81,21 +81,22 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const [camera, setCamera] = useState<Camera>({ x: 120, y: 90, scale: 1 });
   const [canvasSize, setCanvasSize] = useState({ width: 900, height: 600 });
-  const [portPositions, setPortPositions] = useState(() => computePortPositions(module));
+  const [portPositions, setPortPositions] = useState(() => computePortPositions(createEditableModule(module)));
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const wireDragRef = useRef<WireDragState | null>(null);
 
   useEffect(() => {
-    setDraft(cloneModule(module));
+    const editable = createEditableModule(module);
+    setDraft(editable);
     setDirty(false);
     setSelection(null);
     setWireStart(null);
     setHoverWorld(null);
     setHistory([]);
     setFuture([]);
-    setPortPositions(computePortPositions(module));
+    setPortPositions(computePortPositions(editable));
   }, [module.module_id, module.revision]);
 
   useEffect(() => {
@@ -386,6 +387,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         draft.components.map((component) => [component.id, component.position]),
       ))}
       data-wire-points={JSON.stringify((draft.wires ?? []).map((wire) => wire.points))}
+      data-camera={JSON.stringify(camera)}
     >
       <div style={styles.toolbar}>
         <button
@@ -429,7 +431,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
           Fit
         </button>
         <button style={styles.primaryButton} onClick={() => void saveAndRebuild()} disabled={busy || !dirty} data-testid="schematic-editor-save">
-          Save
+          Apply
         </button>
         <button style={styles.toolButton} onClick={onBuild} disabled={busy} data-testid="schematic-editor-rebuild-svg">
           Rebuild SVG
@@ -516,6 +518,13 @@ function cloneModule(module: CircuitModule): CircuitModule {
   return JSON.parse(JSON.stringify(module)) as CircuitModule;
 }
 
+function createEditableModule(module: CircuitModule): CircuitModule {
+  const next = cloneModule(module);
+  const initialPortPositions = computePortPositions(next);
+  next.wires = materializeNetWires(next, initialPortPositions);
+  return next;
+}
+
 function snap(value: number): number {
   return Math.round(value / GRID) * GRID;
 }
@@ -535,6 +544,75 @@ function makeId(prefix: string, existing: Set<string>): string {
     if (!existing.has(id)) return id;
   }
   return `${prefix}${Date.now()}`;
+}
+
+function wireIdToken(value: string): string {
+  return value.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'net';
+}
+
+function materializeNetWires(
+  module: CircuitModule,
+  portPositions: Map<string, CircuitPosition>,
+): CircuitWire[] {
+  const explicit = (module.wires ?? [])
+    .filter((wire) => (wire.points ?? []).length >= 2)
+    .map((wire) => rerouteWire(module, wire, portPositions));
+  const explicitNets = new Set(explicit.map((wire) => wire.net).filter(Boolean) as string[]);
+  const existingIds = new Set(explicit.map((wire) => wire.id));
+  const endpointsByNet = new Map<string, EndpointHit[]>();
+
+  const remember = (net: string | undefined, endpoint: EndpointHit) => {
+    if (!net) return;
+    endpointsByNet.set(net, [...(endpointsByNet.get(net) ?? []), endpoint]);
+  };
+
+  for (const component of module.components) {
+    component.pins.forEach((pin, index) => {
+      const point = pinWorld(component, pin, index);
+      remember(pin.net, {
+        kind: 'pin',
+        x: point.x,
+        y: point.y,
+        component_id: component.id,
+        pin_id: pin.id,
+        label: `${component.name}.${pin.name}`,
+        net: pin.net,
+      });
+    });
+  }
+
+  for (const port of module.ports) {
+    const point = portPositions.get(port.id);
+    if (!point) continue;
+    remember(port.net, {
+      kind: 'port',
+      x: point.x,
+      y: point.y,
+      port_id: port.id,
+      label: port.name,
+      net: port.net,
+    });
+  }
+
+  const wires = [...explicit];
+  for (const [net, endpoints] of endpointsByNet) {
+    if (explicitNets.has(net) || endpoints.length < 2) continue;
+    const anchor = endpoints.find((endpoint) => endpoint.kind === 'port') ?? endpoints[0];
+    if (!anchor) continue;
+    for (const endpoint of endpoints) {
+      if (endpoint === anchor) continue;
+      const id = makeId(`net_${wireIdToken(net)}_`, existingIds);
+      existingIds.add(id);
+      wires.push({
+        id,
+        points: routePoints(snapPoint(anchor), snapPoint(endpoint)),
+        from: stripEndpoint(snapPoint(anchor), anchor),
+        to: stripEndpoint(snapPoint(endpoint), endpoint),
+        net,
+      });
+    }
+  }
+  return wires;
 }
 
 function makePlacedComponent(module: CircuitModule, type: PlaceType, position: CircuitPosition): CircuitComponent {

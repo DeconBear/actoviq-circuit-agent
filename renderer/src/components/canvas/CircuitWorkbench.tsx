@@ -202,6 +202,48 @@ function parseParameters(value: string): Record<string, string> {
   );
 }
 
+function sanitizeSpiceToken(value: string): string {
+  return value.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'node';
+}
+
+function componentSpiceName(moduleId: string, component: CircuitModule['components'][number]): string {
+  let name = sanitizeSpiceToken(`${moduleId}_${component.name}`);
+  if (!name.toUpperCase().startsWith(component.type)) {
+    name = `${component.type}${name}`;
+  }
+  return name;
+}
+
+function moduleToSpiceNetlist(moduleId: string, moduleData: CircuitModule): string {
+  const lines = [
+    `* ${moduleData.name}`,
+    '* Editable schematic netlist generated from actoviq.module.v1',
+  ];
+  for (const component of moduleData.components) {
+    const nodes = component.pins.map((pin) => sanitizeSpiceToken(pin.net || `n_${component.id}_${pin.id}`));
+    lines.push([
+      componentSpiceName(moduleId, component),
+      ...nodes,
+      component.value.trim() || '1',
+    ].join(' '));
+  }
+  lines.push('.end');
+  return `${lines.join('\n')}\n`;
+}
+
+function moduleNotebookMarkdown(moduleId: string, moduleData: CircuitModule): string {
+  return [
+    `# ${moduleData.name}`,
+    '',
+    'Editable schematic source. Applying schematic edits rewrites this SPICE block and refreshes the netlistsvg preview.',
+    '',
+    '```spice',
+    moduleToSpiceNetlist(moduleId, moduleData).trim(),
+    '```',
+    '',
+  ].join('\n');
+}
+
 export function CircuitWorkbench({
   onCreateProject,
   onCreateProjectFromTemplate,
@@ -402,6 +444,7 @@ export function CircuitWorkbench({
   }
 
   async function saveModuleSchematic(moduleId: string, moduleData: CircuitModule): Promise<void> {
+    if (!activeProjectId) return;
     const saved = await applyOperations(`Edit schematic ${moduleId}`, [{
       op: 'set_module_schematic',
       module_id: moduleId,
@@ -411,8 +454,26 @@ export function CircuitWorkbench({
       annotations: moduleData.annotations ?? [],
     }]);
     if (saved) {
-      await buildModulePreview(moduleId, false);
-      setNotice('Schematic saved and SVG rebuilt');
+      setBusy(true);
+      setError('');
+      setNotice('Applying schematic netlist and rebuilding SVG...');
+      try {
+        const result = await window.electronAPI.saveCircuitModuleNotebook(
+          activeProjectId,
+          moduleId,
+          moduleNotebookMarkdown(moduleId, moduleData),
+        );
+        if (!result.render.ok) {
+          throw new Error(result.render.error || 'netlistsvg could not render the applied schematic netlist.');
+        }
+        await onReloadProject();
+        setNotice('Applied netlist and SVG rebuilt');
+      } catch (saveError) {
+        setError(saveError instanceof Error ? saveError.message : String(saveError));
+        setNotice('');
+      } finally {
+        setBusy(false);
+      }
     }
   }
 
@@ -1237,10 +1298,13 @@ function ModuleCard({
           <input
             type="checkbox"
             checked={previewEnabled}
-            onChange={(event) => {
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => {
               event.stopPropagation();
               onTogglePreview();
             }}
+            onClick={(event) => event.stopPropagation()}
+            readOnly
             data-testid={`preview-toggle-${module.id}`}
           />
           Preview
@@ -1363,7 +1427,7 @@ function ModuleSchematic({
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
 }) {
-  const [viewMode, setViewMode] = useState<'editor' | 'svg'>(() => (moduleData ? 'editor' : 'svg'));
+  const [viewMode, setViewMode] = useState<'editor' | 'svg'>('svg');
   const [editLayout, setEditLayout] = useState(false);
   const [draggedItem, setDraggedItem] = useState('');
   const [selectedItem, setSelectedItem] = useState('');
@@ -1679,7 +1743,7 @@ function ModuleSchematic({
             disabled={busy || !moduleData}
             data-testid="schematic-editor-tab"
           >
-            Editor
+            Editable model
           </button>
           <button
             style={viewMode === 'svg' ? styles.primaryButton : styles.secondaryButton}
@@ -1687,7 +1751,7 @@ function ModuleSchematic({
             disabled={busy}
             data-testid="schematic-svg-tab"
           >
-            SVG preview
+            SVG
           </button>
           <button
             style={editLayout ? styles.primaryButton : styles.secondaryButton}
@@ -2166,7 +2230,7 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 11,
   },
   notice: { padding: '6px 14px', background: '#e9f7ee', color: '#23653e', borderBottom: '1px solid #c2e2ce', fontSize: 12 },
-  noticeError: { background: '#fbe9e9', color: '#9c2525', borderBottomColor: '#e9b7b7' },
+  noticeError: { background: '#fbe9e9', color: '#9c2525', borderBottom: '1px solid #e9b7b7' },
   body: { flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 310px' },
   canvasPanel: { overflow: 'auto', position: 'relative', background: '#f3f4f6', minWidth: 0 },
   boardViewport: { position: 'relative', padding: 20 },

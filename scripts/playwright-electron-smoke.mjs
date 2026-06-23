@@ -348,27 +348,55 @@ try {
   await page.getByTestId('save-module-note').click();
   await page.getByText(new RegExp(`revision ${initialRevision + 2}`)).waitFor({ timeout: 10_000 });
 
-  await page.getByTestId('preview-toggle-filter').click();
+  let projectForPreview = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
+  runSkill([
+    'apply',
+    '--project-root', projectRoot,
+    '--command-json', JSON.stringify({
+      schema: 'actoviq.command.v1',
+      command_id: `playwright-preview-off-${Date.now()}`,
+      actor: 'playwright',
+      project_id: projectId,
+      base_revision: projectForPreview.revision,
+      message: 'Hide filter preview',
+      operations: [{ op: 'set_module_preview', module_id: 'filter', enabled: false }],
+    }),
+  ]);
   await page.getByText(new RegExp(`revision ${initialRevision + 3}`)).waitFor({ timeout: 10_000 });
   await page.getByTestId('module-summary-filter').waitFor();
   await page.getByText('15.9 nF', { exact: true }).first().waitFor();
   await page.screenshot({ path: path.resolve(outputRoot, 'module-summary-mode.png') });
 
-  await page.getByTestId('preview-toggle-filter').click();
+  projectForPreview = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
+  runSkill([
+    'apply',
+    '--project-root', projectRoot,
+    '--command-json', JSON.stringify({
+      schema: 'actoviq.command.v1',
+      command_id: `playwright-preview-on-${Date.now()}`,
+      actor: 'playwright',
+      project_id: projectId,
+      base_revision: projectForPreview.revision,
+      message: 'Show filter preview',
+      operations: [{ op: 'set_module_preview', module_id: 'filter', enabled: true }],
+    }),
+  ]);
   await page.getByText(new RegExp(`revision ${initialRevision + 4}`)).waitFor({ timeout: 10_000 });
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();
 
   await page.getByTestId('module-card-filter').dblclick();
   await page.getByTestId('module-canvas').waitFor();
-  await page.getByTestId('schematic-editor').waitFor();
-  assert.equal(await page.getByTestId('schematic-editor-canvas').count(), 1);
-  await page.getByTestId('schematic-svg-tab').click();
   await page.getByTestId('module-netlistsvg').locator('svg').waitFor();
   const moduleSvgBefore = await page.getByTestId('module-netlistsvg').innerHTML();
   assert.match(moduleSvgBefore, /<svg\b/);
   const moduleSvgBox = await page.getByTestId('module-netlistsvg').locator('svg').boundingBox();
   assert.ok(moduleSvgBox && moduleSvgBox.width > 100 && moduleSvgBox.height > 100);
   await page.screenshot({ path: path.resolve(outputRoot, 'module-netlistsvg.png') });
+  await page.getByTestId('schematic-editor-tab').click();
+  await page.getByTestId('schematic-editor').waitFor();
+  assert.equal(await page.getByTestId('schematic-editor-canvas').count(), 1);
+  await page.getByTestId('schematic-svg-tab').click();
+  await page.getByTestId('module-netlistsvg').locator('svg').waitFor();
 
   await page.getByTestId('toggle-schematic-layout-edit').click();
   await page.getByTestId('toggle-schematic-layout-edit').getByText('Done', { exact: true }).waitFor();
@@ -501,7 +529,8 @@ try {
   ]);
   assert.equal(agentCompile.render.ok, true);
 
-  await page.getByText(new RegExp(`revision ${initialRevision + 11}`)).waitFor({ timeout: 10_000 });
+  const projectAfterAgent = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
+  await page.getByText(new RegExp(`revision ${projectAfterAgent.revision}`)).waitFor({ timeout: 10_000 });
   await page.getByTestId('module-note').waitFor();
   await page.waitForFunction(() => {
     const note = document.querySelector('[data-testid="module-note"]');
@@ -575,8 +604,9 @@ try {
   await page.getByTestId('module-editor-kind').fill('input');
   await page.getByTestId('module-editor-function').fill('Conditions a sensor signal before amplification.');
   await page.getByTestId('module-editor-parameters').fill('Input range = 0-1 V');
+  const projectBeforeSensorAdd = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
   await page.getByTestId('save-module-editor').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 12}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${projectBeforeSensorAdd.revision + 1}`)).waitFor({ timeout: 10_000 });
   await page.getByTestId('module-card-sensor').waitFor();
   await page.getByTestId('module-summary-sensor').getByText('0-1 V', { exact: true }).waitFor();
 
@@ -585,8 +615,9 @@ try {
   await page.getByTestId('module-editor-function').fill(
     'Conditions and protects the sensor signal before amplification.',
   );
+  const projectBeforeSensorEdit = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
   await page.getByTestId('save-module-editor').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 13}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${projectBeforeSensorEdit.revision + 1}`)).waitFor({ timeout: 10_000 });
   await page.getByText(
     'Conditions and protects the sensor signal before amplification.',
     { exact: true },
@@ -644,7 +675,7 @@ try {
     path.resolve(projectRoot, 'project.circuit.json'),
     'utf8',
   ));
-  assert.equal(finalProject.revision, initialRevision + 13);
+  assert.equal(finalProject.revision, projectBeforeSensorEdit.revision + 1);
   assert.equal(finalProject.modules.length, 4);
   const finalFilter = finalProject.modules.find((module) => module.id === 'filter');
   assert.equal(finalFilter.preview_enabled, true);

@@ -67,6 +67,43 @@ async function componentPositions(page) {
   return JSON.parse(raw || '{}');
 }
 
+async function editorCamera(page) {
+  const raw = await page.getByTestId('schematic-editor').getAttribute('data-camera');
+  return JSON.parse(raw || '{"x":0,"y":0,"scale":1}');
+}
+
+async function editorWirePoints(page) {
+  const raw = await page.getByTestId('schematic-editor').getAttribute('data-wire-points');
+  return JSON.parse(raw || '[]');
+}
+
+function worldToScreen(point, camera, canvasBox) {
+  return {
+    x: canvasBox.x + camera.x + point.x * camera.scale,
+    y: canvasBox.y + camera.y + point.y * camera.scale,
+  };
+}
+
+async function firstVisibleWireSegment(page) {
+  const canvasBox = await page.getByTestId('schematic-editor-canvas').boundingBox();
+  assert.ok(canvasBox);
+  const camera = await editorCamera(page);
+  const wires = await editorWirePoints(page);
+  for (const points of wires) {
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      if (!start || !end) continue;
+      if (Math.abs(start.x - end.x) + Math.abs(start.y - end.y) < 20) continue;
+      return {
+        start: worldToScreen(start, camera, canvasBox),
+        end: worldToScreen(end, camera, canvasBox),
+      };
+    }
+  }
+  throw new Error('No visible wire segment in editor state.');
+}
+
 function assertPositionEqual(actual, expected, label) {
   assert.deepEqual(
     { x: Number(actual?.x), y: Number(actual?.y) },
@@ -149,32 +186,24 @@ try {
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
 
   await page.getByTestId('module-card-filter').dblclick();
+  await page.getByTestId('module-netlistsvg').locator('svg').waitFor({ timeout: 20_000 });
+  await page.getByTestId('schematic-editor-tab').click();
   const editor = page.getByTestId('schematic-editor');
   await editor.waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
     return node?.getAttribute('data-component-count') === '2' &&
-      node?.getAttribute('data-wire-count') === '0';
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 3;
   });
 
   const canvas = page.getByTestId('schematic-editor-canvas');
   const box = await canvas.boundingBox();
   assert.ok(box);
-  const pointA = { x: box.x + Math.min(220, box.width * 0.35), y: box.y + Math.min(220, box.height * 0.35) };
-  const pointB = { x: pointA.x + 80, y: pointA.y };
+  const initialWireCount = Number(await editor.getAttribute('data-wire-count'));
+  const initialSegment = await firstVisibleWireSegment(page);
+  const visibleImplicitWirePixels = await countVisibleWirePixels(page, initialSegment.start, initialSegment.end);
+  assert.ok(visibleImplicitWirePixels > 60, `netlist-derived wire is not visible; counted ${visibleImplicitWirePixels} pixels`);
   const placePoint = { x: box.x + Math.min(430, box.width * 0.62), y: box.y + Math.min(280, box.height * 0.48) };
-
-  await page.getByTestId('schematic-editor-wire').click();
-  await page.mouse.move(pointA.x, pointA.y);
-  await page.mouse.down();
-  await page.mouse.move(pointB.x, pointB.y, { steps: 8 });
-  await page.mouse.up();
-  await page.waitForFunction(() => (
-    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') === '1'
-  ));
-  const visibleWirePixelsAfterDraw = await countVisibleWirePixels(page, pointA, pointB);
-  assert.ok(visibleWirePixelsAfterDraw > 60, `wire is not visibly drawn; counted ${visibleWirePixelsAfterDraw} pixels`);
-  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-wire-visible.png') });
 
   await page.getByTestId('schematic-editor-place-R').click();
   await page.mouse.click(placePoint.x, placePoint.y);
@@ -198,32 +227,64 @@ try {
   assertPositionEqual(filterPositionsAfterDrag.c_filter, filterPositionsAfterPlace.c_filter, 'dragging added resistor moved c_filter');
   assertPositionChanged(filterPositionsAfterDrag.r1, filterPositionsAfterPlace.r1, 'added resistor did not move');
 
+  const cameraAfterDrag = await editorCamera(page);
+  const canvasBoxAfterDrag = await canvas.boundingBox();
+  assert.ok(canvasBoxAfterDrag);
+  const wireStart = worldToScreen(
+    { x: filterPositionsAfterDrag.r_filter.x + 48, y: filterPositionsAfterDrag.r_filter.y },
+    cameraAfterDrag,
+    canvasBoxAfterDrag,
+  );
+  const wireEnd = worldToScreen(
+    { x: filterPositionsAfterDrag.r1.x - 48, y: filterPositionsAfterDrag.r1.y },
+    cameraAfterDrag,
+    canvasBoxAfterDrag,
+  );
+  await page.getByTestId('schematic-editor-wire').click();
+  await page.mouse.move(wireStart.x, wireStart.y);
+  await page.mouse.down();
+  await page.mouse.move(wireEnd.x, wireEnd.y, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForFunction((count) => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') > count
+  ), initialWireCount);
+  const visibleWirePixelsAfterDraw = await countVisibleWirePixels(page, wireStart, wireEnd);
+  assert.ok(visibleWirePixelsAfterDraw > 60, `drawn wire is not visibly drawn; counted ${visibleWirePixelsAfterDraw} pixels`);
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-wire-visible.png') });
+
   await page.getByTestId('schematic-editor-save').click();
-  await page.getByText('Schematic saved and SVG rebuilt', { exact: true }).waitFor({ timeout: 30_000 });
+  await page.getByText('Applied netlist and SVG rebuilt', { exact: true }).waitFor({ timeout: 30_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
     return node?.getAttribute('data-dirty') === 'false' &&
       node?.getAttribute('data-component-count') === '3' &&
-      node?.getAttribute('data-wire-count') === '1';
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 3;
   });
 
   const moduleData = JSON.parse(await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'));
   assert.equal(moduleData.components.length, 3);
-  assert.equal(moduleData.wires.length, 1);
   assert.ok(moduleData.components.some((component) => component.id === 'r1' && component.type === 'R'));
+  assert.match(
+    await readFile(path.resolve(projectRoot, 'build', 'modules', 'filter', 'design.cir'), 'utf8'),
+    /Rfilter_R1\s+out\s+\S+\s+1k/,
+  );
 
   await page.getByTestId('schematic-svg-tab').click();
   await page.getByTestId('module-netlistsvg').locator('svg').waitFor({ timeout: 20_000 });
+  assert.match(await page.getByTestId('module-netlistsvg').innerHTML(), /cell_Rfilter_R1/);
   await page.getByTestId('back-to-board').click();
   await page.getByTestId('module-card-filter').dblclick();
+  await page.getByTestId('schematic-editor-tab').click();
   await page.waitForFunction(() => (
-    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') === '1'
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') >= 3
   ));
-  const visibleWirePixelsAfterReload = await countVisibleWirePixels(page, pointA, pointB);
+  const reloadSegment = await firstVisibleWireSegment(page);
+  const visibleWirePixelsAfterReload = await countVisibleWirePixels(page, reloadSegment.start, reloadSegment.end);
   assert.ok(visibleWirePixelsAfterReload > 60, `wire is not visible after reload; counted ${visibleWirePixelsAfterReload} pixels`);
   await page.getByTestId('back-to-board').click();
 
   await page.getByTestId('module-card-power').dblclick();
+  await page.getByTestId('schematic-editor-tab').click();
   await editor.waitFor({ timeout: 20_000 });
   const powerCanvas = page.getByTestId('schematic-editor-canvas');
   const powerBox = await powerCanvas.boundingBox();
