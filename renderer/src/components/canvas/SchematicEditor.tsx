@@ -52,7 +52,7 @@ interface WireDragState {
 }
 
 export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
-  const [draft, setDraft] = useState(() => cloneModule(module));
+  const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
   const [placeType, setPlaceType] = useState<ToolComponentType>('R');
@@ -65,7 +65,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const dragRef = useRef<DragState | null>(null);
   const wireDragRef = useRef<WireDragState | null>(null);
 
-  const document = useMemo(() => createSchematicDocument(draft), [draft]);
+  const document = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
   const selectedComponent = selection?.kind === 'component'
     ? draft.components.find((component) => component.id === selection.id) ?? null
     : null;
@@ -74,7 +74,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     : null;
 
   useEffect(() => {
-    setDraft(cloneModule(module));
+    setDraft(createSchematicDocument(module).module);
     setDirty(false);
     setSelection(null);
     setWireStart(null);

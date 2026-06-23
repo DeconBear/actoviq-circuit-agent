@@ -42,6 +42,10 @@ export interface SchematicDocument {
   viewBox: SchematicBounds;
 }
 
+export interface SchematicDocumentOptions {
+  autoLayout?: boolean;
+}
+
 export const COMPONENT_TYPES: ToolComponentType[] = ['R', 'C', 'L', 'D', 'M', 'Q', 'V', 'I'];
 
 export const DEFAULT_VALUES: Record<ToolComponentType, string> = {
@@ -70,8 +74,12 @@ export function cloneModule(module: CircuitModule): CircuitModule {
   return JSON.parse(JSON.stringify(module)) as CircuitModule;
 }
 
-export function createSchematicDocument(module: CircuitModule): SchematicDocument {
-  const next = cloneModule(module);
+export function createSchematicDocument(
+  module: CircuitModule,
+  options: SchematicDocumentOptions = {},
+): SchematicDocument {
+  const shouldAutoLayout = options.autoLayout !== false && (module.wires ?? []).length === 0;
+  const next = shouldAutoLayout ? autoLayoutModule(cloneModule(module)) : cloneModule(module);
   for (const component of next.components) {
     component.rotation = normalizeRotation(component.rotation);
     component.position = snapPoint(component.position);
@@ -137,6 +145,286 @@ export function makePlacedComponent(
   };
 }
 
+function autoLayoutModule(module: CircuitModule): CircuitModule {
+  if (module.components.length === 0) return module;
+  const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
+  if (activeComponents.length > 0) return autoLayoutActiveModule(module, activeComponents);
+  return autoLayoutPassiveModule(module);
+}
+
+function autoLayoutPassiveModule(module: CircuitModule): CircuitModule {
+  const inputNet = preferredPortNet(module, 'input');
+  const outputNet = preferredPortNet(module, 'output');
+  const path = inputNet && outputNet ? findSeriesPath(module, inputNet, outputNet) : [];
+  if (path.length === 0) return autoLayoutGenericModule(module);
+
+  const pathComponents = new Set(path.map((entry) => entry.component.id));
+  const nodeX = new Map<string, number>();
+  const yMain = 180;
+  const xStart = 210;
+  const spacing = 180;
+
+  path.forEach((entry, index) => {
+    const center = { x: xStart + index * spacing, y: yMain };
+    placeHorizontal(entry.component, entry.leftNet, entry.rightNet, center);
+    rememberPinX(nodeX, entry.component);
+  });
+
+  const lowerCounts = new Map<string, number>();
+  const upperCounts = new Map<string, number>();
+  const floating: CircuitComponent[] = [];
+
+  for (const component of module.components) {
+    if (pathComponents.has(component.id)) continue;
+    if (component.pins.length !== 2) {
+      floating.push(component);
+      continue;
+    }
+    const [first, second] = component.pins;
+    if (!first || !second) continue;
+    const firstSignal = nodeX.has(first.net) && !isRailNet(first.net, module);
+    const secondSignal = nodeX.has(second.net) && !isRailNet(second.net, module);
+    const firstRail = isRailNet(first.net, module);
+    const secondRail = isRailNet(second.net, module);
+    if (firstSignal && secondRail) {
+      placeRailBranch(component, first.net, second.net, nodeX, lowerCounts, upperCounts, yMain, module);
+      continue;
+    }
+    if (secondSignal && firstRail) {
+      placeRailBranch(component, second.net, first.net, nodeX, lowerCounts, upperCounts, yMain, module);
+      continue;
+    }
+    floating.push(component);
+  }
+
+  floating.forEach((component, index) => {
+    component.position = snapPoint({ x: xStart + path.length * spacing + 120, y: yMain + index * 120 });
+    component.rotation = normalizeRotation(component.rotation);
+  });
+  return module;
+}
+
+function autoLayoutActiveModule(module: CircuitModule, activeComponents: CircuitComponent[]): CircuitModule {
+  const sortedActive = [...activeComponents].sort((left, right) => (
+    activePlacementScore(left) - activePlacementScore(right) || left.id.localeCompare(right.id)
+  ));
+  const mainY = 220;
+  sortedActive.forEach((component, index) => {
+    component.position = snapPoint({ x: 250 + index * 190, y: mainY });
+    component.rotation = 0;
+  });
+
+  const primary = sortedActive[0];
+  const primaryNets = primary ? activeNetMap(primary) : {};
+  const placed = new Set(sortedActive.map((component) => component.id));
+  const usedSlots = { top: 0, bottom: 0, right: 0 };
+
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    if (component.pins.length !== 2) {
+      component.position = snapPoint({ x: 250 + sortedActive.length * 190 + usedSlots.right * 150, y: mainY });
+      component.rotation = 0;
+      usedSlots.right += 1;
+      continue;
+    }
+    const [first, second] = component.pins;
+    if (!first || !second) continue;
+    const firstRail = isRailNet(first.net, module);
+    const secondRail = isRailNet(second.net, module);
+    const signalNet = firstRail ? second.net : first.net;
+    const railNet = firstRail ? first.net : secondRail ? second.net : '';
+    const signalPin = nearestPinPointForNet(sortedActive, signalNet);
+
+    if (railNet && signalPin) {
+      if (isGroundNet(railNet, module)) {
+        placeVertical(component, signalNet, railNet, {
+          x: signalPin.x + usedSlots.bottom * 110,
+          y: signalPin.y + 90,
+        });
+        usedSlots.bottom += 1;
+      } else {
+        placeVertical(component, railNet, signalNet, {
+          x: signalPin.x + usedSlots.top * 110,
+          y: signalPin.y - 90,
+        });
+        usedSlots.top += 1;
+      }
+      continue;
+    }
+
+    if (primaryNets.gate && (first.net === primaryNets.gate || second.net === primaryNets.gate)) {
+      placeHorizontal(component, first.net, second.net, {
+        x: (primary?.position.x ?? 250) - 160,
+        y: mainY,
+      });
+      continue;
+    }
+
+    component.position = snapPoint({ x: 250 + sortedActive.length * 190 + usedSlots.right * 150, y: mainY + 100 });
+    component.rotation = 0;
+    usedSlots.right += 1;
+  }
+  return module;
+}
+
+function autoLayoutGenericModule(module: CircuitModule): CircuitModule {
+  const columns = Math.max(1, Math.ceil(Math.sqrt(module.components.length)));
+  module.components.forEach((component, index) => {
+    component.position = snapPoint({
+      x: 180 + (index % columns) * 180,
+      y: 170 + Math.floor(index / columns) * 140,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+  });
+  return module;
+}
+
+function placeRailBranch(
+  component: CircuitComponent,
+  signalNet: string,
+  railNet: string,
+  nodeX: Map<string, number>,
+  lowerCounts: Map<string, number>,
+  upperCounts: Map<string, number>,
+  yMain: number,
+  module: CircuitModule,
+) {
+  const xBase = nodeX.get(signalNet) ?? 240;
+  if (isGroundNet(railNet, module)) {
+    const index = lowerCounts.get(signalNet) ?? 0;
+    lowerCounts.set(signalNet, index + 1);
+    placeVertical(component, signalNet, railNet, {
+      x: xBase + index * 95,
+      y: yMain + 95 + index * 12,
+    });
+    return;
+  }
+  const index = upperCounts.get(signalNet) ?? 0;
+  upperCounts.set(signalNet, index + 1);
+  placeVertical(component, railNet, signalNet, {
+    x: xBase + index * 95,
+    y: yMain - 95 - index * 12,
+  });
+}
+
+function placeHorizontal(component: CircuitComponent, leftNet: string, rightNet: string, center: CircuitPosition) {
+  component.position = snapPoint(center);
+  const [first, second] = component.pins;
+  if (first?.net === leftNet && second?.net === rightNet) {
+    component.rotation = 0;
+  } else if (first?.net === rightNet && second?.net === leftNet) {
+    component.rotation = 180;
+  } else {
+    component.rotation = 0;
+  }
+}
+
+function placeVertical(component: CircuitComponent, topNet: string, bottomNet: string, center: CircuitPosition) {
+  component.position = snapPoint(center);
+  const [first, second] = component.pins;
+  if (first?.net === topNet && second?.net === bottomNet) {
+    component.rotation = 90;
+  } else if (first?.net === bottomNet && second?.net === topNet) {
+    component.rotation = 270;
+  } else {
+    component.rotation = 90;
+  }
+}
+
+interface SeriesPathEntry {
+  component: CircuitComponent;
+  leftNet: string;
+  rightNet: string;
+}
+
+function findSeriesPath(module: CircuitModule, inputNet: string, outputNet: string): SeriesPathEntry[] {
+  const graph = new Map<string, SeriesPathEntry[]>();
+  for (const component of module.components) {
+    if (component.pins.length !== 2) continue;
+    const [first, second] = component.pins;
+    if (!first || !second || first.net === second.net) continue;
+    if (isRailNet(first.net, module) || isRailNet(second.net, module)) continue;
+    const forward = { component, leftNet: first.net, rightNet: second.net };
+    const reverse = { component, leftNet: second.net, rightNet: first.net };
+    graph.set(first.net, [...(graph.get(first.net) ?? []), forward]);
+    graph.set(second.net, [...(graph.get(second.net) ?? []), reverse]);
+  }
+
+  const queue: Array<{ net: string; path: SeriesPathEntry[]; used: Set<string> }> = [
+    { net: inputNet, path: [], used: new Set() },
+  ];
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
+    if (current.net === outputNet) return current.path;
+    if (visited.has(current.net)) continue;
+    visited.add(current.net);
+    for (const edge of graph.get(current.net) ?? []) {
+      if (current.used.has(edge.component.id)) continue;
+      queue.push({
+        net: edge.rightNet,
+        path: [...current.path, edge],
+        used: new Set([...current.used, edge.component.id]),
+      });
+    }
+  }
+  return [];
+}
+
+function preferredPortNet(module: CircuitModule, direction: 'input' | 'output'): string | null {
+  const port = module.ports.find((entry) => (
+    entry.direction === direction &&
+    entry.signal_type !== 'ground' &&
+    entry.signal_type !== 'power'
+  ));
+  return port?.net ?? null;
+}
+
+function rememberPinX(nodeX: Map<string, number>, component: CircuitComponent) {
+  component.pins.forEach((pin, index) => {
+    const point = pinWorld(component, pin, index);
+    nodeX.set(pin.net, point.x);
+  });
+}
+
+function activeNetMap(component: CircuitComponent): { gate?: string; drain?: string; source?: string } {
+  const result: { gate?: string; drain?: string; source?: string } = {};
+  for (const pin of component.pins) {
+    const key = `${pin.id} ${pin.name}`.toLowerCase();
+    if (/gate|base|\bg\b|\bb\b/.test(key)) result.gate = pin.net;
+    if (/drain|collector|\bd\b|\bc\b/.test(key)) result.drain = pin.net;
+    if (/source|emitter|\bs\b|\be\b/.test(key)) result.source = pin.net;
+  }
+  return result;
+}
+
+function activePlacementScore(component: CircuitComponent): number {
+  const text = `${component.id} ${component.name}`.toLowerCase();
+  if (/ref|bias|diode/.test(text)) return 0;
+  if (/out|load/.test(text)) return 2;
+  return 1;
+}
+
+function nearestPinPointForNet(components: CircuitComponent[], net: string): CircuitPosition | null {
+  for (const component of components) {
+    for (let index = 0; index < component.pins.length; index += 1) {
+      const pin = component.pins[index];
+      if (!pin || pin.net !== net) continue;
+      return pinWorld(component, pin, index);
+    }
+  }
+  return null;
+}
+
+function isRailNet(net: string, module: CircuitModule): boolean {
+  return isGroundNet(net, module) || module.ports.some((port) => port.net === net && port.signal_type === 'power');
+}
+
+function isGroundNet(net: string, module: CircuitModule): boolean {
+  return net === '0' || module.ports.some((port) => port.net === net && isGroundPort(port));
+}
+
 export function pinWorld(component: CircuitComponent, pin: CircuitPin, index: number): CircuitPosition {
   const offset = pinOffset(component, pin, index);
   return {
@@ -157,25 +445,77 @@ export function componentBounds(component: CircuitComponent): SchematicBounds {
   };
 }
 
+function pinPointsByNetName(module: CircuitModule): Map<string, CircuitPosition[]> {
+  const points = new Map<string, CircuitPosition[]>();
+  for (const component of module.components) {
+    component.pins.forEach((pin, index) => {
+      const point = pinWorld(component, pin, index);
+      points.set(pin.net, [...(points.get(pin.net) ?? []), point]);
+    });
+  }
+  return points;
+}
+
+function leftmost(points: CircuitPosition[]): CircuitPosition | null {
+  return points.reduce<CircuitPosition | null>((best, point) => (
+    !best || point.x < best.x ? point : best
+  ), null);
+}
+
+function rightmost(points: CircuitPosition[]): CircuitPosition | null {
+  return points.reduce<CircuitPosition | null>((best, point) => (
+    !best || point.x > best.x ? point : best
+  ), null);
+}
+
+function topmost(points: CircuitPosition[]): CircuitPosition | null {
+  return points.reduce<CircuitPosition | null>((best, point) => (
+    !best || point.y < best.y ? point : best
+  ), null);
+}
+
+function bottommost(points: CircuitPosition[]): CircuitPosition | null {
+  return points.reduce<CircuitPosition | null>((best, point) => (
+    !best || point.y > best.y ? point : best
+  ), null);
+}
+
 export function computePortPositions(module: CircuitModule): Map<string, CircuitPosition> {
   const bounds = moduleBounds(module, new Map(), module.wires ?? []);
   const inputs = module.ports.filter((port) => !isGroundPort(port) && port.signal_type !== 'power' && port.direction !== 'output');
   const outputs = module.ports.filter((port) => !isGroundPort(port) && port.direction === 'output');
   const powers = module.ports.filter((port) => !isGroundPort(port) && port.signal_type === 'power');
   const grounds = module.ports.filter(isGroundPort);
+  const pinPointsByNet = pinPointsByNetName(module);
   const map = new Map<string, CircuitPosition>();
 
   inputs.forEach((port, index) => {
-    map.set(port.id, snapPoint({ x: bounds.minX - 120, y: bounds.minY + 70 + index * 60 }));
+    const points = pinPointsByNet.get(port.net) ?? [];
+    const anchor = leftmost(points);
+    map.set(port.id, snapPoint(anchor
+      ? { x: anchor.x - 110, y: anchor.y + index * 16 }
+      : { x: bounds.minX - 120, y: bounds.minY + 70 + index * 60 }));
   });
   outputs.forEach((port, index) => {
-    map.set(port.id, snapPoint({ x: bounds.maxX + 120, y: bounds.minY + 70 + index * 60 }));
+    const points = pinPointsByNet.get(port.net) ?? [];
+    const anchor = rightmost(points);
+    map.set(port.id, snapPoint(anchor
+      ? { x: anchor.x + 110, y: anchor.y + index * 16 }
+      : { x: bounds.maxX + 120, y: bounds.minY + 70 + index * 60 }));
   });
   powers.forEach((port, index) => {
-    map.set(port.id, snapPoint({ x: bounds.minX + 110 + index * 110, y: bounds.minY - 90 }));
+    const points = pinPointsByNet.get(port.net) ?? [];
+    const anchor = topmost(points);
+    map.set(port.id, snapPoint(anchor
+      ? { x: anchor.x + index * 80, y: anchor.y - 110 }
+      : { x: bounds.minX + 110 + index * 110, y: bounds.minY - 90 }));
   });
   grounds.forEach((port, index) => {
-    map.set(port.id, snapPoint({ x: bounds.minX + 110 + index * 110, y: bounds.maxY + 100 }));
+    const points = pinPointsByNet.get(port.net) ?? [];
+    const anchor = bottommost(points);
+    map.set(port.id, snapPoint(anchor
+      ? { x: anchor.x + index * 80, y: anchor.y + 120 }
+      : { x: bounds.minX + 110 + index * 110, y: bounds.maxY + 100 }));
   });
   return map;
 }
@@ -585,6 +925,7 @@ function materializeNetWires(
     const anchor = chooseNetAnchor(endpoints);
     for (const endpoint of endpoints) {
       if (endpoint === anchor) continue;
+      if (distance(endpointDrawPoint(anchor), endpointDrawPoint(endpoint)) < 1) continue;
       const pairKey = endpointPairKey(anchor, endpoint);
       if (usedPairs.has(pairKey)) continue;
       usedPairs.add(pairKey);

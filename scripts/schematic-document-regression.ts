@@ -130,6 +130,8 @@ for (const fixture of fixtures) {
       assert.equal(resolved.y, endpoint?.y, `${fixture.module_id}.${wire.id} endpoint y`);
     }
   }
+
+  assertReadableLayout(document.module);
 }
 
 console.log(JSON.stringify({
@@ -137,3 +139,90 @@ console.log(JSON.stringify({
   fixtureCount: fixtures.length,
   fixtures: fixtures.map((fixture) => fixture.module_id),
 }, null, 2));
+
+function assertReadableLayout(module: CircuitModule) {
+  if (module.module_id === 'rc_low_pass') {
+    const resistor = mustComponent(module, 'r1');
+    const capacitor = mustComponent(module, 'c1');
+    assertPinLeftOf(resistor, 'in', 'out', module.module_id);
+    assertPinAbove(capacitor, 'out', '0', module.module_id);
+    assert.ok(resistor.position.y < capacitor.position.y, 'RC shunt capacitor should sit below the series resistor');
+  }
+  if (module.module_id === 'rlc_band_pass') {
+    const resistor = mustComponent(module, 'r1');
+    const inductor = mustComponent(module, 'l1');
+    const capacitor = mustComponent(module, 'c1');
+    assert.ok(resistor.position.x < inductor.position.x, 'RLC series resistor should precede inductor');
+    assertPinLeftOf(resistor, 'in', 'n1', module.module_id);
+    assertPinLeftOf(inductor, 'n1', 'out', module.module_id);
+    assertPinAbove(capacitor, 'out', '0', module.module_id);
+  }
+  if (module.module_id === 'diode_rectifier') {
+    const diode = mustComponent(module, 'd1');
+    const capacitor = mustComponent(module, 'c1');
+    assertPinLeftOf(diode, 'in', 'out', module.module_id);
+    assertPinAbove(capacitor, 'out', '0', module.module_id);
+  }
+  if (module.module_id === 'bjt_common_emitter') {
+    const transistor = mustComponent(module, 'q1');
+    assertActivePins(transistor, module.module_id);
+  }
+  if (module.module_id === 'mos_common_source') {
+    const transistor = mustComponent(module, 'm1');
+    assertActivePins(transistor, module.module_id);
+  }
+  if (module.module_id === 'mos_ldo') {
+    const pass = mustComponent(module, 'm_pass');
+    assertActivePins(pass, module.module_id);
+  }
+  if (module.module_id === 'current_mirror') {
+    const reference = mustComponent(module, 'm_ref');
+    const output = mustComponent(module, 'm_out');
+    assertActivePins(reference, module.module_id);
+    assertActivePins(output, module.module_id);
+    assert.ok(reference.position.x < output.position.x, 'current mirror reference device should be left of output device');
+  }
+}
+
+function mustComponent(module: CircuitModule, id: string): CircuitComponent {
+  const component = module.components.find((entry) => entry.id === id);
+  assert.ok(component, `${module.module_id}.${id} missing`);
+  return component;
+}
+
+function assertPinLeftOf(component: CircuitComponent, leftNet: string, rightNet: string, label: string) {
+  const left = pinPointForNet(component, leftNet);
+  const right = pinPointForNet(component, rightNet);
+  assert.ok(left.x < right.x, `${label}.${component.id} should route ${leftNet} left of ${rightNet}`);
+}
+
+function assertPinAbove(component: CircuitComponent, topNet: string, bottomNet: string, label: string) {
+  const top = pinPointForNet(component, topNet);
+  const bottom = pinPointForNet(component, bottomNet);
+  assert.ok(top.y < bottom.y, `${label}.${component.id} should route ${topNet} above ${bottomNet}`);
+}
+
+function assertActivePins(component: CircuitComponent, label: string) {
+  const gate = pinPointByName(component, /gate|base|\bg\b|\bb\b/);
+  const drain = pinPointByName(component, /drain|collector|\bd\b|\bc\b/);
+  const source = pinPointByName(component, /source|emitter|\bs\b|\be\b/);
+  assert.ok(gate.x < drain.x, `${label}.${component.id} gate/base should be left of drain/collector`);
+  assert.ok(gate.x < source.x, `${label}.${component.id} gate/base should be left of source/emitter`);
+  assert.ok(drain.y < source.y, `${label}.${component.id} drain/collector should be above source/emitter`);
+}
+
+function pinPointForNet(component: CircuitComponent, net: string) {
+  const index = component.pins.findIndex((pin) => pin.net === net);
+  assert.notEqual(index, -1, `${component.id}.${net} pin missing`);
+  const pin = component.pins[index];
+  assert.ok(pin);
+  return pinWorld(component, pin, index);
+}
+
+function pinPointByName(component: CircuitComponent, pattern: RegExp) {
+  const index = component.pins.findIndex((pin) => pattern.test(`${pin.id} ${pin.name}`.toLowerCase()));
+  assert.notEqual(index, -1, `${component.id}.${pattern.source} pin missing`);
+  const pin = component.pins[index];
+  assert.ok(pin);
+  return pinWorld(component, pin, index);
+}
