@@ -13,6 +13,12 @@ let mainWindow: BrowserWindow | null = null;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function appIconPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'icon.png')
+    : path.join(app.getAppPath(), 'assets', 'icon.png');
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -20,6 +26,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     title: 'Actoviq Circuit Agent',
+    icon: appIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

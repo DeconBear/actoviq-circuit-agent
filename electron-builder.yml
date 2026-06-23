@@ -19,6 +19,8 @@ extraResources:
     to: embedded/
   - from: skills/
     to: skills/
+  - from: assets/
+    to: assets/
 win:
   target:
     - nsis
