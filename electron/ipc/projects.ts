@@ -1,6 +1,6 @@
 import { app, BrowserWindow, type IpcMain, shell } from 'electron';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
-import { access, copyFile, cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { access, copyFile, cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
@@ -23,6 +23,20 @@ interface SavedDesignMemorySummary {
   name: string;
   rootPath: string;
   relativePath: string;
+  guidePath?: string;
+  templatePath?: string;
+  flowPath?: string;
+}
+
+interface DesignMemoryItem {
+  id: string;
+  kind: 'template' | 'flow';
+  name: string;
+  rootPath: string;
+  relativePath: string;
+  sourceProjectId?: string;
+  sourceRevision?: number;
+  createdAt?: string;
   guidePath?: string;
   templatePath?: string;
   flowPath?: string;
@@ -372,6 +386,64 @@ async function saveDesignFlow(projectId: string): Promise<SavedDesignMemorySumma
   };
 }
 
+async function listDesignMemoryKind(
+  referencesDir: string,
+  directoryName: 'templates' | 'flows',
+  kind: 'template' | 'flow',
+): Promise<DesignMemoryItem[]> {
+  const root = path.resolve(referencesDir, 'design-memory', directoryName);
+  if (!(await exists(root))) return [];
+  const entries = await readdir(root, { withFileTypes: true });
+  const items: DesignMemoryItem[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const targetRoot = path.resolve(root, entry.name);
+    const relative = path.relative(root, targetRoot);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    const manifestPath = path.resolve(targetRoot, kind === 'template' ? 'template.json' : 'flow.json');
+    try {
+      const manifest = await readJsonFile<{
+        id?: string;
+        name?: string;
+        source_project_id?: string;
+        source_revision?: number;
+        created_at?: string;
+        files?: Record<string, string | null>;
+      }>(manifestPath);
+      const fallbackStat = await stat(targetRoot);
+      const files = manifest.files ?? {};
+      const agentGuide = files.agent_guide;
+      const templateNetlist = files.template_netlist;
+      const designFlow = files.design_flow;
+      items.push({
+        id: manifest.id || entry.name,
+        kind,
+        name: manifest.name || entry.name,
+        rootPath: targetRoot,
+        relativePath: relativeReferencePath(referencesDir, targetRoot),
+        sourceProjectId: manifest.source_project_id,
+        sourceRevision: manifest.source_revision,
+        createdAt: manifest.created_at || fallbackStat.mtime.toISOString(),
+        guidePath: typeof agentGuide === 'string' ? path.resolve(targetRoot, agentGuide) : undefined,
+        templatePath: typeof templateNetlist === 'string' ? path.resolve(targetRoot, templateNetlist) : undefined,
+        flowPath: typeof designFlow === 'string' ? path.resolve(targetRoot, designFlow) : undefined,
+      });
+    } catch {
+      // Ignore incomplete or hand-edited design memory folders.
+    }
+  }
+  return items.sort((left, right) => String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')));
+}
+
+async function listDesignMemory(): Promise<{ templates: DesignMemoryItem[]; flows: DesignMemoryItem[] }> {
+  const workspace = await getActiveWorkspace();
+  const [templates, flows] = await Promise.all([
+    listDesignMemoryKind(workspace.referencesDir, 'templates', 'template'),
+    listDesignMemoryKind(workspace.referencesDir, 'flows', 'flow'),
+  ]);
+  return { templates, flows };
+}
+
 function projectScriptPath(): string {
   const candidates = [
     path.resolve(app.getAppPath(), 'skills', 'circuit-design-ngspice', 'scripts', 'circuit_project.py'),
@@ -645,6 +717,10 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle('project:save-design-flow', async (_event, projectId: string) => {
     return saveDesignFlow(projectId);
+  });
+
+  ipcMain.handle('project:list-design-memory', async () => {
+    return listDesignMemory();
   });
 
   ipcMain.handle('project:watch', async (_event, projectId: string) => {

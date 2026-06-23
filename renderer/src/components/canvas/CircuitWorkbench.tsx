@@ -12,6 +12,7 @@ import { useAppStore } from '../../store/appStore';
 import type {
   CircuitCommand,
   CircuitConnection,
+  DesignMemoryItem,
   CircuitModule,
   CircuitModuleRef,
   CircuitPort,
@@ -235,6 +236,11 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject, onReference
     module_id: string;
     metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
   } | null>(null);
+  const [designMemory, setDesignMemory] = useState<{
+    templates: DesignMemoryItem[];
+    flows: DesignMemoryItem[];
+  }>({ templates: [], flows: [] });
+  const [designMemoryLoading, setDesignMemoryLoading] = useState(false);
 
   const project = bundle?.project ?? null;
   const systemNetworks = useMemo(
@@ -260,6 +266,21 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject, onReference
     setModulePreviewPositions({});
     setModulePreviewSizes({});
   }, [activeProjectId]);
+
+  const refreshDesignMemory = useCallback(async () => {
+    setDesignMemoryLoading(true);
+    try {
+      setDesignMemory(await window.electronAPI.listCircuitDesignMemory());
+    } catch {
+      setDesignMemory({ templates: [], flows: [] });
+    } finally {
+      setDesignMemoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshDesignMemory();
+  }, [refreshDesignMemory, activeProjectId]);
 
   useEffect(() => {
     const closeMenu = () => setContextMenu(null);
@@ -406,6 +427,7 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject, onReference
       const result = kind === 'template'
         ? await window.electronAPI.saveCircuitDesignTemplate(activeProjectId)
         : await window.electronAPI.saveCircuitDesignFlow(activeProjectId);
+      await refreshDesignMemory();
       await onReferencesChanged?.();
       setNotice(
         kind === 'template'
@@ -877,6 +899,9 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject, onReference
           onSimulate={runModuleSimulation}
           moduleSimulation={moduleSimulation}
           systemSimulation={build?.simulation ?? null}
+          designMemory={designMemory}
+          designMemoryLoading={designMemoryLoading}
+          onRefreshDesignMemory={refreshDesignMemory}
           busy={busy}
         />
       </div>
@@ -1454,6 +1479,9 @@ function ModuleInspector({
   onSimulate,
   moduleSimulation,
   systemSimulation,
+  designMemory,
+  designMemoryLoading,
+  onRefreshDesignMemory,
   busy,
 }: {
   module: CircuitModuleRef | null;
@@ -1475,6 +1503,9 @@ function ModuleInspector({
     ok: boolean;
     metrics?: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
   } | null;
+  designMemory: { templates: DesignMemoryItem[]; flows: DesignMemoryItem[] };
+  designMemoryLoading: boolean;
+  onRefreshDesignMemory: () => void;
   busy: boolean;
 }) {
   if (!module) {
@@ -1545,11 +1576,93 @@ function ModuleInspector({
         </button>
       </div>
 
+      <DesignMemoryPanel
+        memory={designMemory}
+        loading={designMemoryLoading}
+        onRefresh={onRefreshDesignMemory}
+      />
+
       {moduleSimulation ? (
         <SimulationMetrics title={`${moduleSimulation.module_id} module`} data={moduleSimulation} />
       ) : null}
       {systemSimulation ? <SimulationMetrics title="System" data={systemSimulation} /> : null}
     </aside>
+  );
+}
+
+function formatMemoryDate(value?: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function DesignMemoryPanel({
+  memory,
+  loading,
+  onRefresh,
+}: {
+  memory: { templates: DesignMemoryItem[]; flows: DesignMemoryItem[] };
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const templates = memory.templates.slice(0, 4);
+  const flows = memory.flows.slice(0, 4);
+  return (
+    <div style={styles.memoryPanel} data-testid="design-memory-panel">
+      <div style={styles.memoryHeader}>
+        <div style={styles.sectionTitle}>Design memory</div>
+        <button
+          style={styles.memoryRefreshButton}
+          onClick={onRefresh}
+          disabled={loading}
+          data-testid="refresh-design-memory"
+        >
+          {loading ? '...' : 'Refresh'}
+        </button>
+      </div>
+      <MemoryList title="Templates" items={templates} empty="No saved templates yet." />
+      <MemoryList title="Flows" items={flows} empty="No saved flows yet." />
+    </div>
+  );
+}
+
+function MemoryList({
+  title,
+  items,
+  empty,
+}: {
+  title: string;
+  items: DesignMemoryItem[];
+  empty: string;
+}) {
+  return (
+    <div style={styles.memoryGroup}>
+      <div style={styles.memoryGroupTitle}>{title}</div>
+      {items.length === 0 ? (
+        <div style={styles.memoryEmpty}>{empty}</div>
+      ) : items.map((item) => (
+        <div
+          key={`${item.kind}-${item.id}`}
+          style={styles.memoryItem}
+          data-testid={`design-memory-${item.kind}-${item.id}`}
+        >
+          <div style={styles.memoryItemTop}>
+            <strong style={styles.memoryName}>{item.name}</strong>
+            <span style={styles.memoryDate}>{formatMemoryDate(item.createdAt)}</span>
+          </div>
+          <code style={styles.memoryPath}>{item.relativePath}</code>
+          <div style={styles.memoryMeta}>
+            {item.sourceRevision !== undefined ? `rev ${item.sourceRevision}` : item.id}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1759,6 +1872,29 @@ const styles: Record<string, CSSProperties> = {
   simulationBlock: { marginTop: 8 },
   simStatus: { color: '#277448', fontSize: 11, fontWeight: 750, marginBottom: 5 },
   metricRow: { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '5px 0', fontSize: 9, borderBottom: '1px solid #eceff2' },
+  memoryPanel: { marginTop: 12, borderTop: '1px solid #eceff2', paddingTop: 2 },
+  memoryHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  memoryRefreshButton: {
+    border: '1px solid #cbd0d7',
+    borderRadius: 5,
+    background: '#fff',
+    color: '#4e5965',
+    padding: '4px 7px',
+    cursor: 'pointer',
+    fontSize: 10,
+  },
+  memoryGroup: { marginTop: 8 },
+  memoryGroupTitle: { color: '#69727d', fontSize: 10, fontWeight: 760, marginBottom: 6 },
+  memoryEmpty: { color: '#9aa1aa', fontSize: 10, padding: '5px 0' },
+  memoryItem: {
+    padding: '7px 0',
+    borderTop: '1px solid #eef1f4',
+  },
+  memoryItemTop: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' },
+  memoryName: { minWidth: 0, color: '#303741', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  memoryDate: { flexShrink: 0, color: '#8a929d', fontSize: 9 },
+  memoryPath: { display: 'block', marginTop: 4, color: '#2563eb', fontSize: 9, overflowWrap: 'anywhere' },
+  memoryMeta: { marginTop: 3, color: '#7b8490', fontSize: 9 },
   moduleViewer: { minWidth: 720, minHeight: '100%', display: 'flex', flexDirection: 'column', padding: 16 },
   moduleViewerHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   moduleViewerActions: { display: 'flex', alignItems: 'center', gap: 8 },

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +9,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputRoot = path.resolve(root, 'output', 'playwright');
 const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
+const designMemoryRoot = path.resolve(workspaceRoot, 'references', 'design-memory');
+const e2eProjectPrefix = 'playwright-module-hub-';
+const viteUrl = 'http://127.0.0.1:5173';
+const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const skillScript = path.resolve(
-  process.env.USERPROFILE || '',
-  '.codex',
+  root,
   'skills',
   'circuit-design-ngspice',
   'scripts',
@@ -25,13 +28,80 @@ function runSkill(args) {
   }));
 }
 
+async function canFetch(url) {
+  try {
+    const response = await fetch(url);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startViteIfNeeded() {
+  if (await canFetch(viteUrl)) return null;
+  let exited = null;
+  const child = spawn(process.execPath, [
+    viteBin,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '5173',
+  ], {
+    cwd: root,
+    env: { ...process.env, BROWSER: 'none' },
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.once('exit', (code, signal) => {
+    exited = { code, signal };
+  });
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (exited) {
+      throw new Error(`Vite exited before serving ${viteUrl}: ${JSON.stringify(exited)}`);
+    }
+    if (await canFetch(viteUrl)) return child;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  child.kill();
+  throw new Error(`Timed out waiting for Vite at ${viteUrl}`);
+}
+
+async function removePrefixedDirectories(rootDir, prefix) {
+  const entries = await readdir(rootDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+    const target = path.resolve(rootDir, entry.name);
+    assert.equal(path.dirname(target), rootDir);
+    await rm(target, { recursive: true, force: true });
+  }
+}
+
+async function cleanE2eDesignMemory() {
+  await Promise.all([
+    removePrefixedDirectories(path.resolve(designMemoryRoot, 'templates'), e2eProjectPrefix),
+    removePrefixedDirectories(path.resolve(designMemoryRoot, 'flows'), e2eProjectPrefix),
+  ]);
+}
+
+async function readDesignMemoryManifest(kind, id) {
+  const rootDir = path.resolve(designMemoryRoot, kind === 'template' ? 'templates' : 'flows', id);
+  const manifestPath = path.resolve(rootDir, kind === 'template' ? 'template.json' : 'flow.json');
+  return {
+    rootDir,
+    manifestPath,
+    manifest: JSON.parse(await readFile(manifestPath, 'utf8')),
+  };
+}
+
 const entries = await readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
 for (const entry of entries) {
-  if (!entry.isDirectory() || !entry.name.startsWith('playwright-module-hub-')) continue;
+  if (!entry.isDirectory() || !entry.name.startsWith(e2eProjectPrefix)) continue;
   const target = path.resolve(projectsRoot, entry.name);
   assert.equal(path.dirname(target), projectsRoot);
   await rm(target, { recursive: true, force: true });
 }
+await cleanE2eDesignMemory();
 
 const created = runSkill([
   'create-demo',
@@ -55,6 +125,7 @@ for (const module of created.project.modules) {
 
 await mkdir(outputRoot, { recursive: true });
 
+const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
 const electronApp = await electron.launch({
   args: ['.'],
@@ -274,6 +345,32 @@ try {
   assert.ok(moduleSvgBox && moduleSvgBox.width > 100 && moduleSvgBox.height > 100);
   await page.screenshot({ path: path.resolve(outputRoot, 'module-netlistsvg.png') });
 
+  await page.getByTestId('toggle-schematic-layout-edit').click();
+  await page.getByTestId('toggle-schematic-layout-edit').getByText('Done', { exact: true }).waitFor();
+  const filterCapacitor = page.locator('[data-testid="module-netlistsvg"] svg #cell_Cfilter_Cfilter');
+  await filterCapacitor.waitFor();
+  const capacitorBox = await filterCapacitor.boundingBox();
+  assert.ok(capacitorBox);
+  await page.mouse.move(capacitorBox.x + capacitorBox.width / 2, capacitorBox.y + capacitorBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    capacitorBox.x + capacitorBox.width / 2 + 55,
+    capacitorBox.y + capacitorBox.height / 2 + 28,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+  await page.getByText(new RegExp(`revision ${initialRevision + 5}`)).waitFor({ timeout: 20_000 });
+  await page.getByText('Moved Cfilter_Cfilter', { exact: true }).waitFor({ timeout: 20_000 });
+  const filterOverrides = JSON.parse(
+    await readFile(path.resolve(projectRoot, 'modules', 'filter', 'schematic.overrides.json'), 'utf8'),
+  );
+  assert.equal(filterOverrides.schema, 'actoviq.schematic-overrides.v1');
+  assert.equal(filterOverrides.items.Cfilter_Cfilter.locked, true);
+  assert.equal(typeof filterOverrides.items.Cfilter_Cfilter.x, 'number');
+  assert.equal(typeof filterOverrides.items.Cfilter_Cfilter.y, 'number');
+  await page.getByTestId('toggle-schematic-layout-edit').click();
+  await page.screenshot({ path: path.resolve(outputRoot, 'module-layout-edit.png') });
+
   await page.getByTestId('rebuild-module-svg').click();
   await page.getByText('Module SVG updated', { exact: true }).waitFor({ timeout: 20_000 });
 
@@ -326,7 +423,7 @@ try {
   ]);
   assert.equal(agentCompile.render.ok, true);
 
-  await page.getByText(new RegExp(`revision ${initialRevision + 5}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${initialRevision + 6}`)).waitFor({ timeout: 10_000 });
   await page.getByTestId('module-note').waitFor();
   await page.waitForFunction(() => {
     const note = document.querySelector('[data-testid="module-note"]');
@@ -359,6 +456,32 @@ try {
   await page.getByText('System simulation complete', { exact: true }).waitFor({ timeout: 30_000 });
   await page.getByText('output_1khz_db', { exact: true }).waitFor();
 
+  await page.getByTestId('save-design-template').click();
+  await page.getByText(/Saved template playwright-module-hub-/).waitFor({ timeout: 30_000 });
+  const templateNotice = await page.locator('[role="status"]').textContent();
+  const templateId = templateNotice?.match(/Saved template (\S+)/)?.[1] ?? '';
+  assert.match(templateId, /^playwright-module-hub-/);
+  await page.getByTestId(`design-memory-template-${templateId}`).waitFor({ timeout: 10_000 });
+  const savedTemplate = await readDesignMemoryManifest('template', templateId);
+  assert.equal(savedTemplate.manifest.schema, 'actoviq.design-template.v1');
+  assert.equal(savedTemplate.manifest.source_project_id, projectId);
+  assert.equal(savedTemplate.manifest.files.template_netlist, 'template.cir');
+  assert.match(await readFile(path.resolve(savedTemplate.rootDir, 'agent-guide.md'), 'utf8'), /Saved Design Template/);
+  assert.match(await readFile(path.resolve(savedTemplate.rootDir, 'template.cir'), 'utf8'), /22n/);
+
+  await page.getByTestId('save-design-flow').click();
+  await page.getByText(/Saved flow playwright-module-hub-/).waitFor({ timeout: 30_000 });
+  const flowNotice = await page.locator('[role="status"]').textContent();
+  const flowId = flowNotice?.match(/Saved flow (\S+)/)?.[1] ?? '';
+  assert.match(flowId, /^playwright-module-hub-/);
+  await page.getByTestId(`design-memory-flow-${flowId}`).waitFor({ timeout: 10_000 });
+  const savedFlow = await readDesignMemoryManifest('flow', flowId);
+  assert.equal(savedFlow.manifest.schema, 'actoviq.design-flow.v1');
+  assert.equal(savedFlow.manifest.source_project_id, projectId);
+  assert.ok(savedFlow.manifest.command_count >= 5);
+  assert.match(await readFile(path.resolve(savedFlow.rootDir, 'design-flow.md'), 'utf8'), /Move schematic item Cfilter_Cfilter/);
+  await page.screenshot({ path: path.resolve(outputRoot, 'saved-design-memory.png') });
+
   await canvasPanel.click({ button: 'right', position: { x: 520, y: 500 } });
   await page.getByTestId('canvas-context-menu').waitFor();
   await page.getByTestId('context-add-module').click();
@@ -369,7 +492,7 @@ try {
   await page.getByTestId('module-editor-function').fill('Conditions a sensor signal before amplification.');
   await page.getByTestId('module-editor-parameters').fill('Input range = 0-1 V');
   await page.getByTestId('save-module-editor').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 6}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${initialRevision + 7}`)).waitFor({ timeout: 10_000 });
   await page.getByTestId('module-card-sensor').waitFor();
   await page.getByTestId('module-summary-sensor').getByText('0-1 V', { exact: true }).waitFor();
 
@@ -379,7 +502,7 @@ try {
     'Conditions and protects the sensor signal before amplification.',
   );
   await page.getByTestId('save-module-editor').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 7}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${initialRevision + 8}`)).waitFor({ timeout: 10_000 });
   await page.getByText(
     'Conditions and protects the sensor signal before amplification.',
     { exact: true },
@@ -437,7 +560,7 @@ try {
     path.resolve(projectRoot, 'project.circuit.json'),
     'utf8',
   ));
-  assert.equal(finalProject.revision, initialRevision + 7);
+  assert.equal(finalProject.revision, initialRevision + 8);
   assert.equal(finalProject.modules.length, 4);
   const finalFilter = finalProject.modules.find((module) => module.id === 'filter');
   assert.equal(finalFilter.preview_enabled, true);
@@ -461,6 +584,8 @@ try {
       'output/playwright/module-hub-canvas.png',
       'output/playwright/module-summary-mode.png',
       'output/playwright/module-netlistsvg.png',
+      'output/playwright/module-layout-edit.png',
+      'output/playwright/saved-design-memory.png',
       'output/playwright/light-netlist-notebook.png',
       'output/playwright/light-svg-context.png',
       'output/playwright/minimum-window.png',
@@ -480,4 +605,7 @@ try {
   throw error;
 } finally {
   await electronApp.close();
+  if (viteProcess) {
+    viteProcess.kill();
+  }
 }

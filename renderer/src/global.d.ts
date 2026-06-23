@@ -7,6 +7,7 @@ import type {
   CircuitCommand,
   CircuitProjectBundle,
   CircuitProjectSummary,
+  DesignMemoryItem,
   SavedDesignMemorySummary,
   WorkflowEvent,
   WorkspaceSummary,
@@ -100,6 +101,7 @@ declare global {
       readCircuitBuild(projectId: string): Promise<CircuitBuildState | null>;
       saveCircuitDesignTemplate(projectId: string): Promise<SavedDesignMemorySummary>;
       saveCircuitDesignFlow(projectId: string): Promise<SavedDesignMemorySummary>;
+      listCircuitDesignMemory(): Promise<{ templates: DesignMemoryItem[]; flows: DesignMemoryItem[] }>;
       watchCircuitProject(projectId: string): Promise<void>;
       onCircuitProjectChanged(
         callback: (event: { projectId: string; timestamp: number }) => void,

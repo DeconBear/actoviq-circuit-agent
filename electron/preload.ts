@@ -200,6 +200,10 @@ const electronAPI = {
     return ipcRenderer.invoke('project:save-design-flow', projectId);
   },
 
+  listCircuitDesignMemory(): Promise<unknown> {
+    return ipcRenderer.invoke('project:list-design-memory');
+  },
+
   watchCircuitProject(projectId: string): Promise<void> {
     return ipcRenderer.invoke('project:watch', projectId);
   },

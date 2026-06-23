@@ -36,7 +36,7 @@ This compiles the Electron main process, starts Vite, and opens the window.
 **Tabs**
 
 - **Design** — each circuit module is an asset card showing its netlistsvg preview (or a function/parameter summary), its `IN` / `OUT` / `GND` system-network names, a copyable module ID, and an Agent note field. `Ctrl`+scroll zooms, the middle mouse button pans, right-click adds or edits a module, and the corner handle resizes a card. Double-click a card to open its full netlistsvg schematic. In the full schematic view, enable *Edit layout* to drag symbols/terminals; the GUI stores those layout-only edits in `modules/<id>/schematic.overrides.json` and re-renders the wires without changing the SPICE netlist.
-- **Design memory** — from the Design toolbar, *Save template* stores the current project as a reusable Agent template under `references/design-memory/templates/`; *Save flow* stores the applied design process under `references/design-memory/flows/`. Future workflow runs expose these saved items through the Agent asset-reuse tools.
+- **Design memory** — from the Design toolbar, *Save template* stores the current project as a reusable Agent template under `references/design-memory/templates/`; *Save flow* stores the applied design process under `references/design-memory/flows/`. The Design inspector lists recent saved templates and flows so you can confirm what was saved before reusing or hand-editing it. Future workflow runs expose these saved items through the Agent asset-reuse tools.
 - **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Saving re-renders the module SVG.
 - **SVG** — the selected module's netlistsvg schematic (the same module shown in Design and Netlist).
 - **Sim** — system AC metrics from ngspice (status badge, table, chart) after *Simulate system*.
@@ -242,6 +242,10 @@ The workflow generates schematics via the netlistsvg backend:
 - Rendering writes geometry/readability reports next to the SVG. These reports
   check missing pin connections, wire crossings, component overlaps, wire-body
   intrusions, and tight spacing.
+- `npm run test:schematic-quality` generates a small regression corpus under
+  `output/schematic-quality/` (RC, RLC, rectifier, BJT, MOS, and LDO examples),
+  applies starter `schematic.overrides.json` placements, renders SVGs, and
+  fails if any hard geometry check regresses.
 
 `netlistsvg` is a Node.js package required for rendering. Install it once:
 
