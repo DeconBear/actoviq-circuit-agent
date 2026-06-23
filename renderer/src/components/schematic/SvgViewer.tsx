@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
+import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
+import { createSchematicDocument } from '../../schematic/schematicDocument';
 
 export function SvgViewer() {
   const workflowSvg = useAppStore((s) => s.svgContent);
@@ -7,9 +9,14 @@ export function SvgViewer() {
   const moduleId = useAppStore((s) => s.activeModuleId);
   const bundle = useAppStore((s) => s.circuitProject);
   const moduleRef = bundle?.project.modules.find((module) => module.id === moduleId);
+  const moduleData = moduleId ? bundle?.modules[moduleId] : undefined;
   const modulePreview = moduleId ? bundle?.module_previews[moduleId] : undefined;
   const projectContext = Boolean(projectId && moduleId && bundle);
-  const svgContent = projectContext ? modulePreview?.svg ?? '' : workflowSvg;
+  const schematicDocument = useMemo(
+    () => projectContext && moduleData ? createSchematicDocument(moduleData) : null,
+    [moduleData, projectContext],
+  );
+  const svgContent = schematicDocument ? '' : projectContext ? modulePreview?.svg ?? '' : workflowSvg;
   const contextLabel = projectContext
     ? `${moduleRef?.name ?? moduleId} · same module as Design and Netlist`
     : 'Workflow schematic';
@@ -41,13 +48,18 @@ export function SvgViewer() {
 
   const fitView = useCallback(() => {
     const viewport = viewportRef.current;
-    if (!viewport || !svgContent) {
+    if (!viewport || (!svgContent && !schematicDocument)) {
       setScale(1);
       setOffset({ x: 0, y: 0 });
       return;
     }
     const rect = viewport.getBoundingClientRect();
-    const dimensions = getSvgDimensions(svgContent);
+    const dimensions = schematicDocument
+      ? {
+          width: schematicDocument.viewBox.maxX - schematicDocument.viewBox.minX,
+          height: schematicDocument.viewBox.maxY - schematicDocument.viewBox.minY,
+        }
+      : getSvgDimensions(svgContent);
     const nextScale = Math.max(
       0.25,
       Math.min(4, Math.min((rect.width - 80) / dimensions.width, (rect.height - 80) / dimensions.height)),
@@ -57,14 +69,17 @@ export function SvgViewer() {
       x: Math.max(0, (rect.width - dimensions.width * nextScale) / 2 - 20),
       y: Math.max(0, (rect.height - dimensions.height * nextScale) / 2 - 20),
     });
-  }, [svgContent]);
+  }, [schematicDocument, svgContent]);
 
   useEffect(() => {
     fitView();
   }, [fitView]);
 
   const handleExport = useCallback(() => {
-    const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+    const renderedDocument = viewportRef.current
+      ?.querySelector('svg[data-schematic-source="document"]')
+      ?.outerHTML;
+    const blob = new Blob([renderedDocument || svgContent], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -76,7 +91,7 @@ export function SvgViewer() {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, [svgContent]);
 
-  if (!svgContent) {
+  if (!svgContent && !schematicDocument) {
     return (
       <div style={styles.empty}>
         <div style={styles.emptyIcon}>📐</div>
@@ -118,8 +133,18 @@ export function SvgViewer() {
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
             transformOrigin: '0 0',
           }}
-          dangerouslySetInnerHTML={{ __html: sanitizeSvg(svgContent) }}
-        />
+          data-testid="module-netlistsvg"
+          data-schematic-source={schematicDocument ? 'document' : 'netlistsvg'}
+        >
+          {schematicDocument ? (
+            <SchematicDocumentSvg
+              document={schematicDocument}
+              testId="module-document-svg"
+            />
+          ) : (
+            <div dangerouslySetInnerHTML={{ __html: sanitizeSvg(svgContent) }} />
+          )}
+        </div>
       </div>
     </div>
   );

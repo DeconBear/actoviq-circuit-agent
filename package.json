@@ -42,6 +42,7 @@
     "electron:start": "electron .",
     "test": "npm run typecheck && npm run test:unit",
     "test:unit": "tsx src/tests/runTests.ts",
+    "test:schematic-document": "tsx scripts/schematic-document-regression.ts",
     "test:e2e:electron": "node scripts/playwright-electron-smoke.mjs",
     "test:e2e:schematic-editor": "node scripts/playwright-schematic-editor-smoke.mjs",
     "test:schematic-quality": "node scripts/schematic-quality-regression.mjs",

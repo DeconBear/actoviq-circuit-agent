@@ -19,6 +19,8 @@ import type {
   SchematicOverrides,
 } from '../../types';
 import { SchematicEditor } from './SchematicEditor';
+import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
+import { createSchematicDocument } from '../../schematic/schematicDocument';
 
 interface Props {
   onCreateProject: (demo: boolean) => void;
@@ -1427,7 +1429,7 @@ function ModuleSchematic({
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
 }) {
-  const [viewMode, setViewMode] = useState<'editor' | 'svg'>('svg');
+  const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
   const [editLayout, setEditLayout] = useState(false);
   const [draggedItem, setDraggedItem] = useState('');
   const [selectedItem, setSelectedItem] = useState('');
@@ -1477,6 +1479,10 @@ function ModuleSchematic({
     [overrides],
   );
   const selectedOverride = selectedItem ? overrides?.items[selectedItem] : undefined;
+  const schematicDocument = useMemo(
+    () => moduleData ? createSchematicDocument(moduleData) : null,
+    [moduleData],
+  );
 
   useEffect(() => {
     if (!moduleData && viewMode === 'editor') setViewMode('svg');
@@ -1754,16 +1760,13 @@ function ModuleSchematic({
             SVG
           </button>
           <button
-            style={editLayout ? styles.primaryButton : styles.secondaryButton}
-            onClick={() => setEditLayout((value) => !value)}
-            disabled={busy || !svg || viewMode !== 'svg'}
-            aria-pressed={editLayout}
-            data-testid="toggle-schematic-layout-edit"
+            style={styles.secondaryButton}
+            onClick={onBuild}
+            disabled={busy}
+            title="Refresh the legacy netlistsvg build artifact used by compile/export checks."
+            data-testid="rebuild-module-svg"
           >
-            {editLayout ? 'Done' : 'Edit layout'}
-          </button>
-          <button style={styles.secondaryButton} onClick={onBuild} disabled={busy} data-testid="rebuild-module-svg">
-            Rebuild SVG
+            Build netlistsvg
           </button>
         </div>
       </div>
@@ -1825,11 +1828,21 @@ function ModuleSchematic({
         {viewMode === 'editor' && moduleData ? (
           <SchematicEditor
             module={moduleData}
-            svg={svg}
             busy={busy}
             onSave={onSaveSchematic}
             onBuild={onBuild}
           />
+        ) : schematicDocument ? (
+          <div
+            style={styles.fullSvg}
+            data-testid="module-netlistsvg"
+            data-schematic-source="document"
+          >
+            <SchematicDocumentSvg
+              document={schematicDocument}
+              testId="module-document-svg"
+            />
+          </div>
         ) : svg ? (
           <>
             <div

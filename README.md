@@ -35,10 +35,11 @@ This compiles the Electron main process, starts Vite, and opens the window.
 
 **Tabs**
 
-- **Design** — each circuit module is an asset card showing its netlistsvg preview (or a function/parameter summary), its `IN` / `OUT` / `GND` system-network names, a copyable module ID, and an Agent note field. `Ctrl`+scroll zooms, the middle mouse button pans, right-click adds or edits a module, and the corner handle resizes a card. Double-click a card to open its schematic workspace. **Editor** mode is a lightweight grid-based canvas backed by `module.circuit.json`: select and left-drag components, place primitive R/C/L/D/M/Q/V/I devices, draw orthogonal wires, edit component values, delete items, undo/redo, then save and rebuild the netlistsvg preview. **SVG preview** keeps the original AI/netlist-to-netlistsvg path available; enable *Edit layout* there to apply layout-only symbol/terminal overrides in `modules/<id>/schematic.overrides.json` without changing the SPICE netlist.
+- **Design** — each circuit module is an asset card showing its schematic preview (or a function/parameter summary), its `IN` / `OUT` / `GND` system-network names, a copyable module ID, and an Agent note field. `Ctrl`+scroll zooms, the middle mouse button pans, right-click adds or edits a module, and the corner handle resizes a card. Double-click a card to open its schematic workspace. **Editable model** is a lightweight grid-based semantic SVG editor backed by `module.circuit.json`: select and left-drag components, place primitive R/C/L/D/M/Q/V/I devices, draw orthogonal wires, edit component values, delete items, undo/redo, then apply changes to the module JSON, notebook netlist, and refreshed build artifact. **SVG** uses the same `SchematicDocument` renderer as the editor, so the preview and editable surface share one geometry source. The legacy netlistsvg pipeline is still available through *Build netlistsvg* and compile/export checks, but it is no longer parsed back into the editor.
 - **Design memory** — from the Design toolbar, *Save template* stores the current project as a reusable Agent template under `references/design-memory/templates/`; *Save flow* stores the applied design process under `references/design-memory/flows/`. The Design inspector lists recent saved templates and flows, can open their folders, and can create a new project directly from a saved template. Future workflow runs expose these saved items through the Agent asset-reuse tools.
 - **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Saving re-renders the module SVG.
-- **SVG** — the selected module's netlistsvg schematic (the same module shown in Design and Netlist).
+- **SVG** — the selected module's `SchematicDocument` preview, matching the editable module view.
+- **Schematic document source of truth** — the module editor and module SVG preview render from `actoviq.schematic-document.v1`, derived from `actoviq.module.v1`. Pin anchors, including MOS `D/G/S/B`, are computed from semantic pin ids/names. Wires are materialized from `pin.net` / `port.net` membership plus explicit user-created wires, and those explicit wires survive `compile-module`.
 - **Sim** — system AC metrics from ngspice (status badge, table, chart) after *Simulate system*.
 - **Report** — a generated Markdown report (modules, interfaces, system networks, simulation metrics, and the system netlist).
 
@@ -182,6 +183,16 @@ Source smoke run:
 
 ```powershell
 npm run dev -- --auto-approve --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and netlistsvg schematic."
+```
+
+Schematic editor changes must pass the document, Playwright, and legacy render regressions:
+
+```powershell
+npm run test:schematic-document
+npm run test:e2e:schematic-editor
+npm run test:e2e:electron
+npm test
+npm run test:schematic-quality
 ```
 
 ## Linked Local CLI

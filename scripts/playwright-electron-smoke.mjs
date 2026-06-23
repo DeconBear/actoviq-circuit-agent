@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
@@ -92,25 +92,6 @@ async function readDesignMemoryManifest(kind, id) {
     manifestPath,
     manifest: JSON.parse(await readFile(manifestPath, 'utf8')),
   };
-}
-
-async function fileMtimeMs(filePath) {
-  try {
-    return (await stat(filePath)).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-
-async function waitForFileMtimeAfter(filePath, previousMtime, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let lastMtime = 0;
-  while (Date.now() < deadline) {
-    lastMtime = await fileMtimeMs(filePath);
-    if (lastMtime > previousMtime) return lastMtime;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`Timed out waiting for ${filePath} to update after ${previousMtime}; last mtime was ${lastMtime}`);
 }
 
 const entries = await readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
@@ -386,96 +367,19 @@ try {
 
   await page.getByTestId('module-card-filter').dblclick();
   await page.getByTestId('module-canvas').waitFor();
-  await page.getByTestId('module-netlistsvg').locator('svg').waitFor();
-  const moduleSvgBefore = await page.getByTestId('module-netlistsvg').innerHTML();
-  assert.match(moduleSvgBefore, /<svg\b/);
-  const moduleSvgBox = await page.getByTestId('module-netlistsvg').locator('svg').boundingBox();
-  assert.ok(moduleSvgBox && moduleSvgBox.width > 100 && moduleSvgBox.height > 100);
-  await page.screenshot({ path: path.resolve(outputRoot, 'module-netlistsvg.png') });
-  await page.getByTestId('schematic-editor-tab').click();
   await page.getByTestId('schematic-editor').waitFor();
-  assert.equal(await page.getByTestId('schematic-editor-canvas').count(), 1);
+  assert.equal(await page.getByTestId('schematic-editor').getAttribute('data-schematic-source'), 'document');
+  assert.equal(await page.getByTestId('schematic-editor-svg').getAttribute('data-schematic-source'), 'document');
+  const editorSvgBox = await page.getByTestId('schematic-editor-svg').boundingBox();
+  assert.ok(editorSvgBox && editorSvgBox.width > 100 && editorSvgBox.height > 100);
+  await page.screenshot({ path: path.resolve(outputRoot, 'module-document-editor.png') });
   await page.getByTestId('schematic-svg-tab').click();
   await page.getByTestId('module-netlistsvg').locator('svg').waitFor();
-
-  await page.getByTestId('toggle-schematic-layout-edit').click();
-  await page.getByTestId('toggle-schematic-layout-edit').getByText('Done', { exact: true }).waitFor();
-  const filterCapacitor = page.locator('[data-testid="module-netlistsvg"] svg #cell_Cfilter_Cfilter');
-  await filterCapacitor.waitFor();
-  const capacitorBox = await filterCapacitor.boundingBox();
-  assert.ok(capacitorBox);
-  await page.mouse.move(capacitorBox.x + capacitorBox.width / 2, capacitorBox.y + capacitorBox.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(
-    capacitorBox.x + capacitorBox.width / 2 + 55,
-    capacitorBox.y + capacitorBox.height / 2 + 28,
-    { steps: 8 },
-  );
-  await page.mouse.up();
-  await page.getByText(new RegExp(`revision ${initialRevision + 5}`)).waitFor({ timeout: 20_000 });
-  await page.getByText('Moved Cfilter_Cfilter', { exact: true }).waitFor({ timeout: 20_000 });
-  const filterOverrides = JSON.parse(
-    await readFile(path.resolve(projectRoot, 'modules', 'filter', 'schematic.overrides.json'), 'utf8'),
-  );
-  assert.equal(filterOverrides.schema, 'actoviq.schematic-overrides.v1');
-  assert.equal(filterOverrides.items.Cfilter_Cfilter.locked, true);
-  assert.equal(typeof filterOverrides.items.Cfilter_Cfilter.x, 'number');
-  assert.equal(typeof filterOverrides.items.Cfilter_Cfilter.y, 'number');
-  await page.getByTestId('schematic-overrides-panel').waitFor();
-  await page.getByTestId('schematic-selected-item').getByText(/Cfilter_Cfilter/).waitFor();
-  await page.getByTestId('schematic-override-Cfilter_Cfilter').waitFor();
-  const movedX = filterOverrides.items.Cfilter_Cfilter.x;
-  const movedY = filterOverrides.items.Cfilter_Cfilter.y;
-
-  await page.getByTestId('schematic-nudge-right').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 6}`)).waitFor({ timeout: 20_000 });
-  const nudgedOverrides = JSON.parse(
-    await readFile(path.resolve(projectRoot, 'modules', 'filter', 'schematic.overrides.json'), 'utf8'),
-  );
-  assert.equal(nudgedOverrides.items.Cfilter_Cfilter.x, movedX + 10);
-  assert.equal(nudgedOverrides.items.Cfilter_Cfilter.y, movedY);
-
-  await page.getByTestId('schematic-undo').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 7}`)).waitFor({ timeout: 20_000 });
-  const undoneOverrides = JSON.parse(
-    await readFile(path.resolve(projectRoot, 'modules', 'filter', 'schematic.overrides.json'), 'utf8'),
-  );
-  assert.equal(undoneOverrides.items.Cfilter_Cfilter.x, movedX);
-  assert.equal(undoneOverrides.items.Cfilter_Cfilter.y, movedY);
-
-  await page.getByTestId('schematic-redo').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 8}`)).waitFor({ timeout: 20_000 });
-  const redoneOverrides = JSON.parse(
-    await readFile(path.resolve(projectRoot, 'modules', 'filter', 'schematic.overrides.json'), 'utf8'),
-  );
-  assert.equal(redoneOverrides.items.Cfilter_Cfilter.x, movedX + 10);
-
-  await page.getByTestId('schematic-reset-selected').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 9}`)).waitFor({ timeout: 20_000 });
-  await page.getByText('Reset Cfilter_Cfilter', { exact: true }).waitFor({ timeout: 20_000 });
-  const resetOverrides = JSON.parse(
-    await readFile(path.resolve(projectRoot, 'modules', 'filter', 'schematic.overrides.json'), 'utf8'),
-  );
-  assert.equal(resetOverrides.items.Cfilter_Cfilter, undefined);
-
-  await filterCapacitor.waitFor();
-  const capacitorBoxAfterReset = await filterCapacitor.boundingBox();
-  assert.ok(capacitorBoxAfterReset);
-  await page.mouse.move(
-    capacitorBoxAfterReset.x + capacitorBoxAfterReset.width / 2,
-    capacitorBoxAfterReset.y + capacitorBoxAfterReset.height / 2,
-  );
-  await page.mouse.down();
-  await page.mouse.move(
-    capacitorBoxAfterReset.x + capacitorBoxAfterReset.width / 2 + 35,
-    capacitorBoxAfterReset.y + capacitorBoxAfterReset.height / 2 + 25,
-    { steps: 8 },
-  );
-  await page.mouse.up();
-  await page.getByText(new RegExp(`revision ${initialRevision + 10}`)).waitFor({ timeout: 20_000 });
-  await page.getByTestId('schematic-override-Cfilter_Cfilter').waitFor({ timeout: 20_000 });
-  await page.getByTestId('toggle-schematic-layout-edit').click();
-  await page.screenshot({ path: path.resolve(outputRoot, 'module-layout-edit.png') });
+  assert.equal(await page.getByTestId('module-netlistsvg').getAttribute('data-schematic-source'), 'document');
+  assert.equal(await page.getByTestId('module-document-svg').getAttribute('data-schematic-source'), 'document');
+  const moduleSvgBox = await page.getByTestId('module-document-svg').boundingBox();
+  assert.ok(moduleSvgBox && moduleSvgBox.width > 100 && moduleSvgBox.height > 100);
+  await page.screenshot({ path: path.resolve(outputRoot, 'module-document-svg.png') });
 
   await page.getByTestId('rebuild-module-svg').click();
   await page.getByText('Module SVG updated', { exact: true }).waitFor({ timeout: 20_000 });
@@ -557,16 +461,12 @@ try {
     'IN: DAC#1, VDD',
   );
 
-  const buildManifestPath = path.resolve(projectRoot, 'build', 'build-manifest.json');
-  const buildManifestMtime = await fileMtimeMs(buildManifestPath);
   await page.getByTestId('build-project').click();
-  await waitForFileMtimeAfter(buildManifestPath, buildManifestMtime, 30_000);
+  await page.getByText('Netlist and previews updated', { exact: true }).waitFor({ timeout: 30_000 });
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();
 
-  const systemSimulationPath = path.resolve(projectRoot, 'build', 'system', 'simulation', 'result.json');
-  const systemSimulationMtime = await fileMtimeMs(systemSimulationPath);
   await page.getByTestId('simulate-project').click();
-  await waitForFileMtimeAfter(systemSimulationPath, systemSimulationMtime, 30_000);
+  await page.getByText('System simulation complete', { exact: true }).waitFor({ timeout: 30_000 });
   await page.getByText('output_1khz_db', { exact: true }).waitFor();
 
   await page.getByTestId('save-design-template').click();
@@ -591,8 +491,8 @@ try {
   const savedFlow = await readDesignMemoryManifest('flow', flowId);
   assert.equal(savedFlow.manifest.schema, 'actoviq.design-flow.v1');
   assert.equal(savedFlow.manifest.source_project_id, projectId);
-  assert.ok(savedFlow.manifest.command_count >= 5);
-  assert.match(await readFile(path.resolve(savedFlow.rootDir, 'design-flow.md'), 'utf8'), /Move schematic item Cfilter_Cfilter/);
+  assert.ok(savedFlow.manifest.command_count >= 4);
+  assert.match(await readFile(path.resolve(savedFlow.rootDir, 'design-flow.md'), 'utf8'), /Agent updates module filter/);
   await page.screenshot({ path: path.resolve(outputRoot, 'saved-design-memory.png') });
 
   await canvasPanel.click({ button: 'right', position: { x: 520, y: 500 } });
@@ -711,12 +611,12 @@ try {
   ));
   assert.equal(importedProject.name, importedProjectName);
   assert.equal(importedProject.revision, 0);
-  const importedFilterOverrides = JSON.parse(await readFile(
-    path.resolve(importedProjectRoot, 'modules', 'filter', 'schematic.overrides.json'),
+  const importedFilterModule = JSON.parse(await readFile(
+    path.resolve(importedProjectRoot, 'modules', 'filter', 'module.circuit.json'),
     'utf8',
   ));
-  assert.equal(importedFilterOverrides.project_id, importedProject.project_id);
-  assert.equal(typeof importedFilterOverrides.items.Cfilter_Cfilter.x, 'number');
+  assert.equal(importedFilterModule.module_id, 'filter');
+  assert.ok(importedFilterModule.components.some((component) => component.id === 'c_filter'));
   await page.screenshot({ path: path.resolve(outputRoot, 'imported-template-project.png') });
   assert.deepEqual(pageErrors, []);
   console.log(JSON.stringify({
@@ -727,8 +627,8 @@ try {
     screenshots: [
       'output/playwright/module-hub-canvas.png',
       'output/playwright/module-summary-mode.png',
-      'output/playwright/module-netlistsvg.png',
-      'output/playwright/module-layout-edit.png',
+      'output/playwright/module-document-editor.png',
+      'output/playwright/module-document-svg.png',
       'output/playwright/saved-design-memory.png',
       'output/playwright/imported-template-project.png',
       'output/playwright/light-netlist-notebook.png',

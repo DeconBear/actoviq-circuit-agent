@@ -1143,7 +1143,7 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
         **module,
         "components": components,
         "ports": ports,
-        "wires": [],
+        "wires": module.get("wires", []),
         "annotations": module.get("annotations", []),
     }
     validate_module(next_module)
@@ -1162,7 +1162,7 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
             **module,
             "components": components,
             "ports": ports,
-            "wires": [],
+            "wires": module.get("wires", []),
             "annotations": module.get("annotations", []),
             "revision": int(module.get("revision", 0)) + 1,
         }
