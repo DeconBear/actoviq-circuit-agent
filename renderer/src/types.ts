@@ -151,6 +151,22 @@ export interface CircuitPin {
   net: string;
 }
 
+export interface CircuitWireEndpoint {
+  x: number;
+  y: number;
+  component_id?: string;
+  pin_id?: string;
+  port_id?: string;
+}
+
+export interface CircuitWire {
+  id: string;
+  points: CircuitPosition[];
+  from?: CircuitWireEndpoint;
+  to?: CircuitWireEndpoint;
+  net?: string;
+}
+
 export interface CircuitComponent {
   id: string;
   type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I';
@@ -168,7 +184,7 @@ export interface CircuitModule {
   revision: number;
   ports: CircuitPort[];
   components: CircuitComponent[];
-  wires: unknown[];
+  wires: CircuitWire[];
   annotations: unknown[];
 }
 

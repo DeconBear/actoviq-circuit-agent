@@ -18,6 +18,7 @@ import type {
   CircuitPort,
   SchematicOverrides,
 } from '../../types';
+import { SchematicEditor } from './SchematicEditor';
 
 interface Props {
   onCreateProject: (demo: boolean) => void;
@@ -397,6 +398,21 @@ export function CircuitWorkbench({
     if (saved) {
       await buildModulePreview(moduleId, false);
       setNotice('Reset schematic layout');
+    }
+  }
+
+  async function saveModuleSchematic(moduleId: string, moduleData: CircuitModule): Promise<void> {
+    const saved = await applyOperations(`Edit schematic ${moduleId}`, [{
+      op: 'set_module_schematic',
+      module_id: moduleId,
+      components: moduleData.components,
+      ports: moduleData.ports,
+      wires: moduleData.wires ?? [],
+      annotations: moduleData.annotations ?? [],
+    }]);
+    if (saved) {
+      await buildModulePreview(moduleId, false);
+      setNotice('Schematic saved and SVG rebuilt');
     }
   }
 
@@ -922,10 +938,12 @@ export function CircuitWorkbench({
           ) : selectedRef ? (
             <ModuleSchematic
               module={selectedRef}
+              moduleData={selectedModule}
               svg={selectedPreview?.svg ?? ''}
               overrides={selectedPreview?.schematicOverrides}
               busy={busy}
               onBuild={() => buildModulePreview(selectedRef.id)}
+              onSaveSchematic={(moduleData) => saveModuleSchematic(selectedRef.id, moduleData)}
               onMoveItem={(itemId, x, y) => moveSchematicItem(selectedRef.id, itemId, x, y)}
               onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
@@ -1324,23 +1342,28 @@ function InterfaceBadge({
 
 function ModuleSchematic({
   module,
+  moduleData,
   svg,
   overrides,
   busy,
   onBuild,
+  onSaveSchematic,
   onMoveItem,
   onResetItem,
   onResetLayout,
 }: {
   module: CircuitModuleRef;
+  moduleData?: CircuitModule;
   svg: string;
   overrides?: SchematicOverrides;
   busy: boolean;
   onBuild: () => void;
+  onSaveSchematic: (moduleData: CircuitModule) => Promise<void>;
   onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
 }) {
+  const [viewMode, setViewMode] = useState<'editor' | 'svg'>(() => (moduleData ? 'editor' : 'svg'));
   const [editLayout, setEditLayout] = useState(false);
   const [draggedItem, setDraggedItem] = useState('');
   const [selectedItem, setSelectedItem] = useState('');
@@ -1390,6 +1413,10 @@ function ModuleSchematic({
     [overrides],
   );
   const selectedOverride = selectedItem ? overrides?.items[selectedItem] : undefined;
+
+  useEffect(() => {
+    if (!moduleData && viewMode === 'editor') setViewMode('svg');
+  }, [moduleData, viewMode]);
 
   function svgClientDeltaScale(svgElement: SVGSVGElement): { x: number; y: number } {
     const matrix = svgElement.getScreenCTM();
@@ -1644,9 +1671,28 @@ function ModuleSchematic({
         </div>
         <div style={styles.moduleViewerActions}>
           <button
+            style={viewMode === 'editor' ? styles.primaryButton : styles.secondaryButton}
+            onClick={() => {
+              setViewMode('editor');
+              setEditLayout(false);
+            }}
+            disabled={busy || !moduleData}
+            data-testid="schematic-editor-tab"
+          >
+            Editor
+          </button>
+          <button
+            style={viewMode === 'svg' ? styles.primaryButton : styles.secondaryButton}
+            onClick={() => setViewMode('svg')}
+            disabled={busy}
+            data-testid="schematic-svg-tab"
+          >
+            SVG preview
+          </button>
+          <button
             style={editLayout ? styles.primaryButton : styles.secondaryButton}
             onClick={() => setEditLayout((value) => !value)}
-            disabled={busy || !svg}
+            disabled={busy || !svg || viewMode !== 'svg'}
             aria-pressed={editLayout}
             data-testid="toggle-schematic-layout-edit"
           >
@@ -1657,7 +1703,7 @@ function ModuleSchematic({
           </button>
         </div>
       </div>
-      {editLayout ? (
+      {viewMode === 'svg' && editLayout ? (
         <div style={styles.layoutToolbar} data-testid="schematic-layout-tools">
           <label style={styles.layoutCheck}>
             <input
@@ -1712,7 +1758,14 @@ function ModuleSchematic({
         </div>
       ) : null}
       <div style={styles.fullSvgStage}>
-        {svg ? (
+        {viewMode === 'editor' && moduleData ? (
+          <SchematicEditor
+            module={moduleData}
+            busy={busy}
+            onSave={onSaveSchematic}
+            onBuild={onBuild}
+          />
+        ) : svg ? (
           <>
             <div
               style={{

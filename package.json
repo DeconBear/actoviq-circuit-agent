@@ -43,6 +43,7 @@
     "test": "npm run typecheck && npm run test:unit",
     "test:unit": "tsx src/tests/runTests.ts",
     "test:e2e:electron": "node scripts/playwright-electron-smoke.mjs",
+    "test:e2e:schematic-editor": "node scripts/playwright-schematic-editor-smoke.mjs",
     "test:schematic-quality": "node scripts/schematic-quality-regression.mjs",
     "typecheck": "npm run typecheck:src && npm run typecheck:electron && npm run typecheck:renderer",
     "typecheck:src": "tsc -p tsconfig.json --noEmit",

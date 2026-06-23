@@ -859,8 +859,66 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
     const movedModuleSvg = await readFile(String(movedModuleCompiled.schematic_path), 'utf8');
     assert.match(movedModuleSvg, /id="cell_Cfilter_Cfilter"/);
     assert.match(movedModuleSvg, /transform="translate\(260,180\)" id="cell_Cfilter_Cfilter"/);
+    const filterModuleForManualEdit = JSON.parse(
+      await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'),
+    );
+    const manualComponents = [
+      ...filterModuleForManualEdit.components,
+      {
+        id: 'r_manual',
+        type: 'R',
+        name: 'Rmanual',
+        value: '2k',
+        position: { x: 340, y: 120 },
+        rotation: 0,
+        pins: [
+          { id: 'a', name: '1', net: 'out' },
+          { id: 'b', name: '2', net: 'n_manual' },
+        ],
+      },
+    ];
+    const manualSchematicApplied = runTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify({
+        schema: 'actoviq.command.v1',
+        command_id: 'test-set-module-schematic',
+        actor: 'unit-test',
+        project_id: created.project.project_id,
+        base_revision: 3,
+        message: 'Save structured manual schematic edit',
+        operations: [{
+          op: 'set_module_schematic',
+          module_id: 'filter',
+          components: manualComponents,
+          ports: filterModuleForManualEdit.ports,
+          wires: [{
+            id: 'w_manual',
+            points: [{ x: 260, y: 120 }, { x: 292, y: 120 }],
+            from: { x: 260, y: 120, component_id: 'c_filter', pin_id: 'a' },
+            to: { x: 292, y: 120, component_id: 'r_manual', pin_id: 'a' },
+            net: 'out',
+          }],
+          annotations: filterModuleForManualEdit.annotations,
+        }],
+      }),
+    ]);
+    assert.equal(manualSchematicApplied.revision, 4);
+    assert.deepEqual(manualSchematicApplied.changed_modules, ['filter']);
+    const manuallyEditedFilter = JSON.parse(
+      await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'),
+    );
+    assert.equal(manuallyEditedFilter.components.length, 3);
+    assert.equal(manuallyEditedFilter.wires.length, 1);
+    const manuallyCompiled = runTool([
+      'compile-module',
+      '--project-root', projectRoot,
+      '--module-id', 'filter',
+    ]);
+    assert.equal(manuallyCompiled.render.ok, true);
+    assert.match(await readFile(String(manuallyCompiled.netlist_path), 'utf8'), /Rfilter_Rmanual out n_manual 2k/);
     const notebookPath = path.resolve(projectRoot, 'modules', 'filter', 'netlist-notebook.md');
-    const notebookNetlist = await readFile(String(movedModuleCompiled.netlist_path), 'utf8');
+    const notebookNetlist = await readFile(String(manuallyCompiled.netlist_path), 'utf8');
     await writeFile(
       notebookPath,
       [

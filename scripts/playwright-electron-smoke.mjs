@@ -360,6 +360,9 @@ try {
 
   await page.getByTestId('module-card-filter').dblclick();
   await page.getByTestId('module-canvas').waitFor();
+  await page.getByTestId('schematic-editor').waitFor();
+  assert.equal(await page.getByTestId('schematic-editor-canvas').count(), 1);
+  await page.getByTestId('schematic-svg-tab').click();
   await page.getByTestId('module-netlistsvg').locator('svg').waitFor();
   const moduleSvgBefore = await page.getByTestId('module-netlistsvg').innerHTML();
   assert.match(moduleSvgBefore, /<svg\b/);

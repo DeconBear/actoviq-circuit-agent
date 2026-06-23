@@ -631,6 +631,36 @@ def apply_operation(
         component["position"] = {"x": float(operation["x"]), "y": float(operation["y"])}
         changed_modules.add(module_id)
         return
+    if op == "set_module_schematic":
+        module_id = operation["module_id"]
+        module = modules[module_id]
+        components = operation.get("components")
+        ports = operation.get("ports")
+        wires = operation.get("wires", [])
+        annotations = operation.get("annotations", module.get("annotations", []))
+        if not isinstance(components, list):
+            raise ValueError("set_module_schematic components must be an array")
+        if not isinstance(ports, list):
+            raise ValueError("set_module_schematic ports must be an array")
+        if not isinstance(wires, list):
+            raise ValueError("set_module_schematic wires must be an array")
+        if not isinstance(annotations, list):
+            raise ValueError("set_module_schematic annotations must be an array")
+        next_module = {
+            **module,
+            "components": components,
+            "ports": ports,
+            "wires": wires,
+            "annotations": annotations,
+        }
+        validate_module(next_module)
+        module["components"] = components
+        module["ports"] = ports
+        module["wires"] = wires
+        module["annotations"] = annotations
+        find_module_ref(project, module_id)["ports"] = ports
+        changed_modules.add(module_id)
+        return
     if op == "move_schematic_item":
         module_id = str(operation["module_id"])
         find_module_ref(project, module_id)
