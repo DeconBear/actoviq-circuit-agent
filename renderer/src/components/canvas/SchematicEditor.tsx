@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react';
 import type {
   CircuitComponent,
@@ -69,10 +70,12 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [placeType, setPlaceType] = useState<PlaceType>('R');
   const [selection, setSelection] = useState<Selection>(null);
   const [wireStart, setWireStart] = useState<EndpointHit | null>(null);
+  const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const [camera, setCamera] = useState<Camera>({ x: 120, y: 90, scale: 1 });
   const [canvasSize, setCanvasSize] = useState({ width: 900, height: 600 });
+  const [portPositions, setPortPositions] = useState(() => computePortPositions(module));
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -82,8 +85,10 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setDirty(false);
     setSelection(null);
     setWireStart(null);
+    setHoverWorld(null);
     setHistory([]);
     setFuture([]);
+    setPortPositions(computePortPositions(module));
   }, [module.module_id, module.revision]);
 
   useEffect(() => {
@@ -100,8 +105,6 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     observer.observe(stage);
     return () => observer.disconnect();
   }, []);
-
-  const portPositions = useMemo(() => computePortPositions(draft), [draft]);
 
   const selectedComponent = selection?.kind === 'component'
     ? draft.components.find((component) => component.id === selection.id) ?? null
@@ -150,22 +153,33 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       size: canvasSize,
       selection,
       wireStart,
+      wirePreview: hoverWorld
+        ? hitEndpoint(draft, portPositions, hoverWorld) ?? pointEndpoint(snapPoint(hoverWorld))
+        : null,
       portPositions,
     });
-  }, [camera, canvasSize, draft, portPositions, selection, wireStart]);
+  }, [camera, canvasSize, draft, hoverWorld, portPositions, selection, wireStart]);
 
-  function screenToWorld(event: ReactMouseEvent<HTMLCanvasElement>): CircuitPosition {
-    const rect = event.currentTarget.getBoundingClientRect();
+  function screenToWorldFromClient(canvas: HTMLCanvasElement, clientX: number, clientY: number): CircuitPosition {
+    const rect = canvas.getBoundingClientRect();
     return {
-      x: (event.clientX - rect.left - camera.x) / camera.scale,
-      y: (event.clientY - rect.top - camera.y) / camera.scale,
+      x: (clientX - rect.left - camera.x) / camera.scale,
+      y: (clientY - rect.top - camera.y) / camera.scale,
     };
   }
 
-  function handleMouseDown(event: ReactMouseEvent<HTMLCanvasElement>) {
+  function screenToWorld(event: ReactMouseEvent<HTMLCanvasElement> | ReactPointerEvent<HTMLCanvasElement>): CircuitPosition {
+    return screenToWorldFromClient(event.currentTarget, event.clientX, event.clientY);
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (busy || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
     event.currentTarget.focus();
+    event.currentTarget.setPointerCapture(event.pointerId);
     const world = screenToWorld(event);
+    setHoverWorld(world);
     if (tool === 'place') {
       const next = cloneModule(draft);
       const component = makePlacedComponent(next, placeType, snapPoint(world));
@@ -187,6 +201,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       commitDraft(next);
       setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
       setWireStart(null);
+      setHoverWorld(null);
       return;
     }
 
@@ -210,10 +225,12 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setSelection(null);
   }
 
-  function handleMouseMove(event: ReactMouseEvent<HTMLCanvasElement>) {
+  function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    event.stopPropagation();
+    const world = screenToWorld(event);
+    setHoverWorld(world);
     const drag = dragRef.current;
     if (!drag || busy) return;
-    const world = screenToWorld(event);
     const dx = world.x - drag.startWorld.x;
     const dy = world.y - drag.startWorld.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
@@ -226,17 +243,28 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       const next = cloneModule(current);
       const component = next.components.find((entry) => entry.id === drag.componentId);
       if (component) component.position = nextPosition;
+      next.wires = (next.wires ?? []).map((wire) => rerouteWire(next, wire, portPositions));
       return next;
     });
     setDirty(true);
   }
 
-  function handleMouseUp() {
+  function handlePointerUp(event: ReactPointerEvent<HTMLCanvasElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag?.moved) return;
     setHistory((items) => [...items, drag.originalModule].slice(-40));
     setFuture([]);
+  }
+
+  function handlePointerCancel(event: ReactPointerEvent<HTMLCanvasElement>) {
+    event.stopPropagation();
+    dragRef.current = null;
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>) {
@@ -323,6 +351,10 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-selected={selection ? `${selection.kind}:${selection.id}` : ''}
       data-component-count={draft.components.length}
       data-wire-count={(draft.wires ?? []).length}
+      data-component-positions={JSON.stringify(Object.fromEntries(
+        draft.components.map((component) => [component.id, component.position]),
+      ))}
+      data-wire-points={JSON.stringify((draft.wires ?? []).map((wire) => wire.points))}
     >
       <div style={styles.toolbar}>
         <button
@@ -381,10 +413,10 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
           <canvas
             ref={canvasRef}
             style={styles.canvas}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
             onKeyDown={handleKeyDown}
             tabIndex={0}
             data-testid="schematic-editor-canvas"
@@ -626,9 +658,6 @@ function chooseMergedNet(left: string | null, right: string | null): string {
 function addWire(module: CircuitModule, start: EndpointHit, end: EndpointHit) {
   const startPoint = snapPoint(start);
   const endPoint = snapPoint(end);
-  const points = startPoint.x === endPoint.x || startPoint.y === endPoint.y
-    ? [startPoint, endPoint]
-    : [startPoint, { x: endPoint.x, y: startPoint.y }, endPoint];
   const leftNet = endpointNet(module, start);
   const rightNet = endpointNet(module, end);
   const mergedNet = chooseMergedNet(leftNet, rightNet);
@@ -640,12 +669,19 @@ function addWire(module: CircuitModule, start: EndpointHit, end: EndpointHit) {
     ...(module.wires ?? []),
     {
       id,
-      points,
+      points: routePoints(startPoint, endPoint),
       from: stripEndpoint(startPoint, start),
       to: stripEndpoint(endPoint, end),
       net: mergedNet,
     },
   ];
+}
+
+function routePoints(startPoint: CircuitPosition, endPoint: CircuitPosition): CircuitPosition[] {
+  if (startPoint.x === endPoint.x || startPoint.y === endPoint.y) {
+    return [startPoint, endPoint];
+  }
+  return [startPoint, { x: endPoint.x, y: startPoint.y }, endPoint];
 }
 
 function stripEndpoint(point: CircuitPosition, endpoint: EndpointHit): CircuitWireEndpoint {
@@ -722,6 +758,42 @@ function normalizeConnectivity(module: CircuitModule): CircuitModule {
     return { ...wire, net };
   });
   return next;
+}
+
+function endpointWorldPosition(
+  module: CircuitModule,
+  endpoint: CircuitWireEndpoint | undefined,
+  portPositions: Map<string, CircuitPosition>,
+): CircuitPosition | null {
+  if (!endpoint) return null;
+  if (endpoint.component_id && endpoint.pin_id) {
+    const component = module.components.find((entry) => entry.id === endpoint.component_id);
+    if (!component) return { x: endpoint.x, y: endpoint.y };
+    const pinIndex = component.pins.findIndex((pin) => pin.id === endpoint.pin_id);
+    const pin = pinIndex >= 0 ? component.pins[pinIndex] : undefined;
+    if (!pin) return { x: endpoint.x, y: endpoint.y };
+    return pinWorld(component, pin, pinIndex);
+  }
+  if (endpoint.port_id) {
+    return portPositions.get(endpoint.port_id) ?? { x: endpoint.x, y: endpoint.y };
+  }
+  return { x: endpoint.x, y: endpoint.y };
+}
+
+function rerouteWire(
+  module: CircuitModule,
+  wire: CircuitWire,
+  portPositions: Map<string, CircuitPosition>,
+): CircuitWire {
+  const start = endpointWorldPosition(module, wire.from, portPositions);
+  const end = endpointWorldPosition(module, wire.to, portPositions);
+  if (!start || !end) return wire;
+  return {
+    ...wire,
+    from: wire.from ? { ...wire.from, x: start.x, y: start.y } : wire.from,
+    to: wire.to ? { ...wire.to, x: end.x, y: end.y } : wire.to,
+    points: routePoints(start, end),
+  };
 }
 
 function pointEndpoint(point: CircuitPosition): EndpointHit {
@@ -816,10 +888,11 @@ function drawEditor(
     size: { width: number; height: number };
     selection: Selection;
     wireStart: EndpointHit | null;
+    wirePreview: EndpointHit | null;
     portPositions: Map<string, CircuitPosition>;
   },
 ) {
-  const { module, camera, size, selection, wireStart, portPositions } = input;
+  const { module, camera, size, selection, wireStart, wirePreview, portPositions } = input;
   context.save();
   context.clearRect(0, 0, size.width, size.height);
   context.fillStyle = '#f8fafc';
@@ -829,6 +902,9 @@ function drawEditor(
   drawGrid(context, camera, size);
   drawPorts(context, module, portPositions);
   drawWires(context, module, selection);
+  if (wireStart && wirePreview) {
+    drawWirePreview(context, wireStart, wirePreview);
+  }
   for (const component of module.components) {
     drawComponent(context, component, selection?.kind === 'component' && selection.id === component.id);
   }
@@ -841,6 +917,23 @@ function drawEditor(
     context.stroke();
     context.setLineDash([]);
   }
+  context.restore();
+}
+
+function drawWirePreview(context: CanvasRenderingContext2D, start: CircuitPosition, end: CircuitPosition) {
+  const points = routePoints(snapPoint(start), snapPoint(end));
+  const first = points[0];
+  if (!first) return;
+  context.save();
+  context.strokeStyle = '#2563eb';
+  context.lineWidth = 2;
+  context.setLineDash([8, 6]);
+  context.beginPath();
+  context.moveTo(first.x, first.y);
+  for (const point of points.slice(1)) {
+    context.lineTo(point.x, point.y);
+  }
+  context.stroke();
   context.restore();
 }
 

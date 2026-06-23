@@ -62,6 +62,27 @@ async function removePrefixedProjects() {
   }
 }
 
+async function componentPositions(page) {
+  const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-positions');
+  return JSON.parse(raw || '{}');
+}
+
+function assertPositionEqual(actual, expected, label) {
+  assert.deepEqual(
+    { x: Number(actual?.x), y: Number(actual?.y) },
+    { x: Number(expected?.x), y: Number(expected?.y) },
+    label,
+  );
+}
+
+function assertPositionChanged(actual, expected, label) {
+  assert.notDeepEqual(
+    { x: Number(actual?.x), y: Number(actual?.y) },
+    { x: Number(expected?.x), y: Number(expected?.y) },
+    label,
+  );
+}
+
 await mkdir(outputRoot, { recursive: true });
 await removePrefixedProjects();
 
@@ -128,6 +149,7 @@ try {
     return node?.getAttribute('data-component-count') === '3' &&
       node?.getAttribute('data-selected')?.startsWith('component:r');
   });
+  const filterPositionsAfterPlace = await componentPositions(page);
 
   await page.getByTestId('schematic-editor-select').click();
   await page.mouse.move(placePoint.x, placePoint.y);
@@ -137,6 +159,10 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
   ));
+  const filterPositionsAfterDrag = await componentPositions(page);
+  assertPositionEqual(filterPositionsAfterDrag.r_filter, filterPositionsAfterPlace.r_filter, 'dragging added resistor moved r_filter');
+  assertPositionEqual(filterPositionsAfterDrag.c_filter, filterPositionsAfterPlace.c_filter, 'dragging added resistor moved c_filter');
+  assertPositionChanged(filterPositionsAfterDrag.r1, filterPositionsAfterPlace.r1, 'added resistor did not move');
 
   await page.getByTestId('schematic-editor-save').click();
   await page.getByText('Schematic saved and SVG rebuilt', { exact: true }).waitFor({ timeout: 30_000 });
@@ -154,6 +180,41 @@ try {
 
   await page.getByTestId('schematic-svg-tab').click();
   await page.getByTestId('module-netlistsvg').locator('svg').waitFor({ timeout: 20_000 });
+  await page.getByTestId('back-to-board').click();
+  await page.getByTestId('module-card-filter').dblclick();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') === '1'
+  ));
+  await page.getByTestId('back-to-board').click();
+
+  await page.getByTestId('module-card-power').dblclick();
+  await editor.waitFor({ timeout: 20_000 });
+  const powerCanvas = page.getByTestId('schematic-editor-canvas');
+  const powerBox = await powerCanvas.boundingBox();
+  assert.ok(powerBox);
+  const powerPlacePoint = {
+    x: powerBox.x + Math.min(430, powerBox.width * 0.62),
+    y: powerBox.y + Math.min(260, powerBox.height * 0.45),
+  };
+  await page.getByTestId('schematic-editor-place-R').click();
+  await page.mouse.click(powerPlacePoint.x, powerPlacePoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3'
+  ));
+  const powerPositionsAfterPlace = await componentPositions(page);
+  await page.getByTestId('schematic-editor-select').click();
+  await page.mouse.move(powerPlacePoint.x, powerPlacePoint.y);
+  await page.mouse.down();
+  await page.mouse.move(powerPlacePoint.x + 70, powerPlacePoint.y + 40, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const powerPositionsAfterDrag = await componentPositions(page);
+  assertPositionEqual(powerPositionsAfterDrag.v_signal, powerPositionsAfterPlace.v_signal, 'dragging resistor moved Vsignal');
+  assertPositionEqual(powerPositionsAfterDrag.v_supply, powerPositionsAfterPlace.v_supply, 'dragging resistor moved VDD source');
+  assertPositionChanged(powerPositionsAfterDrag.r1, powerPositionsAfterPlace.r1, 'power-module resistor did not move');
+
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-smoke.png') });
   assert.deepEqual(pageErrors, []);
   console.log(JSON.stringify({
