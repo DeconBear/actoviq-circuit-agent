@@ -105,6 +105,20 @@ function relativeReferencePath(referencesDir: string, targetPath: string): strin
   return path.relative(referencesDir, targetPath).replace(/\\/g, '/');
 }
 
+async function uniqueProjectRoot(projectsRootPath: string, name: string): Promise<{ projectId: string; projectRoot: string }> {
+  const baseId = slugify(name);
+  let projectId = baseId;
+  let suffix = 2;
+  while (await exists(path.resolve(projectsRootPath, projectId))) {
+    projectId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+  return {
+    projectId,
+    projectRoot: path.resolve(projectsRootPath, projectId),
+  };
+}
+
 async function copyFileIfExists(source: string, target: string): Promise<boolean> {
   if (!(await exists(source))) return false;
   await mkdir(path.dirname(target), { recursive: true });
@@ -444,6 +458,94 @@ async function listDesignMemory(): Promise<{ templates: DesignMemoryItem[]; flow
   return { templates, flows };
 }
 
+async function findDesignMemoryItem(kind: 'template' | 'flow', id: string): Promise<DesignMemoryItem> {
+  const memory = await listDesignMemory();
+  const items = kind === 'template' ? memory.templates : memory.flows;
+  const item = items.find((entry) => entry.id === id);
+  if (!item) {
+    throw new Error(`Saved ${kind} not found: ${id}`);
+  }
+  return item;
+}
+
+async function createProjectFromTemplate(input: {
+  templateId: string;
+  name?: string;
+}): Promise<Record<string, unknown>> {
+  const template = await findDesignMemoryItem('template', String(input.templateId ?? '').trim());
+  const sourceProjectPath = path.resolve(template.rootPath, 'project.circuit.json');
+  if (!(await exists(sourceProjectPath))) {
+    throw new Error(`Saved template has no project.circuit.json: ${template.id}`);
+  }
+
+  const sourceProject = await readJsonFile<{
+    schema: string;
+    project_id: string;
+    name: string;
+    revision: number;
+    modules?: Array<{ id?: string; source?: string }>;
+    connections?: unknown[];
+    analyses?: unknown;
+  }>(sourceProjectPath);
+  const name = input.name?.trim() || `${sourceProject.name || template.name} copy`;
+  const root = await projectsRoot();
+  const { projectId, projectRoot } = await uniqueProjectRoot(root, name);
+  await mkdir(projectRoot, { recursive: false });
+  await mkdir(path.resolve(projectRoot, 'modules'), { recursive: true });
+  await Promise.all(
+    ['commands/pending', 'commands/applied', 'commands/rejected', 'revisions', 'build', 'logs']
+      .map((directory) => mkdir(path.resolve(projectRoot, directory), { recursive: true })),
+  );
+  await copyDirectoryIfExists(path.resolve(template.rootPath, 'modules'), path.resolve(projectRoot, 'modules'));
+
+  const now = new Date().toISOString();
+  const project = {
+    ...sourceProject,
+    project_id: projectId,
+    name,
+    revision: 0,
+    created_at: now,
+    updated_at: now,
+  };
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(projectRoot, 'project.settings.json'), `${JSON.stringify({
+    schema: 'actoviq.project-settings.v1',
+    imported_from_template: template.id,
+    imported_at: now,
+  }, null, 2)}\n`, 'utf8');
+
+  for (const moduleRef of project.modules ?? []) {
+    const moduleId = moduleRef.id;
+    if (!moduleId) continue;
+    const moduleRoot = path.resolve(projectRoot, 'modules', moduleId);
+    const modulePath = path.resolve(moduleRoot, 'module.circuit.json');
+    if (await exists(modulePath)) {
+      try {
+        const module = await readJsonFile<Record<string, unknown>>(modulePath);
+        module.revision = 0;
+        await writeFile(modulePath, `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+      } catch {
+        // The project summary step below will surface invalid module files.
+      }
+    }
+    const overridesPath = path.resolve(moduleRoot, 'schematic.overrides.json');
+    if (await exists(overridesPath)) {
+      try {
+        const overrides = await readJsonFile<Record<string, unknown>>(overridesPath);
+        overrides.project_id = projectId;
+        overrides.module_id = moduleId;
+        overrides.updated_at = now;
+        await writeFile(overridesPath, `${JSON.stringify(overrides, null, 2)}\n`, 'utf8');
+      } catch {
+        // Invalid overrides are non-fatal; rendering can regenerate them later.
+      }
+    }
+  }
+
+  const bundle = await runProjectTool(['summary', '--project-root', projectRoot]);
+  return enrichProjectBundle(projectRoot, bundle);
+}
+
 function projectScriptPath(): string {
   const candidates = [
     path.resolve(app.getAppPath(), 'skills', 'circuit-design-ngspice', 'scripts', 'circuit_project.py'),
@@ -552,6 +654,7 @@ async function enrichProjectBundle(
     notebook: string;
     notebookPath: string;
     builtRevision?: number;
+    schematicOverrides?: Record<string, unknown>;
   }> = {};
   for (const moduleRef of project?.modules ?? []) {
     const moduleId = moduleRef.id;
@@ -562,6 +665,7 @@ async function enrichProjectBundle(
     if (!(await exists(svgPath)) && !(await exists(netlistPath))) continue;
     const netlist = await exists(netlistPath) ? await readFile(netlistPath, 'utf8') : '';
     const notebookPath = path.resolve(projectRoot, 'modules', moduleId, 'netlist-notebook.md');
+    const overridesPath = path.resolve(projectRoot, 'modules', moduleId, 'schematic.overrides.json');
     const notebook = await exists(notebookPath)
       ? await readFile(notebookPath, 'utf8')
       : [
@@ -588,6 +692,9 @@ async function enrichProjectBundle(
       notebook,
       notebookPath,
       builtRevision: manifestModules[moduleId]?.revision,
+      schematicOverrides: await exists(overridesPath)
+        ? JSON.parse(await readFile(overridesPath, 'utf8')) as Record<string, unknown>
+        : undefined,
     };
   }
   return { ...bundle, module_previews: previews };
@@ -622,6 +729,11 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       '--name', input.name,
     ]);
   });
+
+  ipcMain.handle(
+    'project:create-from-template',
+    async (_event, input: { templateId: string; name?: string }) => createProjectFromTemplate(input),
+  );
 
   ipcMain.handle('project:get', async (_event, projectId: string) => {
     const root = await resolveProjectRoot(projectId);
@@ -721,6 +833,11 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle('project:list-design-memory', async () => {
     return listDesignMemory();
+  });
+
+  ipcMain.handle('project:open-design-memory', async (_event, input: { kind: 'template' | 'flow'; id: string }) => {
+    const item = await findDesignMemoryItem(input.kind, input.id);
+    return shell.openPath(item.rootPath);
   });
 
   ipcMain.handle('project:watch', async (_event, projectId: string) => {

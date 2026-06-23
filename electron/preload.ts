@@ -160,6 +160,10 @@ const electronAPI = {
     return ipcRenderer.invoke('project:create', input);
   },
 
+  createCircuitProjectFromTemplate(input: { templateId: string; name?: string }): Promise<unknown> {
+    return ipcRenderer.invoke('project:create-from-template', input);
+  },
+
   getCircuitProject(projectId: string): Promise<unknown> {
     return ipcRenderer.invoke('project:get', projectId);
   },
@@ -202,6 +206,10 @@ const electronAPI = {
 
   listCircuitDesignMemory(): Promise<unknown> {
     return ipcRenderer.invoke('project:list-design-memory');
+  },
+
+  openCircuitDesignMemory(input: { kind: 'template' | 'flow'; id: string }): Promise<string> {
+    return ipcRenderer.invoke('project:open-design-memory', input);
   },
 
   watchCircuitProject(projectId: string): Promise<void> {

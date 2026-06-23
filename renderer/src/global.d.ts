@@ -50,6 +50,7 @@ declare global {
       runReferenceOcr(relativePath: string): Promise<{ textPath: string; text: string }>;
       listCircuitProjects(): Promise<CircuitProjectSummary[]>;
       createCircuitProject(input: { name: string; demo?: boolean }): Promise<CircuitProjectBundle>;
+      createCircuitProjectFromTemplate(input: { templateId: string; name?: string }): Promise<CircuitProjectBundle>;
       getCircuitProject(projectId: string): Promise<CircuitProjectBundle>;
       applyCircuitCommand(projectId: string, command: CircuitCommand): Promise<{
         ok: true;
@@ -102,6 +103,7 @@ declare global {
       saveCircuitDesignTemplate(projectId: string): Promise<SavedDesignMemorySummary>;
       saveCircuitDesignFlow(projectId: string): Promise<SavedDesignMemorySummary>;
       listCircuitDesignMemory(): Promise<{ templates: DesignMemoryItem[]; flows: DesignMemoryItem[] }>;
+      openCircuitDesignMemory(input: { kind: 'template' | 'flow'; id: string }): Promise<string>;
       watchCircuitProject(projectId: string): Promise<void>;
       onCircuitProjectChanged(
         callback: (event: { projectId: string; timestamp: number }) => void,

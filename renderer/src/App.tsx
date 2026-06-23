@@ -386,6 +386,33 @@ export function App() {
     }
   }, [loadCircuitProject, refreshCircuitProjects]);
 
+  const handleCreateCircuitProjectFromTemplate = useCallback(async (
+    templateId: string,
+    defaultName: string,
+  ) => {
+    if (!window.electronAPI) return;
+    const name = defaultName.trim() || 'Template project copy';
+    const state = useAppStore.getState();
+    state.setCircuitBusy(true);
+    state.setCircuitError('');
+    try {
+      const bundle = await window.electronAPI.createCircuitProjectFromTemplate({
+        templateId,
+        name,
+      });
+      for (const module of bundle.project.modules) {
+        await window.electronAPI.compileCircuitModule(bundle.project.project_id, module.id);
+      }
+      await refreshCircuitProjects();
+      await loadCircuitProject(bundle.project.project_id);
+      await refreshReferences();
+    } catch (error) {
+      state.setCircuitError(error instanceof Error ? error.message : String(error));
+    } finally {
+      state.setCircuitBusy(false);
+    }
+  }, [loadCircuitProject, refreshCircuitProjects, refreshReferences]);
+
   useEffect(() => {
     if (!window.electronAPI) return;
     refreshWorkspaces();
@@ -843,6 +870,7 @@ export function App() {
             {store.activeTab === 'design' && (
               <CircuitWorkbench
                 onCreateProject={handleCreateCircuitProject}
+                onCreateProjectFromTemplate={handleCreateCircuitProjectFromTemplate}
                 onReferencesChanged={refreshReferences}
                 onReloadProject={async () => {
                   const projectId = useAppStore.getState().activeProjectId;

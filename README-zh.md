@@ -37,8 +37,8 @@ npm run electron:dev
 
 **标签页**
 
-- **Design**——每个电路模块是一张资产卡片，显示其 netlistsvg 预览（或功能 / 参数摘要）、`IN` / `OUT` / `GND` 系统网络名、可复制的模块 ID 和 Agent 笔记。`Ctrl`+滚轮缩放，鼠标中键拖动画布，右键新增或编辑模块，右下角手柄缩放卡片。双击卡片进入完整的 netlistsvg 电路图。在完整原理图视图中启用 *Edit layout* 后，可以拖动符号或端口；GUI 会把这些只影响布局的编辑保存到 `modules/<id>/schematic.overrides.json`，并在不改变 SPICE 网表的前提下重新连线。
-- **Design memory**——在 Design 工具栏中，*Save template* 会把当前项目保存为可复用的 Agent 模板，路径为 `references/design-memory/templates/`；*Save flow* 会把已执行的设计流程保存到 `references/design-memory/flows/`。右侧 Design inspector 会列出最近保存的模板和流程，便于你在复用或手动调整前确认到底保存了哪些内容。后续工作流会把这些保存项暴露给 Agent 资产复用工具。
+- **Design**——每个电路模块是一张资产卡片，显示其 netlistsvg 预览（或功能 / 参数摘要）、`IN` / `OUT` / `GND` 系统网络名、可复制的模块 ID 和 Agent 笔记。`Ctrl`+滚轮缩放，鼠标中键拖动画布，右键新增或编辑模块，右下角手柄缩放卡片。双击卡片进入完整的 netlistsvg 电路图。在完整原理图视图中启用 *Edit layout* 后，可以拖动符号或端口，也可以选中/高亮 item、按 10 px 网格吸附、用方向按钮微调、撤销/重做布局移动，并复位单个 item 或全部 override；GUI 会把这些只影响布局的编辑保存到 `modules/<id>/schematic.overrides.json`，并在不改变 SPICE 网表的前提下重新连线。
+- **Design memory**——在 Design 工具栏中，*Save template* 会把当前项目保存为可复用的 Agent 模板，路径为 `references/design-memory/templates/`；*Save flow* 会把已执行的设计流程保存到 `references/design-memory/flows/`。右侧 Design inspector 会列出最近保存的模板和流程，可以打开对应文件夹，也可以直接从已保存模板创建新项目。后续工作流会把这些保存项暴露给 Agent 资产复用工具。
 - **Netlist**——每个模块一份可编辑的 Markdown 笔记本：`spice` 代码块是网表，代码块之外的文字是笔记；保存后会重新渲染该模块 SVG。
 - **SVG**——当前选中模块的 netlistsvg 电路图（与 Design、Netlist 是同一个模块）。
 - **Sim**——执行 *Simulate system* 后，展示 ngspice 的系统级 AC 指标（状态徽章、表格、图表）。

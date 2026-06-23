@@ -16,10 +16,12 @@ import type {
   CircuitModule,
   CircuitModuleRef,
   CircuitPort,
+  SchematicOverrides,
 } from '../../types';
 
 interface Props {
   onCreateProject: (demo: boolean) => void;
+  onCreateProjectFromTemplate: (templateId: string, defaultName: string) => Promise<void>;
   onReloadProject: () => Promise<void>;
   onReferencesChanged?: () => Promise<void>;
 }
@@ -199,7 +201,12 @@ function parseParameters(value: string): Record<string, string> {
   );
 }
 
-export function CircuitWorkbench({ onCreateProject, onReloadProject, onReferencesChanged }: Props) {
+export function CircuitWorkbench({
+  onCreateProject,
+  onCreateProjectFromTemplate,
+  onReloadProject,
+  onReferencesChanged,
+}: Props) {
   const bundle = useAppStore((state) => state.circuitProject);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeModuleId = useAppStore((state) => state.activeModuleId);
@@ -365,6 +372,34 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject, onReference
     }
   }
 
+  async function resetSchematicItem(moduleId: string, itemId: string): Promise<void> {
+    const saved = await applyOperations(`Reset schematic item ${itemId}`, [{
+      op: 'reset_schematic_item',
+      module_id: moduleId,
+      item_id: itemId,
+    }]);
+    if (saved) {
+      await buildModulePreview(moduleId, false);
+      setNotice(`Reset ${itemId}`);
+    }
+  }
+
+  async function resetSchematicLayout(moduleId: string, itemIds: string[]): Promise<void> {
+    if (itemIds.length === 0) {
+      setNotice('No schematic layout overrides to reset');
+      return;
+    }
+    const saved = await applyOperations('Reset schematic layout', itemIds.map((itemId) => ({
+      op: 'reset_schematic_item',
+      module_id: moduleId,
+      item_id: itemId,
+    })));
+    if (saved) {
+      await buildModulePreview(moduleId, false);
+      setNotice('Reset schematic layout');
+    }
+  }
+
   async function openModule(moduleId: string): Promise<void> {
     setActiveModuleId(moduleId);
     setView('module');
@@ -440,6 +475,22 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject, onReference
     } finally {
       setBusy(false);
     }
+  }
+
+  async function openDesignMemoryItem(kind: 'template' | 'flow', id: string): Promise<void> {
+    setError('');
+    try {
+      const result = await window.electronAPI.openCircuitDesignMemory({ kind, id });
+      if (result) throw new Error(result);
+      setNotice(`Opened ${kind} ${id}`);
+    } catch (openError) {
+      setError(openError instanceof Error ? openError.message : String(openError));
+    }
+  }
+
+  async function createProjectFromSavedTemplate(template: DesignMemoryItem): Promise<void> {
+    await onCreateProjectFromTemplate(template.id, `${template.name} copy`);
+    await refreshDesignMemory();
   }
 
   async function runModuleSimulation() {
@@ -872,9 +923,12 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject, onReference
             <ModuleSchematic
               module={selectedRef}
               svg={selectedPreview?.svg ?? ''}
+              overrides={selectedPreview?.schematicOverrides}
               busy={busy}
               onBuild={() => buildModulePreview(selectedRef.id)}
               onMoveItem={(itemId, x, y) => moveSchematicItem(selectedRef.id, itemId, x, y)}
+              onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
+              onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
             />
           ) : null}
         </div>
@@ -902,6 +956,8 @@ export function CircuitWorkbench({ onCreateProject, onReloadProject, onReference
           designMemory={designMemory}
           designMemoryLoading={designMemoryLoading}
           onRefreshDesignMemory={refreshDesignMemory}
+          onOpenDesignMemory={openDesignMemoryItem}
+          onCreateProjectFromTemplate={createProjectFromSavedTemplate}
           busy={busy}
         />
       </div>
@@ -1269,22 +1325,44 @@ function InterfaceBadge({
 function ModuleSchematic({
   module,
   svg,
+  overrides,
   busy,
   onBuild,
   onMoveItem,
+  onResetItem,
+  onResetLayout,
 }: {
   module: CircuitModuleRef;
   svg: string;
+  overrides?: SchematicOverrides;
   busy: boolean;
   onBuild: () => void;
   onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
+  onResetItem: (itemId: string) => Promise<void>;
+  onResetLayout: (itemIds: string[]) => Promise<void>;
 }) {
   const [editLayout, setEditLayout] = useState(false);
   const [draggedItem, setDraggedItem] = useState('');
+  const [selectedItem, setSelectedItem] = useState('');
+  const [snapToGrid, setSnapToGrid] = useState(true);
+  const [undoStack, setUndoStack] = useState<Array<{
+    itemId: string;
+    from: { x: number; y: number; overridden: boolean };
+    to: { x: number; y: number };
+  }>>([]);
+  const [redoStack, setRedoStack] = useState<Array<{
+    itemId: string;
+    from: { x: number; y: number; overridden: boolean };
+    to: { x: number; y: number };
+  }>>([]);
   const svgContainerRef = useRef<HTMLDivElement | null>(null);
   const editLayoutRef = useRef(editLayout);
   const busyRef = useRef(busy);
   const onMoveItemRef = useRef(onMoveItem);
+  const onResetItemRef = useRef(onResetItem);
+  const selectedItemRef = useRef(selectedItem);
+  const snapToGridRef = useRef(snapToGrid);
+  const overridesRef = useRef(overrides);
   const nativeDragHandlersRef = useRef<{
     node: HTMLDivElement;
     pointerDown: (event: PointerEvent) => void;
@@ -1296,11 +1374,22 @@ function ModuleSchematic({
     startClient: { x: number; y: number };
     origin: { x: number; y: number };
     scale: { x: number; y: number };
+    fromOverride?: { x: number; y: number };
   } | null>(null);
 
   editLayoutRef.current = editLayout;
   busyRef.current = busy;
   onMoveItemRef.current = onMoveItem;
+  onResetItemRef.current = onResetItem;
+  selectedItemRef.current = selectedItem;
+  snapToGridRef.current = snapToGrid;
+  overridesRef.current = overrides;
+
+  const overrideItems = useMemo(
+    () => Object.entries(overrides?.items ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    [overrides],
+  );
+  const selectedOverride = selectedItem ? overrides?.items[selectedItem] : undefined;
 
   function svgClientDeltaScale(svgElement: SVGSVGElement): { x: number; y: number } {
     const matrix = svgElement.getScreenCTM();
@@ -1317,6 +1406,23 @@ function ModuleSchematic({
     const match = /translate\(\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*\)/.exec(transform ?? '');
     if (!match) return null;
     return { x: Number.parseFloat(match[1] ?? '0'), y: Number.parseFloat(match[2] ?? '0') };
+  }
+
+  function snapPosition(position: { x: number; y: number }): { x: number; y: number } {
+    if (!snapToGridRef.current) return position;
+    return {
+      x: Math.round(position.x / 10) * 10,
+      y: Math.round(position.y / 10) * 10,
+    };
+  }
+
+  function groupForItem(itemId: string): SVGGElement | null {
+    const container = svgContainerRef.current;
+    return container?.querySelector(`svg #cell_${CSS.escape(itemId)}`) as SVGGElement | null;
+  }
+
+  function currentItemPosition(itemId: string): { x: number; y: number } | null {
+    return parseSvgTranslate(groupForItem(itemId)?.getAttribute('transform') ?? null);
   }
 
   function findSchematicCellGroup(
@@ -1363,23 +1469,33 @@ function ModuleSchematic({
     event.preventDefault();
     event.stopPropagation();
     const scale = svgClientDeltaScale(svgElement);
+    const fromOverride = overridesRef.current?.items?.[cellId];
     dragRef.current = {
       itemId: cellId,
       group,
       startClient: { x: event.clientX, y: event.clientY },
       origin,
       scale,
+      fromOverride,
     };
     setDraggedItem(cellId);
+    setSelectedItem(cellId);
 
     const isPointerDrag = 'pointerId' in event;
     const moveEventName = isPointerDrag ? 'pointermove' : 'mousemove';
     const upEventName = isPointerDrag ? 'pointerup' : 'mouseup';
+    let moved = false;
     const move = (moveEvent: PointerEvent | MouseEvent) => {
       const current = dragRef.current;
       if (!current) return;
-      const nextX = current.origin.x + (moveEvent.clientX - current.startClient.x) * current.scale.x;
-      const nextY = current.origin.y + (moveEvent.clientY - current.startClient.y) * current.scale.y;
+      if (!moved && Math.abs(moveEvent.clientX - current.startClient.x) + Math.abs(moveEvent.clientY - current.startClient.y) < 4) return;
+      moved = true;
+      const next = snapPosition({
+        x: current.origin.x + (moveEvent.clientX - current.startClient.x) * current.scale.x,
+        y: current.origin.y + (moveEvent.clientY - current.startClient.y) * current.scale.y,
+      });
+      const nextX = next.x;
+      const nextY = next.y;
       current.group.setAttribute('transform', `translate(${nextX.toFixed(3)},${nextY.toFixed(3)})`);
     };
     const up = (upEvent: PointerEvent | MouseEvent) => {
@@ -1391,14 +1507,92 @@ function ModuleSchematic({
         setDraggedItem('');
         return;
       }
-      const nextX = current.origin.x + (upEvent.clientX - current.startClient.x) * current.scale.x;
-      const nextY = current.origin.y + (upEvent.clientY - current.startClient.y) * current.scale.y;
+      if (!moved) {
+        setDraggedItem('');
+        return;
+      }
+      const next = snapPosition({
+        x: current.origin.x + (upEvent.clientX - current.startClient.x) * current.scale.x,
+        y: current.origin.y + (upEvent.clientY - current.startClient.y) * current.scale.y,
+      });
+      const nextX = next.x;
+      const nextY = next.y;
       current.group.setAttribute('transform', `translate(${nextX.toFixed(3)},${nextY.toFixed(3)})`);
       setDraggedItem('');
+      setUndoStack((currentStack) => [
+        ...currentStack,
+        {
+          itemId: current.itemId,
+          from: current.fromOverride
+            ? { x: current.fromOverride.x, y: current.fromOverride.y, overridden: true }
+            : { x: current.origin.x, y: current.origin.y, overridden: false },
+          to: { x: nextX, y: nextY },
+        },
+      ].slice(-30));
+      setRedoStack([]);
       void onMoveItemRef.current(current.itemId, nextX, nextY);
     };
     window.addEventListener(moveEventName, move as EventListener);
     window.addEventListener(upEventName, up as EventListener, { once: true });
+  }
+
+  async function moveSelectedItem(dx: number, dy: number): Promise<void> {
+    if (!selectedItem || busy) return;
+    const currentPosition = currentItemPosition(selectedItem);
+    if (!currentPosition) return;
+    const fromOverride = overrides?.items[selectedItem];
+    const next = snapPosition({ x: currentPosition.x + dx, y: currentPosition.y + dy });
+    groupForItem(selectedItem)?.setAttribute('transform', `translate(${next.x.toFixed(3)},${next.y.toFixed(3)})`);
+    setUndoStack((currentStack) => [
+      ...currentStack,
+      {
+        itemId: selectedItem,
+        from: fromOverride
+          ? { x: fromOverride.x, y: fromOverride.y, overridden: true }
+          : { x: currentPosition.x, y: currentPosition.y, overridden: false },
+        to: next,
+      },
+    ].slice(-30));
+    setRedoStack([]);
+    await onMoveItem(selectedItem, next.x, next.y);
+  }
+
+  async function undoLayoutMove(): Promise<void> {
+    const entry = undoStack.at(-1);
+    if (!entry || busy) return;
+    setUndoStack((currentStack) => currentStack.slice(0, -1));
+    setRedoStack((currentStack) => [...currentStack, entry].slice(-30));
+    setSelectedItem(entry.itemId);
+    if (entry.from.overridden) {
+      await onMoveItem(entry.itemId, entry.from.x, entry.from.y);
+    } else {
+      await onResetItem(entry.itemId);
+    }
+  }
+
+  async function redoLayoutMove(): Promise<void> {
+    const entry = redoStack.at(-1);
+    if (!entry || busy) return;
+    setRedoStack((currentStack) => currentStack.slice(0, -1));
+    setUndoStack((currentStack) => [...currentStack, entry].slice(-30));
+    setSelectedItem(entry.itemId);
+    await onMoveItem(entry.itemId, entry.to.x, entry.to.y);
+  }
+
+  async function resetSelectedItem(): Promise<void> {
+    if (!selectedItem || busy) return;
+    await onResetItem(selectedItem);
+    setSelectedItem('');
+    setUndoStack([]);
+    setRedoStack([]);
+  }
+
+  async function resetAllItems(): Promise<void> {
+    if (busy || overrideItems.length === 0) return;
+    await onResetLayout(overrideItems.map(([itemId]) => itemId));
+    setSelectedItem('');
+    setUndoStack([]);
+    setRedoStack([]);
   }
 
   const setSvgContainer = useCallback((node: HTMLDivElement | null) => {
@@ -1417,6 +1611,28 @@ function ModuleSchematic({
     node.addEventListener('mousedown', mouseDown, true);
     nativeDragHandlersRef.current = { node, pointerDown, mouseDown };
   }, []);
+
+  useEffect(() => {
+    const container = svgContainerRef.current;
+    if (!container) return;
+    const groups = Array.from(container.querySelectorAll('svg g[id^="cell_"]')) as SVGGElement[];
+    for (const group of groups) {
+      group.style.filter = '';
+      group.style.cursor = editLayout ? 'move' : '';
+      group.removeAttribute('data-actoviq-selected');
+    }
+    if (!selectedItem) return;
+    const selected = groupForItem(selectedItem);
+    if (!selected) return;
+    selected.style.filter = 'drop-shadow(0 0 3px rgba(37, 99, 235, 0.95))';
+    selected.setAttribute('data-actoviq-selected', 'true');
+  }, [editLayout, selectedItem, svg]);
+
+  useEffect(() => {
+    if (selectedItem && svgContainerRef.current && !groupForItem(selectedItem)) {
+      setSelectedItem('');
+    }
+  }, [selectedItem, svg]);
 
   return (
     <div style={styles.moduleViewer} data-testid="module-canvas">
@@ -1441,19 +1657,109 @@ function ModuleSchematic({
           </button>
         </div>
       </div>
+      {editLayout ? (
+        <div style={styles.layoutToolbar} data-testid="schematic-layout-tools">
+          <label style={styles.layoutCheck}>
+            <input
+              type="checkbox"
+              checked={snapToGrid}
+              onChange={(event) => setSnapToGrid(event.target.checked)}
+              data-testid="schematic-snap-toggle"
+            />
+            Snap 10px
+          </label>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => void undoLayoutMove()}
+            disabled={busy || undoStack.length === 0}
+            data-testid="schematic-undo"
+          >
+            Undo
+          </button>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => void redoLayoutMove()}
+            disabled={busy || redoStack.length === 0}
+            data-testid="schematic-redo"
+          >
+            Redo
+          </button>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => void resetSelectedItem()}
+            disabled={busy || !selectedOverride}
+            data-testid="schematic-reset-selected"
+          >
+            Reset selected
+          </button>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => void resetAllItems()}
+            disabled={busy || overrideItems.length === 0}
+            data-testid="schematic-reset-all"
+          >
+            Reset all
+          </button>
+          <div style={styles.layoutNudgeGroup} data-testid="schematic-nudge-controls">
+            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(0, -10)} disabled={busy || !selectedItem} title="Nudge up" data-testid="schematic-nudge-up">↑</button>
+            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(-10, 0)} disabled={busy || !selectedItem} title="Nudge left" data-testid="schematic-nudge-left">←</button>
+            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(10, 0)} disabled={busy || !selectedItem} title="Nudge right" data-testid="schematic-nudge-right">→</button>
+            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(0, 10)} disabled={busy || !selectedItem} title="Nudge down" data-testid="schematic-nudge-down">↓</button>
+          </div>
+          <span style={styles.layoutSelectedText} data-testid="schematic-selected-item">
+            {selectedItem ? `${selectedItem}${selectedOverride ? ` @ ${selectedOverride.x}, ${selectedOverride.y}` : ''}` : 'Select a symbol'}
+          </span>
+        </div>
+      ) : null}
       <div style={styles.fullSvgStage}>
         {svg ? (
-          <div
-            style={{
-              ...styles.fullSvg,
-              ...(editLayout ? styles.fullSvgEditing : {}),
-            }}
-            ref={setSvgContainer}
-            dangerouslySetInnerHTML={{ __html: prepareSvg(svg) }}
-            data-testid="module-netlistsvg"
-            data-layout-editing={editLayout ? 'true' : 'false'}
-            data-dragged-item={draggedItem}
-          />
+          <>
+            <div
+              style={{
+                ...styles.fullSvg,
+                ...(editLayout ? styles.fullSvgEditing : {}),
+              }}
+              ref={setSvgContainer}
+              dangerouslySetInnerHTML={{ __html: prepareSvg(svg) }}
+              data-testid="module-netlistsvg"
+              data-layout-editing={editLayout ? 'true' : 'false'}
+              data-dragged-item={draggedItem}
+            />
+            {editLayout ? (
+              <aside style={styles.overridePanel} data-testid="schematic-overrides-panel">
+                <div style={styles.overridePanelTitle}>Overrides</div>
+                {overrideItems.length === 0 ? (
+                  <div style={styles.overrideEmpty}>No layout overrides yet.</div>
+                ) : overrideItems.map(([itemId, item]) => (
+                  <div
+                    key={itemId}
+                    style={{
+                      ...styles.overrideItem,
+                      ...(selectedItem === itemId ? styles.overrideItemSelected : {}),
+                    }}
+                    data-testid={`schematic-override-${itemId}`}
+                  >
+                    <button
+                      style={styles.overrideSelectButton}
+                      onClick={() => setSelectedItem(itemId)}
+                      data-testid={`select-schematic-override-${itemId}`}
+                    >
+                      <strong>{itemId}</strong>
+                      <span>{item.x}, {item.y}</span>
+                    </button>
+                    <button
+                      style={styles.memoryRefreshButton}
+                      onClick={() => void onResetItem(itemId)}
+                      disabled={busy}
+                      data-testid={`reset-schematic-override-${itemId}`}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                ))}
+              </aside>
+            ) : null}
+          </>
         ) : (
           <div style={styles.fullSvgEmpty}>
             <strong>No module SVG yet</strong>
@@ -1482,6 +1788,8 @@ function ModuleInspector({
   designMemory,
   designMemoryLoading,
   onRefreshDesignMemory,
+  onOpenDesignMemory,
+  onCreateProjectFromTemplate,
   busy,
 }: {
   module: CircuitModuleRef | null;
@@ -1506,6 +1814,8 @@ function ModuleInspector({
   designMemory: { templates: DesignMemoryItem[]; flows: DesignMemoryItem[] };
   designMemoryLoading: boolean;
   onRefreshDesignMemory: () => void;
+  onOpenDesignMemory: (kind: 'template' | 'flow', id: string) => Promise<void>;
+  onCreateProjectFromTemplate: (template: DesignMemoryItem) => Promise<void>;
   busy: boolean;
 }) {
   if (!module) {
@@ -1580,6 +1890,8 @@ function ModuleInspector({
         memory={designMemory}
         loading={designMemoryLoading}
         onRefresh={onRefreshDesignMemory}
+        onOpen={onOpenDesignMemory}
+        onUseTemplate={onCreateProjectFromTemplate}
       />
 
       {moduleSimulation ? (
@@ -1606,10 +1918,14 @@ function DesignMemoryPanel({
   memory,
   loading,
   onRefresh,
+  onOpen,
+  onUseTemplate,
 }: {
   memory: { templates: DesignMemoryItem[]; flows: DesignMemoryItem[] };
   loading: boolean;
   onRefresh: () => void;
+  onOpen: (kind: 'template' | 'flow', id: string) => Promise<void>;
+  onUseTemplate: (template: DesignMemoryItem) => Promise<void>;
 }) {
   const templates = memory.templates.slice(0, 4);
   const flows = memory.flows.slice(0, 4);
@@ -1626,8 +1942,20 @@ function DesignMemoryPanel({
           {loading ? '...' : 'Refresh'}
         </button>
       </div>
-      <MemoryList title="Templates" items={templates} empty="No saved templates yet." />
-      <MemoryList title="Flows" items={flows} empty="No saved flows yet." />
+      <MemoryList
+        title="Templates"
+        items={templates}
+        empty="No saved templates yet."
+        onOpen={onOpen}
+        onUseTemplate={onUseTemplate}
+      />
+      <MemoryList
+        title="Flows"
+        items={flows}
+        empty="No saved flows yet."
+        onOpen={onOpen}
+        onUseTemplate={onUseTemplate}
+      />
     </div>
   );
 }
@@ -1636,10 +1964,14 @@ function MemoryList({
   title,
   items,
   empty,
+  onOpen,
+  onUseTemplate,
 }: {
   title: string;
   items: DesignMemoryItem[];
   empty: string;
+  onOpen: (kind: 'template' | 'flow', id: string) => Promise<void>;
+  onUseTemplate: (template: DesignMemoryItem) => Promise<void>;
 }) {
   return (
     <div style={styles.memoryGroup}>
@@ -1659,6 +1991,24 @@ function MemoryList({
           <code style={styles.memoryPath}>{item.relativePath}</code>
           <div style={styles.memoryMeta}>
             {item.sourceRevision !== undefined ? `rev ${item.sourceRevision}` : item.id}
+          </div>
+          <div style={styles.memoryActions}>
+            {item.kind === 'template' ? (
+              <button
+                style={styles.memoryActionButton}
+                onClick={() => void onUseTemplate(item)}
+                data-testid={`use-design-memory-template-${item.id}`}
+              >
+                Use
+              </button>
+            ) : null}
+            <button
+              style={styles.memoryActionButton}
+              onClick={() => void onOpen(item.kind, item.id)}
+              data-testid={`open-design-memory-${item.kind}-${item.id}`}
+            >
+              Open
+            </button>
           </div>
         </div>
       ))}
@@ -1895,15 +2245,86 @@ const styles: Record<string, CSSProperties> = {
   memoryDate: { flexShrink: 0, color: '#8a929d', fontSize: 9 },
   memoryPath: { display: 'block', marginTop: 4, color: '#2563eb', fontSize: 9, overflowWrap: 'anywhere' },
   memoryMeta: { marginTop: 3, color: '#7b8490', fontSize: 9 },
+  memoryActions: { display: 'flex', gap: 6, marginTop: 6 },
+  memoryActionButton: {
+    border: '1px solid #cbd0d7',
+    borderRadius: 5,
+    background: '#fff',
+    color: '#303741',
+    padding: '4px 7px',
+    cursor: 'pointer',
+    fontSize: 10,
+    fontWeight: 700,
+  },
   moduleViewer: { minWidth: 720, minHeight: '100%', display: 'flex', flexDirection: 'column', padding: 16 },
   moduleViewerHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   moduleViewerActions: { display: 'flex', alignItems: 'center', gap: 8 },
   moduleViewerTitle: { margin: '2px 0', fontSize: 18 },
   moduleViewerId: { color: '#7b8490', fontFamily: 'Consolas, monospace', fontSize: 10 },
+  layoutToolbar: {
+    minHeight: 40,
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+    padding: '7px 9px',
+    border: '1px solid #d7dce3',
+    borderRadius: 6,
+    background: '#fff',
+  },
+  layoutCheck: { display: 'inline-flex', alignItems: 'center', gap: 6, color: '#4e5965', fontSize: 11, fontWeight: 700 },
+  layoutNudgeGroup: { display: 'inline-flex', alignItems: 'center', gap: 4 },
+  nudgeButton: {
+    width: 30,
+    height: 30,
+    border: '1px solid #c5cbd3',
+    borderRadius: 5,
+    background: '#fff',
+    color: '#303741',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 800,
+  },
+  layoutSelectedText: { minWidth: 160, color: '#69727d', fontFamily: 'Consolas, monospace', fontSize: 10, overflowWrap: 'anywhere' },
   fullSvgStage: { flex: 1, minHeight: 520, display: 'flex', background: '#fff', border: '1px solid #d9dde3', boxShadow: '0 2px 8px rgba(27, 38, 51, 0.08)', overflow: 'auto' },
   fullSvg: { flex: 1, minWidth: 680, minHeight: 500, padding: 18 },
   fullSvgEditing: { outline: '2px solid rgba(37, 99, 235, 0.32)', outlineOffset: -2, cursor: 'move', touchAction: 'none' },
   fullSvgEmpty: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 10, color: '#7b8490', fontSize: 12 },
+  overridePanel: {
+    flex: '0 0 260px',
+    minWidth: 220,
+    maxWidth: 300,
+    borderLeft: '1px solid #d9dde3',
+    background: '#fbfcfd',
+    padding: 12,
+    overflowY: 'auto',
+  },
+  overridePanelTitle: { color: '#7b8490', fontSize: 10, textTransform: 'uppercase', fontWeight: 800, marginBottom: 8 },
+  overrideEmpty: { color: '#8a929d', fontSize: 11, padding: '8px 0' },
+  overrideItem: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: 7,
+    padding: '7px 0',
+    borderTop: '1px solid #edf0f3',
+  },
+  overrideItemSelected: { background: '#edf5ff' },
+  overrideSelectButton: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    border: 0,
+    background: 'transparent',
+    color: '#303741',
+    textAlign: 'left',
+    cursor: 'pointer',
+    fontFamily: 'Consolas, monospace',
+    fontSize: 10,
+    overflow: 'hidden',
+  },
   contextMenu: {
     position: 'fixed',
     zIndex: 40,

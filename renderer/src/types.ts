@@ -181,6 +181,20 @@ export interface CircuitProjectSummary {
   moduleCount: number;
 }
 
+export interface SchematicOverrideItem {
+  x: number;
+  y: number;
+  locked?: boolean;
+}
+
+export interface SchematicOverrides {
+  schema: 'actoviq.schematic-overrides.v1';
+  project_id: string;
+  module_id: string;
+  updated_at?: string;
+  items: Record<string, SchematicOverrideItem>;
+}
+
 export interface CircuitProjectBundle {
   ok: true;
   project: CircuitProject;
@@ -193,6 +207,7 @@ export interface CircuitProjectBundle {
     notebook: string;
     notebookPath: string;
     builtRevision?: number;
+    schematicOverrides?: SchematicOverrides;
   }>;
   project_root: string;
 }
