@@ -63,6 +63,12 @@ interface DragState {
   moved: boolean;
 }
 
+interface WireDragState {
+  start: EndpointHit;
+  startClient: CircuitPosition;
+  moved: boolean;
+}
+
 export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [draft, setDraft] = useState(() => cloneModule(module));
   const [dirty, setDirty] = useState(false);
@@ -79,6 +85,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const wireDragRef = useRef<WireDragState | null>(null);
 
   useEffect(() => {
     setDraft(cloneModule(module));
@@ -194,6 +201,11 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       const hit = hitEndpoint(draft, portPositions, world) ?? pointEndpoint(snapPoint(world));
       if (!wireStart) {
         setWireStart(hit);
+        wireDragRef.current = {
+          start: hit,
+          startClient: { x: event.clientX, y: event.clientY },
+          moved: false,
+        };
         return;
       }
       const next = cloneModule(draft);
@@ -202,6 +214,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
       setWireStart(null);
       setHoverWorld(null);
+      wireDragRef.current = null;
       return;
     }
 
@@ -229,6 +242,10 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     event.stopPropagation();
     const world = screenToWorld(event);
     setHoverWorld(world);
+    const wireDrag = wireDragRef.current;
+    if (wireDrag && !wireDrag.moved) {
+      wireDrag.moved = Math.abs(event.clientX - wireDrag.startClient.x) + Math.abs(event.clientY - wireDrag.startClient.y) > 8;
+    }
     const drag = dragRef.current;
     if (!drag || busy) return;
     const dx = world.x - drag.startWorld.x;
@@ -255,6 +272,19 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    const wireDrag = wireDragRef.current;
+    wireDragRef.current = null;
+    if (wireDrag?.moved && tool === 'wire') {
+      const world = screenToWorld(event);
+      const end = hitEndpoint(draft, portPositions, world) ?? pointEndpoint(snapPoint(world));
+      const next = cloneModule(draft);
+      addWire(next, wireDrag.start, end);
+      commitDraft(next);
+      setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
+      setWireStart(null);
+      setHoverWorld(null);
+      return;
+    }
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag?.moved) return;
@@ -265,6 +295,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   function handlePointerCancel(event: ReactPointerEvent<HTMLCanvasElement>) {
     event.stopPropagation();
     dragRef.current = null;
+    wireDragRef.current = null;
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>) {
@@ -901,12 +932,12 @@ function drawEditor(
   context.scale(camera.scale, camera.scale);
   drawGrid(context, camera, size);
   drawPorts(context, module, portPositions);
+  for (const component of module.components) {
+    drawComponent(context, component, selection?.kind === 'component' && selection.id === component.id);
+  }
   drawWires(context, module, selection);
   if (wireStart && wirePreview) {
     drawWirePreview(context, wireStart, wirePreview);
-  }
-  for (const component of module.components) {
-    drawComponent(context, component, selection?.kind === 'component' && selection.id === component.id);
   }
   if (wireStart) {
     context.strokeStyle = '#2563eb';
@@ -925,14 +956,17 @@ function drawWirePreview(context: CanvasRenderingContext2D, start: CircuitPositi
   const first = points[0];
   if (!first) return;
   context.save();
-  context.strokeStyle = '#2563eb';
-  context.lineWidth = 2;
+  context.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+  context.lineWidth = 8;
   context.setLineDash([8, 6]);
   context.beginPath();
   context.moveTo(first.x, first.y);
   for (const point of points.slice(1)) {
     context.lineTo(point.x, point.y);
   }
+  context.stroke();
+  context.strokeStyle = '#2563eb';
+  context.lineWidth = 3.5;
   context.stroke();
   context.restore();
 }
@@ -980,19 +1014,25 @@ function drawWires(context: CanvasRenderingContext2D, module: CircuitModule, sel
   for (const wire of module.wires ?? []) {
     if ((wire.points ?? []).length < 2) continue;
     const selected = selection?.kind === 'wire' && selection.id === wire.id;
-    context.strokeStyle = selected ? '#2563eb' : '#202a37';
-    context.lineWidth = selected ? 4 : 2.25;
     context.lineCap = 'round';
     context.lineJoin = 'round';
     const first = wire.points[0];
     if (!first) continue;
-    context.beginPath();
-    context.moveTo(first.x, first.y);
-    for (let index = 1; index < wire.points.length; index += 1) {
-      const point = wire.points[index];
-      if (point) context.lineTo(point.x, point.y);
-    }
-    context.stroke();
+    const strokeWirePath = () => {
+      context.beginPath();
+      context.moveTo(first.x, first.y);
+      for (let index = 1; index < wire.points.length; index += 1) {
+        const point = wire.points[index];
+        if (point) context.lineTo(point.x, point.y);
+      }
+      context.stroke();
+    };
+    context.strokeStyle = 'rgba(255, 255, 255, 0.96)';
+    context.lineWidth = selected ? 9 : 8;
+    strokeWirePath();
+    context.strokeStyle = selected ? '#2563eb' : '#0f172a';
+    context.lineWidth = selected ? 5 : 3.5;
+    strokeWirePath();
   }
 }
 

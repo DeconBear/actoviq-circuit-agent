@@ -83,6 +83,35 @@ function assertPositionChanged(actual, expected, label) {
   );
 }
 
+async function countVisibleWirePixels(page, start, end) {
+  return page.getByTestId('schematic-editor-canvas').evaluate((canvas, points) => {
+    if (!(canvas instanceof HTMLCanvasElement)) return 0;
+    const context = canvas.getContext('2d');
+    if (!context) return 0;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const padding = 18;
+    const x0 = Math.max(0, Math.floor((Math.min(points.start.x, points.end.x) - rect.left - padding) * scaleX));
+    const y0 = Math.max(0, Math.floor((Math.min(points.start.y, points.end.y) - rect.top - padding) * scaleY));
+    const x1 = Math.min(canvas.width, Math.ceil((Math.max(points.start.x, points.end.x) - rect.left + padding) * scaleX));
+    const y1 = Math.min(canvas.height, Math.ceil((Math.max(points.start.y, points.end.y) - rect.top + padding) * scaleY));
+    const width = Math.max(1, x1 - x0);
+    const height = Math.max(1, y1 - y0);
+    const data = context.getImageData(x0, y0, width, height).data;
+    let visible = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      const darkWire = r < 45 && g < 65 && b < 95;
+      const blueWire = r < 80 && g < 130 && b > 170;
+      if (darkWire || blueWire) visible += 1;
+    }
+    return visible;
+  }, { start, end });
+}
+
 await mkdir(outputRoot, { recursive: true });
 await removePrefixedProjects();
 
@@ -136,11 +165,16 @@ try {
   const placePoint = { x: box.x + Math.min(430, box.width * 0.62), y: box.y + Math.min(280, box.height * 0.48) };
 
   await page.getByTestId('schematic-editor-wire').click();
-  await page.mouse.click(pointA.x, pointA.y);
-  await page.mouse.click(pointB.x, pointB.y);
+  await page.mouse.move(pointA.x, pointA.y);
+  await page.mouse.down();
+  await page.mouse.move(pointB.x, pointB.y, { steps: 8 });
+  await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') === '1'
   ));
+  const visibleWirePixelsAfterDraw = await countVisibleWirePixels(page, pointA, pointB);
+  assert.ok(visibleWirePixelsAfterDraw > 60, `wire is not visibly drawn; counted ${visibleWirePixelsAfterDraw} pixels`);
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-wire-visible.png') });
 
   await page.getByTestId('schematic-editor-place-R').click();
   await page.mouse.click(placePoint.x, placePoint.y);
@@ -185,6 +219,8 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') === '1'
   ));
+  const visibleWirePixelsAfterReload = await countVisibleWirePixels(page, pointA, pointB);
+  assert.ok(visibleWirePixelsAfterReload > 60, `wire is not visible after reload; counted ${visibleWirePixelsAfterReload} pixels`);
   await page.getByTestId('back-to-board').click();
 
   await page.getByTestId('module-card-power').dblclick();
@@ -223,6 +259,7 @@ try {
     moduleComponentCount: moduleData.components.length,
     moduleWireCount: moduleData.wires.length,
     screenshot: 'output/playwright/schematic-editor-smoke.png',
+    wireScreenshot: 'output/playwright/schematic-editor-wire-visible.png',
   }, null, 2));
 } catch (error) {
   if (page) {
