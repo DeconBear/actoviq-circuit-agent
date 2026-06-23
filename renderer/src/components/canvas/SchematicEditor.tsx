@@ -30,6 +30,7 @@ type EndpointHit = CircuitWireEndpoint & {
 
 const GRID = 20;
 const PIN_REACH = 12;
+const SVG_BACKDROP_PADDING = 18;
 const COMPONENT_TYPES: PlaceType[] = ['R', 'C', 'L', 'D', 'M', 'Q', 'V', 'I'];
 const DEFAULT_VALUES: Record<PlaceType, string> = {
   R: '1k',
@@ -44,6 +45,7 @@ const DEFAULT_VALUES: Record<PlaceType, string> = {
 
 interface Props {
   module: CircuitModule;
+  svg?: string;
   busy: boolean;
   onSave: (module: CircuitModule) => Promise<void>;
   onBuild: () => void;
@@ -53,6 +55,13 @@ interface Camera {
   x: number;
   y: number;
   scale: number;
+}
+
+interface SvgViewBox {
+  minX: number;
+  minY: number;
+  width: number;
+  height: number;
 }
 
 interface DragState {
@@ -69,8 +78,22 @@ interface WireDragState {
   moved: boolean;
 }
 
-export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
-  const [draft, setDraft] = useState(() => createEditableModule(module));
+interface EditableState {
+  module: CircuitModule;
+  portPositions: Map<string, CircuitPosition>;
+}
+
+interface SvgCellPosition {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  type: string;
+}
+
+export function SchematicEditor({ module, svg = '', busy, onSave, onBuild }: Props) {
+  const [initialState] = useState(() => createEditableState(module, svg));
+  const [draft, setDraft] = useState(() => initialState.module);
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
   const [placeType, setPlaceType] = useState<PlaceType>('R');
@@ -81,23 +104,28 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const [camera, setCamera] = useState<Camera>({ x: 120, y: 90, scale: 1 });
   const [canvasSize, setCanvasSize] = useState({ width: 900, height: 600 });
-  const [portPositions, setPortPositions] = useState(() => computePortPositions(createEditableModule(module)));
+  const [portPositions, setPortPositions] = useState(() => initialState.portPositions);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const wireDragRef = useRef<WireDragState | null>(null);
+  const svgViewBox = useMemo(() => parseSvgViewBox(svg), [svg]);
+  const viewCamera = useMemo(
+    () => svgViewBox ? cameraForSvgViewBox(svgViewBox, canvasSize) : camera,
+    [camera, canvasSize, svgViewBox],
+  );
 
   useEffect(() => {
-    const editable = createEditableModule(module);
-    setDraft(editable);
+    const editable = createEditableState(module, svg);
+    setDraft(editable.module);
     setDirty(false);
     setSelection(null);
     setWireStart(null);
     setHoverWorld(null);
     setHistory([]);
     setFuture([]);
-    setPortPositions(computePortPositions(editable));
-  }, [module.module_id, module.revision]);
+    setPortPositions(editable.portPositions);
+  }, [module.module_id, module.revision, svg]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -157,7 +185,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     drawEditor(context, {
       module: draft,
-      camera,
+      camera: viewCamera,
       size: canvasSize,
       selection,
       wireStart,
@@ -165,14 +193,15 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         ? hitEndpoint(draft, portPositions, hoverWorld) ?? pointEndpoint(snapPoint(hoverWorld))
         : null,
       portPositions,
+      useSvgBackdrop: Boolean(svg) && !dirty,
     });
-  }, [camera, canvasSize, draft, hoverWorld, portPositions, selection, wireStart]);
+  }, [canvasSize, dirty, draft, hoverWorld, portPositions, selection, svg, viewCamera, wireStart]);
 
   function screenToWorldFromClient(canvas: HTMLCanvasElement, clientX: number, clientY: number): CircuitPosition {
     const rect = canvas.getBoundingClientRect();
     return {
-      x: (clientX - rect.left - camera.x) / camera.scale,
-      y: (clientY - rect.top - camera.y) / camera.scale,
+      x: (clientX - rect.left - viewCamera.x) / viewCamera.scale,
+      y: (clientY - rect.top - viewCamera.y) / viewCamera.scale,
     };
   }
 
@@ -387,7 +416,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         draft.components.map((component) => [component.id, component.position]),
       ))}
       data-wire-points={JSON.stringify((draft.wires ?? []).map((wire) => wire.points))}
-      data-camera={JSON.stringify(camera)}
+      data-camera={JSON.stringify(viewCamera)}
     >
       <div style={styles.toolbar}>
         <button
@@ -443,9 +472,19 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
 
       <div style={styles.content}>
         <div style={styles.stage} ref={stageRef}>
+          {svg ? (
+            <div
+              style={styles.svgBackdrop}
+              dangerouslySetInnerHTML={{ __html: sanitizeSvgForEditor(svg) }}
+              data-testid="schematic-editor-svg-backdrop"
+            />
+          ) : null}
           <canvas
             ref={canvasRef}
-            style={styles.canvas}
+            style={{
+              ...styles.canvas,
+              ...(svg && !dirty ? styles.canvasOverlay : {}),
+            }}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
@@ -518,11 +557,28 @@ function cloneModule(module: CircuitModule): CircuitModule {
   return JSON.parse(JSON.stringify(module)) as CircuitModule;
 }
 
-function createEditableModule(module: CircuitModule): CircuitModule {
+function sanitizeSvgForEditor(svg: string): string {
+  return svg
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, '')
+    .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '')
+    .replace(/\s(?:href|xlink:href)\s*=\s*["']\s*(?:javascript:|data:|https?:|\/\/)[^"']*["']/gi, '')
+    .replace(/<svg\b([^>]*)>/i, (_match, attributes: string) => {
+      const cleaned = attributes
+        .replace(/\sstyle\s*=\s*["'][^"']*["']/gi, '')
+        .replace(/\spreserveAspectRatio\s*=\s*["'][^"']*["']/gi, '');
+      return `<svg${cleaned} style="width:100%;height:100%;display:block" preserveAspectRatio="xMidYMid meet">`;
+    });
+}
+
+function createEditableState(module: CircuitModule, svg: string): EditableState {
   const next = cloneModule(module);
-  const initialPortPositions = computePortPositions(next);
-  next.wires = materializeNetWires(next, initialPortPositions);
-  return next;
+  const svgCells = parseSvgCells(svg);
+  applySvgComponentPositions(next, svgCells);
+  const portPositions = computePortPositions(next);
+  applySvgPortPositions(next, portPositions, svgCells);
+  next.wires = materializeNetWires(next, portPositions);
+  return { module: next, portPositions };
 }
 
 function snap(value: number): number {
@@ -544,6 +600,121 @@ function makeId(prefix: string, existing: Set<string>): string {
     if (!existing.has(id)) return id;
   }
   return `${prefix}${Date.now()}`;
+}
+
+function parseSvgCells(svg: string): Map<string, SvgCellPosition> {
+  const cells = new Map<string, SvgCellPosition>();
+  if (!svg.trim()) return cells;
+  try {
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    for (const group of Array.from(doc.querySelectorAll('g[id^="cell_"]'))) {
+      const id = group.getAttribute('id')?.replace(/^cell_/, '');
+      const transform = group.getAttribute('transform') ?? '';
+      const match = /translate\(\s*([-+]?\d*\.?\d+)(?:[,\s]+([-+]?\d*\.?\d+))?\s*\)/.exec(transform);
+      if (!id || !match) continue;
+      const x = Number.parseFloat(match[1] ?? '0');
+      const y = Number.parseFloat(match[2] ?? '0');
+      const width = Number.parseFloat(group.getAttribute('s:width') ?? group.getAttribute('width') ?? '0') || 0;
+      const height = Number.parseFloat(group.getAttribute('s:height') ?? group.getAttribute('height') ?? '0') || 0;
+      const type = group.getAttribute('s:type') ?? '';
+      cells.set(id, { x, y, width, height, type });
+    }
+  } catch {
+    return cells;
+  }
+  return cells;
+}
+
+function parseSvgViewBox(svg: string): SvgViewBox | null {
+  if (!svg.trim()) return null;
+  try {
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    const svgNode = doc.querySelector('svg');
+    const viewBox = svgNode?.getAttribute('viewBox');
+    if (viewBox) {
+      const parts = viewBox
+        .trim()
+        .split(/[\s,]+/)
+        .map((part) => Number(part));
+      const minX = parts[0] ?? Number.NaN;
+      const minY = parts[1] ?? Number.NaN;
+      const width = parts[2] ?? Number.NaN;
+      const height = parts[3] ?? Number.NaN;
+      if ([minX, minY, width, height].every(Number.isFinite) && width > 0 && height > 0) {
+        return { minX, minY, width, height };
+      }
+    }
+    const width = Number.parseFloat(svgNode?.getAttribute('width') ?? '');
+    const height = Number.parseFloat(svgNode?.getAttribute('height') ?? '');
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      return { minX: 0, minY: 0, width, height };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function cameraForSvgViewBox(viewBox: SvgViewBox, size: { width: number; height: number }): Camera {
+  const contentWidth = Math.max(1, size.width - SVG_BACKDROP_PADDING * 2);
+  const contentHeight = Math.max(1, size.height - SVG_BACKDROP_PADDING * 2);
+  const scale = Math.min(contentWidth / viewBox.width, contentHeight / viewBox.height);
+  return {
+    scale,
+    x: SVG_BACKDROP_PADDING + (contentWidth - viewBox.width * scale) / 2 - viewBox.minX * scale,
+    y: SVG_BACKDROP_PADDING + (contentHeight - viewBox.height * scale) / 2 - viewBox.minY * scale,
+  };
+}
+
+function componentSvgCellId(moduleId: string, component: CircuitComponent): string {
+  let name = `${moduleId}_${component.name}`.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || component.name;
+  if (!name.toUpperCase().startsWith(component.type)) {
+    name = `${component.type}${name}`;
+  }
+  return name;
+}
+
+function svgCellCenter(cell: SvgCellPosition): CircuitPosition {
+  return {
+    x: cell.x + (cell.width > 0 ? cell.width / 2 : 0),
+    y: cell.y + (cell.height > 0 ? cell.height / 2 : 0),
+  };
+}
+
+function applySvgComponentPositions(module: CircuitModule, cells: Map<string, SvgCellPosition>) {
+  for (const component of module.components) {
+    const cell = cells.get(componentSvgCellId(module.module_id, component));
+    if (!cell) continue;
+    component.position = snapPoint(svgCellCenter(cell));
+    if (cell.type.endsWith('_v')) component.rotation = 90;
+    if (cell.type.endsWith('_h')) component.rotation = 0;
+  }
+}
+
+function cellByPreferredIds(cells: Map<string, SvgCellPosition>, ids: string[]): SvgCellPosition | undefined {
+  for (const id of ids) {
+    const cell = cells.get(id);
+    if (cell) return cell;
+  }
+  return undefined;
+}
+
+function applySvgPortPositions(
+  module: CircuitModule,
+  portPositions: Map<string, CircuitPosition>,
+  cells: Map<string, SvgCellPosition>,
+) {
+  for (const port of module.ports) {
+    const label = `${port.name || port.id}`.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase();
+    const net = wireIdToken(port.net);
+    const ids = isGroundPort(port)
+      ? [`gnd_${net}`, `GND_${net}`, 'GND', 'gnd_0']
+      : port.direction === 'output'
+        ? [label, 'OUT', `output_${net}`]
+        : [label, 'IN', `input_${net}`];
+    const cell = cellByPreferredIds(cells, ids);
+    if (cell) portPositions.set(port.id, snapPoint(svgCellCenter(cell)));
+  }
 }
 
 function wireIdToken(value: string): string {
@@ -999,21 +1170,29 @@ function drawEditor(
     wireStart: EndpointHit | null;
     wirePreview: EndpointHit | null;
     portPositions: Map<string, CircuitPosition>;
+    useSvgBackdrop: boolean;
   },
 ) {
-  const { module, camera, size, selection, wireStart, wirePreview, portPositions } = input;
+  const { module, camera, size, selection, wireStart, wirePreview, portPositions, useSvgBackdrop } = input;
   context.save();
   context.clearRect(0, 0, size.width, size.height);
-  context.fillStyle = '#f8fafc';
-  context.fillRect(0, 0, size.width, size.height);
+  if (!useSvgBackdrop) {
+    context.fillStyle = '#f8fafc';
+    context.fillRect(0, 0, size.width, size.height);
+  }
   context.translate(camera.x, camera.y);
   context.scale(camera.scale, camera.scale);
-  drawGrid(context, camera, size);
-  drawPorts(context, module, portPositions);
-  for (const component of module.components) {
-    drawComponent(context, component, selection?.kind === 'component' && selection.id === component.id);
+  if (!useSvgBackdrop) {
+    drawGrid(context, camera, size);
+    drawPorts(context, module, portPositions);
+    for (const component of module.components) {
+      drawComponent(context, component, selection?.kind === 'component' && selection.id === component.id);
+    }
+    drawWires(context, module, selection);
+  } else if (selection?.kind === 'component') {
+    const component = module.components.find((entry) => entry.id === selection.id);
+    if (component) drawSelectionBox(context, component);
   }
-  drawWires(context, module, selection);
   if (wireStart && wirePreview) {
     drawWirePreview(context, wireStart, wirePreview);
   }
@@ -1117,10 +1296,7 @@ function drawWires(context: CanvasRenderingContext2D, module: CircuitModule, sel
 function drawComponent(context: CanvasRenderingContext2D, component: CircuitComponent, selected: boolean) {
   const bounds = componentBounds(component);
   if (selected) {
-    context.fillStyle = 'rgba(37, 99, 235, 0.12)';
-    context.strokeStyle = '#2563eb';
-    context.lineWidth = 2;
-    context.strokeRect(bounds.minX - 8, bounds.minY - 8, bounds.maxX - bounds.minX + 16, bounds.maxY - bounds.minY + 16);
+    drawSelectionBox(context, component);
   }
 
   context.strokeStyle = '#111827';
@@ -1144,6 +1320,14 @@ function drawComponent(context: CanvasRenderingContext2D, component: CircuitComp
   drawSymbolBody(context, component);
   context.fillText(component.name, component.position.x, component.position.y - 50);
   context.fillText(component.value, component.position.x, component.position.y + 50);
+}
+
+function drawSelectionBox(context: CanvasRenderingContext2D, component: CircuitComponent) {
+  const bounds = componentBounds(component);
+  context.fillStyle = 'rgba(37, 99, 235, 0.12)';
+  context.strokeStyle = '#2563eb';
+  context.lineWidth = 2;
+  context.strokeRect(bounds.minX - 8, bounds.minY - 8, bounds.maxX - bounds.minX + 16, bounds.maxY - bounds.minY + 16);
 }
 
 function drawSymbolBody(context: CanvasRenderingContext2D, component: CircuitComponent) {
@@ -1199,6 +1383,8 @@ const styles: Record<string, CSSProperties> = {
   editorShell: {
     display: 'flex',
     flexDirection: 'column',
+    flex: '1 1 auto',
+    minWidth: 0,
     minHeight: 0,
     height: '100%',
     border: '1px solid #d8dee8',
@@ -1254,20 +1440,36 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 90,
     textAlign: 'right',
   },
-  content: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 220px', minHeight: 0, flex: 1 },
-  stage: { minHeight: 0, position: 'relative', overflow: 'hidden' },
+  content: { display: 'flex', flexDirection: 'column', minHeight: 520, flex: '1 1 520px' },
+  stage: { flex: '1 1 420px', minHeight: 420, position: 'relative', overflow: 'hidden', background: '#ffffff' },
+  svgBackdrop: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 0,
+    padding: SVG_BACKDROP_PADDING,
+    background: '#ffffff',
+    pointerEvents: 'none',
+  },
   canvas: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 1,
     width: '100%',
     height: '100%',
     display: 'block',
     cursor: 'crosshair',
     outline: 'none',
   },
+  canvasOverlay: {
+    background: 'transparent',
+  },
   panel: {
-    borderLeft: '1px solid #d8dee8',
+    borderTop: '1px solid #d8dee8',
     padding: 12,
     overflow: 'auto',
     background: '#fbfcfe',
+    minHeight: 86,
+    maxHeight: 180,
   },
   panelTitle: {
     color: '#697386',

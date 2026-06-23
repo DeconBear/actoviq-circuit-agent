@@ -1825,6 +1825,7 @@ function ModuleSchematic({
         {viewMode === 'editor' && moduleData ? (
           <SchematicEditor
             module={moduleData}
+            svg={svg}
             busy={busy}
             onSave={onSaveSchematic}
             onBuild={onBuild}
