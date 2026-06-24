@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
@@ -92,6 +92,23 @@ async function readDesignMemoryManifest(kind, id) {
     manifestPath,
     manifest: JSON.parse(await readFile(manifestPath, 'utf8')),
   };
+}
+
+async function mtimeMs(filePath) {
+  try {
+    return (await stat(filePath)).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+async function waitForFileMtimeAfter(filePath, previousMtime, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await mtimeMs(filePath) > previousMtime) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for ${filePath} to be refreshed`);
 }
 
 const entries = await readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
@@ -475,8 +492,10 @@ try {
     'IN: DAC#1, VDD',
   );
 
+  const buildManifestPath = path.resolve(projectRoot, 'build', 'build-manifest.json');
+  const buildManifestMtime = await mtimeMs(buildManifestPath);
   await page.getByTestId('build-project').click();
-  await page.getByText('Netlist and previews updated', { exact: true }).waitFor({ timeout: 30_000 });
+  await waitForFileMtimeAfter(buildManifestPath, buildManifestMtime);
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();
 
   await page.getByTestId('simulate-project').click();

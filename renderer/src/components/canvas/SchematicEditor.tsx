@@ -59,6 +59,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [selection, setSelection] = useState<SchematicSelection>(null);
   const [wireStart, setWireStart] = useState<EndpointHit | null>(null);
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
+  const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -70,7 +71,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     ? draft.components.find((component) => component.id === selection.id) ?? null
     : null;
   const wirePreview = hoverWorld
-    ? hitEndpoint(document, hoverWorld) ?? pointEndpoint(snapPoint(hoverWorld))
+    ? hoverEndpoint ?? pointEndpoint(snapPoint(hoverWorld))
     : null;
 
   useEffect(() => {
@@ -79,6 +80,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setSelection(null);
     setWireStart(null);
     setHoverWorld(null);
+    setHoverEndpoint(null);
     setHistory([]);
     setFuture([]);
   }, [module.module_id, module.revision]);
@@ -110,6 +112,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     event.currentTarget.setPointerCapture(event.pointerId);
     const world = screenToWorld(event);
     setHoverWorld(world);
+    setHoverEndpoint(tool === 'wire' || tool === 'place' || wireStart ? hitEndpoint(document, world) : null);
 
     if (tool === 'place') {
       const next = cloneModule(draft);
@@ -138,6 +141,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
       setWireStart(null);
       setHoverWorld(null);
+      setHoverEndpoint(null);
       wireDragRef.current = null;
       return;
     }
@@ -166,6 +170,10 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     event.stopPropagation();
     const world = screenToWorld(event);
     if (tool === 'wire' || tool === 'place' || wireStart) {
+      const hit = hitEndpoint(document, world);
+      setHoverEndpoint((current) => (
+        endpointIdentity(current) === endpointIdentity(hit) ? current : hit
+      ));
       setHoverWorld(world);
     }
     const wireDrag = wireDragRef.current;
@@ -216,6 +224,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
       setWireStart(null);
       setHoverWorld(null);
+      setHoverEndpoint(null);
       return;
     }
     const drag = dragRef.current;
@@ -229,11 +238,13 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     event.stopPropagation();
     dragRef.current = null;
     wireDragRef.current = null;
+    setHoverEndpoint(null);
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape') {
       setWireStart(null);
+      setHoverEndpoint(null);
       setSelection(null);
       setTool('select');
       return;
@@ -261,6 +272,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setDirty(true);
     setSelection(null);
     setWireStart(null);
+    setHoverEndpoint(null);
   }
 
   function redo() {
@@ -272,6 +284,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setDirty(true);
     setSelection(null);
     setWireStart(null);
+    setHoverEndpoint(null);
   }
 
   function deleteSelection() {
@@ -313,6 +326,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-tool={tool}
       data-dirty={dirty ? 'true' : 'false'}
       data-selected={selection ? `${selection.kind}:${selection.id}` : ''}
+      data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
       data-component-count={draft.components.length}
       data-wire-count={document.wires.length}
       data-component-positions={JSON.stringify(Object.fromEntries(
@@ -326,7 +340,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       <div style={styles.toolbar}>
         <button
           style={tool === 'select' ? styles.activeToolButton : styles.toolButton}
-          onClick={() => { setTool('select'); setWireStart(null); }}
+          onClick={() => { setTool('select'); setWireStart(null); setHoverEndpoint(null); }}
           disabled={busy}
           data-testid="schematic-editor-select"
         >
@@ -334,7 +348,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         </button>
         <button
           style={tool === 'wire' ? styles.activeToolButton : styles.toolButton}
-          onClick={() => { setTool('wire'); setWireStart(null); }}
+          onClick={() => { setTool('wire'); setWireStart(null); setHoverEndpoint(null); }}
           disabled={busy}
           data-testid="schematic-editor-wire"
         >
@@ -344,7 +358,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
           <button
             key={type}
             style={tool === 'place' && placeType === type ? styles.activeToolButton : styles.toolButton}
-            onClick={() => { setTool('place'); setPlaceType(type); setWireStart(null); }}
+            onClick={() => { setTool('place'); setPlaceType(type); setWireStart(null); setHoverEndpoint(null); }}
             disabled={busy}
             data-testid={`schematic-editor-place-${type}`}
           >
@@ -368,7 +382,11 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
           Build netlistsvg
         </button>
         <span style={styles.statusText} data-testid="schematic-editor-status">
-          {wireStart ? `Wire from ${wireStart.label}` : dirty ? 'Unsaved' : 'Saved'}
+          {wireStart
+            ? `Wire from ${wireStart.label}${hoverEndpoint ? ` to ${hoverEndpoint.label}` : ''}`
+            : hoverEndpoint
+              ? `Snap ${hoverEndpoint.label}`
+              : dirty ? 'Unsaved' : 'Saved'}
         </span>
       </div>
 
@@ -379,7 +397,9 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
             selection={selection}
             wireStart={wireStart}
             wirePreview={wirePreview}
+            hoverEndpoint={hoverEndpoint}
             showGrid
+            cursor={dragRef.current ? 'grabbing' : tool === 'wire' ? 'crosshair' : tool === 'place' ? 'copy' : 'default'}
             testId="schematic-editor-svg"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -444,6 +464,13 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       </div>
     </div>
   );
+}
+
+function endpointIdentity(endpoint: EndpointHit | null): string {
+  if (!endpoint) return '';
+  if (endpoint.component_id && endpoint.pin_id) return `pin:${endpoint.component_id}:${endpoint.pin_id}`;
+  if (endpoint.port_id) return `port:${endpoint.port_id}`;
+  return `point:${endpoint.x},${endpoint.y}`;
 }
 
 const styles: Record<string, CSSProperties> = {

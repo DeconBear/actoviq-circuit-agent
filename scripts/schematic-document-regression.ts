@@ -3,6 +3,7 @@ import type { CircuitComponent, CircuitModule, CircuitPort } from '../renderer/s
 import {
   createSchematicDocument,
   endpointWorldPosition,
+  isPmosComponent,
   pinWorld,
 } from '../renderer/src/schematic/schematicDocument';
 
@@ -208,7 +209,11 @@ function assertActivePins(component: CircuitComponent, label: string) {
   const source = pinPointByName(component, /source|emitter|\bs\b|\be\b/);
   assert.ok(gate.x < drain.x, `${label}.${component.id} gate/base should be left of drain/collector`);
   assert.ok(gate.x < source.x, `${label}.${component.id} gate/base should be left of source/emitter`);
-  assert.ok(drain.y < source.y, `${label}.${component.id} drain/collector should be above source/emitter`);
+  if (component.type === 'M' && isPmosComponent(component)) {
+    assert.ok(source.y < drain.y, `${label}.${component.id} PMOS source should be above drain`);
+  } else {
+    assert.ok(drain.y < source.y, `${label}.${component.id} drain/collector should be above source/emitter`);
+  }
 }
 
 function pinPointForNet(component: CircuitComponent, net: string) {

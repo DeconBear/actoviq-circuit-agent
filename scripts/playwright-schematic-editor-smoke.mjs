@@ -178,6 +178,16 @@ async function countVisibleSchematicWires(page) {
   ));
 }
 
+async function countVisibleSchematicComponents(page) {
+  return page.getByTestId('schematic-editor-svg').locator('g[data-component-id]').evaluateAll((nodes) => (
+    nodes.filter((node) => {
+      if (!(node instanceof SVGGraphicsElement)) return false;
+      const box = node.getBBox();
+      return box.width > 0 && box.height > 0;
+    }).length
+  ));
+}
+
 await mkdir(outputRoot, { recursive: true });
 await removePrefixedProjects();
 
@@ -238,6 +248,21 @@ try {
   const box = await canvas.boundingBox();
   assert.ok(box);
   const initialWireCount = Number(await editor.getAttribute('data-wire-count'));
+  const filterPositionsInitial = await componentPositions(page);
+  const filterViewBoxInitial = await editorViewBox(page);
+  const filterWireSnapPoint = worldToScreen(
+    { x: filterPositionsInitial.r_filter.x + 52, y: filterPositionsInitial.r_filter.y },
+    filterViewBoxInitial,
+    box,
+  );
+  await page.getByTestId('schematic-editor-wire').click();
+  await page.mouse.move(filterWireSnapPoint.x, filterWireSnapPoint.y);
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Boolean(node?.getAttribute('data-hover-endpoint')?.includes('Rfilter'));
+  });
+  assert.equal(await page.getByTestId('schematic-hover-endpoint').count(), 1, 'wire tool did not show endpoint snap feedback');
+  await page.getByTestId('schematic-editor-select').click();
   const placePoint = { x: box.x + Math.min(430, box.width * 0.62), y: box.y + Math.min(280, box.height * 0.48) };
 
   await page.getByTestId('schematic-editor-place-R').click();
@@ -333,6 +358,20 @@ try {
   });
   const ldoPositions = await componentPositions(page);
   assert.ok(ldoPositions.mp, 'hydrated LDO pass MOSFET is missing from editable schematic');
+  assert.ok(await countVisibleSchematicComponents(page) >= 12, 'hydrated LDO components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 10, 'hydrated LDO wires are not visibly drawn');
+  assert.ok(
+    ldoPositions.mp.x > Math.max(ldoPositions.m1?.x ?? 0, ldoPositions.m2?.x ?? 0, ldoPositions.m3?.x ?? 0, ldoPositions.m4?.x ?? 0),
+    'LDO pass MOSFET should be placed to the right of the error amplifier',
+  );
+  if (ldoPositions.rtop && ldoPositions.rbot) {
+    assert.ok(Math.abs(ldoPositions.rtop.x - ldoPositions.rbot.x) <= 40, 'LDO feedback divider should be vertically aligned');
+    assert.ok(ldoPositions.rtop.y < ldoPositions.rbot.y, 'LDO top feedback resistor should sit above bottom feedback resistor');
+  }
+  if (ldoPositions.cout && ldoPositions.rload) {
+    assert.ok(ldoPositions.cout.x >= ldoPositions.mp.x, 'LDO output capacitor should be placed on the output side');
+    assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
+  }
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();

@@ -2,6 +2,7 @@ import type { PointerEventHandler } from 'react';
 import type { CircuitComponent, CircuitPosition, CircuitWire } from '../types';
 import {
   componentBounds,
+  isPmosComponent,
   isGroundPort,
   pinWorld,
   routePoints,
@@ -16,7 +17,9 @@ interface Props {
   selection?: SchematicSelection;
   wireStart?: EndpointHit | null;
   wirePreview?: EndpointHit | null;
+  hoverEndpoint?: EndpointHit | null;
   showGrid?: boolean;
+  cursor?: CSSCursor;
   testId?: string;
   onPointerDown?: PointerEventHandler<SVGSVGElement>;
   onPointerMove?: PointerEventHandler<SVGSVGElement>;
@@ -29,7 +32,9 @@ export function SchematicDocumentSvg({
   selection = null,
   wireStart = null,
   wirePreview = null,
+  hoverEndpoint = null,
   showGrid = false,
+  cursor = 'default',
   testId = 'schematic-document-svg',
   onPointerDown,
   onPointerMove,
@@ -50,7 +55,7 @@ export function SchematicDocumentSvg({
       xmlns="http://www.w3.org/2000/svg"
       viewBox={`${viewBox.minX} ${viewBox.minY} ${width} ${height}`}
       preserveAspectRatio="xMidYMid meet"
-      style={{ width: '100%', height: '100%', display: 'block', background: '#ffffff', touchAction: 'none' }}
+      style={{ width: '100%', height: '100%', display: 'block', background: '#ffffff', touchAction: 'none', cursor }}
       data-testid={testId}
       data-schematic-source="document"
       data-module-id={document.moduleId}
@@ -161,9 +166,12 @@ export function SchematicDocumentSvg({
           pointerEvents="none"
         />
       ) : null}
+      {hoverEndpoint ? <EndpointHover endpoint={hoverEndpoint} /> : null}
     </svg>
   );
 }
+
+type CSSCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
 function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) {
   const points = pointsAttribute(wire.points ?? []);
@@ -321,7 +329,12 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   const { x, y } = component.position;
   const rotation = component.rotation ?? 0;
   if (component.type === 'R') {
-    return <rect x={x - 28} y={y - 10} width="56" height="20" fill="#fff" stroke="#111827" strokeWidth="2.4" pointerEvents="none" />;
+    return (
+      <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none">
+        <rect x={x - 29} y={y - 10} width="58" height="20" rx="2" fill="#fff" stroke="#111827" strokeWidth="2.4" />
+        <line x1={x - 21} y1={y - 5} x2={x + 21} y2={y + 5} stroke="#cbd5e1" strokeWidth="1.2" />
+      </g>
+    );
   }
   if (component.type === 'C') {
     return (
@@ -333,13 +346,9 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   }
   if (component.type === 'L') {
     return (
-      <path
-        d={`M ${x - 28} ${y} A 8 8 0 0 1 ${x - 12} ${y} A 8 8 0 0 1 ${x + 4} ${y} A 8 8 0 0 1 ${x + 20} ${y} A 8 8 0 0 1 ${x + 36} ${y}`}
-        fill="none"
-        stroke="#111827"
-        strokeWidth="2.4"
-        pointerEvents="none"
-      />
+      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke="#111827" strokeWidth="2.4" pointerEvents="none">
+        <path d={`M ${x - 32} ${y} A 8 8 0 0 1 ${x - 16} ${y} A 8 8 0 0 1 ${x} ${y} A 8 8 0 0 1 ${x + 16} ${y} A 8 8 0 0 1 ${x + 32} ${y}`} />
+      </g>
     );
   }
   if (component.type === 'D') {
@@ -351,14 +360,25 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
     );
   }
   if (component.type === 'M') {
+    const pmos = isPmosComponent(component);
+    const gateX = x - 20;
+    const channelX = x + 12;
     return (
       <g fill="none" stroke="#111827" strokeWidth="2.4" pointerEvents="none">
-        <line x1={x - 20} y1={y - 34} x2={x - 20} y2={y + 34} />
-        <line x1={x + 12} y1={y - 38} x2={x + 12} y2={y + 38} />
-        <line x1={x - 58} y1={y} x2={x - 20} y2={y} />
-        <line x1={x + 12} y1={y - 30} x2={x + 26} y2={y - 52} />
-        <line x1={x + 12} y1={y + 30} x2={x + 26} y2={y + 52} />
-        <line x1={x + 12} y1={y} x2={x + 58} y2={y} />
+        <line x1={gateX} y1={y - 34} x2={gateX} y2={y + 34} />
+        <line x1={channelX} y1={y - 38} x2={channelX} y2={y + 38} />
+        <line x1={x - 58} y1={y} x2={pmos ? x - 31 : gateX} y2={y} />
+        {pmos ? <circle cx={x - 26} cy={y} r="5" fill="#fff" /> : null}
+        <line x1={channelX} y1={y - 30} x2={x + 26} y2={y - 52} />
+        <line x1={channelX} y1={y + 30} x2={x + 26} y2={y + 52} />
+        <line x1={channelX} y1={y} x2={x + 58} y2={y} />
+        <path
+          d={pmos
+            ? `M ${x + 21} ${y - 19} l 10 -5 l -3 10 z`
+            : `M ${x + 32} ${y + 24} l -10 5 l 3 -10 z`}
+          fill="#111827"
+          stroke="none"
+        />
       </g>
     );
   }
@@ -375,9 +395,21 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   return (
     <g pointerEvents="none">
       <circle cx={x} cy={y} r="28" fill="#fff" stroke="#111827" strokeWidth="2.4" />
-      <text x={x} y={y + 4} textAnchor="middle" fontSize="15" fontFamily="Consolas, monospace" fontWeight="700">
-        {component.type}
-      </text>
+      {component.type === 'V' ? (
+        <>
+          <text x={x} y={y - 7} textAnchor="middle" fontSize="16" fontFamily="Consolas, monospace" fontWeight="700">+</text>
+          <text x={x} y={y + 16} textAnchor="middle" fontSize="18" fontFamily="Consolas, monospace" fontWeight="700">-</text>
+        </>
+      ) : component.type === 'I' ? (
+        <>
+          <line x1={x} y1={y + 16} x2={x} y2={y - 13} stroke="#111827" strokeWidth="2.2" />
+          <path d={`M ${x - 7} ${y - 6} L ${x} ${y - 17} L ${x + 7} ${y - 6}`} fill="none" stroke="#111827" strokeWidth="2.2" />
+        </>
+      ) : (
+        <text x={x} y={y + 4} textAnchor="middle" fontSize="15" fontFamily="Consolas, monospace" fontWeight="700">
+          {component.type}
+        </text>
+      )}
     </g>
   );
 }
@@ -400,6 +432,15 @@ function rotateOffset(offset: CircuitPosition, rotation: number): CircuitPositio
   if (normalized === 180) return { x: -offset.x, y: -offset.y };
   if (normalized === 270) return { x: offset.y, y: -offset.x };
   return offset;
+}
+
+function EndpointHover({ endpoint }: { endpoint: EndpointHit }) {
+  return (
+    <g pointerEvents="none" data-testid="schematic-hover-endpoint" data-label={endpoint.label} data-net={endpoint.net ?? ''}>
+      <circle cx={endpoint.x} cy={endpoint.y} r="10" fill="rgba(37, 99, 235, 0.10)" stroke="#2563eb" strokeWidth="2" />
+      <circle cx={endpoint.x} cy={endpoint.y} r="4" fill="#2563eb" />
+    </g>
+  );
 }
 
 function EndpointCircle({

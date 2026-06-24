@@ -148,6 +148,7 @@ export function makePlacedComponent(
 function autoLayoutModule(module: CircuitModule): CircuitModule {
   if (module.components.length === 0) return module;
   const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
+  if (activeComponents.length > 0 && isLdoLikeModule(module, activeComponents)) return autoLayoutLdoModule(module, activeComponents);
   if (activeComponents.length > 0) return autoLayoutActiveModule(module, activeComponents);
   return autoLayoutPassiveModule(module);
 }
@@ -264,6 +265,76 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
     component.rotation = 0;
     usedSlots.right += 1;
   }
+  return module;
+}
+
+function autoLayoutLdoModule(module: CircuitModule, activeComponents: CircuitComponent[]): CircuitModule {
+  const placed = new Set<string>();
+  const inputNet = preferredPortNet(module, 'input') ?? 'vin';
+  const outputNet = preferredPortNet(module, 'output') ?? 'vout';
+  const groundNet = module.ports.find(isGroundPort)?.net ?? '0';
+  const powerNet = module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net ?? inputNet;
+
+  const pass = findPassDevice(activeComponents, powerNet, outputNet);
+  const differential = activeComponents
+    .filter((component) => component.id !== pass?.id)
+    .sort((left, right) => activePlacementScore(left) - activePlacementScore(right) || left.id.localeCompare(right.id));
+
+  const currentSources = differential.filter((component) => /current|mirror|bias|load|p?mos/i.test(component.value) && isPmosComponent(component));
+  const signalPair = differential.filter((component) => !isPmosComponent(component));
+  const fallbackActives = differential.filter((component) => !currentSources.includes(component) && !signalPair.includes(component));
+
+  const activeSlots: Array<{ component: CircuitComponent | undefined; x: number; y: number }> = [
+    { component: currentSources[0], x: 380, y: 145 },
+    { component: currentSources[1], x: 600, y: 145 },
+    { component: signalPair[0] ?? fallbackActives[0], x: 380, y: 390 },
+    { component: signalPair[1] ?? fallbackActives[1], x: 600, y: 390 },
+    { component: pass, x: 820, y: 265 },
+  ];
+
+  activeSlots.forEach(({ component, x, y }) => {
+    if (!component || placed.has(component.id)) return;
+    component.position = snapPoint({ x, y });
+    component.rotation = 0;
+    placed.add(component.id);
+  });
+
+  const twoPinComponents = module.components.filter((component) => component.pins.length === 2 && !placed.has(component.id));
+  placeNamedTwoPin(twoPinComponents, placed, /v(in|dd|supply)|input/i, powerNet, groundNet, { x: 160, y: 300 });
+  placeNamedTwoPin(twoPinComponents, placed, /vref|reference/i, 'vref', groundNet, { x: 185, y: 535 });
+  placeNamedTwoPin(twoPinComponents, placed, /itail|tail|bias/i, 'tail', groundNet, { x: 500, y: 575 });
+  placeNamedTwoPin(twoPinComponents, placed, /r(top|fb1|upper)|feedback.*top/i, outputNet, 'fb', { x: 1010, y: 345 });
+  placeNamedTwoPin(twoPinComponents, placed, /r(bot|fb2|lower)|feedback.*bot/i, 'fb', groundNet, { x: 1010, y: 535 });
+  placeNamedTwoPin(twoPinComponents, placed, /r(load|out)|load/i, outputNet, groundNet, { x: 1160, y: 480 });
+  placeNamedTwoPin(twoPinComponents, placed, /c(out|load)|output.*cap/i, outputNet, groundNet, { x: 1300, y: 480 });
+
+  for (const component of twoPinComponents) {
+    if (placed.has(component.id)) continue;
+    const [first, second] = component.pins;
+    if (!first || !second) continue;
+    const firstRail = isRailNet(first.net, module);
+    const secondRail = isRailNet(second.net, module);
+    const signalNet = firstRail ? second.net : first.net;
+    const railNet = firstRail ? first.net : secondRail ? second.net : '';
+    const anchor = nearestPinPointForNet(activeComponents, signalNet);
+    if (railNet && anchor) {
+      placeVertical(component, signalNet, railNet, {
+        x: anchor.x,
+        y: anchor.y + (isGroundNet(railNet, module) ? 135 : -135),
+      });
+    } else {
+      component.position = snapPoint({ x: 820 + placed.size * 80, y: 520 });
+      component.rotation = normalizeRotation(component.rotation);
+    }
+    placed.add(component.id);
+  }
+
+  module.components.forEach((component, index) => {
+    if (placed.has(component.id)) return;
+    component.position = snapPoint({ x: 230 + (index % 4) * 180, y: 590 + Math.floor(index / 4) * 120 });
+    component.rotation = normalizeRotation(component.rotation);
+  });
+
   return module;
 }
 
@@ -404,6 +475,47 @@ function activePlacementScore(component: CircuitComponent): number {
   if (/ref|bias|diode/.test(text)) return 0;
   if (/out|load/.test(text)) return 2;
   return 1;
+}
+
+function isLdoLikeModule(module: CircuitModule, activeComponents: CircuitComponent[]): boolean {
+  const text = [
+    module.module_id,
+    module.name,
+    ...module.components.flatMap((component) => [component.id, component.name, component.value]),
+  ].join(' ').toLowerCase();
+  const hasPassDevice = activeComponents.some((component) => /pass|ldo|pmos/i.test(`${component.id} ${component.name} ${component.value}`));
+  const hasInputOutputRails = module.ports.some((port) => port.direction === 'input' && !isGroundPort(port)) &&
+    module.ports.some((port) => port.direction === 'output' && !isGroundPort(port));
+  return activeComponents.length >= 3 && hasInputOutputRails && (text.includes('ldo') || hasPassDevice);
+}
+
+function findPassDevice(activeComponents: CircuitComponent[], powerNet: string, outputNet: string): CircuitComponent | undefined {
+  return activeComponents.find((component) => /(^|[_-])m?p(ass)?($|[_-])|\bmp\b|pass/i.test(`${component.id} ${component.name} ${component.value}`)) ??
+    activeComponents.find((component) => (
+      isPmosComponent(component) &&
+      component.pins.some((pin) => pin.net === powerNet) &&
+      component.pins.some((pin) => pin.net === outputNet)
+    )) ??
+    activeComponents.find(isPmosComponent);
+}
+
+function placeNamedTwoPin(
+  components: CircuitComponent[],
+  placed: Set<string>,
+  pattern: RegExp,
+  topNet: string,
+  bottomNet: string,
+  center: CircuitPosition,
+) {
+  const component = components.find((entry) => !placed.has(entry.id) && pattern.test(`${entry.id} ${entry.name} ${entry.value}`));
+  if (!component) return;
+  const [first, second] = component.pins;
+  if (!first || !second) return;
+  const nets = [first.net, second.net];
+  const actualTop = nets.includes(topNet) ? topNet : first.net;
+  const actualBottom = nets.includes(bottomNet) ? bottomNet : nets.find((net) => net !== actualTop) ?? second.net;
+  placeVertical(component, actualTop, actualBottom, center);
+  placed.add(component.id);
 }
 
 function nearestPinPointForNet(components: CircuitComponent[], net: string): CircuitPosition | null {
@@ -566,6 +678,10 @@ export function padBounds(bounds: SchematicBounds, padding: number): SchematicBo
 export function isGroundPort(port: CircuitPort): boolean {
   const text = `${port.name} ${port.net} ${port.signal_type}`.toLowerCase();
   return port.signal_type === 'ground' || text.includes('gnd') || port.net === '0';
+}
+
+export function isPmosComponent(component: CircuitComponent): boolean {
+  return /pmos|pfet|p-channel|p channel|\bp\b/i.test(`${component.id} ${component.name} ${component.value}`);
 }
 
 export function endpointKey(endpoint: CircuitWireEndpoint | undefined): string | null {
@@ -853,9 +969,10 @@ function pinOffset(component: CircuitComponent, pin: CircuitPin, index: number):
   const key = `${pin.id} ${pin.name}`.toLowerCase();
   let offset: CircuitPosition;
   if (component.type === 'M') {
+    const pmos = isPmosComponent(component);
     if (/gate|\bg\b/.test(key)) offset = { x: -58, y: 0 };
-    else if (/drain|\bd\b/.test(key)) offset = { x: 26, y: -52 };
-    else if (/source|\bs\b/.test(key)) offset = { x: 26, y: 52 };
+    else if (/drain|\bd\b/.test(key)) offset = { x: 26, y: pmos ? 52 : -52 };
+    else if (/source|\bs\b/.test(key)) offset = { x: 26, y: pmos ? -52 : 52 };
     else offset = { x: 58, y: 0 };
   } else if (component.type === 'Q') {
     if (/base|\bb\b/.test(key)) offset = { x: -58, y: 0 };
