@@ -12,6 +12,11 @@ import {
   type SchematicSelection,
 } from './schematicDocument';
 
+const WIRE_COLOR = '#16821f';
+const SYMBOL_COLOR = '#9b111e';
+const LABEL_COLOR = '#0000cc';
+const MUTED_LABEL_COLOR = '#334155';
+
 interface Props {
   document: SchematicDocument;
   selection?: SchematicSelection;
@@ -95,7 +100,8 @@ export function SchematicDocumentSvg({
           const position = document.portPositions.get(port.id);
           if (!position) return null;
           const connected = connectedNets.has(port.net);
-          const labelPosition = portLabelPositions(position, isGroundPort(port) ? 'ground' : port.direction === 'output' ? 'output' : 'input');
+          const portKind = isGroundPort(port) ? 'ground' : port.signal_type === 'power' ? 'power' : port.direction === 'output' ? 'output' : 'input';
+          const labelPosition = portLabelPositions(position, portKind);
           return (
             <g
               key={port.id}
@@ -106,6 +112,8 @@ export function SchematicDocumentSvg({
             >
               {isGroundPort(port) ? (
                 <GroundSymbol position={position} />
+              ) : port.signal_type === 'power' ? (
+                <PowerFlagSymbol position={position} />
               ) : (
                 <PortSymbol position={position} direction={port.direction === 'output' ? 'output' : 'input'} />
               )}
@@ -123,6 +131,7 @@ export function SchematicDocumentSvg({
                 fontSize="12"
                 fontFamily="Consolas, monospace"
                 fontWeight="700"
+                fill={LABEL_COLOR}
               >
                 {port.name}
               </text>
@@ -132,7 +141,7 @@ export function SchematicDocumentSvg({
                 textAnchor={labelPosition.net.anchor}
                 fontSize="9"
                 fontFamily="Consolas, monospace"
-                fill="#64748b"
+                fill={MUTED_LABEL_COLOR}
               >
                 {port.net}
               </text>
@@ -151,7 +160,7 @@ export function SchematicDocumentSvg({
       </g>
       <g data-layer="junctions" pointerEvents="none">
         {junctions(document).map((point) => (
-          <circle key={`${point.x},${point.y}`} cx={point.x} cy={point.y} r="3.2" fill="#111827" />
+          <circle key={`${point.x},${point.y}`} cx={point.x} cy={point.y} r="3.8" fill="#cc0000" stroke="#ffffff" strokeWidth="1" />
         ))}
       </g>
       {wireStart ? (
@@ -190,7 +199,7 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
       <polyline
         points={points}
         fill="none"
-        stroke={selected ? '#2563eb' : '#111827'}
+        stroke={selected ? '#2563eb' : WIRE_COLOR}
         strokeWidth={selected ? 4.5 : 2.6}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -240,6 +249,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         fontSize="12"
         fontFamily="Consolas, monospace"
         fontWeight="700"
+        fill={LABEL_COLOR}
         pointerEvents="none"
       >
         {component.name}
@@ -250,6 +260,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         textAnchor={labels.value.anchor}
         fontSize="11"
         fontFamily="Consolas, monospace"
+        fill={LABEL_COLOR}
         pointerEvents="none"
       >
         {component.value}
@@ -260,7 +271,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
 
 type TextAnchor = 'start' | 'middle' | 'end';
 
-function portLabelPositions(position: CircuitPosition, direction: 'input' | 'output' | 'ground'): {
+function portLabelPositions(position: CircuitPosition, direction: 'input' | 'output' | 'ground' | 'power'): {
   name: CircuitPosition & { anchor: TextAnchor };
   net: CircuitPosition & { anchor: TextAnchor };
 } {
@@ -274,6 +285,12 @@ function portLabelPositions(position: CircuitPosition, direction: 'input' | 'out
     return {
       name: { x: position.x - 50, y: position.y - 22, anchor: 'start' },
       net: { x: position.x - 50, y: position.y + 4, anchor: 'start' },
+    };
+  }
+  if (direction === 'power') {
+    return {
+      name: { x: position.x, y: position.y - 28, anchor: 'middle' },
+      net: { x: position.x + 12, y: position.y + 16, anchor: 'start' },
     };
   }
   return {
@@ -306,7 +323,7 @@ function LeadLines({ component }: { component: CircuitComponent }) {
   if (component.pins.length !== 2) return null;
   const bodyOffsets = bodyTerminalOffsets(component);
   return (
-    <g stroke="#111827" strokeWidth="2" pointerEvents="none">
+    <g stroke={SYMBOL_COLOR} strokeWidth="2" pointerEvents="none">
       {component.pins.map((pin, index) => {
         const point = pinWorld(component, pin, index);
         const offset = bodyOffsets[index];
@@ -331,7 +348,7 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   if (component.type === 'R') {
     return (
       <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none">
-        <rect x={x - 29} y={y - 10} width="58" height="20" rx="2" fill="#fff" stroke="#111827" strokeWidth="2.4" />
+        <rect x={x - 29} y={y - 10} width="58" height="20" rx="2" fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2.4" />
         <line x1={x - 21} y1={y - 5} x2={x + 21} y2={y + 5} stroke="#cbd5e1" strokeWidth="1.2" />
       </g>
     );
@@ -339,21 +356,21 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   if (component.type === 'C') {
     return (
       <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none">
-        <line x1={x - 8} y1={y - 30} x2={x - 8} y2={y + 30} stroke="#111827" strokeWidth="2.4" />
-        <line x1={x + 8} y1={y - 30} x2={x + 8} y2={y + 30} stroke="#111827" strokeWidth="2.4" />
+        <line x1={x - 8} y1={y - 30} x2={x - 8} y2={y + 30} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
+        <line x1={x + 8} y1={y - 30} x2={x + 8} y2={y + 30} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
       </g>
     );
   }
   if (component.type === 'L') {
     return (
-      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke="#111827" strokeWidth="2.4" pointerEvents="none">
+      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none">
         <path d={`M ${x - 32} ${y} A 8 8 0 0 1 ${x - 16} ${y} A 8 8 0 0 1 ${x} ${y} A 8 8 0 0 1 ${x + 16} ${y} A 8 8 0 0 1 ${x + 32} ${y}`} />
       </g>
     );
   }
   if (component.type === 'D') {
     return (
-      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke="#111827" strokeWidth="2.4" pointerEvents="none">
+      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none">
         <path d={`M ${x - 22} ${y - 24} L ${x - 22} ${y + 24} L ${x + 20} ${y} Z`} />
         <line x1={x + 22} y1={y - 25} x2={x + 22} y2={y + 25} />
       </g>
@@ -364,7 +381,7 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
     const gateX = x - 20;
     const channelX = x + 12;
     return (
-      <g fill="none" stroke="#111827" strokeWidth="2.4" pointerEvents="none">
+      <g fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none">
         <line x1={gateX} y1={y - 34} x2={gateX} y2={y + 34} />
         <line x1={channelX} y1={y - 38} x2={channelX} y2={y + 38} />
         <line x1={x - 58} y1={y} x2={pmos ? x - 31 : gateX} y2={y} />
@@ -376,7 +393,7 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
           d={pmos
             ? `M ${x + 21} ${y - 19} l 10 -5 l -3 10 z`
             : `M ${x + 32} ${y + 24} l -10 5 l 3 -10 z`}
-          fill="#111827"
+          fill={SYMBOL_COLOR}
           stroke="none"
         />
       </g>
@@ -384,7 +401,7 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   }
   if (component.type === 'Q') {
     return (
-      <g fill="none" stroke="#111827" strokeWidth="2.4" pointerEvents="none">
+      <g fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none">
         <line x1={x - 18} y1={y - 34} x2={x - 18} y2={y + 34} />
         <line x1={x - 58} y1={y} x2={x - 18} y2={y} />
         <line x1={x - 18} y1={y - 20} x2={x + 30} y2={y - 52} />
@@ -394,7 +411,7 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   }
   return (
     <g pointerEvents="none">
-      <circle cx={x} cy={y} r="28" fill="#fff" stroke="#111827" strokeWidth="2.4" />
+      <circle cx={x} cy={y} r="28" fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2.4" />
       {component.type === 'V' ? (
         <>
           <text x={x} y={y - 7} textAnchor="middle" fontSize="16" fontFamily="Consolas, monospace" fontWeight="700">+</text>
@@ -402,8 +419,8 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
         </>
       ) : component.type === 'I' ? (
         <>
-          <line x1={x} y1={y + 16} x2={x} y2={y - 13} stroke="#111827" strokeWidth="2.2" />
-          <path d={`M ${x - 7} ${y - 6} L ${x} ${y - 17} L ${x + 7} ${y - 6}`} fill="none" stroke="#111827" strokeWidth="2.2" />
+          <line x1={x} y1={y + 16} x2={x} y2={y - 13} stroke={SYMBOL_COLOR} strokeWidth="2.2" />
+          <path d={`M ${x - 7} ${y - 6} L ${x} ${y - 17} L ${x + 7} ${y - 6}`} fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.2" />
         </>
       ) : (
         <text x={x} y={y + 4} textAnchor="middle" fontSize="15" fontFamily="Consolas, monospace" fontWeight="700">
@@ -465,7 +482,7 @@ function EndpointCircle({
       cx={point.x}
       cy={point.y}
       r="4.6"
-      fill="#111827"
+      fill={kind === 'port' ? '#8a929d' : '#cc0000'}
       stroke="#ffffff"
       strokeWidth="1.5"
       data-endpoint-kind={kind}
@@ -494,12 +511,22 @@ function PortSymbol({ position, direction }: { position: CircuitPosition; direct
         `${position.x + 24} ${position.y + 18}`,
         `${position.x} ${position.y + 18}`,
       ];
-  return <polygon points={points.join(' ')} fill="#fff" stroke="#111827" strokeWidth="2" pointerEvents="none" />;
+  return <polygon points={points.join(' ')} fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2" pointerEvents="none" />;
+}
+
+function PowerFlagSymbol({ position }: { position: CircuitPosition }) {
+  return (
+    <g fill="none" pointerEvents="none">
+      <line x1={position.x} y1={position.y} x2={position.x} y2={position.y - 34} stroke={WIRE_COLOR} strokeWidth="2.4" />
+      <line x1={position.x - 18} y1={position.y - 34} x2={position.x + 18} y2={position.y - 34} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
+      <line x1={position.x} y1={position.y - 34} x2={position.x} y2={position.y - 46} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
+    </g>
+  );
 }
 
 function GroundSymbol({ position }: { position: CircuitPosition }) {
   return (
-    <g stroke="#111827" strokeWidth="2" fill="none" pointerEvents="none">
+    <g stroke={SYMBOL_COLOR} strokeWidth="2" fill="none" pointerEvents="none">
       <line x1={position.x} y1={position.y} x2={position.x} y2={position.y + 22} />
       <line x1={position.x - 20} y1={position.y + 22} x2={position.x + 20} y2={position.y + 22} />
       <line x1={position.x - 13} y1={position.y + 30} x2={position.x + 13} y2={position.y + 30} />

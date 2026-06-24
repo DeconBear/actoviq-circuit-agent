@@ -23,7 +23,7 @@ import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import { createSchematicDocument } from '../../schematic/schematicDocument';
 
 interface Props {
-  onCreateProject: (demo: boolean) => void;
+  onCreateProject: (demo: boolean, name: string) => Promise<void>;
   onCreateProjectFromTemplate: (templateId: string, defaultName: string) => Promise<void>;
   onReloadProject: () => Promise<void>;
   onReferencesChanged?: () => Promise<void>;
@@ -414,6 +414,24 @@ export function CircuitWorkbench({
     if (saved) {
       await buildModulePreview(moduleId, false);
       setNotice(`Moved ${itemId}`);
+    }
+  }
+
+  async function moveSchematicItems(
+    moduleId: string,
+    items: Array<{ itemId: string; x: number; y: number }>,
+  ): Promise<void> {
+    if (items.length === 0) return;
+    const saved = await applyOperations('Lock schematic layout baseline', items.map((item) => ({
+      op: 'move_schematic_item',
+      module_id: moduleId,
+      item_id: item.itemId,
+      x: Math.round(item.x * 10) / 10,
+      y: Math.round(item.y * 10) / 10,
+    })));
+    if (saved) {
+      await buildModulePreview(moduleId, false);
+      setNotice(`Locked ${items.length} schematic items`);
     }
   }
 
@@ -878,10 +896,10 @@ export function CircuitWorkbench({
           Claude Code, Codex, and this desktop share the same module netlists and netlistsvg output.
         </p>
         <div style={styles.actionRow}>
-          <button style={styles.primaryButton} onClick={() => onCreateProject(true)} data-testid="create-demo-project">
+          <button style={styles.primaryButton} onClick={() => void onCreateProject(true, 'Modular analog chain')} data-testid="create-demo-project">
             Create three-module demo
           </button>
-          <button style={styles.secondaryButton} onClick={() => onCreateProject(false)} data-testid="create-blank-project">
+          <button style={styles.secondaryButton} onClick={() => void onCreateProject(false, 'New circuit project')} data-testid="create-blank-project">
             Create blank project
           </button>
         </div>
@@ -1008,6 +1026,7 @@ export function CircuitWorkbench({
               onBuild={() => buildModulePreview(selectedRef.id)}
               onSaveSchematic={(moduleData) => saveModuleSchematic(selectedRef.id, moduleData)}
               onMoveItem={(itemId, x, y) => moveSchematicItem(selectedRef.id, itemId, x, y)}
+              onMoveItems={(items) => moveSchematicItems(selectedRef.id, items)}
               onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
             />
@@ -1431,6 +1450,7 @@ function ModuleSchematic({
   onBuild,
   onSaveSchematic,
   onMoveItem,
+  onMoveItems,
   onResetItem,
   onResetLayout,
 }: {
@@ -1442,6 +1462,7 @@ function ModuleSchematic({
   onBuild: () => void;
   onSaveSchematic: (moduleData: CircuitModule) => Promise<void>;
   onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
+  onMoveItems: (items: Array<{ itemId: string; x: number; y: number }>) => Promise<void>;
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
 }) {
@@ -1464,6 +1485,7 @@ function ModuleSchematic({
   const editLayoutRef = useRef(editLayout);
   const busyRef = useRef(busy);
   const onMoveItemRef = useRef(onMoveItem);
+  const onMoveItemsRef = useRef(onMoveItems);
   const onResetItemRef = useRef(onResetItem);
   const selectedItemRef = useRef(selectedItem);
   const snapToGridRef = useRef(snapToGrid);
@@ -1485,6 +1507,7 @@ function ModuleSchematic({
   editLayoutRef.current = editLayout;
   busyRef.current = busy;
   onMoveItemRef.current = onMoveItem;
+  onMoveItemsRef.current = onMoveItems;
   onResetItemRef.current = onResetItem;
   selectedItemRef.current = selectedItem;
   snapToGridRef.current = snapToGrid;
@@ -1536,6 +1559,18 @@ function ModuleSchematic({
 
   function currentItemPosition(itemId: string): { x: number; y: number } | null {
     return parseSvgTranslate(groupForItem(itemId)?.getAttribute('transform') ?? null);
+  }
+
+  function currentLayoutPositions(): Array<{ itemId: string; x: number; y: number }> {
+    const container = svgContainerRef.current;
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('svg g[id^="cell_"]'))
+      .map((group) => {
+        const itemId = group.id.replace(/^cell_/, '');
+        const position = parseSvgTranslate(group.getAttribute('transform'));
+        return itemId && position ? { itemId, x: position.x, y: position.y } : null;
+      })
+      .filter((entry): entry is { itemId: string; x: number; y: number } => Boolean(entry));
   }
 
   function findSchematicCellGroup(
@@ -1643,7 +1678,14 @@ function ModuleSchematic({
         },
       ].slice(-30));
       setRedoStack([]);
-      void onMoveItemRef.current(current.itemId, nextX, nextY);
+      const baseline = currentLayoutPositions();
+      if (Object.keys(overridesRef.current?.items ?? {}).length === 0 && baseline.length > 1) {
+        void onMoveItemsRef.current(baseline.map((item) => (
+          item.itemId === current.itemId ? { ...item, x: nextX, y: nextY } : item
+        )));
+      } else {
+        void onMoveItemRef.current(current.itemId, nextX, nextY);
+      }
     };
     window.addEventListener(moveEventName, move as EventListener);
     window.addEventListener(upEventName, up as EventListener, { once: true });
@@ -1667,7 +1709,14 @@ function ModuleSchematic({
       },
     ].slice(-30));
     setRedoStack([]);
-    await onMoveItem(selectedItem, next.x, next.y);
+    const baseline = currentLayoutPositions();
+    if (Object.keys(overrides?.items ?? {}).length === 0 && baseline.length > 1) {
+      await onMoveItems(baseline.map((item) => (
+        item.itemId === selectedItem ? { ...item, x: next.x, y: next.y } : item
+      )));
+    } else {
+      await onMoveItem(selectedItem, next.x, next.y);
+    }
   }
 
   async function undoLayoutMove(): Promise<void> {

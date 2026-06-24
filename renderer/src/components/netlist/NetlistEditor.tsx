@@ -36,6 +36,7 @@ export function NetlistEditor({
   const [mode, setMode] = useState<'edit' | 'preview'>('preview');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveMessage, setSaveMessage] = useState('');
+  const [editorFallback, setEditorFallback] = useState(false);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const loadedSourceKeyRef = useRef('');
 
@@ -143,7 +144,29 @@ export function NetlistEditor({
 
   const handleMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;
+    setEditorFallback(false);
   }, []);
+
+  useEffect(() => {
+    if (mode !== 'edit') {
+      setEditorFallback(false);
+      return undefined;
+    }
+    editorRef.current = null;
+    setEditorFallback(false);
+    const timer = window.setTimeout(() => {
+      if (!editorRef.current) setEditorFallback(true);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [mode]);
+
+  const handleDraftChange = useCallback((value: string) => {
+    setDraft(value);
+    if (saveStatus !== 'idle') {
+      setSaveStatus('idle');
+      setSaveMessage('');
+    }
+  }, [saveStatus]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -234,30 +257,34 @@ export function NetlistEditor({
         </div>
       </div>
       {mode === 'edit' ? (
-        <Editor
-          height="100%"
-          defaultLanguage="markdown"
-          theme="vs"
-          value={draft}
-          onChange={(value) => {
-            setDraft(value ?? '');
-            if (saveStatus !== 'idle') {
-              setSaveStatus('idle');
-              setSaveMessage('');
-            }
-          }}
-          onMount={handleMount}
-          options={{
-            fontSize: 13,
-            fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
-            lineNumbers: 'on',
-            minimap: { enabled: false },
-            scrollBeyondLastLine: false,
-            wordWrap: 'on',
-            tabSize: 2,
-            automaticLayout: true,
-          }}
-        />
+        editorFallback ? (
+          <textarea
+            data-testid="netlist-notebook-editor"
+            value={draft}
+            onChange={(event) => handleDraftChange(event.target.value)}
+            spellCheck={false}
+            style={styles.fallbackEditor}
+          />
+        ) : (
+          <Editor
+            height="100%"
+            defaultLanguage="markdown"
+            theme="vs"
+            value={draft}
+            onChange={(value) => handleDraftChange(value ?? '')}
+            onMount={handleMount}
+            options={{
+              fontSize: 13,
+              fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+              lineNumbers: 'on',
+              minimap: { enabled: false },
+              scrollBeyondLastLine: false,
+              wordWrap: 'on',
+              tabSize: 2,
+              automaticLayout: true,
+            }}
+          />
+        )
       ) : (
         <div
           className="markdown-content netlist-notebook-preview"
@@ -319,6 +346,22 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#f7f8fa',
     fontSize: 14,
     lineHeight: 1.7,
+  },
+  fallbackEditor: {
+    flex: 1,
+    width: '100%',
+    minHeight: 0,
+    border: 0,
+    outline: 'none',
+    resize: 'none',
+    padding: '16px 18px 80px',
+    color: '#243041',
+    background: '#ffffff',
+    fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+    fontSize: 13,
+    lineHeight: 1.55,
+    whiteSpace: 'pre',
+    overflow: 'auto',
   },
   empty: {
     height: '100%',

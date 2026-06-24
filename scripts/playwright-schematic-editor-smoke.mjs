@@ -3,7 +3,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron } from 'playwright';
+
+const { _electron: electron } = await import('playwright');
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputRoot = path.resolve(root, 'output', 'playwright');
@@ -31,8 +32,16 @@ async function canFetch(url) {
   }
 }
 
+async function warmUpVite() {
+  await fetch(`${viteUrl}/src/main.tsx`).catch(() => null);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+}
+
 async function startViteIfNeeded() {
-  if (await canFetch(viteUrl)) return null;
+  if (await canFetch(viteUrl)) {
+    await warmUpVite();
+    return null;
+  }
   let exited = null;
   const child = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', '5173'], {
     cwd: root,
@@ -46,7 +55,10 @@ async function startViteIfNeeded() {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (exited) throw new Error(`Vite exited early: ${JSON.stringify(exited)}`);
-    if (await canFetch(viteUrl)) return child;
+    if (await canFetch(viteUrl)) {
+      await warmUpVite();
+      return child;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   child.kill();
@@ -207,24 +219,61 @@ const legacyLdoProject = await createLegacyLdoProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
+const e2eUserDataDir = path.resolve(outputRoot, `schematic-editor-user-data-${Date.now()}`);
+const e2eHomeDir = path.resolve(outputRoot, `schematic-editor-home-${Date.now()}`);
+const electronDistDir = path.resolve(root, 'node_modules', 'electron', 'dist');
+await mkdir(e2eUserDataDir, { recursive: true });
+await mkdir(e2eHomeDir, { recursive: true });
 const electronApp = await electron.launch({
-  args: ['.'],
+  args: [`--user-data-dir=${e2eUserDataDir}`, '--no-sandbox', '--disable-gpu-sandbox', '.'],
   cwd: root,
-  env: { ...process.env, ACTOVIQ_E2E: '1' },
+  env: {
+    ...process.env,
+    ACTOVIQ_E2E: '1',
+    HOME: e2eHomeDir,
+    USERPROFILE: e2eHomeDir,
+    PATH: `${electronDistDir}${path.delimiter}${process.env.PATH ?? ''}`,
+  },
+  slowMo: 50,
 });
+electronApp.process()?.on('exit', (code, signal) => {
+  pageErrors.push(`electron-exit: code=${code} signal=${signal ?? ''}`);
+});
+const observedWindows = new WeakSet();
+function observeWindow(windowPage) {
+  if (observedWindows.has(windowPage)) return;
+  observedWindows.add(windowPage);
+  pageErrors.push(`electron-window: ${windowPage.url()}`);
+  windowPage.on('domcontentloaded', () => pageErrors.push(`domcontentloaded: ${windowPage.url()}`));
+  windowPage.on('load', () => pageErrors.push(`load: ${windowPage.url()}`));
+  windowPage.on('crash', () => pageErrors.push(`page-crash: ${windowPage.url()}`));
+  windowPage.on('framenavigated', (frame) => {
+    if (frame === windowPage.mainFrame()) pageErrors.push(`framenavigated: ${frame.url()}`);
+  });
+  windowPage.on('close', () => pageErrors.push(`page-close: ${windowPage.url()}`));
+  windowPage.on('requestfailed', (request) => {
+    pageErrors.push(`requestfailed: ${request.url()} ${request.failure()?.errorText ?? ''}`);
+  });
+}
+electronApp.on('window', observeWindow);
 
 let page;
 try {
-  page = await electronApp.firstWindow();
+  page = electronApp.windows()[0] ?? await electronApp.firstWindow({ timeout: 20_000 });
+  observeWindow(page);
+  page.setDefaultTimeout(30_000);
+  page.setDefaultNavigationTimeout(30_000);
   page.on('pageerror', (error) => pageErrors.push(`pageerror: ${error.message}`));
   page.on('console', (message) => {
     if (message.type() === 'error') pageErrors.push(`console: ${message.text()}`);
   });
-  await page.waitForLoadState('domcontentloaded');
+  await page.waitForTimeout(1000);
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
+  console.log('[e2e] shell loaded');
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
   await page.getByTestId('module-preview-filter').waitFor({ timeout: 20_000 });
+  console.log('[e2e] project selected');
   assert.equal(await page.getByTestId('module-preview-filter').getAttribute('data-schematic-source'), 'document');
   assert.ok(
     await page.getByTestId('module-preview-document-svg-filter').locator('g[data-wire-id]').count() >= 3,
@@ -243,6 +292,7 @@ try {
   assert.equal(await editor.getAttribute('data-schematic-source'), 'document');
   assert.equal(await page.getByTestId('schematic-editor-svg').getAttribute('data-schematic-source'), 'document');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-document-backed.png') });
+  console.log('[e2e] filter editor loaded');
 
   const canvas = page.getByTestId('schematic-editor-svg');
   const box = await canvas.boundingBox();
@@ -273,6 +323,7 @@ try {
       node?.getAttribute('data-selected')?.startsWith('component:r');
   });
   const filterPositionsAfterPlace = await componentPositions(page);
+  console.log('[e2e] component placed');
 
   await page.getByTestId('schematic-editor-select').click();
   const r1PlaceViewBox = await editorViewBox(page);
@@ -290,6 +341,7 @@ try {
   assertPositionEqual(filterPositionsAfterDrag.r_filter, filterPositionsAfterPlace.r_filter, 'dragging added resistor moved r_filter');
   assertPositionEqual(filterPositionsAfterDrag.c_filter, filterPositionsAfterPlace.c_filter, 'dragging added resistor moved c_filter');
   assertPositionChanged(filterPositionsAfterDrag.r1, filterPositionsAfterPlace.r1, 'added resistor did not move');
+  console.log('[e2e] component drag isolated');
 
   const viewBoxAfterDrag = await editorViewBox(page);
   const canvasBoxAfterDrag = await canvas.boundingBox();
@@ -315,6 +367,7 @@ try {
   const visibleWiresAfterDraw = await countVisibleSchematicWires(page);
   assert.ok(visibleWiresAfterDraw > initialWireCount, `drawn wire is not visibly drawn; counted ${visibleWiresAfterDraw} wires`);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-wire-visible.png') });
+  console.log('[e2e] wire drawn');
 
   await page.getByTestId('schematic-editor-save').click();
   await page.getByText('Applied netlist and SVG rebuilt', { exact: true }).waitFor({ timeout: 30_000 });
@@ -333,11 +386,13 @@ try {
     await readFile(path.resolve(projectRoot, 'build', 'modules', 'filter', 'design.cir'), 'utf8'),
     /Rfilter_R1\s+out\s+\S+\s+1k/,
   );
+  console.log('[e2e] apply persisted');
 
   await page.getByTestId('schematic-svg-tab').click();
   await page.getByTestId('module-netlistsvg').locator('svg').waitFor({ timeout: 20_000 });
   assert.equal(await page.getByTestId('module-netlistsvg').getAttribute('data-schematic-source'), 'document');
   assert.equal(await page.getByTestId('module-document-svg').getAttribute('data-schematic-source'), 'document');
+  console.log('[e2e] svg tab verified');
   await page.getByTestId('back-to-board').click();
   await page.getByTestId('module-card-filter').dblclick();
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
@@ -372,7 +427,27 @@ try {
     assert.ok(ldoPositions.cout.x >= ldoPositions.mp.x, 'LDO output capacitor should be placed on the output side');
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
+  console.log('[e2e] legacy ldo loaded');
+  const ldoCanvas = page.getByTestId('schematic-editor-svg');
+  const ldoViewBox = await editorViewBox(page);
+  const ldoBox = await ldoCanvas.boundingBox();
+  assert.ok(ldoBox);
+  const mpPoint = worldToScreen(ldoPositions.mp, ldoViewBox, ldoBox);
+  await page.getByTestId('schematic-editor-select').click();
+  await page.mouse.move(mpPoint.x, mpPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(mpPoint.x + 70, mpPoint.y + 30, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const ldoPositionsAfterMpDrag = await componentPositions(page);
+  assertPositionChanged(ldoPositionsAfterMpDrag.mp, ldoPositions.mp, 'dragging MP did not move MP');
+  for (const id of ['m1', 'm2', 'm3', 'm4', 'rtop', 'rbot', 'rload', 'cout', 'vin', 'vref', 'itail']) {
+    assertPositionEqual(ldoPositionsAfterMpDrag[id], ldoPositions[id], `dragging MP moved ${id}`);
+  }
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
+  console.log('[e2e] legacy ldo drag isolated');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
@@ -411,9 +486,13 @@ try {
   assertPositionEqual(powerPositionsAfterDrag.v_signal, powerPositionsAfterPlace.v_signal, 'dragging resistor moved Vsignal');
   assertPositionEqual(powerPositionsAfterDrag.v_supply, powerPositionsAfterPlace.v_supply, 'dragging resistor moved VDD source');
   assertPositionChanged(powerPositionsAfterDrag.r1, powerPositionsAfterPlace.r1, 'power-module resistor did not move');
+  console.log('[e2e] power module drag isolated');
 
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-smoke.png') });
-  assert.deepEqual(pageErrors, []);
+  assert.deepEqual(
+    pageErrors.filter((entry) => /^(pageerror|console:|requestfailed|page-crash)/.test(entry)),
+    [],
+  );
   console.log(JSON.stringify({
     ok: true,
     projectId,

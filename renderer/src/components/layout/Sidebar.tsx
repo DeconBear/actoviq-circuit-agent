@@ -20,12 +20,12 @@ interface Props {
   workspaces: WorkspaceSummary[];
   referenceDocuments: ReferenceDocument[];
   onSelectWorkspace: (id: string) => void;
-  onCreateWorkspace: () => void;
+  onCreateWorkspace: (input: { name: string; root?: string }) => Promise<void>;
   onRefreshReferences: () => void;
   circuitProjects: CircuitProjectSummary[];
   activeProjectId: string | null;
   onSelectProject: (projectId: string) => void;
-  onCreateProject: (demo: boolean) => void;
+  onCreateProject: (demo: boolean, name: string) => Promise<void>;
 }
 
 export function Sidebar({
@@ -50,6 +50,11 @@ export function Sidebar({
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
   const [ocrRunningPath, setOcrRunningPath] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
+  const [workspaceFormOpen, setWorkspaceFormOpen] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceRoot, setWorkspaceRoot] = useState('');
+  const [projectForm, setProjectForm] = useState<{ demo: boolean; name: string } | null>(null);
+  const [creating, setCreating] = useState(false);
   const conversations = useAppStore((s) => s.conversations);
   const conversationId = useAppStore((s) => s.conversationId);
   const setConversationId = useAppStore((s) => s.setConversationId);
@@ -118,6 +123,47 @@ export function Sidebar({
     }
   }, []);
 
+  const handleChooseWorkspaceRoot = useCallback(async () => {
+    if (!window.electronAPI) return;
+    const root = await window.electronAPI.chooseWorkspaceRoot();
+    if (root) setWorkspaceRoot(root);
+  }, []);
+
+  const handleCreateWorkspace = useCallback(async () => {
+    const name = workspaceName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    setNotice(null);
+    try {
+      await onCreateWorkspace({ name, root: workspaceRoot.trim() || undefined });
+      setWorkspaceFormOpen(false);
+      setWorkspaceName('');
+      setWorkspaceRoot('');
+      setNotice({ type: 'ok', text: `Workspace created: ${name}` });
+    } catch (error) {
+      setNotice({ type: 'error', text: `Workspace failed: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setCreating(false);
+    }
+  }, [creating, onCreateWorkspace, workspaceName, workspaceRoot]);
+
+  const handleCreateProject = useCallback(async () => {
+    if (!projectForm || creating) return;
+    const name = projectForm.name.trim();
+    if (!name) return;
+    setCreating(true);
+    setNotice(null);
+    try {
+      await onCreateProject(projectForm.demo, name);
+      setProjectForm(null);
+      setNotice({ type: 'ok', text: `Project created: ${name}` });
+    } catch (error) {
+      setNotice({ type: 'error', text: `Project failed: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setCreating(false);
+    }
+  }, [creating, onCreateProject, projectForm]);
+
   if (collapsed) {
     return (
       <div style={styles.collapsed}>
@@ -142,28 +188,128 @@ export function Sidebar({
           value={activeWorkspace?.id ?? ''}
           onChange={(event) => onSelectWorkspace(event.target.value)}
           style={styles.workspaceSelect}
+          data-testid="workspace-select"
         >
           {workspaces.map((workspace) => (
             <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
           ))}
         </select>
         <div style={styles.workspaceActions}>
-          <button onClick={onCreateWorkspace} style={styles.smallBtn}>+ Workspace</button>
+          <button
+            onClick={() => {
+              setWorkspaceFormOpen((open) => !open);
+              setProjectForm(null);
+              setNotice(null);
+            }}
+            style={styles.smallBtn}
+            data-testid="sidebar-new-workspace"
+          >
+            + Workspace
+          </button>
           <button onClick={() => window.electronAPI?.openWorkspaceRoot()} style={styles.smallBtn}>Open Root</button>
         </div>
+        {workspaceFormOpen && (
+          <div style={styles.createPanel} data-testid="workspace-create-panel">
+            <input
+              value={workspaceName}
+              onChange={(event) => setWorkspaceName(event.target.value)}
+              placeholder="Workspace name"
+              style={styles.inlineInput}
+              data-testid="workspace-name-input"
+            />
+            <div style={styles.pathRow}>
+              <input
+                value={workspaceRoot}
+                onChange={(event) => setWorkspaceRoot(event.target.value)}
+                placeholder="Default location"
+                style={styles.inlineInput}
+                data-testid="workspace-root-input"
+              />
+              <button type="button" onClick={handleChooseWorkspaceRoot} style={styles.iconBtn} title="Choose folder">
+                ...
+              </button>
+            </div>
+            <div style={styles.formActions}>
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkspaceFormOpen(false);
+                  setWorkspaceName('');
+                  setWorkspaceRoot('');
+                }}
+                style={styles.formBtn}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCreateWorkspace()}
+                style={styles.formPrimaryBtn}
+                disabled={creating || !workspaceName.trim()}
+                data-testid="workspace-create-submit"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        )}
         {activeWorkspace && (
           <div style={styles.workspacePath}>{activeWorkspace.root}</div>
         )}
       </div>
       <div style={styles.projectActions}>
-        <button onClick={() => onCreateProject(true)} style={styles.newBtn}>+ Demo Project</button>
-        <button onClick={() => onCreateProject(false)} style={styles.blankProjectBtn}>Blank</button>
+        <button
+          onClick={() => {
+            setProjectForm({ demo: true, name: 'Modular analog chain' });
+            setWorkspaceFormOpen(false);
+            setNotice(null);
+          }}
+          style={styles.newBtn}
+          data-testid="sidebar-new-demo-project"
+        >
+          + Demo Project
+        </button>
+        <button
+          onClick={() => {
+            setProjectForm({ demo: false, name: 'New circuit project' });
+            setWorkspaceFormOpen(false);
+            setNotice(null);
+          }}
+          style={styles.blankProjectBtn}
+          data-testid="sidebar-new-blank-project"
+        >
+          Blank
+        </button>
       </div>
+      {projectForm && (
+        <div style={styles.createPanel} data-testid="project-create-panel">
+          <div style={styles.formTitle}>{projectForm.demo ? 'Demo project' : 'Blank project'}</div>
+          <input
+            value={projectForm.name}
+            onChange={(event) => setProjectForm({ ...projectForm, name: event.target.value })}
+            placeholder="Project name"
+            style={styles.inlineInput}
+            data-testid="project-name-input"
+          />
+          <div style={styles.formActions}>
+            <button type="button" onClick={() => setProjectForm(null)} style={styles.formBtn}>Cancel</button>
+            <button
+              type="button"
+              onClick={() => void handleCreateProject()}
+              style={styles.formPrimaryBtn}
+              disabled={creating || !projectForm.name.trim()}
+              data-testid="project-create-submit"
+            >
+              Create
+            </button>
+          </div>
+        </div>
+      )}
       {notice && (
         <div style={{
           ...styles.notice,
           ...(notice.type === 'error' ? styles.noticeError : styles.noticeOk),
-        }}>
+        }} data-testid="sidebar-notice">
           {notice.text}
         </div>
       )}
@@ -380,6 +526,70 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontSize: 11,
     fontWeight: 650,
+  },
+  createPanel: {
+    margin: '0 12px 10px',
+    padding: 8,
+    border: '1px solid #d8dee8',
+    borderRadius: 5,
+    backgroundColor: '#f8fafc',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+  },
+  formTitle: {
+    color: '#59636e',
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+  },
+  inlineInput: {
+    width: '100%',
+    boxSizing: 'border-box',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    padding: '6px 7px',
+    fontSize: 12,
+    color: '#253041',
+    backgroundColor: '#ffffff',
+  },
+  pathRow: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 32px',
+    gap: 5,
+  },
+  iconBtn: {
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    backgroundColor: '#ffffff',
+    color: '#59636e',
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+  formActions: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  formBtn: {
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    backgroundColor: '#ffffff',
+    color: '#59636e',
+    padding: '5px 8px',
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: 650,
+  },
+  formPrimaryBtn: {
+    border: '1px solid #2563eb',
+    borderRadius: 4,
+    backgroundColor: '#2563eb',
+    color: '#ffffff',
+    padding: '5px 9px',
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: 700,
   },
   legacyDesignBtn: {
     margin: '8px 12px 4px',

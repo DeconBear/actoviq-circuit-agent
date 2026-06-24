@@ -365,10 +365,9 @@ export function App() {
     }
   }, [store.circuitProjects, loadCircuitProject]);
 
-  const handleCreateCircuitProject = useCallback(async (demo: boolean) => {
+  const handleCreateCircuitProject = useCallback(async (demo: boolean, name: string) => {
     if (!window.electronAPI) return;
-    const name = window.prompt('Circuit project name', demo ? 'Modular analog chain' : 'New circuit project');
-    if (!name?.trim()) return;
+    if (!name.trim()) return;
     const state = useAppStore.getState();
     state.setCircuitBusy(true);
     state.setCircuitError('');
@@ -748,12 +747,11 @@ export function App() {
     await refreshWorkspaces();
   }, [refreshWorkspaces, setJobId]);
 
-  const handleCreateWorkspace = useCallback(async () => {
+  const handleCreateWorkspace = useCallback(async (input: { name: string; root?: string }) => {
     if (!window.electronAPI) return;
-    const name = window.prompt('Workspace name');
-    if (!name?.trim()) return;
-    const root = await window.electronAPI.chooseWorkspaceRoot();
-    const workspace = await window.electronAPI.createWorkspace({ name, root: root ?? undefined });
+    const name = input.name.trim();
+    if (!name) return;
+    const workspace = await window.electronAPI.createWorkspace({ name, root: input.root?.trim() || undefined });
     const state = useAppStore.getState();
     suppressAutoLoadRef.current = false;
     state.setActiveWorkspace(workspace);
