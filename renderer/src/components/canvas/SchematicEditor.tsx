@@ -165,7 +165,9 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
     event.stopPropagation();
     const world = screenToWorld(event);
-    setHoverWorld(world);
+    if (tool === 'wire' || tool === 'place' || wireStart) {
+      setHoverWorld(world);
+    }
     const wireDrag = wireDragRef.current;
     if (wireDrag && !wireDrag.moved) {
       wireDrag.moved = Math.abs(event.clientX - wireDrag.startClient.x) + Math.abs(event.clientY - wireDrag.startClient.y) > 8;
@@ -181,6 +183,13 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       y: drag.originalPosition.y + dy,
     });
     setDraft((current) => {
+      const currentComponent = current.components.find((entry) => entry.id === drag.componentId);
+      if (
+        !currentComponent ||
+        (currentComponent.position.x === nextPosition.x && currentComponent.position.y === nextPosition.y)
+      ) {
+        return current;
+      }
       const next = cloneModule(current);
       const component = next.components.find((entry) => entry.id === drag.componentId);
       if (component) component.position = nextPosition;

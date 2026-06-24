@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
@@ -10,6 +10,7 @@ const outputRoot = path.resolve(root, 'output', 'playwright');
 const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const projectPrefix = 'playwright-schematic-editor-';
+const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
 const viteUrl = 'http://127.0.0.1:5173';
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const skillScript = path.resolve(root, 'skills', 'circuit-design-ngspice', 'scripts', 'circuit_project.py');
@@ -60,6 +61,74 @@ async function removePrefixedProjects() {
     assert.equal(path.dirname(target), projectsRoot);
     await rm(target, { recursive: true, force: true });
   }
+}
+
+async function createLegacyLdoProject() {
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyLdoPrefix}${Date.now()}`,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  const modulePorts = [
+    { id: 'vin', name: 'VIN', direction: 'input', signal_type: 'power', net: 'vin' },
+    { id: 'vout', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'ldo',
+    name: 'PMOS-pass LDO',
+    kind: 'regulator',
+    function: 'Legacy notebook-only LDO used to verify SPICE-to-editable hydration.',
+    parameters: { Vin: '5.0 V', Vout: '3.3 V' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/ldo/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 360, height: 260 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'ldo',
+    name: 'PMOS-pass LDO',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'ldo');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# PMOS-pass LDO',
+    '',
+    '```spice',
+    '* Legacy notebook-only LDO fixture',
+    '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+    '.model PMOS1 PMOS (LEVEL=1 VTO=-0.7 KP=40u)',
+    'Vin vin 0 DC 5',
+    'Vref vref 0 DC 1.2',
+    'Itail tail 0 DC 20u',
+    'M1 n1 fb tail 0 NMOS1 W=20u L=1u',
+    'M2 eaout vref tail 0 NMOS1 W=20u L=1u',
+    'M3 n1 n1 vin vin PMOS1 W=40u L=1u',
+    'M4 eaout n1 vin vin PMOS1 W=40u L=1u',
+    'MP vout eaout vin vin PMOS1 W=2000u L=0.5u',
+    'Rtop fb vout 210k',
+    'Rbot fb 0 120k',
+    'Rload vout 0 330',
+    'Cout vout 0 1u',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
 }
 
 async function componentPositions(page) {
@@ -124,6 +193,7 @@ for (const module of created.project.modules) {
   const compiled = runSkill(['compile-module', '--project-root', projectRoot, '--module-id', module.id]);
   assert.equal(compiled.render.ok, true);
 }
+const legacyLdoProject = await createLegacyLdoProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -251,6 +321,25 @@ try {
   ));
   assert.equal(await page.getByTestId('schematic-editor').getAttribute('data-schematic-source'), 'document');
   await page.getByTestId('back-to-board').click();
+
+  await page.getByTestId(`sidebar-project-${legacyLdoProject.projectId}`).click();
+  await page.getByTestId('circuit-workbench').getByText(legacyLdoProject.projectName, { exact: true }).waitFor();
+  await page.getByTestId('module-card-ldo').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 12 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 10;
+  });
+  const ldoPositions = await componentPositions(page);
+  assert.ok(ldoPositions.mp, 'hydrated LDO pass MOSFET is missing from editable schematic');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
+
+  await page.getByTestId(`sidebar-project-${projectId}`).click();
+  await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
 
   await page.getByTestId('module-card-power').dblclick();
   await editor.waitFor({ timeout: 20_000 });

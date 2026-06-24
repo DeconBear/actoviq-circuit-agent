@@ -1184,6 +1184,44 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
     }
 
 
+def hydrated_summary_module(root: Path, module_id: str, module: dict[str, Any]) -> dict[str, Any]:
+    module_file = module_path(root, module_id)
+    notebook_path = root / "modules" / module_id / "netlist-notebook.md"
+    build_netlist_path = root / "build" / "modules" / module_id / "design.cir"
+    netlist_text = ""
+
+    try:
+        if notebook_path.exists() and (
+            not module.get("components")
+            or not module_file.exists()
+            or notebook_path.stat().st_mtime > module_file.stat().st_mtime
+        ):
+            netlist_text = extract_notebook_netlist(notebook_path.read_text(encoding="utf-8"))
+        elif not module.get("components") and build_netlist_path.exists():
+            netlist_text = build_netlist_path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        netlist_text = ""
+
+    if not netlist_text:
+        return module
+
+    components = parse_editable_netlist_components(module_id, netlist_text, module)
+    if not components:
+        return module
+    next_module = {
+        **module,
+        "components": components,
+        "ports": infer_editable_ports(list(module.get("ports", [])), components),
+        "wires": module.get("wires", []),
+        "annotations": module.get("annotations", []),
+    }
+    try:
+        validate_module(next_module)
+    except ValueError:
+        return module
+    return next_module
+
+
 def build_report_markdown(
     project: dict[str, Any],
     modules: dict[str, dict[str, Any]],
@@ -1827,6 +1865,14 @@ def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, A
 
 def project_summary(root: Path) -> dict[str, Any]:
     project, modules = load_project(root)
+    modules = {
+        module_id: hydrated_summary_module(root, module_id, module)
+        for module_id, module in modules.items()
+    }
+    for module_ref in project.get("modules", []):
+        module_id = module_ref.get("id")
+        if module_id in modules and modules[module_id].get("ports"):
+            module_ref["ports"] = modules[module_id]["ports"]
     return {
         "ok": True,
         "project": project,
