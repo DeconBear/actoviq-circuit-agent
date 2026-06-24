@@ -1273,6 +1273,10 @@ function ModuleCard({
   const parameters = module.parameters && Object.keys(module.parameters).length > 0
     ? module.parameters
     : fallbackParameters(moduleData);
+  const schematicDocument = useMemo(
+    () => moduleData ? createSchematicDocument(moduleData) : null,
+    [moduleData],
+  );
   return (
     <article
       style={{
@@ -1315,11 +1319,23 @@ function ModuleCard({
 
       {previewEnabled ? (
         <div style={styles.previewBody}>
-          {svg ? (
+          {schematicDocument ? (
+            <div
+              style={styles.svgPreview}
+              data-testid={`module-preview-${module.id}`}
+              data-schematic-source="document"
+            >
+              <SchematicDocumentSvg
+                document={schematicDocument}
+                testId={`module-preview-document-svg-${module.id}`}
+              />
+            </div>
+          ) : svg ? (
             <div
               style={styles.svgPreview}
               dangerouslySetInnerHTML={{ __html: prepareSvg(svg) }}
               data-testid={`module-preview-${module.id}`}
+              data-schematic-source="netlistsvg"
             />
           ) : (
             <div style={styles.previewMissing}>
@@ -1834,7 +1850,7 @@ function ModuleSchematic({
           />
         ) : schematicDocument ? (
           <div
-            style={styles.fullSvg}
+            style={styles.documentSvgPanel}
             data-testid="module-netlistsvg"
             data-schematic-source="document"
           >
@@ -2387,7 +2403,7 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 10,
     fontWeight: 700,
   },
-  moduleViewer: { minWidth: 720, minHeight: '100%', display: 'flex', flexDirection: 'column', padding: 16 },
+  moduleViewer: { minWidth: 720, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column', padding: 16, boxSizing: 'border-box' },
   moduleViewerHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   moduleViewerActions: { display: 'flex', alignItems: 'center', gap: 8 },
   moduleViewerTitle: { margin: '2px 0', fontSize: 18 },
@@ -2418,8 +2434,9 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 800,
   },
   layoutSelectedText: { minWidth: 160, color: '#69727d', fontFamily: 'Consolas, monospace', fontSize: 10, overflowWrap: 'anywhere' },
-  fullSvgStage: { flex: 1, minHeight: 520, display: 'flex', background: '#fff', border: '1px solid #d9dde3', boxShadow: '0 2px 8px rgba(27, 38, 51, 0.08)', overflow: 'auto' },
+  fullSvgStage: { flex: 1, minHeight: 0, display: 'flex', background: '#fff', border: '1px solid #d9dde3', boxShadow: '0 2px 8px rgba(27, 38, 51, 0.08)', overflow: 'auto' },
   fullSvg: { flex: 1, minWidth: 680, minHeight: 500, padding: 18 },
+  documentSvgPanel: { flex: 1, minWidth: 0, minHeight: 0, height: '100%', padding: 18, boxSizing: 'border-box' },
   fullSvgEditing: { outline: '2px solid rgba(37, 99, 235, 0.32)', outlineOffset: -2, cursor: 'move', touchAction: 'none' },
   fullSvgEmpty: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 10, color: '#7b8490', fontSize: 12 },
   overridePanel: {

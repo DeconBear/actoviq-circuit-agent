@@ -41,6 +41,9 @@ export function SchematicDocumentSvg({
   const height = Math.max(1, viewBox.maxY - viewBox.minY);
   const gridId = `grid-${document.moduleId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
   const previewPoints = wireStart && wirePreview ? routePoints(wireStart, wirePreview) : [];
+  const connectedNets = new Set(
+    document.module.components.flatMap((component) => component.pins.map((pin) => pin.net)),
+  );
 
   return (
     <svg
@@ -86,8 +89,16 @@ export function SchematicDocumentSvg({
         {document.module.ports.map((port) => {
           const position = document.portPositions.get(port.id);
           if (!position) return null;
+          const connected = connectedNets.has(port.net);
+          const labelPosition = portLabelPositions(position, isGroundPort(port) ? 'ground' : port.direction === 'output' ? 'output' : 'input');
           return (
-            <g key={port.id} data-port-id={port.id} data-net={port.net}>
+            <g
+              key={port.id}
+              data-port-id={port.id}
+              data-net={port.net}
+              data-connected={connected ? 'true' : 'false'}
+              opacity={connected ? 1 : 0.38}
+            >
               {isGroundPort(port) ? (
                 <GroundSymbol position={position} />
               ) : (
@@ -100,10 +111,24 @@ export function SchematicDocumentSvg({
                 label={port.name}
                 net={port.net}
               />
-              <text x={position.x + 12} y={position.y - 12} fontSize="13" fontFamily="Consolas, monospace" fontWeight="700">
+              <text
+                x={labelPosition.name.x}
+                y={labelPosition.name.y}
+                textAnchor={labelPosition.name.anchor}
+                fontSize="12"
+                fontFamily="Consolas, monospace"
+                fontWeight="700"
+              >
                 {port.name}
               </text>
-              <text x={position.x + 12} y={position.y + 14} fontSize="10" fontFamily="Consolas, monospace" fill="#64748b">
+              <text
+                x={labelPosition.net.x}
+                y={labelPosition.net.y}
+                textAnchor={labelPosition.net.anchor}
+                fontSize="9"
+                fontFamily="Consolas, monospace"
+                fill="#64748b"
+              >
                 {port.net}
               </text>
             </g>
@@ -170,6 +195,7 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
 function ComponentSymbol({ component, selected }: { component: CircuitComponent; selected: boolean }) {
   const bounds = componentBounds(component);
   const pins = component.pins.map((pin, index) => ({ pin, point: pinWorld(component, pin, index) }));
+  const labels = componentLabelPositions(component);
   return (
     <g data-component-id={component.id} data-component-type={component.type}>
       {selected ? (
@@ -200,10 +226,10 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         />
       ))}
       <text
-        x={component.position.x}
-        y={component.position.y - 62}
-        textAnchor="middle"
-        fontSize="13"
+        x={labels.name.x}
+        y={labels.name.y}
+        textAnchor={labels.name.anchor}
+        fontSize="12"
         fontFamily="Consolas, monospace"
         fontWeight="700"
         pointerEvents="none"
@@ -211,10 +237,10 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         {component.name}
       </text>
       <text
-        x={component.position.x}
-        y={component.position.y + 66}
-        textAnchor="middle"
-        fontSize="12"
+        x={labels.value.x}
+        y={labels.value.y}
+        textAnchor={labels.value.anchor}
+        fontSize="11"
         fontFamily="Consolas, monospace"
         pointerEvents="none"
       >
@@ -222,6 +248,50 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
       </text>
     </g>
   );
+}
+
+type TextAnchor = 'start' | 'middle' | 'end';
+
+function portLabelPositions(position: CircuitPosition, direction: 'input' | 'output' | 'ground'): {
+  name: CircuitPosition & { anchor: TextAnchor };
+  net: CircuitPosition & { anchor: TextAnchor };
+} {
+  if (direction === 'output') {
+    return {
+      name: { x: position.x + 50, y: position.y - 12, anchor: 'start' },
+      net: { x: position.x + 50, y: position.y + 14, anchor: 'start' },
+    };
+  }
+  if (direction === 'input') {
+    return {
+      name: { x: position.x - 50, y: position.y - 22, anchor: 'start' },
+      net: { x: position.x - 50, y: position.y + 4, anchor: 'start' },
+    };
+  }
+  return {
+    name: { x: position.x + 12, y: position.y - 12, anchor: 'start' },
+    net: { x: position.x + 12, y: position.y + 14, anchor: 'start' },
+  };
+}
+
+function componentLabelPositions(component: CircuitComponent): {
+  name: CircuitPosition & { anchor: TextAnchor };
+  value: CircuitPosition & { anchor: TextAnchor };
+} {
+  const { x, y } = component.position;
+  const rotation = ((component.rotation ?? 0) % 360 + 360) % 360;
+  const isVerticalTwoPin = component.pins.length === 2 && (rotation === 90 || rotation === 270);
+  if (isVerticalTwoPin) {
+    return {
+      name: { x: x + 46, y: y - 22, anchor: 'start' },
+      value: { x: x + 46, y: y + 24, anchor: 'start' },
+    };
+  }
+  const isActive = component.type === 'M' || component.type === 'Q';
+  return {
+    name: { x, y: y - (isActive ? 68 : 42), anchor: 'middle' },
+    value: { x, y: y + (isActive ? 74 : 44), anchor: 'middle' },
+  };
 }
 
 function LeadLines({ component }: { component: CircuitComponent }) {
@@ -368,15 +438,22 @@ function EndpointCircle({
 }
 
 function PortSymbol({ position, direction }: { position: CircuitPosition; direction: 'input' | 'output' }) {
-  const sign = direction === 'output' ? 1 : -1;
-  const points = [
-    `${position.x} ${position.y}`,
-    `${position.x - sign * 24} ${position.y - 18}`,
-    `${position.x - sign * 42} ${position.y - 18}`,
-    `${position.x - sign * 42} ${position.y + 18}`,
-    `${position.x - sign * 24} ${position.y + 18}`,
-  ].join(' ');
-  return <polyline points={points} fill="#fff" stroke="#111827" strokeWidth="2" pointerEvents="none" />;
+  const points = direction === 'input'
+    ? [
+        `${position.x} ${position.y}`,
+        `${position.x - 24} ${position.y - 18}`,
+        `${position.x - 42} ${position.y - 18}`,
+        `${position.x - 42} ${position.y + 18}`,
+        `${position.x - 24} ${position.y + 18}`,
+      ]
+    : [
+        `${position.x} ${position.y - 18}`,
+        `${position.x + 24} ${position.y - 18}`,
+        `${position.x + 42} ${position.y}`,
+        `${position.x + 24} ${position.y + 18}`,
+        `${position.x} ${position.y + 18}`,
+      ];
+  return <polygon points={points.join(' ')} fill="#fff" stroke="#111827" strokeWidth="2" pointerEvents="none" />;
 }
 
 function GroundSymbol({ position }: { position: CircuitPosition }) {

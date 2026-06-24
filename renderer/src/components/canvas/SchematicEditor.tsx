@@ -290,7 +290,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   }
 
   async function saveAndRebuild() {
-    const normalized = normalizeConnectivity(draft);
+    const normalized = normalizeConnectivity({ ...draft, wires: document.wires });
     await onSave(normalized);
     setDirty(false);
     setHistory([]);

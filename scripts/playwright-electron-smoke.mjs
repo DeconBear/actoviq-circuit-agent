@@ -152,8 +152,14 @@ try {
   assert.equal(await page.getByTestId('system-canvas').count(), 1);
   assert.equal(await page.locator('[data-testid^="module-card-"]').count(), 3);
   assert.equal(await page.getByTestId('module-preview-power').locator('svg').count(), 1);
+  assert.equal(await page.getByTestId('module-preview-power').getAttribute('data-schematic-source'), 'document');
   assert.equal(await page.getByTestId('module-summary-amplifier').count(), 1);
   assert.equal(await page.getByTestId('module-preview-filter').locator('svg').count(), 1);
+  assert.equal(await page.getByTestId('module-preview-filter').getAttribute('data-schematic-source'), 'document');
+  assert.ok(
+    await page.getByTestId('module-preview-document-svg-filter').locator('g[data-wire-id]').count() >= 3,
+    'filter card preview did not render document wires',
+  );
   assert.equal(await page.getByTestId('module-preview-filter').getByText(/Rload_/).count(), 0);
   assert.equal(await page.locator('[data-testid="system-canvas"] > svg').count(), 0);
   assert.equal(await page.locator('[data-testid="system-canvas"] [data-connection-id]').count(), 0);
@@ -230,6 +236,9 @@ try {
   await page.getByRole('button', { name: 'SVG', exact: true }).click();
   await page.getByTestId('svg-context-label').getByText(/RC low-pass filter/).waitFor();
   assert.equal(await page.getByTestId('schematic-svg-viewport').locator('svg').count(), 1);
+  assert.equal(await page.getByTestId('module-netlistsvg').getAttribute('data-schematic-source'), 'document');
+  const svgWrapperBox = await page.getByTestId('module-netlistsvg').boundingBox();
+  assert.ok(svgWrapperBox && svgWrapperBox.width > 200 && svgWrapperBox.height > 160, 'document SVG wrapper has invalid dimensions');
   await page.screenshot({ path: path.resolve(outputRoot, 'light-svg-context.png') });
 
   const lightTheme = await page.evaluate(() => {
@@ -379,6 +388,11 @@ try {
   assert.equal(await page.getByTestId('module-document-svg').getAttribute('data-schematic-source'), 'document');
   const moduleSvgBox = await page.getByTestId('module-document-svg').boundingBox();
   assert.ok(moduleSvgBox && moduleSvgBox.width > 100 && moduleSvgBox.height > 100);
+  const viewportHeight = await page.evaluate(() => window.innerHeight);
+  assert.ok(
+    moduleSvgBox.y >= 0 && moduleSvgBox.y + moduleSvgBox.height <= viewportHeight + 1,
+    'module document SVG is not fully visible in the current viewport',
+  );
   await page.screenshot({ path: path.resolve(outputRoot, 'module-document-svg.png') });
 
   await page.getByTestId('rebuild-module-svg').click();

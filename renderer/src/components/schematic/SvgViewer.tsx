@@ -17,6 +17,15 @@ export function SvgViewer() {
     [moduleData, projectContext],
   );
   const svgContent = schematicDocument ? '' : projectContext ? modulePreview?.svg ?? '' : workflowSvg;
+  const svgDimensions = useMemo(() => {
+    if (schematicDocument) {
+      return {
+        width: schematicDocument.viewBox.maxX - schematicDocument.viewBox.minX,
+        height: schematicDocument.viewBox.maxY - schematicDocument.viewBox.minY,
+      };
+    }
+    return getSvgDimensions(svgContent);
+  }, [schematicDocument, svgContent]);
   const contextLabel = projectContext
     ? `${moduleRef?.name ?? moduleId} · same module as Design and Netlist`
     : 'Workflow schematic';
@@ -54,12 +63,10 @@ export function SvgViewer() {
       return;
     }
     const rect = viewport.getBoundingClientRect();
-    const dimensions = schematicDocument
-      ? {
-          width: schematicDocument.viewBox.maxX - schematicDocument.viewBox.minX,
-          height: schematicDocument.viewBox.maxY - schematicDocument.viewBox.minY,
-        }
-      : getSvgDimensions(svgContent);
+    const dimensions = {
+      width: svgDimensions.width + SVG_FRAME_PADDING * 2,
+      height: svgDimensions.height + SVG_FRAME_PADDING * 2,
+    };
     const nextScale = Math.max(
       0.25,
       Math.min(4, Math.min((rect.width - 80) / dimensions.width, (rect.height - 80) / dimensions.height)),
@@ -69,7 +76,7 @@ export function SvgViewer() {
       x: Math.max(0, (rect.width - dimensions.width * nextScale) / 2 - 20),
       y: Math.max(0, (rect.height - dimensions.height * nextScale) / 2 - 20),
     });
-  }, [schematicDocument, svgContent]);
+  }, [schematicDocument, svgContent, svgDimensions]);
 
   useEffect(() => {
     fitView();
@@ -130,6 +137,8 @@ export function SvgViewer() {
         <div
           style={{
             ...styles.svgWrapper,
+            width: svgDimensions.width,
+            height: svgDimensions.height,
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
             transformOrigin: '0 0',
           }}
@@ -149,6 +158,8 @@ export function SvgViewer() {
     </div>
   );
 }
+
+const SVG_FRAME_PADDING = 16;
 
 function sanitizeSvg(svg: string): string {
   // Remove script tags and event handlers for safety
@@ -239,7 +250,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     border: '1px solid #dfe3e8',
     boxShadow: '0 4px 20px rgba(32, 42, 56, 0.12)',
-    padding: 16,
+    padding: SVG_FRAME_PADDING,
+    boxSizing: 'content-box',
   },
   empty: {
     flex: 1,

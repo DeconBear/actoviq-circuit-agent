@@ -144,6 +144,12 @@ try {
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
+  await page.getByTestId('module-preview-filter').waitFor({ timeout: 20_000 });
+  assert.equal(await page.getByTestId('module-preview-filter').getAttribute('data-schematic-source'), 'document');
+  assert.ok(
+    await page.getByTestId('module-preview-document-svg-filter').locator('g[data-wire-id]').count() >= 3,
+    'module card preview did not render document wires',
+  );
 
   await page.getByTestId('module-card-filter').dblclick();
   const editor = page.getByTestId('schematic-editor');
@@ -226,6 +232,7 @@ try {
 
   const moduleData = JSON.parse(await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'));
   assert.equal(moduleData.components.length, 3);
+  assert.ok((moduleData.wires ?? []).length >= 3, 'saved schematic document did not persist visible wires');
   assert.ok(moduleData.components.some((component) => component.id === 'r1' && component.type === 'R'));
   assert.match(
     await readFile(path.resolve(projectRoot, 'build', 'modules', 'filter', 'design.cir'), 'utf8'),
