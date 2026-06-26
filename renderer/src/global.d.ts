@@ -44,8 +44,8 @@ declare global {
       createWorkspace(input: { name?: string; root?: string }): Promise<WorkspaceSummary>;
       selectWorkspace(id: string): Promise<WorkspaceSummary>;
       chooseWorkspaceRoot(): Promise<string | null>;
-      openWorkspaceRoot(): void;
-      openWorkspaceReferences(): void;
+      openWorkspaceRoot(): Promise<string>;
+      openWorkspaceReferences(): Promise<string>;
       listReferenceDocuments(): Promise<ReferenceDocument[]>;
       runReferenceOcr(relativePath: string): Promise<{ textPath: string; text: string }>;
       listCircuitProjects(): Promise<CircuitProjectSummary[]>;

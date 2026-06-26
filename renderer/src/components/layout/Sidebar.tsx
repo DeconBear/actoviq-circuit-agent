@@ -129,6 +129,34 @@ export function Sidebar({
     if (root) setWorkspaceRoot(root);
   }, []);
 
+  const handleOpenWorkspaceRoot = useCallback(async () => {
+    if (!window.electronAPI || creating) return;
+    setCreating(true);
+    setNotice(null);
+    try {
+      const openedPath = await window.electronAPI.openWorkspaceRoot();
+      setNotice({ type: 'ok', text: `Workspace opened: ${openedPath}` });
+    } catch (error) {
+      setNotice({ type: 'error', text: `Open workspace failed: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setCreating(false);
+    }
+  }, [creating]);
+
+  const handleOpenWorkspaceReferences = useCallback(async () => {
+    if (!window.electronAPI || creating) return;
+    setCreating(true);
+    setNotice(null);
+    try {
+      const openedPath = await window.electronAPI.openWorkspaceReferences();
+      setNotice({ type: 'ok', text: `References opened: ${openedPath}` });
+    } catch (error) {
+      setNotice({ type: 'error', text: `Open references failed: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setCreating(false);
+    }
+  }, [creating]);
+
   const handleCreateWorkspace = useCallback(async () => {
     const name = workspaceName.trim();
     if (!name || creating) return;
@@ -232,7 +260,14 @@ export function Sidebar({
           >
             + Workspace
           </button>
-          <button onClick={() => window.electronAPI?.openWorkspaceRoot()} style={styles.smallBtn}>Open Root</button>
+          <button
+            onClick={() => { void handleOpenWorkspaceRoot(); }}
+            style={styles.smallBtn}
+            disabled={creating}
+            data-testid="sidebar-open-workspace-root"
+          >
+            Open Root
+          </button>
         </div>
         {workspaceFormOpen && (
           <div
@@ -391,7 +426,14 @@ export function Sidebar({
         <div style={styles.sectionHeader}>
           References
           <div style={styles.sectionActions}>
-            <button onClick={() => window.electronAPI?.openWorkspaceReferences()} style={styles.inlineActionBtn}>Open</button>
+            <button
+              onClick={() => { void handleOpenWorkspaceReferences(); }}
+              style={styles.inlineActionBtn}
+              disabled={creating}
+              data-testid="sidebar-open-references"
+            >
+              Open
+            </button>
             <button onClick={onRefreshReferences} style={styles.inlineActionBtn}>Refresh</button>
           </div>
         </div>

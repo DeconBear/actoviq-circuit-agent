@@ -144,15 +144,23 @@ export function registerWorkspaceHandlers(ipcMain: IpcMain): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
-  ipcMain.on('workspace:open-root', async () => {
+  ipcMain.handle('workspace:open-root', async () => {
     const workspace = await getActiveWorkspace();
-    await shell.openPath(workspace.root);
+    if (process.env.ACTOVIQ_E2E !== '1') {
+      const error = await shell.openPath(workspace.root);
+      if (error) throw new Error(error);
+    }
+    return workspace.root;
   });
 
-  ipcMain.on('workspace:open-references', async () => {
+  ipcMain.handle('workspace:open-references', async () => {
     const workspace = await getActiveWorkspace();
     await mkdir(workspace.referencesDir, { recursive: true });
-    await shell.openPath(workspace.referencesDir);
+    if (process.env.ACTOVIQ_E2E !== '1') {
+      const error = await shell.openPath(workspace.referencesDir);
+      if (error) throw new Error(error);
+    }
+    return workspace.referencesDir;
   });
 
   ipcMain.handle('workspace:list-references', async () => listReferenceDocuments());

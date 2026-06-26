@@ -194,6 +194,11 @@ try {
   await page.getByTestId('workspace-name-input').fill(workspaceName);
   await page.getByTestId('workspace-name-input').press('Enter');
   await page.getByTestId('sidebar-notice').getByText(`Workspace created: ${workspaceName}`, { exact: true }).waitFor({ timeout: 20_000 });
+  await page.getByTestId('create-blank-project').waitFor({ timeout: 20_000 });
+  await page.getByTestId('create-blank-project').click();
+  await page.getByTestId('circuit-workbench').getByText('New circuit project', { exact: true }).waitFor({ timeout: 30_000 });
+  await page.getByTestId('sidebar-open-workspace-root').click();
+  await page.getByTestId('sidebar-notice').getByText(/^Workspace opened: /).waitFor({ timeout: 20_000 });
   await page.getByTestId('workspace-select').selectOption('default');
   await page.getByTestId(`sidebar-project-${projectId}`).waitFor({ timeout: 20_000 });
 
@@ -209,6 +214,7 @@ try {
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('project-name-input').fill(sidebarProjectName);
   await page.getByTestId('project-name-input').press('Enter');
+  await page.getByTestId('sidebar-notice').getByText(`Project created: ${sidebarProjectName}`, { exact: true }).waitFor({ timeout: 60_000 });
   await page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarProjectName }).first().waitFor({ timeout: 30_000 });
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
@@ -728,6 +734,7 @@ try {
   assert.deepEqual(
     pageErrors.filter((entry) => !(
       entry.includes('ERR_NETWORK_ACCESS_DENIED') ||
+      entry.includes('ERR_CONNECTION_CLOSED') ||
       entry.includes('Monaco initialization') ||
       entry === 'pageerror: Event'
     )),

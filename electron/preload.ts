@@ -136,12 +136,12 @@ const electronAPI = {
     return ipcRenderer.invoke('workspace:choose-root');
   },
 
-  openWorkspaceRoot(): void {
-    ipcRenderer.send('workspace:open-root');
+  openWorkspaceRoot(): Promise<string> {
+    return ipcRenderer.invoke('workspace:open-root');
   },
 
-  openWorkspaceReferences(): void {
-    ipcRenderer.send('workspace:open-references');
+  openWorkspaceReferences(): Promise<string> {
+    return ipcRenderer.invoke('workspace:open-references');
   },
 
   listReferenceDocuments(): Promise<ReferenceDocument[]> {
