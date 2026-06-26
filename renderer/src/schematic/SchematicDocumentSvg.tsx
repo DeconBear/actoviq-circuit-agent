@@ -12,8 +12,8 @@ import {
   type SchematicSelection,
 } from './schematicDocument';
 
-const WIRE_COLOR = '#16821f';
-const SYMBOL_COLOR = '#9b111e';
+const WIRE_COLOR = '#17851f';
+const SYMBOL_COLOR = '#a00012';
 const LABEL_COLOR = '#0000cc';
 const MUTED_LABEL_COLOR = '#334155';
 
@@ -71,7 +71,13 @@ export function SchematicDocumentSvg({
     >
       <defs>
         <pattern id={gridId} width={SCHEMATIC_GRID} height={SCHEMATIC_GRID} patternUnits="userSpaceOnUse">
-          <path d={`M ${SCHEMATIC_GRID} 0 L 0 0 0 ${SCHEMATIC_GRID}`} fill="none" stroke="#e8edf3" strokeWidth="1" />
+          <path
+            d={`M ${SCHEMATIC_GRID / 2} 0 L ${SCHEMATIC_GRID / 2} ${SCHEMATIC_GRID} M 0 ${SCHEMATIC_GRID / 2} L ${SCHEMATIC_GRID} ${SCHEMATIC_GRID / 2}`}
+            fill="none"
+            stroke="#f2f5f8"
+            strokeWidth="1"
+          />
+          <path d={`M ${SCHEMATIC_GRID} 0 L 0 0 0 ${SCHEMATIC_GRID}`} fill="none" stroke="#e4ebf2" strokeWidth="1" />
         </pattern>
       </defs>
       {showGrid ? (
@@ -199,8 +205,18 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
       <polyline
         points={points}
         fill="none"
-        stroke={selected ? '#2563eb' : WIRE_COLOR}
-        strokeWidth={selected ? 4.5 : 2.6}
+        stroke={selected ? '#2563eb' : 'transparent'}
+        strokeWidth="8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={selected ? 0.28 : 0}
+        pointerEvents="none"
+      />
+      <polyline
+        points={points}
+        fill="none"
+        stroke={WIRE_COLOR}
+        strokeWidth="2.8"
         strokeLinecap="round"
         strokeLinejoin="round"
         pointerEvents="none"
@@ -222,9 +238,10 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
           width={bounds.maxX - bounds.minX + 20}
           height={bounds.maxY - bounds.minY + 20}
           rx="4"
-          fill="rgba(37, 99, 235, 0.10)"
+          fill="rgba(37, 99, 235, 0.06)"
           stroke="#2563eb"
-          strokeWidth="2"
+          strokeWidth="1.6"
+          strokeDasharray="7 5"
           pointerEvents="none"
         />
       ) : null}
@@ -246,7 +263,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         x={labels.name.x}
         y={labels.name.y}
         textAnchor={labels.name.anchor}
-        fontSize="12"
+        fontSize="13"
         fontFamily="Consolas, monospace"
         fontWeight="700"
         fill={LABEL_COLOR}
@@ -258,7 +275,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         x={labels.value.x}
         y={labels.value.y}
         textAnchor={labels.value.anchor}
-        fontSize="11"
+        fontSize="12"
         fontFamily="Consolas, monospace"
         fill={LABEL_COLOR}
         pointerEvents="none"
@@ -289,7 +306,7 @@ function portLabelPositions(position: CircuitPosition, direction: 'input' | 'out
   }
   if (direction === 'power') {
     return {
-      name: { x: position.x, y: position.y - 28, anchor: 'middle' },
+      name: { x: position.x, y: position.y - 54, anchor: 'middle' },
       net: { x: position.x + 12, y: position.y + 16, anchor: 'start' },
     };
   }
@@ -349,7 +366,6 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
     return (
       <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none">
         <rect x={x - 29} y={y - 10} width="58" height="20" rx="2" fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2.4" />
-        <line x1={x - 21} y1={y - 5} x2={x + 21} y2={y + 5} stroke="#cbd5e1" strokeWidth="1.2" />
       </g>
     );
   }
@@ -477,14 +493,16 @@ function EndpointCircle({
   componentId?: string;
   pinId?: string;
 }) {
+  const pin = kind === 'pin';
   return (
     <circle
       cx={point.x}
       cy={point.y}
-      r="4.6"
-      fill={kind === 'port' ? '#8a929d' : '#cc0000'}
+      r={pin ? 3.3 : 3.6}
+      fill={pin ? '#cc0000' : '#7b8490'}
       stroke="#ffffff"
-      strokeWidth="1.5"
+      strokeWidth="1.2"
+      opacity={pin ? 0.9 : 0.82}
       data-endpoint-kind={kind}
       data-endpoint-id={id}
       data-component-id={componentId}
