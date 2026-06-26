@@ -45,6 +45,7 @@ interface DragState {
   originalPosition: CircuitPosition;
   lastPosition: CircuitPosition;
   originalModule: CircuitModule;
+  originalDirty: boolean;
   moved: boolean;
 }
 
@@ -159,6 +160,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         originalPosition: { ...componentHit.position },
         lastPosition: { ...componentHit.position },
         originalModule: cloneModule(draft),
+        originalDirty: dirty,
         moved: false,
       };
       return;
@@ -243,9 +245,19 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
 
   function handlePointerCancel(event: ReactPointerEvent<SVGSVGElement>) {
     event.stopPropagation();
+    cancelActiveDrag();
+    setHoverEndpoint(null);
+  }
+
+  function cancelActiveDrag() {
+    const drag = dragRef.current;
     dragRef.current = null;
     wireDragRef.current = null;
-    setHoverEndpoint(null);
+    if (!drag) return;
+    if (drag.moved) {
+      setDraft(drag.originalModule);
+      setDirty(drag.originalDirty);
+    }
   }
 
   function nudgeSelectedComponent(dx: number, dy: number) {
@@ -278,6 +290,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const key = event.key.toLowerCase();
     if (event.key === 'Escape') {
       event.preventDefault();
+      cancelActiveDrag();
       setWireStart(null);
       setHoverEndpoint(null);
       setSelection(null);

@@ -380,6 +380,26 @@ try {
   const r1PlacePoint = worldToScreen(filterPositionsAfterNudge.r1, r1PlaceViewBox, r1PlaceBox);
   await page.mouse.move(r1PlacePoint.x, r1PlacePoint.y);
   await page.mouse.down();
+  await page.mouse.move(r1PlacePoint.x + 100, r1PlacePoint.y + 60, { steps: 8 });
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r1?.x) !== Number(previous.x) || Number(positions.r1?.y) !== Number(previous.y);
+  }, filterPositionsAfterNudge.r1);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r1?.x) === Number(previous.x) && Number(positions.r1?.y) === Number(previous.y);
+  }, filterPositionsAfterNudge.r1);
+  const filterPositionsAfterCancelDrag = await componentPositions(page);
+  assertPositionEqual(filterPositionsAfterCancelDrag.r_filter, filterPositionsAfterNudge.r_filter, 'cancelled drag moved r_filter');
+  assertPositionEqual(filterPositionsAfterCancelDrag.c_filter, filterPositionsAfterNudge.c_filter, 'cancelled drag moved c_filter');
+  assertPositionEqual(filterPositionsAfterCancelDrag.r1, filterPositionsAfterNudge.r1, 'Escape did not cancel the active drag');
+
+  await page.mouse.move(r1PlacePoint.x, r1PlacePoint.y);
+  await page.mouse.down();
   await page.mouse.move(r1PlacePoint.x + 60, r1PlacePoint.y + 30, { steps: 8 });
   await page.mouse.up();
   await page.waitForFunction(() => (
