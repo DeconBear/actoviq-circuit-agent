@@ -15,6 +15,7 @@ const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
 const viteUrl = 'http://127.0.0.1:5173';
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const skillScript = path.resolve(root, 'skills', 'circuit-design-ngspice', 'scripts', 'circuit_project.py');
+const schematicGrid = 20;
 
 function runSkill(args) {
   return JSON.parse(execFileSync('python', [skillScript, ...args], {
@@ -315,7 +316,11 @@ try {
   await page.getByTestId('schematic-editor-select').click();
   const placePoint = { x: box.x + Math.min(430, box.width * 0.62), y: box.y + Math.min(280, box.height * 0.48) };
 
-  await page.getByTestId('schematic-editor-place-R').click();
+  await editor.focus();
+  await page.keyboard.press('w');
+  assert.equal(await editor.getAttribute('data-tool'), 'wire', 'W hotkey did not activate wire tool');
+  await page.keyboard.press('r');
+  assert.equal(await editor.getAttribute('data-tool'), 'place', 'R hotkey did not activate placement tool');
   await page.mouse.click(placePoint.x, placePoint.y);
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -323,13 +328,28 @@ try {
       node?.getAttribute('data-selected')?.startsWith('component:r');
   });
   const filterPositionsAfterPlace = await componentPositions(page);
+  await editor.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(({ previousX, grid }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r1?.x) === Number(previousX) + Number(grid);
+  }, { previousX: filterPositionsAfterPlace.r1.x, grid: schematicGrid });
+  const filterPositionsAfterNudge = await componentPositions(page);
+  assertPositionEqual(filterPositionsAfterNudge.r_filter, filterPositionsAfterPlace.r_filter, 'nudging added resistor moved r_filter');
+  assertPositionEqual(filterPositionsAfterNudge.c_filter, filterPositionsAfterPlace.c_filter, 'nudging added resistor moved c_filter');
+  assert.deepEqual(
+    { x: Number(filterPositionsAfterNudge.r1.x), y: Number(filterPositionsAfterNudge.r1.y) },
+    { x: Number(filterPositionsAfterPlace.r1.x) + schematicGrid, y: Number(filterPositionsAfterPlace.r1.y) },
+    'ArrowRight did not nudge added resistor by one grid step',
+  );
   console.log('[e2e] component placed');
 
   await page.getByTestId('schematic-editor-select').click();
   const r1PlaceViewBox = await editorViewBox(page);
   const r1PlaceBox = await canvas.boundingBox();
   assert.ok(r1PlaceBox);
-  const r1PlacePoint = worldToScreen(filterPositionsAfterPlace.r1, r1PlaceViewBox, r1PlaceBox);
+  const r1PlacePoint = worldToScreen(filterPositionsAfterNudge.r1, r1PlaceViewBox, r1PlaceBox);
   await page.mouse.move(r1PlacePoint.x, r1PlacePoint.y);
   await page.mouse.down();
   await page.mouse.move(r1PlacePoint.x + 60, r1PlacePoint.y + 30, { steps: 8 });
@@ -338,9 +358,9 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
   ));
   const filterPositionsAfterDrag = await componentPositions(page);
-  assertPositionEqual(filterPositionsAfterDrag.r_filter, filterPositionsAfterPlace.r_filter, 'dragging added resistor moved r_filter');
-  assertPositionEqual(filterPositionsAfterDrag.c_filter, filterPositionsAfterPlace.c_filter, 'dragging added resistor moved c_filter');
-  assertPositionChanged(filterPositionsAfterDrag.r1, filterPositionsAfterPlace.r1, 'added resistor did not move');
+  assertPositionEqual(filterPositionsAfterDrag.r_filter, filterPositionsAfterNudge.r_filter, 'dragging added resistor moved r_filter');
+  assertPositionEqual(filterPositionsAfterDrag.c_filter, filterPositionsAfterNudge.c_filter, 'dragging added resistor moved c_filter');
+  assertPositionChanged(filterPositionsAfterDrag.r1, filterPositionsAfterNudge.r1, 'added resistor did not move');
   console.log('[e2e] component drag isolated');
 
   const viewBoxAfterDrag = await editorViewBox(page);

@@ -22,6 +22,7 @@ import {
   normalizeConnectivity,
   pointEndpoint,
   rerouteStoredWires,
+  SCHEMATIC_GRID,
   snapPoint,
   type EndpointHit,
   type SchematicSelection,
@@ -62,6 +63,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
+  const editorShellRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const wireDragRef = useRef<WireDragState | null>(null);
@@ -108,7 +110,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     event.preventDefault();
     event.stopPropagation();
     svgRef.current = event.currentTarget;
-    event.currentTarget.focus();
+    editorShellRef.current?.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
     const world = screenToWorld(event);
     setHoverWorld(world);
@@ -241,8 +243,26 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setHoverEndpoint(null);
   }
 
+  function nudgeSelectedComponent(dx: number, dy: number) {
+    if (!selectedComponent || busy) return;
+    const next = cloneModule(draft);
+    const component = next.components.find((entry) => entry.id === selectedComponent.id);
+    if (!component) return;
+    const nextPosition = snapPoint({
+      x: component.position.x + dx,
+      y: component.position.y + dy,
+    });
+    if (component.position.x === nextPosition.x && component.position.y === nextPosition.y) return;
+    component.position = nextPosition;
+    next.wires = rerouteStoredWires(next);
+    commitDraft(next);
+  }
+
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (isEditableKeyboardTarget(event.target)) return;
+    const key = event.key.toLowerCase();
     if (event.key === 'Escape') {
+      event.preventDefault();
       setWireStart(null);
       setHoverEndpoint(null);
       setSelection(null);
@@ -252,14 +272,53 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     if ((event.key === 'Delete' || event.key === 'Backspace') && selection) {
       event.preventDefault();
       deleteSelection();
+      return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+    if ((event.ctrlKey || event.metaKey) && key === 'z') {
       event.preventDefault();
-      undo();
+      if (event.shiftKey) {
+        redo();
+      } else {
+        undo();
+      }
+      return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+    if ((event.ctrlKey || event.metaKey) && key === 'y') {
       event.preventDefault();
       redo();
+      return;
+    }
+    if (event.key.startsWith('Arrow') && selectedComponent) {
+      event.preventDefault();
+      const step = event.shiftKey ? SCHEMATIC_GRID * 5 : SCHEMATIC_GRID;
+      if (event.key === 'ArrowLeft') nudgeSelectedComponent(-step, 0);
+      if (event.key === 'ArrowRight') nudgeSelectedComponent(step, 0);
+      if (event.key === 'ArrowUp') nudgeSelectedComponent(0, -step);
+      if (event.key === 'ArrowDown') nudgeSelectedComponent(0, step);
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (key === 'w') {
+      event.preventDefault();
+      setTool('wire');
+      setWireStart(null);
+      setHoverEndpoint(null);
+      return;
+    }
+    if (key === 's') {
+      event.preventDefault();
+      setTool('select');
+      setWireStart(null);
+      setHoverEndpoint(null);
+      return;
+    }
+    const componentType = event.key.toUpperCase() as ToolComponentType;
+    if ((COMPONENT_TYPES as readonly string[]).includes(componentType)) {
+      event.preventDefault();
+      setTool('place');
+      setPlaceType(componentType);
+      setWireStart(null);
+      setHoverEndpoint(null);
     }
   }
 
@@ -321,6 +380,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
 
   return (
     <div
+      ref={editorShellRef}
       style={styles.editorShell}
       data-testid="schematic-editor"
       data-tool={tool}
@@ -471,6 +531,11 @@ function endpointIdentity(endpoint: EndpointHit | null): string {
   if (endpoint.component_id && endpoint.pin_id) return `pin:${endpoint.component_id}:${endpoint.pin_id}`;
   if (endpoint.port_id) return `port:${endpoint.port_id}`;
   return `point:${endpoint.x},${endpoint.y}`;
+}
+
+function isEditableKeyboardTarget(target: EventTarget): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }
 
 const styles: Record<string, CSSProperties> = {
