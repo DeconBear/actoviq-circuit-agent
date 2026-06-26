@@ -16,6 +16,7 @@ const WIRE_COLOR = '#17851f';
 const SYMBOL_COLOR = '#a00012';
 const LABEL_COLOR = '#0000cc';
 const MUTED_LABEL_COLOR = '#334155';
+const LABEL_HALO_COLOR = '#ffffff';
 
 interface Props {
   document: SchematicDocument;
@@ -135,6 +136,9 @@ export function SchematicDocumentSvg({
                 fontFamily="Consolas, monospace"
                 fontWeight="700"
                 fill={LABEL_COLOR}
+                stroke={LABEL_HALO_COLOR}
+                strokeWidth="3"
+                paintOrder="stroke"
               >
                 {port.name}
               </text>
@@ -145,6 +149,9 @@ export function SchematicDocumentSvg({
                 fontSize="9"
                 fontFamily="Consolas, monospace"
                 fill={MUTED_LABEL_COLOR}
+                stroke={LABEL_HALO_COLOR}
+                strokeWidth="2.5"
+                paintOrder="stroke"
               >
                 {port.net}
               </text>
@@ -252,6 +259,9 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         fontFamily="Consolas, monospace"
         fontWeight="700"
         fill={LABEL_COLOR}
+        stroke={LABEL_HALO_COLOR}
+        strokeWidth="3"
+        paintOrder="stroke"
         pointerEvents="none"
       >
         {component.name}
@@ -263,6 +273,9 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         fontSize="12"
         fontFamily="Consolas, monospace"
         fill={LABEL_COLOR}
+        stroke={LABEL_HALO_COLOR}
+        strokeWidth="3"
+        paintOrder="stroke"
         pointerEvents="none"
       >
         {component.value}

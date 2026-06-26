@@ -307,6 +307,10 @@ try {
     0,
     'unselected component pins should not render as persistent red endpoint dots',
   );
+  assert.ok(
+    await page.getByTestId('schematic-editor-svg').locator('text[paint-order="stroke"]').count() >= 6,
+    'schematic labels should render with a white halo for wire overlap readability',
+  );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-document-backed.png') });
   console.log('[e2e] filter editor loaded');
 
