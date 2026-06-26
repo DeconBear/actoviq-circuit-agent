@@ -11,6 +11,7 @@ const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const designMemoryRoot = path.resolve(workspaceRoot, 'references', 'design-memory');
 const e2eProjectPrefix = 'playwright-module-hub-';
+const e2eUiProjectPrefix = 'playwright-ui-project-';
 const viteUrl = 'http://127.0.0.1:5173';
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const skillScript = path.resolve(
@@ -105,16 +106,25 @@ async function readDesignMemoryManifest(kind, id) {
   };
 }
 
-const entries = await readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
-for (const entry of entries) {
-  if (
-    !entry.isDirectory() ||
-    !entry.name.startsWith(e2eProjectPrefix)
-  ) continue;
-  const target = path.resolve(projectsRoot, entry.name);
-  assert.equal(path.dirname(target), projectsRoot);
-  await rm(target, { recursive: true, force: true });
+async function findProjectByName(name) {
+  const entries = await readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const projectRoot = path.resolve(projectsRoot, entry.name);
+    const manifestPath = path.resolve(projectRoot, 'project.circuit.json');
+    try {
+      const project = JSON.parse(await readFile(manifestPath, 'utf8'));
+      if (project.name === name) return { projectRoot, project };
+    } catch {
+      // Ignore folders that are not circuit projects.
+    }
+  }
+  throw new Error(`Project not found by name: ${name}`);
 }
+await Promise.all([
+  removePrefixedDirectories(projectsRoot, e2eProjectPrefix),
+  removePrefixedDirectories(projectsRoot, e2eUiProjectPrefix),
+]);
 await cleanE2eDesignMemory();
 
 const created = runSkill([
@@ -200,6 +210,23 @@ try {
   await page.getByTestId('project-name-input').fill(sidebarProjectName);
   await page.getByTestId('project-name-input').press('Enter');
   await page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarProjectName }).first().waitFor({ timeout: 30_000 });
+  await page.getByTestId(`sidebar-project-${projectId}`).click();
+  await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
+
+  const sidebarDemoProjectName = `${e2eUiProjectPrefix}${Date.now()}`;
+  await page.getByTestId('sidebar-new-demo-project').click();
+  await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
+  await page.getByText('Demo project', { exact: true }).waitFor();
+  await page.getByTestId('project-name-input').fill(sidebarDemoProjectName);
+  await page.getByTestId('project-create-submit').click();
+  await page.getByTestId('sidebar-notice').getByText(`Project created: ${sidebarDemoProjectName}`, { exact: true }).waitFor({ timeout: 60_000 });
+  await page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarDemoProjectName }).first().waitFor({ timeout: 30_000 });
+  await page.getByTestId('circuit-workbench').getByText(sidebarDemoProjectName, { exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid^="module-card-"]').length === 3);
+  const sidebarDemoProject = await findProjectByName(sidebarDemoProjectName);
+  assert.equal(sidebarDemoProject.project.modules.length, 3);
+  assert.ok(sidebarDemoProject.project.connections.length >= 2);
+  assert.ok(sidebarDemoProject.project.modules.some((module) => module.id === 'filter'));
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
 
