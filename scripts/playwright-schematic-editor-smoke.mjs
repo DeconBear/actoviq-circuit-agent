@@ -149,6 +149,11 @@ async function componentPositions(page) {
   return JSON.parse(raw || '{}');
 }
 
+async function componentRotations(page) {
+  const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-rotations');
+  return JSON.parse(raw || '{}');
+}
+
 async function editorViewBox(page) {
   const raw = await page.getByTestId('schematic-editor-svg').getAttribute('viewBox');
   const [minX, minY, width, height] = String(raw || '0 0 1 1').trim().split(/\s+/).map(Number);
@@ -348,6 +353,24 @@ try {
     { x: Number(filterPositionsAfterPlace.r1.x) + schematicGrid, y: Number(filterPositionsAfterPlace.r1.y) },
     'ArrowRight did not nudge added resistor by one grid step',
   );
+  const filterRotationsAfterNudge = await componentRotations(page);
+  await editor.focus();
+  await page.keyboard.press('r');
+  await page.waitForFunction(({ componentId, previousRotation }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
+    const rotations = JSON.parse(raw);
+    return Number(rotations[componentId]) === (Number(previousRotation) + 90) % 360;
+  }, { componentId: 'r1', previousRotation: filterRotationsAfterNudge.r1 ?? 0 });
+  const filterPositionsAfterRotate = await componentPositions(page);
+  assertPositionEqual(filterPositionsAfterRotate.r_filter, filterPositionsAfterNudge.r_filter, 'rotating added resistor moved r_filter');
+  assertPositionEqual(filterPositionsAfterRotate.c_filter, filterPositionsAfterNudge.c_filter, 'rotating added resistor moved c_filter');
+  assertPositionEqual(filterPositionsAfterRotate.r1, filterPositionsAfterNudge.r1, 'rotating added resistor moved its origin');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction(({ componentId, previousRotation }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
+    const rotations = JSON.parse(raw);
+    return Number(rotations[componentId]) === Number(previousRotation);
+  }, { componentId: 'r1', previousRotation: filterRotationsAfterNudge.r1 ?? 0 });
   console.log('[e2e] component placed');
 
   await page.getByTestId('schematic-editor-select').click();

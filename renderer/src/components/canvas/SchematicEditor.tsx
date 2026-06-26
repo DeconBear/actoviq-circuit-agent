@@ -20,6 +20,7 @@ import {
   hitWire,
   makePlacedComponent,
   normalizeConnectivity,
+  normalizeRotation,
   pointEndpoint,
   rerouteStoredWires,
   SCHEMATIC_GRID,
@@ -262,6 +263,16 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     commitDraft(next);
   }
 
+  function rotateSelectedComponent() {
+    if (!selectedComponent || busy) return;
+    const next = cloneModule(draft);
+    const component = next.components.find((entry) => entry.id === selectedComponent.id);
+    if (!component) return;
+    component.rotation = normalizeRotation((component.rotation ?? 0) + 90);
+    next.wires = rerouteStoredWires(next);
+    commitDraft(next);
+  }
+
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (isEditableKeyboardTarget(event.target)) return;
     const key = event.key.toLowerCase();
@@ -302,6 +313,14 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (key === 'r' && selectedComponent) {
+      event.preventDefault();
+      setTool('select');
+      setWireStart(null);
+      setHoverEndpoint(null);
+      rotateSelectedComponent();
+      return;
+    }
     if (key === 'w') {
       event.preventDefault();
       setTool('wire');
@@ -371,6 +390,10 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const component = next.components.find((entry) => entry.id === selectedComponent.id);
     if (!component) return;
     Object.assign(component, patch);
+    if (patch.rotation !== undefined) {
+      component.rotation = normalizeRotation(Number(patch.rotation));
+      next.wires = rerouteStoredWires(next);
+    }
     commitDraft(next);
   }
 
@@ -395,6 +418,9 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-wire-count={document.wires.length}
       data-component-positions={JSON.stringify(Object.fromEntries(
         draft.components.map((component) => [component.id, component.position]),
+      ))}
+      data-component-rotations={JSON.stringify(Object.fromEntries(
+        draft.components.map((component) => [component.id, normalizeRotation(component.rotation)]),
       ))}
       data-wire-points={JSON.stringify(document.wires.map((wire) => wire.points))}
       data-schematic-source="document"
