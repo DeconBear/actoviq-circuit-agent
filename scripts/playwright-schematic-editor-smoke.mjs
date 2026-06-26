@@ -398,6 +398,49 @@ try {
   assertPositionEqual(filterPositionsAfterCancelDrag.c_filter, filterPositionsAfterNudge.c_filter, 'cancelled drag moved c_filter');
   assertPositionEqual(filterPositionsAfterCancelDrag.r1, filterPositionsAfterNudge.r1, 'Escape did not cancel the active drag');
 
+  await page.mouse.click(r1PlacePoint.x, r1PlacePoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
+  ));
+  await editor.focus();
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '2'
+  ));
+  const filterPositionsAfterDelete = await componentPositions(page);
+  assert.equal(filterPositionsAfterDelete.r1, undefined, 'Delete did not remove the selected resistor');
+  assertPositionEqual(filterPositionsAfterDelete.r_filter, filterPositionsAfterNudge.r_filter, 'deleting added resistor moved r_filter');
+  assertPositionEqual(filterPositionsAfterDelete.c_filter, filterPositionsAfterNudge.c_filter, 'deleting added resistor moved c_filter');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3' &&
+      Number(positions.r1?.x) === Number(previous.x) &&
+      Number(positions.r1?.y) === Number(previous.y);
+  }, filterPositionsAfterNudge.r1);
+  const filterPositionsAfterDeleteUndo = await componentPositions(page);
+  assertPositionEqual(filterPositionsAfterDeleteUndo.r_filter, filterPositionsAfterNudge.r_filter, 'undo delete moved r_filter');
+  assertPositionEqual(filterPositionsAfterDeleteUndo.c_filter, filterPositionsAfterNudge.c_filter, 'undo delete moved c_filter');
+  assertPositionEqual(filterPositionsAfterDeleteUndo.r1, filterPositionsAfterNudge.r1, 'undo delete did not restore r1');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+Z' : 'Control+Y');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '2'
+  ));
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3' &&
+      Number(positions.r1?.x) === Number(previous.x) &&
+      Number(positions.r1?.y) === Number(previous.y);
+  }, filterPositionsAfterNudge.r1);
+  const filterPositionsAfterRedoUndo = await componentPositions(page);
+  assertPositionEqual(filterPositionsAfterRedoUndo.r_filter, filterPositionsAfterNudge.r_filter, 'redo/undo delete moved r_filter');
+  assertPositionEqual(filterPositionsAfterRedoUndo.c_filter, filterPositionsAfterNudge.c_filter, 'redo/undo delete moved c_filter');
+  assertPositionEqual(filterPositionsAfterRedoUndo.r1, filterPositionsAfterNudge.r1, 'redo/undo delete did not restore r1');
+  console.log('[e2e] delete undo redo isolated');
+
   await page.mouse.move(r1PlacePoint.x, r1PlacePoint.y);
   await page.mouse.down();
   await page.mouse.move(r1PlacePoint.x + 60, r1PlacePoint.y + 30, { steps: 8 });
