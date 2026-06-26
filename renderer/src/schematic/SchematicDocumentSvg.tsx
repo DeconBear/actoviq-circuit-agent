@@ -51,10 +51,6 @@ export function SchematicDocumentSvg({
   const height = Math.max(1, viewBox.maxY - viewBox.minY);
   const gridId = `grid-${document.moduleId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
   const previewPoints = wireStart && wirePreview ? routePoints(wireStart, wirePreview) : [];
-  const connectedNets = new Set(
-    document.module.components.flatMap((component) => component.pins.map((pin) => pin.net)),
-  );
-
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -105,7 +101,8 @@ export function SchematicDocumentSvg({
         {document.module.ports.map((port) => {
           const position = document.portPositions.get(port.id);
           if (!position) return null;
-          const connected = connectedNets.has(port.net);
+          const connected = document.connectedPortIds.has(port.id);
+          if (!connected) return null;
           const portKind = isGroundPort(port) ? 'ground' : port.signal_type === 'power' ? 'power' : port.direction === 'output' ? 'output' : 'input';
           const labelPosition = portLabelPositions(position, portKind);
           return (

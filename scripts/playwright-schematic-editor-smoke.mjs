@@ -292,6 +292,11 @@ try {
   await page.getByTestId('schematic-editor-svg').waitFor({ timeout: 20_000 });
   assert.equal(await editor.getAttribute('data-schematic-source'), 'document');
   assert.equal(await page.getByTestId('schematic-editor-svg').getAttribute('data-schematic-source'), 'document');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id][data-connected="false"]').count(),
+    0,
+    'unconnected module ports should not be visible or influence the editor plot bounds',
+  );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-document-backed.png') });
   console.log('[e2e] filter editor loaded');
 

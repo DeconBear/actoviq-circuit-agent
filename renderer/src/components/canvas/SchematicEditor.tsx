@@ -42,6 +42,7 @@ interface DragState {
   componentId: string;
   startWorld: CircuitPosition;
   originalPosition: CircuitPosition;
+  lastPosition: CircuitPosition;
   originalModule: CircuitModule;
   moved: boolean;
 }
@@ -155,6 +156,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         componentId: componentHit.id,
         startWorld: world,
         originalPosition: { ...componentHit.position },
+        lastPosition: { ...componentHit.position },
         originalModule: cloneModule(draft),
         moved: false,
       };
@@ -192,6 +194,8 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       x: drag.originalPosition.x + dx,
       y: drag.originalPosition.y + dy,
     });
+    if (drag.lastPosition.x === nextPosition.x && drag.lastPosition.y === nextPosition.y) return;
+    drag.lastPosition = nextPosition;
     setDraft((current) => {
       const currentComponent = current.components.find((entry) => entry.id === drag.componentId);
       if (

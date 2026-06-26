@@ -37,6 +37,7 @@ export interface SchematicDocument {
   moduleName: string;
   module: CircuitModule;
   portPositions: Map<string, CircuitPosition>;
+  connectedPortIds: Set<string>;
   wires: CircuitWire[];
   bounds: SchematicBounds;
   viewBox: SchematicBounds;
@@ -85,8 +86,9 @@ export function createSchematicDocument(
     component.position = snapPoint(component.position);
   }
   const portPositions = computePortPositions(next);
+  const connectedPortIds = computeConnectedPortIds(next);
   const wires = materializeNetWires(next, portPositions);
-  const bounds = moduleBounds(next, portPositions, wires);
+  const bounds = moduleBounds(next, filterPortPositions(portPositions, connectedPortIds), wires);
   const viewBox = padBounds(bounds, 70);
   return {
     schema: 'actoviq.schematic-document.v1',
@@ -94,6 +96,7 @@ export function createSchematicDocument(
     moduleName: next.name,
     module: next,
     portPositions,
+    connectedPortIds,
     wires,
     bounds,
     viewBox,
@@ -568,6 +571,29 @@ function pinPointsByNetName(module: CircuitModule): Map<string, CircuitPosition[
   return points;
 }
 
+function computeConnectedPortIds(module: CircuitModule): Set<string> {
+  const pinNets = new Set(module.components.flatMap((component) => component.pins.map((pin) => pin.net)));
+  const portNetCounts = new Map<string, number>();
+  for (const port of module.ports) {
+    portNetCounts.set(port.net, (portNetCounts.get(port.net) ?? 0) + 1);
+  }
+  const wiredPorts = new Set(
+    (module.wires ?? []).flatMap((wire) => [wire.from?.port_id, wire.to?.port_id].filter(Boolean) as string[]),
+  );
+  return new Set(
+    module.ports
+      .filter((port) => pinNets.has(port.net) || wiredPorts.has(port.id) || (portNetCounts.get(port.net) ?? 0) > 1)
+      .map((port) => port.id),
+  );
+}
+
+function filterPortPositions(
+  portPositions: Map<string, CircuitPosition>,
+  connectedPortIds: Set<string>,
+): Map<string, CircuitPosition> {
+  return new Map([...portPositions].filter(([portId]) => connectedPortIds.has(portId)));
+}
+
 function leftmost(points: CircuitPosition[]): CircuitPosition | null {
   return points.reduce<CircuitPosition | null>((best, point) => (
     !best || point.x < best.x ? point : best
@@ -901,6 +927,7 @@ export function hitEndpoint(document: SchematicDocument, world: CircuitPosition)
     }
   }
   for (const port of document.module.ports) {
+    if (!document.connectedPortIds.has(port.id)) continue;
     const point = document.portPositions.get(port.id);
     if (point && distance(point, world) <= PIN_REACH + 3) {
       return {
