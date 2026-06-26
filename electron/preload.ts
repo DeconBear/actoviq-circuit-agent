@@ -225,8 +225,8 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('project:changed', handler);
   },
 
-  openCircuitProjectFolder(projectId: string): void {
-    ipcRenderer.send('project:open-folder', projectId);
+  openCircuitProjectFolder(projectId: string): Promise<string> {
+    return ipcRenderer.invoke('project:open-folder', projectId);
   },
 
   getSettings(): Promise<AppSettings> {

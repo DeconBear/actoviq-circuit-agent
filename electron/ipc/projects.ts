@@ -844,7 +844,12 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     await watchProject(projectId);
   });
 
-  ipcMain.on('project:open-folder', async (_event, projectId: string) => {
-    await shell.openPath(await resolveProjectRoot(projectId));
+  ipcMain.handle('project:open-folder', async (_event, projectId: string) => {
+    const projectRoot = await resolveProjectRoot(projectId);
+    if (process.env.ACTOVIQ_E2E !== '1') {
+      const error = await shell.openPath(projectRoot);
+      if (error) throw new Error(error);
+    }
+    return projectRoot;
   });
 }

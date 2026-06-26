@@ -108,7 +108,7 @@ declare global {
       onCircuitProjectChanged(
         callback: (event: { projectId: string; timestamp: number }) => void,
       ): () => void;
-      openCircuitProjectFolder(projectId: string): void;
+      openCircuitProjectFolder(projectId: string): Promise<string>;
       getSettings(): Promise<AppSettings>;
       saveSettings(settings: AppSettings): Promise<void>;
       getAppVersion(): Promise<string>;

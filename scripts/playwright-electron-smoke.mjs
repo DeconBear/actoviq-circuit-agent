@@ -235,6 +235,8 @@ try {
   assert.ok(sidebarDemoProject.project.modules.some((module) => module.id === 'filter'));
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
+  await page.getByTestId('open-project-folder').click();
+  await page.getByText(/^Opened project folder: /).waitFor({ timeout: 20_000 });
 
   assert.equal(await page.getByTestId('system-canvas').count(), 1);
   assert.equal(await page.locator('[data-testid^="module-card-"]').count(), 3);

@@ -585,6 +585,18 @@ export function CircuitWorkbench({
     }
   }
 
+  async function openProjectFolder(): Promise<void> {
+    if (!activeProjectId) return;
+    setError('');
+    setNotice('');
+    try {
+      const openedPath = await window.electronAPI.openCircuitProjectFolder(activeProjectId);
+      setNotice(`Opened project folder: ${openedPath}`);
+    } catch (openError) {
+      setError(openError instanceof Error ? openError.message : String(openError));
+    }
+  }
+
   async function createProjectFromSavedTemplate(template: DesignMemoryItem): Promise<void> {
     setError('');
     try {
@@ -990,8 +1002,9 @@ export function CircuitWorkbench({
           </button>
           <button
             style={styles.iconButton}
-            onClick={() => window.electronAPI.openCircuitProjectFolder(project.project_id)}
+            onClick={() => { void openProjectFolder(); }}
             title="Open project folder"
+            data-testid="open-project-folder"
           >
             Folder
           </button>
