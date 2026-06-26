@@ -228,20 +228,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
   const labels = componentLabelPositions(component);
   return (
     <g data-component-id={component.id} data-component-type={component.type}>
-      {selected ? (
-        <rect
-          x={bounds.minX - 10}
-          y={bounds.minY - 10}
-          width={bounds.maxX - bounds.minX + 20}
-          height={bounds.maxY - bounds.minY + 20}
-          rx="4"
-          fill="rgba(37, 99, 235, 0.06)"
-          stroke="#2563eb"
-          strokeWidth="1.6"
-          strokeDasharray="7 5"
-          pointerEvents="none"
-        />
-      ) : null}
+      {selected ? <ComponentSelectionHandles bounds={bounds} /> : null}
       <LeadLines component={component} />
       <SymbolBody component={component} />
       {pins.map(({ pin, point }) => (
@@ -254,6 +241,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
           net={pin.net}
           componentId={component.id}
           pinId={pin.id}
+          visible={selected}
         />
       ))}
       <text
@@ -279,6 +267,34 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
       >
         {component.value}
       </text>
+    </g>
+  );
+}
+
+function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof componentBounds> }) {
+  const inset = 6;
+  const size = 8;
+  const corners = [
+    { x: bounds.minX - inset, y: bounds.minY - inset },
+    { x: bounds.maxX + inset, y: bounds.minY - inset },
+    { x: bounds.maxX + inset, y: bounds.maxY + inset },
+    { x: bounds.minX - inset, y: bounds.maxY + inset },
+  ];
+  return (
+    <g data-testid="schematic-selected-component-handles" pointerEvents="none">
+      {corners.map((corner) => (
+        <rect
+          key={`${corner.x},${corner.y}`}
+          x={corner.x - size / 2}
+          y={corner.y - size / 2}
+          width={size}
+          height={size}
+          rx="1.5"
+          fill="#ffffff"
+          stroke="#2563eb"
+          strokeWidth="1.6"
+        />
+      ))}
     </g>
   );
 }
@@ -481,6 +497,7 @@ function EndpointCircle({
   net,
   componentId,
   pinId,
+  visible,
 }: {
   point: CircuitPosition;
   kind: 'pin' | 'port';
@@ -489,23 +506,26 @@ function EndpointCircle({
   net: string;
   componentId?: string;
   pinId?: string;
+  visible?: boolean;
 }) {
   const pin = kind === 'pin';
+  const show = !pin || visible;
   return (
     <circle
       cx={point.x}
       cy={point.y}
-      r={pin ? 3.3 : 3.6}
-      fill={pin ? '#cc0000' : '#7b8490'}
-      stroke="#ffffff"
-      strokeWidth="1.2"
-      opacity={pin ? 0.9 : 0.82}
+      r={pin ? (show ? 3.2 : 5.5) : 3.6}
+      fill={pin ? (show ? '#cc0000' : 'transparent') : '#7b8490'}
+      stroke={show ? '#ffffff' : 'none'}
+      strokeWidth={show ? '1.2' : '0'}
+      opacity={show ? (pin ? 0.9 : 0.82) : 0}
       data-endpoint-kind={kind}
       data-endpoint-id={id}
       data-component-id={componentId}
       data-pin-id={pinId}
       data-label={label}
       data-net={net}
+      data-visible={show ? 'true' : 'false'}
     />
   );
 }

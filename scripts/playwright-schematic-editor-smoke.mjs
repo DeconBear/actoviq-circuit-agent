@@ -302,6 +302,11 @@ try {
     0,
     'unconnected module ports should not be visible or influence the editor plot bounds',
   );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('circle[data-endpoint-kind="pin"][data-visible="true"]').count(),
+    0,
+    'unselected component pins should not render as persistent red endpoint dots',
+  );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-document-backed.png') });
   console.log('[e2e] filter editor loaded');
 
@@ -337,6 +342,16 @@ try {
     return node?.getAttribute('data-component-count') === '3' &&
       node?.getAttribute('data-selected')?.startsWith('component:r');
   });
+  assert.equal(
+    await page.getByTestId('schematic-selected-component-handles').count(),
+    1,
+    'selected component should use lightweight selection handles',
+  );
+  assert.equal(
+    await page.locator('g[data-component-id="r1"] circle[data-endpoint-kind="pin"][data-visible="true"]').count(),
+    2,
+    'selected resistor should reveal only its own pin snap points',
+  );
   const filterPositionsAfterPlace = await componentPositions(page);
   await editor.focus();
   await page.keyboard.press('ArrowRight');
