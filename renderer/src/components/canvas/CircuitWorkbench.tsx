@@ -586,8 +586,13 @@ export function CircuitWorkbench({
   }
 
   async function createProjectFromSavedTemplate(template: DesignMemoryItem): Promise<void> {
-    await onCreateProjectFromTemplate(template.id, `${template.name} copy`);
-    await refreshDesignMemory();
+    setError('');
+    try {
+      await onCreateProjectFromTemplate(template.id, `${template.name} copy`);
+      await refreshDesignMemory();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function runModuleSimulation() {
@@ -896,10 +901,18 @@ export function CircuitWorkbench({
           Claude Code, Codex, and this desktop share the same module netlists and netlistsvg output.
         </p>
         <div style={styles.actionRow}>
-          <button style={styles.primaryButton} onClick={() => void onCreateProject(true, 'Modular analog chain')} data-testid="create-demo-project">
+          <button
+            style={styles.primaryButton}
+            onClick={() => { void onCreateProject(true, 'Modular analog chain').catch(() => undefined); }}
+            data-testid="create-demo-project"
+          >
             Create three-module demo
           </button>
-          <button style={styles.secondaryButton} onClick={() => void onCreateProject(false, 'New circuit project')} data-testid="create-blank-project">
+          <button
+            style={styles.secondaryButton}
+            onClick={() => { void onCreateProject(false, 'New circuit project').catch(() => undefined); }}
+            data-testid="create-blank-project"
+          >
             Create blank project
           </button>
         </div>

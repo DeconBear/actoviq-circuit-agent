@@ -380,6 +380,7 @@ export function App() {
       await loadCircuitProject(bundle.project.project_id);
     } catch (error) {
       state.setCircuitError(error instanceof Error ? error.message : String(error));
+      throw error;
     } finally {
       state.setCircuitBusy(false);
     }
@@ -407,6 +408,7 @@ export function App() {
       await refreshReferences();
     } catch (error) {
       state.setCircuitError(error instanceof Error ? error.message : String(error));
+      throw error;
     } finally {
       state.setCircuitBusy(false);
     }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
@@ -105,23 +105,6 @@ async function readDesignMemoryManifest(kind, id) {
   };
 }
 
-async function mtimeMs(filePath) {
-  try {
-    return (await stat(filePath)).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-
-async function waitForFileMtimeAfter(filePath, previousMtime, timeoutMs = 60_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await mtimeMs(filePath) > previousMtime) return;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`Timed out waiting for ${filePath} to be refreshed`);
-}
-
 const entries = await readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
 for (const entry of entries) {
   if (
@@ -199,7 +182,7 @@ try {
   await page.getByTestId('sidebar-new-workspace').click();
   await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('workspace-name-input').fill(workspaceName);
-  await page.getByTestId('workspace-create-submit').click();
+  await page.getByTestId('workspace-name-input').press('Enter');
   await page.getByTestId('sidebar-notice').getByText(`Workspace created: ${workspaceName}`, { exact: true }).waitFor({ timeout: 20_000 });
   await page.getByTestId('workspace-select').selectOption('default');
   await page.getByTestId(`sidebar-project-${projectId}`).waitFor({ timeout: 20_000 });
@@ -210,8 +193,12 @@ try {
   const sidebarProjectName = `Playwright Inline Project ${Date.now()}`;
   await page.getByTestId('sidebar-new-blank-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
+  await page.keyboard.press('Escape');
+  await page.getByTestId('project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
+  await page.getByTestId('sidebar-new-blank-project').click();
+  await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('project-name-input').fill(sidebarProjectName);
-  await page.getByTestId('project-create-submit').click();
+  await page.getByTestId('project-name-input').press('Enter');
   await page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarProjectName }).first().waitFor({ timeout: 30_000 });
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
@@ -551,9 +538,11 @@ try {
   );
 
   const buildManifestPath = path.resolve(projectRoot, 'build', 'build-manifest.json');
-  const buildManifestMtime = await mtimeMs(buildManifestPath);
   await page.getByTestId('build-project').click();
-  await waitForFileMtimeAfter(buildManifestPath, buildManifestMtime);
+  await page.getByText('Netlist and previews updated', { exact: true }).waitFor({ timeout: 60_000 });
+  const buildManifest = JSON.parse(await readFile(buildManifestPath, 'utf8'));
+  assert.equal(buildManifest.status, 'compiled');
+  assert.equal(buildManifest.modules.filter.render_ok, true);
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();
 
   await page.getByTestId('simulate-project').click();

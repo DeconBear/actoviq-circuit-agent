@@ -164,6 +164,32 @@ export function Sidebar({
     }
   }, [creating, onCreateProject, projectForm]);
 
+  const closeWorkspaceForm = useCallback(() => {
+    setWorkspaceFormOpen(false);
+    setWorkspaceName('');
+    setWorkspaceRoot('');
+  }, []);
+
+  const handleWorkspaceFormKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void handleCreateWorkspace();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeWorkspaceForm();
+    }
+  }, [closeWorkspaceForm, handleCreateWorkspace]);
+
+  const handleProjectFormKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void handleCreateProject();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setProjectForm(null);
+    }
+  }, [handleCreateProject]);
+
   if (collapsed) {
     return (
       <div style={styles.collapsed}>
@@ -209,13 +235,18 @@ export function Sidebar({
           <button onClick={() => window.electronAPI?.openWorkspaceRoot()} style={styles.smallBtn}>Open Root</button>
         </div>
         {workspaceFormOpen && (
-          <div style={styles.createPanel} data-testid="workspace-create-panel">
+          <div
+            style={styles.createPanel}
+            data-testid="workspace-create-panel"
+            onKeyDown={handleWorkspaceFormKeyDown}
+          >
             <input
               value={workspaceName}
               onChange={(event) => setWorkspaceName(event.target.value)}
               placeholder="Workspace name"
               style={styles.inlineInput}
               data-testid="workspace-name-input"
+              autoFocus
             />
             <div style={styles.pathRow}>
               <input
@@ -232,11 +263,7 @@ export function Sidebar({
             <div style={styles.formActions}>
               <button
                 type="button"
-                onClick={() => {
-                  setWorkspaceFormOpen(false);
-                  setWorkspaceName('');
-                  setWorkspaceRoot('');
-                }}
+                onClick={closeWorkspaceForm}
                 style={styles.formBtn}
               >
                 Cancel
@@ -282,7 +309,11 @@ export function Sidebar({
         </button>
       </div>
       {projectForm && (
-        <div style={styles.createPanel} data-testid="project-create-panel">
+        <div
+          style={styles.createPanel}
+          data-testid="project-create-panel"
+          onKeyDown={handleProjectFormKeyDown}
+        >
           <div style={styles.formTitle}>{projectForm.demo ? 'Demo project' : 'Blank project'}</div>
           <input
             value={projectForm.name}
@@ -290,6 +321,7 @@ export function Sidebar({
             placeholder="Project name"
             style={styles.inlineInput}
             data-testid="project-name-input"
+            autoFocus
           />
           <div style={styles.formActions}>
             <button type="button" onClick={() => setProjectForm(null)} style={styles.formBtn}>Cancel</button>
