@@ -199,6 +199,9 @@ try {
   await page.getByTestId('circuit-workbench').getByText('New circuit project', { exact: true }).waitFor({ timeout: 30_000 });
   await page.getByTestId('sidebar-open-workspace-root').click();
   await page.getByTestId('sidebar-notice').getByText(/^Workspace opened: /).waitFor({ timeout: 20_000 });
+  await page.getByTestId('sidebar-open-references').scrollIntoViewIfNeeded();
+  await page.getByTestId('sidebar-open-references').click();
+  await page.getByTestId('sidebar-notice').getByText(/^References opened: /).waitFor({ timeout: 20_000 });
   await page.getByTestId('workspace-select').selectOption('default');
   await page.getByTestId(`sidebar-project-${projectId}`).waitFor({ timeout: 20_000 });
 
