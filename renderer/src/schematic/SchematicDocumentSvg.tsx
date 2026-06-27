@@ -1,4 +1,4 @@
-import type { PointerEventHandler } from 'react';
+import type { PointerEventHandler, WheelEventHandler } from 'react';
 import type { CircuitComponent, CircuitPosition, CircuitWire } from '../types';
 import {
   componentBounds,
@@ -9,6 +9,7 @@ import {
   SCHEMATIC_GRID,
   type EndpointHit,
   type SchematicDocument,
+  type SchematicBounds,
   type SchematicSelection,
 } from './schematicDocument';
 
@@ -26,11 +27,13 @@ interface Props {
   hoverEndpoint?: EndpointHit | null;
   showGrid?: boolean;
   cursor?: CSSCursor;
+  viewBoxOverride?: SchematicBounds;
   testId?: string;
   onPointerDown?: PointerEventHandler<SVGSVGElement>;
   onPointerMove?: PointerEventHandler<SVGSVGElement>;
   onPointerUp?: PointerEventHandler<SVGSVGElement>;
   onPointerCancel?: PointerEventHandler<SVGSVGElement>;
+  onWheel?: WheelEventHandler<SVGSVGElement>;
 }
 
 export function SchematicDocumentSvg({
@@ -41,13 +44,15 @@ export function SchematicDocumentSvg({
   hoverEndpoint = null,
   showGrid = false,
   cursor = 'default',
+  viewBoxOverride,
   testId = 'schematic-document-svg',
   onPointerDown,
   onPointerMove,
   onPointerUp,
   onPointerCancel,
+  onWheel,
 }: Props) {
-  const viewBox = document.viewBox;
+  const viewBox = viewBoxOverride ?? document.viewBox;
   const width = Math.max(1, viewBox.maxX - viewBox.minX);
   const height = Math.max(1, viewBox.maxY - viewBox.minY);
   const gridId = `grid-${document.moduleId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
@@ -66,6 +71,7 @@ export function SchematicDocumentSvg({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      onWheel={onWheel}
     >
       <defs>
         <pattern id={gridId} width={SCHEMATIC_GRID} height={SCHEMATIC_GRID} patternUnits="userSpaceOnUse">
@@ -197,7 +203,7 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
   const points = pointsAttribute(wire.points ?? []);
   if (!points) return null;
   return (
-    <g data-wire-id={wire.id} data-net={wire.net ?? ''}>
+    <g data-wire-id={wire.id} data-wire-source={wire.source ?? ''} data-net={wire.net ?? ''}>
       <polyline
         points={points}
         fill="none"
@@ -211,11 +217,12 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
         points={points}
         fill="none"
         stroke={selected ? '#2563eb' : 'transparent'}
-        strokeWidth="8"
+        strokeWidth="9"
         strokeLinecap="round"
         strokeLinejoin="round"
-        opacity={selected ? 0.28 : 0}
+        opacity={selected ? 0.36 : 0}
         pointerEvents="none"
+        data-testid={selected ? 'schematic-selected-wire-highlight' : undefined}
       />
       <polyline
         points={points}
@@ -296,6 +303,17 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
   ];
   return (
     <g data-testid="schematic-selected-component-handles" pointerEvents="none">
+      <rect
+        x={bounds.minX - inset}
+        y={bounds.minY - inset}
+        width={bounds.maxX - bounds.minX + inset * 2}
+        height={bounds.maxY - bounds.minY + inset * 2}
+        fill="rgba(245, 158, 11, 0.07)"
+        stroke="#f59e0b"
+        strokeWidth="1.8"
+        strokeDasharray="8 6"
+        data-testid="schematic-selected-component-frame"
+      />
       {corners.map((corner) => (
         <rect
           key={`${corner.x},${corner.y}`}
@@ -305,7 +323,7 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
           height={size}
           rx="1.5"
           fill="#ffffff"
-          stroke="#2563eb"
+          stroke="#f59e0b"
           strokeWidth="1.6"
         />
       ))}

@@ -165,6 +165,7 @@ export interface CircuitWire {
   from?: CircuitWireEndpoint;
   to?: CircuitWireEndpoint;
   net?: string;
+  source?: 'stored' | 'net';
 }
 
 export interface CircuitComponent {

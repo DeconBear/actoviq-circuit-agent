@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
 } from 'react';
 import type { CircuitComponent, CircuitModule, CircuitPosition } from '../../types';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
@@ -22,10 +23,12 @@ import {
   normalizeConnectivity,
   normalizeRotation,
   pointEndpoint,
+  removeWireAndUpdateConnectivity,
   rerouteStoredWires,
   SCHEMATIC_GRID,
   snapPoint,
   type EndpointHit,
+  type SchematicBounds,
   type SchematicSelection,
   type ToolComponentType,
 } from '../../schematic/schematicDocument';
@@ -56,6 +59,11 @@ interface WireDragState {
   moved: boolean;
 }
 
+interface PanState {
+  startClient: CircuitPosition;
+  originalViewBox: SchematicBounds;
+}
+
 export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
@@ -66,14 +74,21 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
   const [interactionCursor, setInteractionCursor] = useState<EditorCursor>('default');
+  const [viewport, setViewport] = useState<SchematicBounds | null>(null);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const editorShellRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const wireDragRef = useRef<WireDragState | null>(null);
+  const panRef = useRef<PanState | null>(null);
 
   const document = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
+  const activeViewBox = viewport ?? document.viewBox;
+  const zoom = Math.max(
+    0.05,
+    (document.viewBox.maxX - document.viewBox.minX) / Math.max(1, activeViewBox.maxX - activeViewBox.minX),
+  );
   const selectedComponent = selection?.kind === 'component'
     ? draft.components.find((component) => component.id === selection.id) ?? null
     : null;
@@ -94,6 +109,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setHoverWorld(null);
     setHoverEndpoint(null);
     setInteractionCursor('default');
+    setViewport(null);
     setHistory([]);
     setFuture([]);
   }, [module.module_id, module.revision]);
@@ -105,24 +121,56 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setDirty(true);
   }, [draft]);
 
-  function screenToWorld(event: ReactPointerEvent<SVGSVGElement>): CircuitPosition {
-    const svg = event.currentTarget;
+  function clientToWorld(svg: SVGSVGElement, clientX: number, clientY: number): CircuitPosition {
+    svgRef.current = svg;
     const point = svg.createSVGPoint();
-    point.x = event.clientX;
-    point.y = event.clientY;
+    point.x = clientX;
+    point.y = clientY;
     const matrix = svg.getScreenCTM()?.inverse();
     if (!matrix) return { x: 0, y: 0 };
     const transformed = point.matrixTransform(matrix);
     return { x: transformed.x, y: transformed.y };
   }
 
+  function screenToWorld(event: ReactPointerEvent<SVGSVGElement>): CircuitPosition {
+    return clientToWorld(event.currentTarget, event.clientX, event.clientY);
+  }
+
+  function handleWheel(event: ReactWheelEvent<SVGSVGElement>) {
+    event.stopPropagation();
+    editorShellRef.current?.focus();
+    const current = activeViewBox;
+    const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
+    const width = current.maxX - current.minX;
+    const height = current.maxY - current.minY;
+    const baseWidth = document.viewBox.maxX - document.viewBox.minX;
+    const factor = event.deltaY > 0 ? 1.14 : 0.88;
+    const nextWidth = clamp(width * factor, Math.max(120, baseWidth * 0.18), Math.max(2400, baseWidth * 5));
+    const nextHeight = nextWidth * (height / Math.max(1, width));
+    const ratioX = (world.x - current.minX) / Math.max(1, width);
+    const ratioY = (world.y - current.minY) / Math.max(1, height);
+    const minX = world.x - ratioX * nextWidth;
+    const minY = world.y - ratioY * nextHeight;
+    setViewport({ minX, minY, maxX: minX + nextWidth, maxY: minY + nextHeight });
+  }
+
   function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
-    if (busy || event.button !== 0) return;
+    if (busy || (event.button !== 0 && event.button !== 1)) return;
     event.preventDefault();
     event.stopPropagation();
     svgRef.current = event.currentTarget;
     editorShellRef.current?.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
+
+    if (event.button === 1 || (event.button === 0 && event.altKey)) {
+      panRef.current = {
+        startClient: { x: event.clientX, y: event.clientY },
+        originalViewBox: activeViewBox,
+      };
+      setInteractionCursor('grabbing');
+      return;
+    }
+
     const world = screenToWorld(event);
     setHoverWorld(world);
     setHoverEndpoint(tool === 'wire' || tool === 'place' || wireStart ? hitEndpoint(document, world) : null);
@@ -161,6 +209,12 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     }
 
     const componentHit = hitComponent(document, world);
+    const wireHit = hitWire(document, world);
+    if (wireHit) {
+      setSelection({ kind: 'wire', id: wireHit.id });
+      setInteractionCursor('default');
+      return;
+    }
     if (componentHit) {
       setSelection({ kind: 'component', id: componentHit.id });
       setInteractionCursor('grabbing');
@@ -175,18 +229,28 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       };
       return;
     }
-    const wireHit = hitWire(document, world);
-    if (wireHit) {
-      setSelection({ kind: 'wire', id: wireHit.id });
-      setInteractionCursor('default');
-      return;
-    }
     setSelection(null);
     setInteractionCursor('default');
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
     event.stopPropagation();
+    const pan = panRef.current;
+    if (pan) {
+      const svgBox = event.currentTarget.getBoundingClientRect();
+      const width = pan.originalViewBox.maxX - pan.originalViewBox.minX;
+      const height = pan.originalViewBox.maxY - pan.originalViewBox.minY;
+      const dx = (event.clientX - pan.startClient.x) * (width / Math.max(1, svgBox.width));
+      const dy = (event.clientY - pan.startClient.y) * (height / Math.max(1, svgBox.height));
+      setViewport({
+        minX: pan.originalViewBox.minX - dx,
+        minY: pan.originalViewBox.minY - dy,
+        maxX: pan.originalViewBox.maxX - dx,
+        maxY: pan.originalViewBox.maxY - dy,
+      });
+      setInteractionCursor('grabbing');
+      return;
+    }
     const world = screenToWorld(event);
     if (tool === 'wire' || tool === 'place' || wireStart) {
       const hit = hitEndpoint(document, world);
@@ -243,6 +307,11 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    if (panRef.current) {
+      panRef.current = null;
+      setInteractionCursor('default');
+      return;
+    }
     const wireDrag = wireDragRef.current;
     wireDragRef.current = null;
     if (wireDrag?.moved && tool === 'wire') {
@@ -278,6 +347,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const drag = dragRef.current;
     dragRef.current = null;
     wireDragRef.current = null;
+    panRef.current = null;
     setInteractionCursor('default');
     if (!drag) return;
     if (drag.moved) {
@@ -311,7 +381,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     commitDraft(next);
   }
 
-  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+  function handleKeyboardEvent(event: Pick<KeyboardEvent | ReactKeyboardEvent<HTMLDivElement>, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'preventDefault' | 'shiftKey' | 'target'>) {
     if (isEditableKeyboardTarget(event.target)) return;
     const key = event.key.toLowerCase();
     if (event.key === 'Escape') {
@@ -389,6 +459,25 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     }
   }
 
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    handleKeyboardEvent(event);
+  }
+
+  useEffect(() => {
+    function handleWindowKeyDown(event: KeyboardEvent) {
+      const shell = editorShellRef.current;
+      if (!shell || event.defaultPrevented || isEditableKeyboardTarget(event.target)) return;
+      const target = event.target;
+      const activeElement = window.document.activeElement;
+      if (target instanceof Node && shell.contains(target)) return;
+      if (activeElement && activeElement !== window.document.body && !shell.contains(activeElement)) return;
+      handleKeyboardEvent(event);
+    }
+
+    window.addEventListener('keydown', handleWindowKeyDown);
+    return () => window.removeEventListener('keydown', handleWindowKeyDown);
+  });
+
   function undo() {
     const previous = history.at(-1);
     if (!previous || busy) return;
@@ -424,7 +513,11 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         wire.from?.component_id !== selection.id && wire.to?.component_id !== selection.id
       ));
     } else {
-      next.wires = (next.wires ?? []).filter((wire) => wire.id !== selection.id);
+      const selectedWire = document.wires.find((wire) => wire.id === selection.id);
+      const updated = removeWireAndUpdateConnectivity(next, selectedWire ?? selection.id);
+      next.components = updated.components;
+      next.ports = updated.ports;
+      next.wires = updated.wires;
     }
     commitDraft(next);
     setSelection(null);
@@ -462,6 +555,8 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-selected={selection ? `${selection.kind}:${selection.id}` : ''}
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
       data-cursor-mode={editorCursor}
+      data-zoom={zoom.toFixed(3)}
+      data-viewport={JSON.stringify(activeViewBox)}
       data-component-count={draft.components.length}
       data-wire-count={document.wires.length}
       data-component-positions={JSON.stringify(Object.fromEntries(
@@ -471,6 +566,12 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         draft.components.map((component) => [component.id, normalizeRotation(component.rotation)]),
       ))}
       data-wire-points={JSON.stringify(document.wires.map((wire) => wire.points))}
+      data-wires={JSON.stringify(document.wires.map((wire) => ({
+        id: wire.id,
+        net: wire.net,
+        source: wire.source,
+        points: wire.points,
+      })))}
       data-schematic-source="document"
       onKeyDown={handleKeyDown}
       tabIndex={0}
@@ -516,6 +617,14 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         <button style={styles.primaryButton} onClick={() => void saveAndRebuild()} disabled={busy || !dirty} data-testid="schematic-editor-save">
           Apply
         </button>
+        <button
+          style={styles.toolButton}
+          onClick={() => { setViewport(null); panRef.current = null; setInteractionCursor('default'); }}
+          disabled={busy}
+          data-testid="schematic-editor-fit"
+        >
+          Fit
+        </button>
         <button style={styles.toolButton} onClick={onBuild} disabled={busy} data-testid="schematic-editor-rebuild-svg">
           Build netlistsvg
         </button>
@@ -525,6 +634,9 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
             : hoverEndpoint
               ? `Snap ${hoverEndpoint.label}`
               : dirty ? 'Unsaved' : 'Saved'}
+        </span>
+        <span style={styles.statusText} data-testid="schematic-editor-zoom">
+          {Math.round(zoom * 100)}%
         </span>
       </div>
 
@@ -538,11 +650,13 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
             hoverEndpoint={hoverEndpoint}
             showGrid
             cursor={editorCursor}
+            viewBoxOverride={activeViewBox}
             testId="schematic-editor-svg"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerCancel}
+            onWheel={handleWheel}
           />
         </div>
         <aside style={styles.panel} data-testid="schematic-editor-panel">
@@ -611,7 +725,11 @@ function endpointIdentity(endpoint: EndpointHit | null): string {
   return `point:${endpoint.x},${endpoint.y}`;
 }
 
-function isEditableKeyboardTarget(target: EventTarget): boolean {
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }

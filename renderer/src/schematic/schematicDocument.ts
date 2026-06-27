@@ -763,12 +763,23 @@ export function addWire(module: CircuitModule, start: EndpointHit, end: Endpoint
     ...(module.wires ?? []),
     {
       id,
-      points: routePoints(startPoint, endPoint),
+      points: routePointsForModule(module, startPoint, endPoint, start, end),
       from: stripEndpoint(startPoint, start),
       to: stripEndpoint(endPoint, end),
       net: mergedNet,
     },
   ];
+}
+
+export function removeWireAndUpdateConnectivity(module: CircuitModule, wireOrId: CircuitWire | string): CircuitModule {
+  const next = cloneModule(module);
+  const selectedWire = typeof wireOrId === 'string'
+    ? next.wires?.find((wire) => wire.id === wireOrId)
+    : wireOrId;
+  const selectedId = typeof wireOrId === 'string' ? wireOrId : wireOrId.id;
+  next.wires = (next.wires ?? []).filter((wire) => wire.id !== selectedId);
+  if (selectedWire) splitNetAfterWireRemoval(next, selectedWire);
+  return normalizeConnectivity(next);
 }
 
 export function routePoints(startPoint: CircuitPosition, endPoint: CircuitPosition): CircuitPosition[] {
@@ -779,6 +790,101 @@ export function routePoints(startPoint: CircuitPosition, endPoint: CircuitPositi
   return horizontalFirst
     ? [startPoint, { x: endPoint.x, y: startPoint.y }, endPoint]
     : [startPoint, { x: startPoint.x, y: endPoint.y }, endPoint];
+}
+
+function routePointsForModule(
+  module: CircuitModule,
+  startPoint: CircuitPosition,
+  endPoint: CircuitPosition,
+  startEndpoint?: CircuitWireEndpoint,
+  endEndpoint?: CircuitWireEndpoint,
+): CircuitPosition[] {
+  const excludedComponentIds = new Set(
+    [startEndpoint?.component_id, endEndpoint?.component_id].filter(Boolean) as string[],
+  );
+  const obstacles = module.components
+    .filter((component) => !excludedComponentIds.has(component.id))
+    .map((component) => padBounds(componentBounds(component), 14));
+  const candidates = orthogonalRouteCandidates(startPoint, endPoint, obstacles);
+  return candidates
+    .filter((points) => routeIsClear(points, obstacles))
+    .sort((left, right) => routeCost(left) - routeCost(right))[0] ?? routePoints(startPoint, endPoint);
+}
+
+function orthogonalRouteCandidates(
+  startPoint: CircuitPosition,
+  endPoint: CircuitPosition,
+  obstacles: SchematicBounds[],
+): CircuitPosition[][] {
+  const candidates = [
+    routePoints(startPoint, endPoint),
+    [startPoint, { x: startPoint.x, y: endPoint.y }, endPoint],
+    [startPoint, { x: endPoint.x, y: startPoint.y }, endPoint],
+  ];
+  const detourXs = new Set<number>();
+  const detourYs = new Set<number>();
+  for (const obstacle of obstacles) {
+    detourXs.add(snap(obstacle.minX - SCHEMATIC_GRID));
+    detourXs.add(snap(obstacle.maxX + SCHEMATIC_GRID));
+    detourYs.add(snap(obstacle.minY - SCHEMATIC_GRID));
+    detourYs.add(snap(obstacle.maxY + SCHEMATIC_GRID));
+  }
+  for (const x of detourXs) {
+    candidates.push([startPoint, { x, y: startPoint.y }, { x, y: endPoint.y }, endPoint]);
+  }
+  for (const y of detourYs) {
+    candidates.push([startPoint, { x: startPoint.x, y }, { x: endPoint.x, y }, endPoint]);
+  }
+  return candidates.map(compactRoute);
+}
+
+function compactRoute(points: CircuitPosition[]): CircuitPosition[] {
+  return points.filter((point, index) => {
+    const previous = points[index - 1];
+    const next = points[index + 1];
+    if (previous && previous.x === point.x && previous.y === point.y) return false;
+    if (!previous || !next) return true;
+    return !(
+      previous.x === point.x && point.x === next.x ||
+      previous.y === point.y && point.y === next.y
+    );
+  });
+}
+
+function routeIsClear(points: CircuitPosition[], obstacles: SchematicBounds[]): boolean {
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    if (!start || !end) continue;
+    if (obstacles.some((obstacle) => segmentIntersectsBounds(start, end, obstacle))) return false;
+  }
+  return true;
+}
+
+function segmentIntersectsBounds(start: CircuitPosition, end: CircuitPosition, bounds: SchematicBounds): boolean {
+  if (start.x === end.x) {
+    const minY = Math.min(start.y, end.y);
+    const maxY = Math.max(start.y, end.y);
+    return start.x >= bounds.minX && start.x <= bounds.maxX && maxY >= bounds.minY && minY <= bounds.maxY;
+  }
+  if (start.y === end.y) {
+    const minX = Math.min(start.x, end.x);
+    const maxX = Math.max(start.x, end.x);
+    return start.y >= bounds.minY && start.y <= bounds.maxY && maxX >= bounds.minX && minX <= bounds.maxX;
+  }
+  return segmentIntersectsBounds(start, { x: end.x, y: start.y }, bounds) ||
+    segmentIntersectsBounds({ x: end.x, y: start.y }, end, bounds);
+}
+
+function routeCost(points: CircuitPosition[]): number {
+  let length = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    if (!start || !end) continue;
+    length += Math.abs(end.x - start.x) + Math.abs(end.y - start.y);
+  }
+  return length + points.length * 8;
 }
 
 export function stripEndpoint(point: CircuitPosition, endpoint: EndpointHit): CircuitWireEndpoint {
@@ -831,8 +937,8 @@ export function normalizeConnectivity(module: CircuitModule): CircuitModule {
     const left = endpointKey(wire.from);
     const right = endpointKey(wire.to);
     if (left && right) union(left, right);
-    if (left && wire.net) nets.set(left, wire.net);
-    if (right && wire.net) nets.set(right, wire.net);
+    if (left && wire.net && !nets.get(left)) nets.set(left, wire.net);
+    if (right && wire.net && !nets.get(right)) nets.set(right, wire.net);
   }
 
   const groupNets = new Map<string, string[]>();
@@ -894,7 +1000,7 @@ export function rerouteWire(
     ...wire,
     from: wire.from ? { ...wire.from, x: start.x, y: start.y } : wire.from,
     to: wire.to ? { ...wire.to, x: end.x, y: end.y } : wire.to,
-    points: routePoints(start, end),
+    points: routePointsForModule(module, start, end, wire.from, wire.to),
   };
 }
 
@@ -947,36 +1053,103 @@ export function hitComponent(document: SchematicDocument, world: CircuitPosition
   for (let index = document.module.components.length - 1; index >= 0; index -= 1) {
     const component = document.module.components[index];
     if (!component) continue;
-    const bounds = componentBounds(component);
-    if (
-      world.x >= bounds.minX - 6 &&
-      world.x <= bounds.maxX + 6 &&
-      world.y >= bounds.minY - 6 &&
-      world.y <= bounds.maxY + 6
-    ) {
-      return component;
-    }
+    if (pointHitsComponentGraphic(component, world)) return component;
   }
   return null;
 }
 
 export function hitWire(document: SchematicDocument, world: CircuitPosition): CircuitWire | null {
   const wires = document.wires ?? [];
-  for (let wireIndex = wires.length - 1; wireIndex >= 0; wireIndex -= 1) {
-    const wire = wires[wireIndex];
-    if (!wire) continue;
-    const points = wire.points ?? [];
-    for (let index = 1; index < points.length; index += 1) {
-      const start = points[index - 1];
-      const end = points[index];
-      if (start && end && pointToSegmentDistance(world, start, end) < 7) return wire;
-    }
-  }
-  return null;
+  const storedIds = new Set((document.module.wires ?? []).map((wire) => wire.id));
+  const stored = wires.filter((wire) => wire.source === 'stored' || storedIds.has(wire.id));
+  const generated = wires.filter((wire) => wire.source !== 'stored' && !storedIds.has(wire.id));
+  return hitWireGroup(stored, world) ?? hitWireGroup(generated, world);
 }
 
 export function distance(left: CircuitPosition, right: CircuitPosition): number {
   return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+function pointHitsComponentGraphic(component: CircuitComponent, world: CircuitPosition): boolean {
+  const pins = component.pins.map((pin, index) => pinWorld(component, pin, index));
+  if (pins.some((point) => distance(point, world) <= PIN_REACH)) return true;
+  if (component.pins.length === 2 && pointNearTwoPinLeads(component, world)) return true;
+
+  if (component.type === 'M') return pointNearMosGraphic(component, world);
+  if (component.type === 'Q') return pointNearBjtGraphic(component, world);
+
+  const local = componentLocalPoint(component, world);
+  if (component.type === 'R') return Math.abs(local.x) <= 32 && Math.abs(local.y) <= 14;
+  if (component.type === 'C') return Math.abs(Math.abs(local.x) - 8) <= 7 && Math.abs(local.y) <= 34;
+  if (component.type === 'L') return Math.abs(local.x) <= 38 && Math.abs(local.y) <= 12;
+  if (component.type === 'D') return local.x >= -26 && local.x <= 26 && local.y >= -29 && local.y <= 29;
+  if (component.type === 'V' || component.type === 'I') return Math.hypot(local.x, local.y) <= 31;
+  return Math.hypot(local.x, local.y) <= 28;
+}
+
+function pointNearTwoPinLeads(component: CircuitComponent, world: CircuitPosition): boolean {
+  const offsets = twoPinBodyTerminalOffsets(component);
+  return component.pins.some((pin, index) => {
+    const pinPoint = pinWorld(component, pin, index);
+    const offset = offsets[index];
+    if (!offset) return false;
+    const bodyPoint = {
+      x: component.position.x + offset.x,
+      y: component.position.y + offset.y,
+    };
+    return pointToSegmentDistance(world, pinPoint, bodyPoint) <= 7;
+  });
+}
+
+function twoPinBodyTerminalOffsets(component: CircuitComponent): [CircuitPosition, CircuitPosition] {
+  let span = 28;
+  if (component.type === 'C') span = 8;
+  if (component.type === 'D') span = 22;
+  if (component.type === 'L') span = 36;
+  if (component.type === 'V' || component.type === 'I') span = 28;
+  return [
+    rotateOffset({ x: -span, y: 0 }, normalizeRotation(component.rotation)),
+    rotateOffset({ x: span, y: 0 }, normalizeRotation(component.rotation)),
+  ];
+}
+
+function componentLocalPoint(component: CircuitComponent, world: CircuitPosition): CircuitPosition {
+  const dx = world.x - component.position.x;
+  const dy = world.y - component.position.y;
+  const rotation = normalizeRotation(component.rotation);
+  if (rotation === 90) return { x: dy, y: -dx };
+  if (rotation === 180) return { x: -dx, y: -dy };
+  if (rotation === 270) return { x: -dy, y: dx };
+  return { x: dx, y: dy };
+}
+
+function pointNearMosGraphic(component: CircuitComponent, world: CircuitPosition): boolean {
+  const { x, y } = component.position;
+  if (Math.abs(world.x - x) <= 46 && Math.abs(world.y - y) <= 58) return true;
+  const pmos = isPmosComponent(component);
+  const gateX = x - 20;
+  const channelX = x + 12;
+  const segments: Array<[CircuitPosition, CircuitPosition]> = [
+    [{ x: gateX, y: y - 34 }, { x: gateX, y: y + 34 }],
+    [{ x: channelX, y: y - 38 }, { x: channelX, y: y + 38 }],
+    [{ x: x - 58, y }, { x: pmos ? x - 31 : gateX, y }],
+    [{ x: channelX, y: y - 30 }, { x: x + 26, y: y - 52 }],
+    [{ x: channelX, y: y + 30 }, { x: x + 26, y: y + 52 }],
+    [{ x: channelX, y }, { x: x + 58, y }],
+  ];
+  return segments.some(([start, end]) => pointToSegmentDistance(world, start, end) <= 8);
+}
+
+function pointNearBjtGraphic(component: CircuitComponent, world: CircuitPosition): boolean {
+  const { x, y } = component.position;
+  if (Math.abs(world.x - x) <= 44 && Math.abs(world.y - y) <= 58) return true;
+  const segments: Array<[CircuitPosition, CircuitPosition]> = [
+    [{ x: x - 18, y: y - 34 }, { x: x - 18, y: y + 34 }],
+    [{ x: x - 58, y }, { x: x - 18, y }],
+    [{ x: x - 18, y: y - 20 }, { x: x + 30, y: y - 52 }],
+    [{ x: x - 18, y: y + 20 }, { x: x + 30, y: y + 52 }],
+  ];
+  return segments.some(([start, end]) => pointToSegmentDistance(world, start, end) <= 8);
 }
 
 export function pointToSegmentDistance(point: CircuitPosition, start: CircuitPosition, end: CircuitPosition): number {
@@ -1025,7 +1198,7 @@ function materializeNetWires(
 ): CircuitWire[] {
   const stored = (module.wires ?? [])
     .filter((wire) => (wire.points ?? []).length >= 2)
-    .map((wire) => rerouteWire(module, wire, portPositions));
+    .map((wire) => ({ ...rerouteWire(module, wire, portPositions), source: 'stored' as const }));
   const usedPairs = new Set(stored.map((wire) => endpointPairKey(wire.from, wire.to)));
   const existingIds = new Set(stored.map((wire) => wire.id));
   const endpointsByNet = new Map<string, EndpointHit[]>();
@@ -1063,7 +1236,7 @@ function materializeNetWires(
     });
   }
 
-  const wires = [...stored];
+  const wires: CircuitWire[] = [...stored];
   for (const [net, endpoints] of endpointsByNet) {
     if (endpoints.length < 2) continue;
     const anchor = chooseNetAnchor(endpoints);
@@ -1075,16 +1248,136 @@ function materializeNetWires(
       usedPairs.add(pairKey);
       const id = makeId(`net_${wireIdToken(net)}_`, existingIds);
       existingIds.add(id);
+      const startPoint = endpointDrawPoint(anchor);
+      const endPoint = endpointDrawPoint(endpoint);
       wires.push({
         id,
-        points: routePoints(endpointDrawPoint(anchor), endpointDrawPoint(endpoint)),
-        from: stripEndpoint(endpointDrawPoint(anchor), anchor),
-        to: stripEndpoint(endpointDrawPoint(endpoint), endpoint),
+        points: routePointsForModule(module, startPoint, endPoint, anchor, endpoint),
+        from: stripEndpoint(startPoint, anchor),
+        to: stripEndpoint(endPoint, endpoint),
         net,
+        source: 'net',
       });
     }
   }
   return wires;
+}
+
+function hitWireGroup(wires: CircuitWire[], world: CircuitPosition): CircuitWire | null {
+  for (let wireIndex = wires.length - 1; wireIndex >= 0; wireIndex -= 1) {
+    const wire = wires[wireIndex];
+    if (!wire) continue;
+    const points = wire.points ?? [];
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      if (start && end && pointToSegmentDistance(world, start, end) < 7) return wire;
+    }
+  }
+  return null;
+}
+
+function splitNetAfterWireRemoval(module: CircuitModule, removedWire: CircuitWire) {
+  const affectedNet = removedWire.net ?? endpointNet(module, removedWire.from) ?? endpointNet(module, removedWire.to);
+  const leftKey = endpointKey(removedWire.from);
+  const rightKey = endpointKey(removedWire.to);
+  if (!affectedNet || !leftKey || !rightKey) return;
+
+  const affectedKeys = endpointKeysForNet(module, affectedNet);
+  if (!affectedKeys.has(leftKey) || !affectedKeys.has(rightKey)) return;
+
+  const adjacency = new Map<string, Set<string>>();
+  for (const key of affectedKeys) adjacency.set(key, new Set());
+  for (const wire of module.wires ?? []) {
+    const left = endpointKey(wire.from);
+    const right = endpointKey(wire.to);
+    if (!left || !right || !affectedKeys.has(left) || !affectedKeys.has(right)) continue;
+    adjacency.get(left)?.add(right);
+    adjacency.get(right)?.add(left);
+  }
+
+  const groups: string[][] = [];
+  const seen = new Set<string>();
+  for (const key of affectedKeys) {
+    if (seen.has(key)) continue;
+    const group: string[] = [];
+    const queue = [key];
+    seen.add(key);
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) continue;
+      group.push(current);
+      for (const next of adjacency.get(current) ?? []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+    groups.push(group);
+  }
+  if (groups.length <= 1) return;
+
+  const existingNets = collectNets(module);
+  const keptGroup = groups.find((group) => group.includes(leftKey)) ?? groups[0];
+  for (const group of groups) {
+    if (group === keptGroup) continue;
+    const nextNet = makeFreshNet(affectedNet, existingNets);
+    existingNets.add(nextNet);
+    for (const key of group) setEndpointNetByKey(module, key, nextNet);
+  }
+}
+
+function endpointKeysForNet(module: CircuitModule, net: string): Set<string> {
+  const keys = new Set<string>();
+  for (const component of module.components) {
+    for (const pin of component.pins) {
+      if (pin.net === net) keys.add(`c:${component.id}:${pin.id}`);
+    }
+  }
+  for (const port of module.ports) {
+    if (port.net === net) keys.add(`p:${port.id}`);
+  }
+  return keys;
+}
+
+function collectNets(module: CircuitModule): Set<string> {
+  const nets = new Set<string>();
+  for (const component of module.components) {
+    for (const pin of component.pins) {
+      if (pin.net) nets.add(pin.net);
+    }
+  }
+  for (const port of module.ports) {
+    if (port.net) nets.add(port.net);
+  }
+  for (const wire of module.wires ?? []) {
+    if (wire.net) nets.add(wire.net);
+  }
+  return nets;
+}
+
+function makeFreshNet(baseNet: string, existingNets: Set<string>): string {
+  const token = wireIdToken(baseNet);
+  for (let index = 1; index < 10000; index += 1) {
+    const candidate = `n_${token}_${index}`;
+    if (!existingNets.has(candidate)) return candidate;
+  }
+  return `n_${token}_${Date.now()}`;
+}
+
+function setEndpointNetByKey(module: CircuitModule, key: string, net: string) {
+  if (key.startsWith('c:')) {
+    const [, componentId, pinId] = key.split(':');
+    const component = module.components.find((entry) => entry.id === componentId);
+    const pin = component?.pins.find((entry) => entry.id === pinId);
+    if (pin) pin.net = net;
+    return;
+  }
+  if (key.startsWith('p:')) {
+    const [, portId] = key.split(':');
+    const port = module.ports.find((entry) => entry.id === portId);
+    if (port) port.net = net;
+  }
 }
 
 function chooseNetAnchor(endpoints: EndpointHit[]): EndpointHit {

@@ -170,6 +170,20 @@ async function editorViewBox(page) {
   return { minX, minY, width, height };
 }
 
+async function editorZoom(page) {
+  return Number(await page.getByTestId('schematic-editor').getAttribute('data-zoom'));
+}
+
+async function editorViewport(page) {
+  const raw = await page.getByTestId('schematic-editor').getAttribute('data-viewport');
+  return JSON.parse(raw || '{}');
+}
+
+async function editorWires(page) {
+  const raw = await page.getByTestId('schematic-editor').getAttribute('data-wires');
+  return JSON.parse(raw || '[]');
+}
+
 function worldToScreen(point, viewBox, svgBox) {
   const scale = Math.min(svgBox.width / viewBox.width, svgBox.height / viewBox.height);
   const xOffset = (svgBox.width - viewBox.width * scale) / 2;
@@ -212,6 +226,39 @@ function assertPositionChanged(actual, expected, label) {
   );
 }
 
+async function wireScreenPointAwayFromComponents(page, wireId) {
+  return page.getByTestId('schematic-editor-svg').evaluate((svg, id) => {
+    if (!(svg instanceof SVGSVGElement)) throw new Error('schematic editor svg is not an SVG element');
+    const wire = svg.querySelector(`g[data-wire-id="${id}"] polyline[data-wire-hitbox="true"]`);
+    if (!(wire instanceof SVGGeometryElement)) throw new Error(`wire ${id} hitbox not found`);
+    const componentBoxes = Array.from(svg.querySelectorAll('g[data-component-id]'))
+      .filter((node) => node instanceof SVGGraphicsElement)
+      .map((node) => {
+        const box = node.getBBox();
+        return {
+          minX: box.x - 10,
+          maxX: box.x + box.width + 10,
+          minY: box.y - 10,
+          maxY: box.y + box.height + 10,
+        };
+      });
+    const matrix = svg.getScreenCTM();
+    if (!matrix) throw new Error('schematic editor svg has no screen matrix');
+    const length = wire.getTotalLength();
+    for (let index = 1; index < 20; index += 1) {
+      const point = wire.getPointAtLength((length * index) / 20);
+      const insideComponent = componentBoxes.some((box) => (
+        point.x >= box.minX && point.x <= box.maxX && point.y >= box.minY && point.y <= box.maxY
+      ));
+      if (insideComponent) continue;
+      const screenPoint = point.matrixTransform(matrix);
+      return { x: screenPoint.x, y: screenPoint.y };
+    }
+    const fallback = wire.getPointAtLength(length / 2).matrixTransform(matrix);
+    return { x: fallback.x, y: fallback.y };
+  }, wireId);
+}
+
 async function countVisibleSchematicWires(page) {
   return page.getByTestId('schematic-editor-svg').locator('g[data-wire-id] polyline:not([stroke="transparent"])').evaluateAll((nodes) => (
     nodes.filter((node) => {
@@ -219,6 +266,16 @@ async function countVisibleSchematicWires(page) {
       const box = node.getBBox();
       return box.width > 0 || box.height > 0;
     }).length
+  ));
+}
+
+async function isWireVisible(page, wireId) {
+  return page.getByTestId('schematic-editor-svg').locator(`g[data-wire-id="${wireId}"] polyline:not([stroke="transparent"])`).evaluateAll((nodes) => (
+    nodes.some((node) => {
+      if (!(node instanceof SVGGraphicsElement)) return false;
+      const box = node.getBBox();
+      return box.width > 0 || box.height > 0;
+    })
   ));
 }
 
@@ -344,6 +401,34 @@ try {
   const canvas = page.getByTestId('schematic-editor-svg');
   const box = await canvas.boundingBox();
   assert.ok(box);
+  const zoomBefore = await editorZoom(page);
+  const viewportBeforeZoom = await editorViewport(page);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -500);
+  await page.waitForFunction((previousZoom) => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') > previousZoom
+  ), zoomBefore);
+  const viewportAfterZoom = await editorViewport(page);
+  assert.ok(
+    viewportAfterZoom.maxX - viewportAfterZoom.minX < viewportBeforeZoom.maxX - viewportBeforeZoom.minX,
+    'mouse wheel zoom did not shrink the world viewport',
+  );
+  await page.keyboard.down('Alt');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 40, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  await page.waitForFunction((before) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-viewport') ?? '{}';
+    const viewport = JSON.parse(raw);
+    return Number(viewport.minX) !== Number(before.minX) || Number(viewport.minY) !== Number(before.minY);
+  }, viewportAfterZoom);
+  await page.getByTestId('schematic-editor-fit').click();
+  await page.waitForFunction(() => (
+    Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
+  ));
+  console.log('[e2e] viewport zoom pan fit verified');
   const initialWireCount = Number(await editor.getAttribute('data-wire-count'));
   const filterPositionsInitial = await componentPositions(page);
   const filterViewBoxInitial = await editorViewBox(page);
@@ -454,6 +539,7 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
   ));
+  assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 1, 'component selection frame is missing');
   await editor.focus();
   await page.keyboard.press('Delete');
   await page.waitForFunction(() => (
@@ -536,10 +622,55 @@ try {
   await page.waitForFunction((count) => (
     Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') > count
   ), initialWireCount);
-  const visibleWiresAfterDraw = await countVisibleSchematicWires(page);
-  assert.ok(visibleWiresAfterDraw > initialWireCount, `drawn wire is not visibly drawn; counted ${visibleWiresAfterDraw} wires`);
+  const wiresAfterDraw = await editorWires(page);
+  const storedWiresAfterDraw = wiresAfterDraw.filter((wire) => wire.source === 'stored');
+  const drawnWire = storedWiresAfterDraw.at(-1);
+  assert.ok(drawnWire, 'drawn stored wire was not exposed to the editor');
+  assert.ok(Array.isArray(drawnWire.points) && drawnWire.points.length >= 2, 'drawn wire points were not exposed to the editor');
+  assert.ok(await isWireVisible(page, drawnWire.id), 'drawn wire is not visibly drawn');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-wire-visible.png') });
   console.log('[e2e] wire drawn');
+
+  const wireSelectPoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
+  await page.getByTestId('schematic-editor-select').click();
+  await page.mouse.click(wireSelectPoint.x, wireSelectPoint.y);
+  await page.waitForFunction(() => (
+    Boolean(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected'))
+  ));
+  const selectedAfterWireClick = await editor.getAttribute('data-selected');
+  if (selectedAfterWireClick !== `wire:${drawnWire.id}`) {
+    console.log('[e2e] wire click selected unexpected item', JSON.stringify({
+      drawnWireId: drawnWire.id,
+      selectedAfterWireClick,
+      wireSelectPoint,
+      storedWireIds: storedWiresAfterDraw.map((wire) => wire.id),
+    }));
+  }
+  assert.equal(selectedAfterWireClick, `wire:${drawnWire.id}`, 'clicking the drawn wire did not select that stored wire');
+  assert.equal(await page.getByTestId('schematic-selected-wire-highlight').count(), 1, 'wire selection highlight is missing');
+  assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 0, 'wire selection should not show component selection frame');
+  await page.keyboard.press('Delete');
+  await page.waitForFunction((wireId) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    return !JSON.parse(raw).some((wire) => wire.id === wireId);
+  }, drawnWire.id);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((wireId) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    return JSON.parse(raw).some((wire) => wire.id === wireId);
+  }, drawnWire.id);
+  assert.ok(await isWireVisible(page, drawnWire.id), 'undo did not restore the deleted visible wire');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+Z' : 'Control+Y');
+  await page.waitForFunction((wireId) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    return !JSON.parse(raw).some((wire) => wire.id === wireId);
+  }, drawnWire.id);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((wireId) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    return JSON.parse(raw).some((wire) => wire.id === wireId);
+  }, drawnWire.id);
+  console.log('[e2e] wire delete undo redo isolated');
 
   await page.getByTestId('schematic-editor-save').click();
   await page.getByText('Applied netlist and SVG rebuilt', { exact: true }).waitFor({ timeout: 30_000 });
