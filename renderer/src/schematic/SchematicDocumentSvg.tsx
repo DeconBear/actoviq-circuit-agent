@@ -61,6 +61,7 @@ export function SchematicDocumentSvg({
       data-testid={testId}
       data-schematic-source="document"
       data-module-id={document.moduleId}
+      data-cursor-mode={cursor}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

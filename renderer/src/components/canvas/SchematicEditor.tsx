@@ -31,6 +31,7 @@ import {
 } from '../../schematic/schematicDocument';
 
 type ToolMode = 'select' | 'wire' | 'place';
+type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy';
 
 interface Props {
   module: CircuitModule;
@@ -64,6 +65,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [wireStart, setWireStart] = useState<EndpointHit | null>(null);
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
+  const [interactionCursor, setInteractionCursor] = useState<EditorCursor>('default');
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const editorShellRef = useRef<HTMLDivElement | null>(null);
@@ -78,6 +80,11 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const wirePreview = hoverWorld
     ? hoverEndpoint ?? pointEndpoint(snapPoint(hoverWorld))
     : null;
+  const editorCursor: EditorCursor = tool === 'wire'
+    ? 'crosshair'
+    : tool === 'place'
+      ? 'copy'
+      : interactionCursor;
 
   useEffect(() => {
     setDraft(createSchematicDocument(module).module);
@@ -86,6 +93,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setWireStart(null);
     setHoverWorld(null);
     setHoverEndpoint(null);
+    setInteractionCursor('default');
     setHistory([]);
     setFuture([]);
   }, [module.module_id, module.revision]);
@@ -126,6 +134,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       commitDraft(next);
       setSelection({ kind: 'component', id: component.id });
       setTool('select');
+      setInteractionCursor('grab');
       return;
     }
 
@@ -154,6 +163,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const componentHit = hitComponent(document, world);
     if (componentHit) {
       setSelection({ kind: 'component', id: componentHit.id });
+      setInteractionCursor('grabbing');
       dragRef.current = {
         componentId: componentHit.id,
         startWorld: world,
@@ -168,9 +178,11 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const wireHit = hitWire(document, world);
     if (wireHit) {
       setSelection({ kind: 'wire', id: wireHit.id });
+      setInteractionCursor('default');
       return;
     }
     setSelection(null);
+    setInteractionCursor('default');
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
@@ -188,7 +200,16 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       wireDrag.moved = Math.abs(event.clientX - wireDrag.startClient.x) + Math.abs(event.clientY - wireDrag.startClient.y) > 8;
     }
     const drag = dragRef.current;
-    if (!drag || busy) return;
+    if (!drag || busy) {
+      if (tool === 'select') {
+        setInteractionCursor((current) => {
+          const next: EditorCursor = hitComponent(document, world) ? 'grab' : 'default';
+          return current === next ? current : next;
+        });
+      }
+      return;
+    }
+    setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
     const dx = world.x - drag.startWorld.x;
     const dy = world.y - drag.startWorld.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
@@ -234,10 +255,13 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setWireStart(null);
       setHoverWorld(null);
       setHoverEndpoint(null);
+      setInteractionCursor('default');
       return;
     }
     const drag = dragRef.current;
     dragRef.current = null;
+    const world = screenToWorld(event);
+    setInteractionCursor(hitComponent(document, world) ? 'grab' : 'default');
     if (!drag?.moved) return;
     setHistory((items) => [...items, drag.originalModule].slice(-40));
     setFuture([]);
@@ -247,12 +271,14 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     event.stopPropagation();
     cancelActiveDrag();
     setHoverEndpoint(null);
+    setInteractionCursor('default');
   }
 
   function cancelActiveDrag() {
     const drag = dragRef.current;
     dragRef.current = null;
     wireDragRef.current = null;
+    setInteractionCursor('default');
     if (!drag) return;
     if (drag.moved) {
       setDraft(drag.originalModule);
@@ -295,6 +321,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setHoverEndpoint(null);
       setSelection(null);
       setTool('select');
+      setInteractionCursor('default');
       return;
     }
     if ((event.key === 'Delete' || event.key === 'Backspace') && selection) {
@@ -331,6 +358,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setTool('select');
       setWireStart(null);
       setHoverEndpoint(null);
+      setInteractionCursor('default');
       rotateSelectedComponent();
       return;
     }
@@ -339,6 +367,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setTool('wire');
       setWireStart(null);
       setHoverEndpoint(null);
+      setInteractionCursor('default');
       return;
     }
     if (key === 's') {
@@ -346,6 +375,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setTool('select');
       setWireStart(null);
       setHoverEndpoint(null);
+      setInteractionCursor('default');
       return;
     }
     const componentType = event.key.toUpperCase() as ToolComponentType;
@@ -355,6 +385,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setPlaceType(componentType);
       setWireStart(null);
       setHoverEndpoint(null);
+      setInteractionCursor('default');
     }
   }
 
@@ -368,6 +399,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setSelection(null);
     setWireStart(null);
     setHoverEndpoint(null);
+    setInteractionCursor('default');
   }
 
   function redo() {
@@ -380,6 +412,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setSelection(null);
     setWireStart(null);
     setHoverEndpoint(null);
+    setInteractionCursor('default');
   }
 
   function deleteSelection() {
@@ -395,6 +428,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     }
     commitDraft(next);
     setSelection(null);
+    setInteractionCursor('default');
   }
 
   function updateSelectedComponent(patch: Partial<CircuitComponent>) {
@@ -427,6 +461,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-dirty={dirty ? 'true' : 'false'}
       data-selected={selection ? `${selection.kind}:${selection.id}` : ''}
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
+      data-cursor-mode={editorCursor}
       data-component-count={draft.components.length}
       data-wire-count={document.wires.length}
       data-component-positions={JSON.stringify(Object.fromEntries(
@@ -502,7 +537,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
             wirePreview={wirePreview}
             hoverEndpoint={hoverEndpoint}
             showGrid
-            cursor={dragRef.current ? 'grabbing' : tool === 'wire' ? 'crosshair' : tool === 'place' ? 'copy' : 'default'}
+            cursor={editorCursor}
             testId="schematic-editor-svg"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
