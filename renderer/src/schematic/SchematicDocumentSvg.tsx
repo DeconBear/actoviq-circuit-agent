@@ -499,6 +499,35 @@ function EndpointHover({ endpoint }: { endpoint: EndpointHit }) {
     <g pointerEvents="none" data-testid="schematic-hover-endpoint" data-label={endpoint.label} data-net={endpoint.net ?? ''}>
       <circle cx={endpoint.x} cy={endpoint.y} r="10" fill="rgba(37, 99, 235, 0.10)" stroke="#2563eb" strokeWidth="2" />
       <circle cx={endpoint.x} cy={endpoint.y} r="4" fill="#2563eb" />
+      <text
+        x={endpoint.x + 12}
+        y={endpoint.y - 12}
+        fontSize="11"
+        fontFamily="Consolas, monospace"
+        fontWeight="700"
+        fill={LABEL_COLOR}
+        stroke={LABEL_HALO_COLOR}
+        strokeWidth="3"
+        paintOrder="stroke"
+        data-testid="schematic-hover-endpoint-label"
+      >
+        {endpoint.label}
+      </text>
+      {endpoint.net ? (
+        <text
+          x={endpoint.x + 12}
+          y={endpoint.y + 3}
+          fontSize="9"
+          fontFamily="Consolas, monospace"
+          fill={MUTED_LABEL_COLOR}
+          stroke={LABEL_HALO_COLOR}
+          strokeWidth="2.5"
+          paintOrder="stroke"
+          data-testid="schematic-hover-endpoint-net"
+        >
+          {endpoint.net}
+        </text>
+      ) : null}
     </g>
   );
 }

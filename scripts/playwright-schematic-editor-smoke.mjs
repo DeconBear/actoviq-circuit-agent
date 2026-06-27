@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,7 +13,8 @@ const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const projectPrefix = 'playwright-schematic-editor-';
 const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
-const viteUrl = 'http://127.0.0.1:5173';
+const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
+const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const skillScript = path.resolve(root, 'skills', 'circuit-design-ngspice', 'scripts', 'circuit_project.py');
 const schematicGrid = 20;
@@ -22,6 +24,18 @@ function runSkill(args) {
     cwd: root,
     encoding: 'utf8',
   }));
+}
+
+async function allocatePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 5173;
+      server.close(() => resolve(port));
+    });
+  });
 }
 
 async function canFetch(url) {
@@ -39,12 +53,8 @@ async function warmUpVite() {
 }
 
 async function startViteIfNeeded() {
-  if (await canFetch(viteUrl)) {
-    await warmUpVite();
-    return null;
-  }
   let exited = null;
-  const child = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', '5173'], {
+  const child = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', String(vitePort), '--strictPort'], {
     cwd: root,
     env: { ...process.env, BROWSER: 'none' },
     stdio: 'ignore',
@@ -170,6 +180,22 @@ function worldToScreen(point, viewBox, svgBox) {
   };
 }
 
+async function componentScreenCenter(page, componentId) {
+  return page.getByTestId('schematic-editor-svg').locator(`g[data-component-id="${componentId}"]`).evaluate((node) => {
+    if (!(node instanceof SVGGraphicsElement)) {
+      throw new Error(`Component ${componentId} is not an SVG graphics element`);
+    }
+    const svg = node.ownerSVGElement;
+    if (!svg) throw new Error(`Component ${componentId} is not inside an SVG`);
+    const box = node.getBBox();
+    const point = svg.createSVGPoint();
+    point.x = box.x + box.width / 2;
+    point.y = box.y + box.height / 2;
+    const screenPoint = point.matrixTransform(svg.getScreenCTM());
+    return { x: screenPoint.x, y: screenPoint.y };
+  });
+}
+
 function assertPositionEqual(actual, expected, label) {
   assert.deepEqual(
     { x: Number(actual?.x), y: Number(actual?.y) },
@@ -236,6 +262,7 @@ const electronApp = await electron.launch({
   env: {
     ...process.env,
     ACTOVIQ_E2E: '1',
+    ACTOVIQ_RENDERER_URL: viteUrl,
     HOME: e2eHomeDir,
     USERPROFILE: e2eHomeDir,
     PATH: `${electronDistDir}${path.delimiter}${process.env.PATH ?? ''}`,
@@ -332,6 +359,12 @@ try {
     return Boolean(node?.getAttribute('data-hover-endpoint')?.includes('Rfilter'));
   });
   assert.equal(await page.getByTestId('schematic-hover-endpoint').count(), 1, 'wire tool did not show endpoint snap feedback');
+  await page.getByTestId('schematic-hover-endpoint-label').getByText(/Rfilter/).waitFor();
+  assert.match(
+    (await page.getByTestId('schematic-hover-endpoint').getAttribute('data-net')) ?? '',
+    /out|in/i,
+    'wire endpoint snap feedback did not expose the endpoint net',
+  );
   await page.getByTestId('schematic-editor-select').click();
   const placePoint = { x: box.x + Math.min(430, box.width * 0.62), y: box.y + Math.min(280, box.height * 0.48) };
 
@@ -567,14 +600,16 @@ try {
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
   console.log('[e2e] legacy ldo loaded');
-  const ldoCanvas = page.getByTestId('schematic-editor-svg');
-  const ldoViewBox = await editorViewBox(page);
-  const ldoBox = await ldoCanvas.boundingBox();
-  assert.ok(ldoBox);
-  const mpPoint = worldToScreen(ldoPositions.mp, ldoViewBox, ldoBox);
+  const mpPoint = await componentScreenCenter(page, 'mp');
   await page.getByTestId('schematic-editor-select').click();
   await page.mouse.move(mpPoint.x, mpPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
   await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
   await page.mouse.move(mpPoint.x + 70, mpPoint.y + 30, { steps: 10 });
   await page.mouse.up();
   await page.waitForFunction(() => (

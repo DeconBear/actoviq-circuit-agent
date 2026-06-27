@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
@@ -12,7 +13,8 @@ const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const designMemoryRoot = path.resolve(workspaceRoot, 'references', 'design-memory');
 const e2eProjectPrefix = 'playwright-module-hub-';
 const e2eUiProjectPrefix = 'playwright-ui-project-';
-const viteUrl = 'http://127.0.0.1:5173';
+const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
+const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const skillScript = path.resolve(
   root,
@@ -27,6 +29,18 @@ function runSkill(args) {
     cwd: root,
     encoding: 'utf8',
   }));
+}
+
+async function allocatePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 5173;
+      server.close(() => resolve(port));
+    });
+  });
 }
 
 async function canFetch(url) {
@@ -44,17 +58,14 @@ async function warmUpVite() {
 }
 
 async function startViteIfNeeded() {
-  if (await canFetch(viteUrl)) {
-    await warmUpVite();
-    return null;
-  }
   let exited = null;
   const child = spawn(process.execPath, [
     viteBin,
     '--host',
     '127.0.0.1',
     '--port',
-    '5173',
+    String(vitePort),
+    '--strictPort',
   ], {
     cwd: root,
     env: { ...process.env, BROWSER: 'none' },
@@ -169,6 +180,7 @@ const electronApp = await electron.launch({
   env: {
     ...process.env,
     ACTOVIQ_E2E: '1',
+    ACTOVIQ_RENDERER_URL: viteUrl,
     HOME: e2eHomeDir,
     USERPROFILE: e2eHomeDir,
     PATH: `${electronDistDir}${path.delimiter}${process.env.PATH ?? ''}`,

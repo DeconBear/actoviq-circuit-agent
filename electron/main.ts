@@ -39,7 +39,7 @@ function createWindow(): void {
   Menu.setApplicationMenu(menu);
 
   if (!app.isPackaged) {
-    mainWindow.loadURL('http://127.0.0.1:5173');
+    mainWindow.loadURL(process.env.ACTOVIQ_RENDERER_URL ?? 'http://127.0.0.1:5173');
     if (process.env.ACTOVIQ_E2E !== '1') {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
