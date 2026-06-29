@@ -233,6 +233,32 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
         strokeLinejoin="round"
         pointerEvents="none"
       />
+      {selected ? <WirePointHandles wire={wire} /> : null}
+    </g>
+  );
+}
+
+function WirePointHandles({ wire }: { wire: CircuitWire }) {
+  const points = wire.points ?? [];
+  return (
+    <g data-testid="schematic-wire-point-handles" pointerEvents="none">
+      {points.map((point, index) => {
+        const endpoint = index === 0 || index === points.length - 1;
+        return (
+          <circle
+            key={`${wire.id}-${index}-${point.x},${point.y}`}
+            cx={point.x}
+            cy={point.y}
+            r={endpoint ? 5.2 : 4.8}
+            fill={endpoint ? '#ffffff' : '#2563eb'}
+            stroke="#2563eb"
+            strokeWidth="1.8"
+            data-testid="schematic-wire-point-handle"
+            data-wire-id={wire.id}
+            data-point-index={index}
+          />
+        );
+      })}
     </g>
   );
 }

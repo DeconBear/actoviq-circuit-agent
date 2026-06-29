@@ -262,6 +262,24 @@ async function wireScreenPointAwayFromComponents(page, wireId) {
   }, wireId);
 }
 
+async function wireHandleScreenPoint(page, wireId, pointIndex) {
+  return page.getByTestId('schematic-editor-svg').locator(
+    `[data-testid="schematic-wire-point-handle"][data-wire-id="${wireId}"][data-point-index="${pointIndex}"]`,
+  ).evaluate((node) => {
+    if (!(node instanceof SVGCircleElement)) {
+      throw new Error('wire handle is not an SVG circle');
+    }
+    const svg = node.ownerSVGElement;
+    const matrix = svg?.getScreenCTM();
+    if (!svg || !matrix) throw new Error('wire handle has no SVG screen matrix');
+    const point = svg.createSVGPoint();
+    point.x = Number(node.getAttribute('cx'));
+    point.y = Number(node.getAttribute('cy'));
+    const screenPoint = point.matrixTransform(matrix);
+    return { x: screenPoint.x, y: screenPoint.y };
+  });
+}
+
 async function countVisibleSchematicWires(page) {
   return page.getByTestId('schematic-editor-svg').locator('g[data-wire-id] polyline:not([stroke="transparent"])').evaluateAll((nodes) => (
     nodes.filter((node) => {
@@ -735,6 +753,37 @@ try {
   assert.equal(selectedAfterWireClick, `wire:${drawnWire.id}`, 'clicking the drawn wire did not select that stored wire');
   assert.equal(await page.getByTestId('schematic-selected-wire-highlight').count(), 1, 'wire selection highlight is missing');
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 0, 'wire selection should not show component selection frame');
+  assert.ok(
+    await page.getByTestId('schematic-wire-point-handle').count() >= 4,
+    'selected stored wire should expose visible point handles after segment drag',
+  );
+  const positionsBeforeWirePointDrag = await componentPositions(page);
+  const wiresBeforePointDrag = await editorWires(page);
+  const wireBeforePointDrag = wiresBeforePointDrag.find((wire) => wire.id === drawnWire.id);
+  assert.ok(wireBeforePointDrag?.points?.[1], 'dragged stored wire should have an interior point handle');
+  const wirePointHandle = await wireHandleScreenPoint(page, drawnWire.id, 1);
+  await page.mouse.move(wirePointHandle.x, wirePointHandle.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'move'
+  ));
+  await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(wirePointHandle.x + 45, wirePointHandle.y - 45, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForFunction(({ wireId, before }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    const wire = JSON.parse(raw).find((entry) => entry.id === wireId);
+    return wire && JSON.stringify(wire.points) !== JSON.stringify(before);
+  }, { wireId: drawnWire.id, before: wireBeforePointDrag.points });
+  assert.deepEqual(
+    await componentPositions(page),
+    positionsBeforeWirePointDrag,
+    'dragging a wire point handle should not move schematic components',
+  );
+  assert.equal(await editor.getAttribute('data-selected'), `wire:${drawnWire.id}`, 'wire point drag should keep the wire selected');
+  console.log('[e2e] stored wire point handle drag isolated');
   await page.keyboard.press('Delete');
   await page.waitForFunction((wireId) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
