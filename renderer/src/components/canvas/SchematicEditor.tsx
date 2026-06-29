@@ -154,10 +154,14 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     editorShellRef.current?.focus();
     const current = activeViewBox;
     const world = clientToWorld(svg, clientX, clientY);
+    zoomAtWorldPoint(world, deltaY > 0 ? 1.14 : 0.88);
+  }
+
+  function zoomAtWorldPoint(world: CircuitPosition, factor: number) {
+    const current = activeViewBox;
     const width = current.maxX - current.minX;
     const height = current.maxY - current.minY;
     const baseWidth = document.viewBox.maxX - document.viewBox.minX;
-    const factor = deltaY > 0 ? 1.14 : 0.88;
     const nextWidth = clamp(width * factor, Math.max(120, baseWidth * 0.18), Math.max(2400, baseWidth * 5));
     const nextHeight = nextWidth * (height / Math.max(1, width));
     const ratioX = (world.x - current.minX) / Math.max(1, width);
@@ -165,6 +169,20 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const minX = world.x - ratioX * nextWidth;
     const minY = world.y - ratioY * nextHeight;
     setViewport({ minX, minY, maxX: minX + nextWidth, maxY: minY + nextHeight });
+  }
+
+  function zoomAtViewCenter(factor: number) {
+    const current = activeViewBox;
+    zoomAtWorldPoint({
+      x: (current.minX + current.maxX) / 2,
+      y: (current.minY + current.maxY) / 2,
+    }, factor);
+  }
+
+  function fitViewport() {
+    panRef.current = null;
+    setViewport(null);
+    setInteractionCursor('default');
   }
 
   function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
@@ -426,6 +444,21 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       redo();
       return;
     }
+    if ((event.key === '+' || event.key === '=') && !event.altKey) {
+      event.preventDefault();
+      zoomAtViewCenter(0.88);
+      return;
+    }
+    if ((event.key === '-' || event.key === '_') && !event.altKey) {
+      event.preventDefault();
+      zoomAtViewCenter(1.14);
+      return;
+    }
+    if (event.key === 'Home' || ((event.ctrlKey || event.metaKey) && key === '0')) {
+      event.preventDefault();
+      fitViewport();
+      return;
+    }
     if (event.key.startsWith('Arrow') && selectedComponent) {
       event.preventDefault();
       const step = event.shiftKey ? SCHEMATIC_GRID * 5 : SCHEMATIC_GRID;
@@ -632,7 +665,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         </button>
         <button
           style={styles.toolButton}
-          onClick={() => { setViewport(null); panRef.current = null; setInteractionCursor('default'); }}
+          onClick={fitViewport}
           disabled={busy}
           data-testid="schematic-editor-fit"
         >

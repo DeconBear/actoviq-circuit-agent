@@ -442,7 +442,22 @@ try {
   await page.waitForFunction(() => (
     Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
   ));
-  console.log('[e2e] viewport zoom pan fit verified');
+  const zoomBeforeKeyboard = await editorZoom(page);
+  await editor.focus();
+  await page.keyboard.press('Equal');
+  await page.waitForFunction((previousZoom) => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') > previousZoom
+  ), zoomBeforeKeyboard);
+  const zoomAfterKeyboardIn = await editorZoom(page);
+  await page.keyboard.press('Minus');
+  await page.waitForFunction((previousZoom) => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') < previousZoom
+  ), zoomAfterKeyboardIn);
+  await page.keyboard.press('Home');
+  await page.waitForFunction(() => (
+    Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
+  ));
+  console.log('[e2e] viewport zoom pan keyboard fit verified');
   const initialWireCount = Number(await editor.getAttribute('data-wire-count'));
   const filterPositionsInitial = await componentPositions(page);
   const filterViewBoxInitial = await editorViewBox(page);
@@ -755,7 +770,7 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
-  await page.mouse.move(mpPoint.x + 70, mpPoint.y + 30, { steps: 10 });
+  await page.mouse.move(mpPoint.x + 150, mpPoint.y + 80, { steps: 14 });
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
