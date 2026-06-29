@@ -206,6 +206,9 @@ export function SchematicDocumentSvg({
 function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
   const { position } = label;
   const nameY = label.kind === 'power' ? position.y - 52 : position.y + 54;
+  if (label.kind === 'signal') {
+    return <SignalNetLabelSymbol label={label} />;
+  }
   return (
     <g
       data-testid="schematic-net-label"
@@ -231,6 +234,60 @@ function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
       </text>
     </g>
   );
+}
+
+function SignalNetLabelSymbol({ label }: { label: SchematicNetLabel }) {
+  const { position } = label;
+  const side = label.side ?? 'right';
+  const stubLength = 34;
+  const end = {
+    x: position.x + (side === 'left' ? -stubLength : side === 'right' ? stubLength : 0),
+    y: position.y + (side === 'top' ? -stubLength : side === 'bottom' ? stubLength : 0),
+  };
+  const text = signalLabelTextPosition(end, side);
+  return (
+    <g
+      data-testid="schematic-net-label"
+      data-net-label-id={label.id}
+      data-net={label.net}
+      data-kind={label.kind}
+      pointerEvents="none"
+    >
+      <line
+        x1={position.x}
+        y1={position.y}
+        x2={end.x}
+        y2={end.y}
+        stroke={WIRE_COLOR}
+        strokeWidth="2.8"
+      />
+      <circle cx={position.x} cy={position.y} r="3.8" fill="#9aa3ad" stroke="#ffffff" strokeWidth="1" />
+      <text
+        x={text.x}
+        y={text.y}
+        textAnchor={text.anchor}
+        fontSize="12"
+        fontFamily="Consolas, monospace"
+        fontWeight="700"
+        fill={LABEL_COLOR}
+        stroke={LABEL_HALO_COLOR}
+        strokeWidth="3"
+        paintOrder="stroke"
+      >
+        {label.name}
+      </text>
+    </g>
+  );
+}
+
+function signalLabelTextPosition(
+  end: CircuitPosition,
+  side: NonNullable<SchematicNetLabel['side']>,
+): CircuitPosition & { anchor: TextAnchor } {
+  if (side === 'left') return { x: end.x - 6, y: end.y + 4, anchor: 'end' };
+  if (side === 'right') return { x: end.x + 6, y: end.y + 4, anchor: 'start' };
+  if (side === 'top') return { x: end.x, y: end.y - 8, anchor: 'middle' };
+  return { x: end.x, y: end.y + 18, anchor: 'middle' };
 }
 
 type CSSCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';

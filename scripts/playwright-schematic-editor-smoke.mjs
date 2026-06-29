@@ -195,13 +195,17 @@ function worldToScreen(point, viewBox, svgBox) {
 }
 
 async function componentScreenCenter(page, componentId) {
+  return componentScreenPoint(page, componentId, { x: 0, y: 0 });
+}
+
+async function componentScreenPoint(page, componentId, offset = { x: 0, y: 0 }) {
   const positions = await componentPositions(page);
   const position = positions[componentId];
   if (!position) throw new Error(`Component ${componentId} position is not exposed`);
   const viewBox = await editorViewBox(page);
   const svgBox = await page.getByTestId('schematic-editor-svg').boundingBox();
   assert.ok(svgBox);
-  return worldToScreen(position, viewBox, svgBox);
+  return worldToScreen({ x: position.x + offset.x, y: position.y + offset.y }, viewBox, svgBox);
 }
 
 function assertPositionEqual(actual, expected, label) {
@@ -847,12 +851,13 @@ try {
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
     return Number(node?.getAttribute('data-component-count') ?? '0') >= 12 &&
-      Number(node?.getAttribute('data-wire-count') ?? '0') >= 10;
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 5 &&
+      Number(node?.getAttribute('data-net-label-count') ?? '0') >= 10;
   });
   const ldoPositions = await componentPositions(page);
   assert.ok(ldoPositions.mp, 'hydrated LDO pass MOSFET is missing from editable schematic');
   assert.ok(await countVisibleSchematicComponents(page) >= 12, 'hydrated LDO components are not visibly drawn');
-  assert.ok(await countVisibleSchematicWires(page) >= 10, 'hydrated LDO wires are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 5, 'hydrated LDO signal wires are not visibly drawn');
   assert.ok(
     Number(await page.getByTestId('schematic-editor').getAttribute('data-net-label-count')) >= 8,
     'hydrated LDO should render local power and ground labels',
@@ -861,8 +866,17 @@ try {
     await page.getByTestId('schematic-net-label').count() >= 8,
     'hydrated LDO local rail labels are not visibly drawn',
   );
+  assert.ok(
+    await page.locator('[data-testid="schematic-net-label"][data-kind="signal"]').count() >= 4,
+    'hydrated LDO should render long named internal nets as local signal labels',
+  );
   const ldoWires = await editorWires(page);
   assert.equal(ldoWires.some((wire) => wire.net === 'vin' || wire.net === '0'), false, 'LDO rail nets should not be rendered as long generated wires');
+  assert.equal(
+    ldoWires.some((wire) => ['fb', 'tail', 'eaout'].includes(wire.net)),
+    false,
+    'LDO long named internal nets should be represented by local labels instead of long generated wires',
+  );
   assert.ok(
     ldoPositions.mp.x > Math.max(ldoPositions.m1?.x ?? 0, ldoPositions.m2?.x ?? 0, ldoPositions.m3?.x ?? 0, ldoPositions.m4?.x ?? 0),
     'LDO pass MOSFET should be placed to the right of the error amplifier',
@@ -876,13 +890,16 @@ try {
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
   console.log('[e2e] legacy ldo loaded');
-  const mpPoint = await componentScreenCenter(page, 'mp');
+  const mpPoint = await componentScreenPoint(page, 'mp', { x: 12, y: 0 });
   await page.getByTestId('schematic-editor-select').click();
   await page.mouse.move(mpPoint.x, mpPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
   ));
   await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:mp'
+  ));
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
@@ -907,6 +924,9 @@ try {
 
   await page.getByTestId('module-card-power').dblclick();
   await editor.waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'power'
+  ));
   const powerCanvas = page.getByTestId('schematic-editor-svg');
   const powerBox = await powerCanvas.boundingBox();
   assert.ok(powerBox);

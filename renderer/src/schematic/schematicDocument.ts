@@ -33,11 +33,12 @@ export interface SchematicBounds {
 
 export interface SchematicNetLabel {
   id: string;
-  kind: 'power' | 'ground';
+  kind: 'power' | 'ground' | 'signal';
   net: string;
   name: string;
   position: CircuitPosition;
   endpoint: CircuitWireEndpoint;
+  side?: 'left' | 'right' | 'top' | 'bottom';
 }
 
 export interface SchematicDocument {
@@ -97,7 +98,7 @@ export function createSchematicDocument(
   }
   const portPositions = computePortPositions(next);
   const connectedPortIds = computeConnectedPortIds(next);
-  const netLabels = createRailNetLabels(next);
+  const netLabels = createNetLabels(next, portPositions);
   const wires = materializeNetWires(next, portPositions);
   const bounds = moduleBounds(next, filterPortPositions(portPositions, connectedPortIds), wires, netLabels);
   const viewBox = padBounds(bounds, 70);
@@ -1286,6 +1287,7 @@ function materializeNetWires(
   for (const [net, endpoints] of endpointsByNet) {
     if (endpoints.length < 2) continue;
     if (shouldRepresentNetWithLocalLabel(module, net)) continue;
+    if (shouldRepresentSignalNetWithLocalLabel(module, net, endpoints)) continue;
     const anchor = chooseNetAnchor(endpoints);
     for (const endpoint of endpoints) {
       if (endpoint === anchor) continue;
@@ -1310,13 +1312,29 @@ function materializeNetWires(
   return wires;
 }
 
-function createRailNetLabels(module: CircuitModule): SchematicNetLabel[] {
+function createNetLabels(module: CircuitModule, portPositions: Map<string, CircuitPosition>): SchematicNetLabel[] {
   const labels: SchematicNetLabel[] = [];
+  const endpointsByNet = new Map<string, EndpointHit[]>();
+
+  const remember = (net: string | undefined, endpoint: EndpointHit) => {
+    if (!net) return;
+    endpointsByNet.set(net, [...(endpointsByNet.get(net) ?? []), endpoint]);
+  };
+
   for (const component of module.components) {
     component.pins.forEach((pin, index) => {
+      const position = pinWorld(component, pin, index);
+      remember(pin.net, {
+        kind: 'pin',
+        x: position.x,
+        y: position.y,
+        component_id: component.id,
+        pin_id: pin.id,
+        label: `${component.name}.${pin.name}`,
+        net: pin.net,
+      });
       if (!shouldRepresentNetWithLocalLabel(module, pin.net)) return;
       if (!shouldLabelRailPin(component, pin)) return;
-      const position = pinWorld(component, pin, index);
       labels.push({
         id: `label_${wireIdToken(pin.net)}_${component.id}_${pin.id}`,
         kind: isGroundNet(pin.net, module) ? 'ground' : 'power',
@@ -1331,6 +1349,44 @@ function createRailNetLabels(module: CircuitModule): SchematicNetLabel[] {
         },
       });
     });
+  }
+
+  for (const port of module.ports) {
+    const position = portPositions.get(port.id);
+    if (!position) continue;
+    remember(port.net, {
+      kind: 'port',
+      x: position.x,
+      y: position.y,
+      port_id: port.id,
+      label: port.name,
+      net: port.net,
+    });
+  }
+
+  for (const [net, endpoints] of endpointsByNet) {
+    if (!shouldRepresentSignalNetWithLocalLabel(module, net, endpoints)) continue;
+    for (const endpoint of endpoints) {
+      if (endpoint.kind !== 'pin' || !endpoint.component_id || !endpoint.pin_id) continue;
+      const component = module.components.find((entry) => entry.id === endpoint.component_id);
+      const pinIndex = component?.pins.findIndex((pin) => pin.id === endpoint.pin_id) ?? -1;
+      const pin = pinIndex >= 0 ? component?.pins[pinIndex] : undefined;
+      if (!component || !pin) continue;
+      labels.push({
+        id: `label_${wireIdToken(net)}_${component.id}_${pin.id}`,
+        kind: 'signal',
+        net,
+        name: formatSignalLabelName(net),
+        position: { x: endpoint.x, y: endpoint.y },
+        endpoint: {
+          x: endpoint.x,
+          y: endpoint.y,
+          component_id: component.id,
+          pin_id: pin.id,
+        },
+        side: labelSideForPin(component, pin, pinIndex),
+      });
+    }
   }
   return labels;
 }
@@ -1352,6 +1408,29 @@ function railLabelName(module: CircuitModule, net: string): string {
     return module.ports.find((port) => port.net === net && isGroundPort(port))?.name || 'GND';
   }
   return module.ports.find((port) => port.net === net && port.signal_type === 'power')?.name || net.toUpperCase();
+}
+
+function shouldRepresentSignalNetWithLocalLabel(module: CircuitModule, net: string | undefined, endpoints: EndpointHit[]): boolean {
+  if (!net || endpoints.length < 3) return false;
+  if (!isReadableSignalNetName(net)) return false;
+  if (module.ports.some((port) => port.net === net)) return false;
+  return true;
+}
+
+function isReadableSignalNetName(net: string): boolean {
+  return !/^(n|net|node)[_-]?\d+$/i.test(net) && net.length <= 18;
+}
+
+function formatSignalLabelName(net: string): string {
+  return net.replace(/_/g, ' ').toUpperCase();
+}
+
+function labelSideForPin(component: CircuitComponent, pin: CircuitPin, index: number): 'left' | 'right' | 'top' | 'bottom' {
+  const point = pinWorld(component, pin, index);
+  const dx = point.x - component.position.x;
+  const dy = point.y - component.position.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+  return dy < 0 ? 'top' : 'bottom';
 }
 
 function hitWireGroup(wires: CircuitWire[], world: CircuitPosition): CircuitWire | null {

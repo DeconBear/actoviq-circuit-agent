@@ -268,6 +268,22 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       return;
     }
 
+    const componentHit = hitComponent(document, world);
+    if (componentHit) {
+      setSelection({ kind: 'component', id: componentHit.id });
+      setInteractionCursor('grabbing');
+      dragRef.current = {
+        componentId: componentHit.id,
+        startWorld: world,
+        originalPosition: { ...componentHit.position },
+        lastPosition: { ...componentHit.position },
+        originalModule: cloneModule(draft),
+        originalDirty: dirty,
+        moved: false,
+      };
+      return;
+    }
+
     const wirePointHit = hitSelectedStoredWirePoint(document.wires, draft, selection, world);
     if (wirePointHit) {
       setSelection({ kind: 'wire', id: wirePointHit.wire.id });
@@ -285,23 +301,8 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       return;
     }
 
-    const componentHit = hitComponent(document, world);
     const wireSegmentHit = hitStoredWireSegment(document.wires, draft, world);
     const wireHit = wireSegmentHit?.wire ?? hitWire(document, world);
-    if (componentHit) {
-      setSelection({ kind: 'component', id: componentHit.id });
-      setInteractionCursor('grabbing');
-      dragRef.current = {
-        componentId: componentHit.id,
-        startWorld: world,
-        originalPosition: { ...componentHit.position },
-        lastPosition: { ...componentHit.position },
-        originalModule: cloneModule(draft),
-        originalDirty: dirty,
-        moved: false,
-      };
-      return;
-    }
     if (wireHit) {
       setSelection({ kind: 'wire', id: wireHit.id });
       if (wireSegmentHit) {
@@ -356,7 +357,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       wireDrag.moved = Math.abs(event.clientX - wireDrag.startClient.x) + Math.abs(event.clientY - wireDrag.startClient.y) > 8;
     }
     const wirePointDrag = wirePointDragRef.current;
-    if (wirePointDrag && !busy) {
+    if (wirePointDrag) {
       setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
       const nextPoint = snapPoint({
         x: wirePointDrag.originalPoint.x + world.x - wirePointDrag.startWorld.x,
@@ -371,7 +372,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       return;
     }
     const wireSegmentDrag = wireSegmentDragRef.current;
-    if (wireSegmentDrag && !busy) {
+    if (wireSegmentDrag) {
       setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
       const nextPoints = dragWireSegmentPoints(
         wireSegmentDrag.originalPoints,
@@ -394,7 +395,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       return;
     }
     const drag = dragRef.current;
-    if (!drag || busy) {
+    if (!drag) {
       if (tool === 'select') {
         setInteractionCursor((current) => {
           const next = cursorForWorld(document, draft, selection, world);
