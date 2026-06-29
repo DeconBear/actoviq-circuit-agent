@@ -117,6 +117,37 @@ async function readDesignMemoryManifest(kind, id) {
   };
 }
 
+async function readJsonFile(filePath) {
+  return JSON.parse(await readFile(filePath, 'utf8'));
+}
+
+async function waitForCompiledBuildManifest(filePath, previousBuiltAt, requiredModuleIds = []) {
+  const deadline = Date.now() + 60_000;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const manifest = await readJsonFile(filePath);
+      const modules = Object.values(manifest.modules ?? {});
+      const hasRequiredModules = requiredModuleIds.every((moduleId) => (
+        manifest.modules?.[moduleId]?.render_ok === true
+      ));
+      if (
+        manifest.status === 'compiled' &&
+        manifest.built_at &&
+        manifest.built_at !== previousBuiltAt &&
+        (requiredModuleIds.length === 0 ? modules.length > 0 : hasRequiredModules) &&
+        modules.every((module) => module.render_ok === true)
+      ) {
+        return manifest;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Timed out waiting for compiled build manifest at ${filePath}: ${lastError?.message ?? 'no matching manifest'}`);
+}
+
 async function findProjectByName(name) {
   const entries = await readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
@@ -588,9 +619,13 @@ try {
   );
 
   const buildManifestPath = path.resolve(projectRoot, 'build', 'build-manifest.json');
+  const previousBuildManifest = await readJsonFile(buildManifestPath).catch(() => null);
   await page.getByTestId('build-project').click();
-  await page.getByText('Netlist and previews updated', { exact: true }).waitFor({ timeout: 60_000 });
-  const buildManifest = JSON.parse(await readFile(buildManifestPath, 'utf8'));
+  const buildManifest = await waitForCompiledBuildManifest(
+    buildManifestPath,
+    previousBuildManifest?.built_at ?? '',
+    ['power', 'amplifier', 'filter'],
+  );
   assert.equal(buildManifest.status, 'compiled');
   assert.equal(buildManifest.modules.filter.render_ok, true);
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();

@@ -241,11 +241,6 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
 
     const componentHit = hitComponent(document, world);
     const wireHit = hitWire(document, world);
-    if (wireHit) {
-      setSelection({ kind: 'wire', id: wireHit.id });
-      setInteractionCursor('default');
-      return;
-    }
     if (componentHit) {
       setSelection({ kind: 'component', id: componentHit.id });
       setInteractionCursor('grabbing');
@@ -258,6 +253,11 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         originalDirty: dirty,
         moved: false,
       };
+      return;
+    }
+    if (wireHit) {
+      setSelection({ kind: 'wire', id: wireHit.id });
+      setInteractionCursor('default');
       return;
     }
     setSelection(null);

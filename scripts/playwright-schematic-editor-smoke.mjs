@@ -229,33 +229,42 @@ function assertPositionChanged(actual, expected, label) {
 async function wireScreenPointAwayFromComponents(page, wireId) {
   return page.getByTestId('schematic-editor-svg').evaluate((svg, id) => {
     if (!(svg instanceof SVGSVGElement)) throw new Error('schematic editor svg is not an SVG element');
-    const wire = svg.querySelector(`g[data-wire-id="${id}"] polyline[data-wire-hitbox="true"]`);
-    if (!(wire instanceof SVGGeometryElement)) throw new Error(`wire ${id} hitbox not found`);
-    const componentBoxes = Array.from(svg.querySelectorAll('g[data-component-id]'))
-      .filter((node) => node instanceof SVGGraphicsElement)
-      .map((node) => {
-        const box = node.getBBox();
-        return {
-          minX: box.x - 10,
-          maxX: box.x + box.width + 10,
-          minY: box.y - 10,
-          maxY: box.y + box.height + 10,
+    const editor = document.querySelector('[data-testid="schematic-editor"]');
+    const wires = JSON.parse(editor?.getAttribute('data-wires') ?? '[]');
+    const wire = wires.find((entry) => entry.id === id);
+    if (!wire || !Array.isArray(wire.points) || wire.points.length < 2) {
+      throw new Error(`wire ${id} points not found`);
+    }
+    const componentPositions = Object.values(JSON.parse(editor?.getAttribute('data-component-positions') ?? '{}'));
+    let best = null;
+    for (let index = 1; index < wire.points.length; index += 1) {
+      const start = wire.points[index - 1];
+      const end = wire.points[index];
+      if (!start || !end) continue;
+      for (let step = 2; step <= 8; step += 1) {
+        const ratio = step / 10;
+        const point = {
+          x: start.x + (end.x - start.x) * ratio,
+          y: start.y + (end.y - start.y) * ratio,
         };
-      });
+        const nearestComponent = componentPositions.reduce((nearest, position) => {
+          const dx = point.x - Number(position.x);
+          const dy = point.y - Number(position.y);
+          return Math.min(nearest, Math.hypot(dx, dy));
+        }, Number.POSITIVE_INFINITY);
+        if (!best || nearestComponent > best.nearestComponent) {
+          best = { point, nearestComponent };
+        }
+      }
+    }
+    if (!best) throw new Error(`wire ${id} has no selectable candidate point`);
     const matrix = svg.getScreenCTM();
     if (!matrix) throw new Error('schematic editor svg has no screen matrix');
-    const length = wire.getTotalLength();
-    for (let index = 1; index < 20; index += 1) {
-      const point = wire.getPointAtLength((length * index) / 20);
-      const insideComponent = componentBoxes.some((box) => (
-        point.x >= box.minX && point.x <= box.maxX && point.y >= box.minY && point.y <= box.maxY
-      ));
-      if (insideComponent) continue;
-      const screenPoint = point.matrixTransform(matrix);
-      return { x: screenPoint.x, y: screenPoint.y };
-    }
-    const fallback = wire.getPointAtLength(length / 2).matrixTransform(matrix);
-    return { x: fallback.x, y: fallback.y };
+    const svgPoint = svg.createSVGPoint();
+    svgPoint.x = best.point.x;
+    svgPoint.y = best.point.y;
+    const screenPoint = svgPoint.matrixTransform(matrix);
+    return { x: screenPoint.x, y: screenPoint.y };
   }, wireId);
 }
 

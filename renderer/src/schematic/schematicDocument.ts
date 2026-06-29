@@ -839,10 +839,17 @@ function orthogonalRouteCandidates(
 }
 
 function compactRoute(points: CircuitPosition[]): CircuitPosition[] {
-  return points.filter((point, index) => {
-    const previous = points[index - 1];
-    const next = points[index + 1];
-    if (previous && previous.x === point.x && previous.y === point.y) return false;
+  const deduped: CircuitPosition[] = [];
+  for (const point of points) {
+    const previous = deduped.at(-1);
+    if (previous && previous.x === point.x && previous.y === point.y) continue;
+    deduped.push(point);
+  }
+  if (deduped.length <= 2) return deduped;
+  return deduped.filter((point, index) => {
+    if (index === 0 || index === deduped.length - 1) return true;
+    const previous = deduped[index - 1];
+    const next = deduped[index + 1];
     if (!previous || !next) return true;
     return !(
       previous.x === point.x && point.x === next.x ||
