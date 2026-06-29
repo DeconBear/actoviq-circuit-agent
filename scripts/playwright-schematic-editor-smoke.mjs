@@ -687,6 +687,33 @@ try {
   assert.ok(drawnWire, 'drawn stored wire was not exposed to the editor');
   assert.ok(Array.isArray(drawnWire.points) && drawnWire.points.length >= 2, 'drawn wire points were not exposed to the editor');
   assert.ok(await isWireVisible(page, drawnWire.id), 'drawn wire is not visibly drawn');
+  const positionsBeforeWireDrag = await componentPositions(page);
+  const wirePointsBeforeDrag = drawnWire.points;
+  const wireDragPoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
+  await page.getByTestId('schematic-editor-select').click();
+  await page.mouse.move(wireDragPoint.x, wireDragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'move'
+  ));
+  await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(wireDragPoint.x + 70, wireDragPoint.y + 55, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForFunction(({ wireId, before }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    const wire = JSON.parse(raw).find((entry) => entry.id === wireId);
+    return wire && JSON.stringify(wire.points) !== JSON.stringify(before);
+  }, { wireId: drawnWire.id, before: wirePointsBeforeDrag });
+  assert.deepEqual(
+    await componentPositions(page),
+    positionsBeforeWireDrag,
+    'dragging a stored wire segment should not move schematic components',
+  );
+  assert.equal(await editor.getAttribute('data-selected'), `wire:${drawnWire.id}`, 'dragged wire should stay selected');
+  assert.ok(await isWireVisible(page, drawnWire.id), 'dragged wire segment is not visibly drawn');
+  console.log('[e2e] stored wire segment drag isolated');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-wire-visible.png') });
   console.log('[e2e] wire drawn');
 

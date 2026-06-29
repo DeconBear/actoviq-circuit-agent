@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import type { CircuitComponent, CircuitModule, CircuitPosition } from '../../types';
+import type { CircuitComponent, CircuitModule, CircuitPosition, CircuitWire } from '../../types';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import {
   addWire,
@@ -21,6 +21,7 @@ import {
   makePlacedComponent,
   normalizeConnectivity,
   normalizeRotation,
+  pointToSegmentDistance,
   pointEndpoint,
   removeWireAndUpdateConnectivity,
   rerouteStoredWires,
@@ -33,7 +34,7 @@ import {
 } from '../../schematic/schematicDocument';
 
 type ToolMode = 'select' | 'wire' | 'place';
-type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy';
+type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
 interface Props {
   module: CircuitModule;
@@ -63,6 +64,17 @@ interface PanState {
   originalViewBox: SchematicBounds;
 }
 
+interface WireSegmentDragState {
+  wireId: string;
+  segmentIndex: number;
+  startWorld: CircuitPosition;
+  originalPoints: CircuitPosition[];
+  lastPoints: CircuitPosition[];
+  originalModule: CircuitModule;
+  originalDirty: boolean;
+  moved: boolean;
+}
+
 export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
@@ -81,6 +93,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const wireDragRef = useRef<WireDragState | null>(null);
+  const wireSegmentDragRef = useRef<WireSegmentDragState | null>(null);
   const panRef = useRef<PanState | null>(null);
 
   const document = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
@@ -244,7 +257,8 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     }
 
     const componentHit = hitComponent(document, world);
-    const wireHit = hitWire(document, world);
+    const wireSegmentHit = hitStoredWireSegment(document.wires, draft, world);
+    const wireHit = wireSegmentHit?.wire ?? hitWire(document, world);
     if (componentHit) {
       setSelection({ kind: 'component', id: componentHit.id });
       setInteractionCursor('grabbing');
@@ -261,7 +275,21 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     }
     if (wireHit) {
       setSelection({ kind: 'wire', id: wireHit.id });
-      setInteractionCursor('default');
+      if (wireSegmentHit) {
+        setInteractionCursor('grabbing');
+        wireSegmentDragRef.current = {
+          wireId: wireSegmentHit.wire.id,
+          segmentIndex: wireSegmentHit.segmentIndex,
+          startWorld: world,
+          originalPoints: clonePoints(wireSegmentHit.wire.points),
+          lastPoints: clonePoints(wireSegmentHit.wire.points),
+          originalModule: cloneModule(draft),
+          originalDirty: dirty,
+          moved: false,
+        };
+      } else {
+        setInteractionCursor('default');
+      }
       return;
     }
     setSelection(null);
@@ -298,11 +326,34 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     if (wireDrag && !wireDrag.moved) {
       wireDrag.moved = Math.abs(event.clientX - wireDrag.startClient.x) + Math.abs(event.clientY - wireDrag.startClient.y) > 8;
     }
+    const wireSegmentDrag = wireSegmentDragRef.current;
+    if (wireSegmentDrag && !busy) {
+      setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
+      const nextPoints = dragWireSegmentPoints(
+        wireSegmentDrag.originalPoints,
+        wireSegmentDrag.segmentIndex,
+        world.x - wireSegmentDrag.startWorld.x,
+        world.y - wireSegmentDrag.startWorld.y,
+      );
+      if (samePoints(nextPoints, wireSegmentDrag.lastPoints)) return;
+      wireSegmentDrag.lastPoints = clonePoints(nextPoints);
+      wireSegmentDrag.moved = true;
+      setDraft((current) => {
+        const existingWire = current.wires?.find((wire) => wire.id === wireSegmentDrag.wireId);
+        if (!existingWire) return current;
+        const next = cloneModule(current);
+        const wire = next.wires?.find((entry) => entry.id === wireSegmentDrag.wireId);
+        if (wire) wire.points = clonePoints(nextPoints);
+        return next;
+      });
+      setDirty(true);
+      return;
+    }
     const drag = dragRef.current;
     if (!drag || busy) {
       if (tool === 'select') {
         setInteractionCursor((current) => {
-          const next: EditorCursor = hitComponent(document, world) ? 'grab' : 'default';
+          const next = cursorForWorld(document, draft, world);
           return current === next ? current : next;
         });
       }
@@ -363,9 +414,16 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       return;
     }
     const drag = dragRef.current;
+    const wireSegmentDrag = wireSegmentDragRef.current;
     dragRef.current = null;
+    wireSegmentDragRef.current = null;
     const world = screenToWorld(event);
-    setInteractionCursor(hitComponent(document, world) ? 'grab' : 'default');
+    setInteractionCursor(cursorForWorld(document, draft, world));
+    if (wireSegmentDrag?.moved) {
+      setHistory((items) => [...items, wireSegmentDrag.originalModule].slice(-40));
+      setFuture([]);
+      return;
+    }
     if (!drag?.moved) return;
     setHistory((items) => [...items, drag.originalModule].slice(-40));
     setFuture([]);
@@ -382,8 +440,15 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const drag = dragRef.current;
     dragRef.current = null;
     wireDragRef.current = null;
+    const wireSegmentDrag = wireSegmentDragRef.current;
+    wireSegmentDragRef.current = null;
     panRef.current = null;
     setInteractionCursor('default');
+    if (wireSegmentDrag?.moved) {
+      setDraft(wireSegmentDrag.originalModule);
+      setDirty(wireSegmentDrag.originalDirty);
+      return;
+    }
     if (!drag) return;
     if (drag.moved) {
       setDraft(drag.originalModule);
@@ -808,6 +873,104 @@ function endpointIdentity(endpoint: EndpointHit | null): string {
   if (endpoint.component_id && endpoint.pin_id) return `pin:${endpoint.component_id}:${endpoint.pin_id}`;
   if (endpoint.port_id) return `port:${endpoint.port_id}`;
   return `point:${endpoint.x},${endpoint.y}`;
+}
+
+function hitStoredWireSegment(
+  wires: CircuitWire[],
+  module: CircuitModule,
+  world: CircuitPosition,
+): { wire: CircuitWire; segmentIndex: number } | null {
+  const storedIds = new Set((module.wires ?? []).map((wire) => wire.id));
+  for (let wireIndex = wires.length - 1; wireIndex >= 0; wireIndex -= 1) {
+    const wire = wires[wireIndex];
+    if (!wire || (wire.source !== 'stored' && !storedIds.has(wire.id))) continue;
+    const points = wire.points ?? [];
+    for (let segmentIndex = 1; segmentIndex < points.length; segmentIndex += 1) {
+      const start = points[segmentIndex - 1];
+      const end = points[segmentIndex];
+      if (start && end && pointToSegmentDistance(world, start, end) < 7) {
+        return { wire, segmentIndex };
+      }
+    }
+  }
+  return null;
+}
+
+function cursorForWorld(document: ReturnType<typeof createSchematicDocument>, module: CircuitModule, world: CircuitPosition): EditorCursor {
+  if (hitComponent(document, world)) return 'grab';
+  return hitStoredWireSegment(document.wires, module, world) ? 'move' : 'default';
+}
+
+function dragWireSegmentPoints(
+  points: CircuitPosition[],
+  segmentIndex: number,
+  dx: number,
+  dy: number,
+): CircuitPosition[] {
+  const start = points[segmentIndex - 1];
+  const end = points[segmentIndex];
+  if (!start || !end) return clonePoints(points);
+  const horizontal = Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+  const lastIndex = points.length - 1;
+  const shiftedStart = horizontal
+    ? { x: start.x, y: snapPoint({ x: 0, y: start.y + dy }).y }
+    : { x: snapPoint({ x: start.x + dx, y: 0 }).x, y: start.y };
+  const shiftedEnd = horizontal
+    ? { x: end.x, y: shiftedStart.y }
+    : { x: shiftedStart.x, y: end.y };
+  const rebuilt: CircuitPosition[] = [];
+
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    if (!point) continue;
+    if (index === segmentIndex - 1) {
+      if (index === 0) {
+        rebuilt.push(point, shiftedStart);
+      } else {
+        rebuilt.push(shiftedStart);
+      }
+      continue;
+    }
+    if (index === segmentIndex) {
+      if (index === lastIndex) {
+        rebuilt.push(shiftedEnd, point);
+      } else {
+        rebuilt.push(shiftedEnd);
+      }
+      continue;
+    }
+    rebuilt.push(point);
+  }
+  return compactEditorRoute(rebuilt);
+}
+
+function compactEditorRoute(points: CircuitPosition[]): CircuitPosition[] {
+  const deduped: CircuitPosition[] = [];
+  for (const point of points) {
+    const previous = deduped.at(-1);
+    if (previous && previous.x === point.x && previous.y === point.y) continue;
+    deduped.push(point);
+  }
+  if (deduped.length <= 2) return deduped;
+  return deduped.filter((point, index) => {
+    if (index === 0 || index === deduped.length - 1) return true;
+    const previous = deduped[index - 1];
+    const next = deduped[index + 1];
+    if (!previous || !next) return true;
+    return !(
+      previous.x === point.x && point.x === next.x ||
+      previous.y === point.y && point.y === next.y
+    );
+  });
+}
+
+function clonePoints(points: CircuitPosition[]): CircuitPosition[] {
+  return points.map((point) => ({ x: point.x, y: point.y }));
+}
+
+function samePoints(left: CircuitPosition[], right: CircuitPosition[]): boolean {
+  return left.length === right.length &&
+    left.every((point, index) => point.x === right[index]?.x && point.y === right[index]?.y);
 }
 
 function clamp(value: number, min: number, max: number): number {

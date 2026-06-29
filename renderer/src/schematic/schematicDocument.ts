@@ -1011,6 +1011,28 @@ export function rerouteWire(
   };
 }
 
+function syncWireEndpointPoints(
+  module: CircuitModule,
+  wire: CircuitWire,
+  portPositions: Map<string, CircuitPosition>,
+): CircuitWire {
+  const start = endpointWorldPosition(module, wire.from, portPositions);
+  const end = endpointWorldPosition(module, wire.to, portPositions);
+  if (!start || !end) return wire;
+  const points = (wire.points ?? []).map((point) => ({ x: point.x, y: point.y }));
+  if (points.length < 2) {
+    return rerouteWire(module, wire, portPositions);
+  }
+  points[0] = start;
+  points[points.length - 1] = end;
+  return {
+    ...wire,
+    from: wire.from ? { ...wire.from, x: start.x, y: start.y } : wire.from,
+    to: wire.to ? { ...wire.to, x: end.x, y: end.y } : wire.to,
+    points: compactRoute(points),
+  };
+}
+
 export function rerouteStoredWires(module: CircuitModule): CircuitWire[] {
   const portPositions = computePortPositions(module);
   return (module.wires ?? []).map((wire) => rerouteWire(module, wire, portPositions));
@@ -1205,7 +1227,7 @@ function materializeNetWires(
 ): CircuitWire[] {
   const stored = (module.wires ?? [])
     .filter((wire) => (wire.points ?? []).length >= 2)
-    .map((wire) => ({ ...rerouteWire(module, wire, portPositions), source: 'stored' as const }));
+    .map((wire) => ({ ...syncWireEndpointPoints(module, wire, portPositions), source: 'stored' as const }));
   const usedPairs = new Set(stored.map((wire) => endpointPairKey(wire.from, wire.to)));
   const existingIds = new Set(stored.map((wire) => wire.id));
   const endpointsByNet = new Map<string, EndpointHit[]>();
