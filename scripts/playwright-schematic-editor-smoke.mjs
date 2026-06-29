@@ -854,6 +854,16 @@ try {
   assert.ok(await countVisibleSchematicComponents(page) >= 12, 'hydrated LDO components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 10, 'hydrated LDO wires are not visibly drawn');
   assert.ok(
+    Number(await page.getByTestId('schematic-editor').getAttribute('data-net-label-count')) >= 8,
+    'hydrated LDO should render local power and ground labels',
+  );
+  assert.ok(
+    await page.getByTestId('schematic-net-label').count() >= 8,
+    'hydrated LDO local rail labels are not visibly drawn',
+  );
+  const ldoWires = await editorWires(page);
+  assert.equal(ldoWires.some((wire) => wire.net === 'vin' || wire.net === '0'), false, 'LDO rail nets should not be rendered as long generated wires');
+  assert.ok(
     ldoPositions.mp.x > Math.max(ldoPositions.m1?.x ?? 0, ldoPositions.m2?.x ?? 0, ldoPositions.m3?.x ?? 0, ldoPositions.m4?.x ?? 0),
     'LDO pass MOSFET should be placed to the right of the error amplifier',
   );

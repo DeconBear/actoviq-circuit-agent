@@ -10,6 +10,7 @@ import {
   type EndpointHit,
   type SchematicDocument,
   type SchematicBounds,
+  type SchematicNetLabel,
   type SchematicSelection,
 } from './schematicDocument';
 
@@ -105,6 +106,11 @@ export function SchematicDocumentSvg({
           />
         ) : null}
       </g>
+      <g data-layer="net-labels">
+        {document.netLabels.map((label) => (
+          <NetLabelSymbol key={label.id} label={label} />
+        ))}
+      </g>
       <g data-layer="ports">
         {document.module.ports.map((port) => {
           const position = document.portPositions.get(port.id);
@@ -194,6 +200,36 @@ export function SchematicDocumentSvg({
       ) : null}
       {hoverEndpoint ? <EndpointHover endpoint={hoverEndpoint} /> : null}
     </svg>
+  );
+}
+
+function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
+  const { position } = label;
+  const nameY = label.kind === 'power' ? position.y - 52 : position.y + 54;
+  return (
+    <g
+      data-testid="schematic-net-label"
+      data-net-label-id={label.id}
+      data-net={label.net}
+      data-kind={label.kind}
+      pointerEvents="none"
+    >
+      {label.kind === 'ground' ? <GroundSymbol position={position} /> : <PowerFlagSymbol position={position} />}
+      <text
+        x={position.x}
+        y={nameY}
+        textAnchor="middle"
+        fontSize="12"
+        fontFamily="Consolas, monospace"
+        fontWeight="700"
+        fill={LABEL_COLOR}
+        stroke={LABEL_HALO_COLOR}
+        strokeWidth="3"
+        paintOrder="stroke"
+      >
+        {label.name}
+      </text>
+    </g>
   );
 }
 

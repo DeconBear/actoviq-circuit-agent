@@ -3,6 +3,7 @@ import type { CircuitComponent, CircuitModule, CircuitPort } from '../renderer/s
 import {
   createSchematicDocument,
   endpointWorldPosition,
+  isGroundPort,
   isPmosComponent,
   pinWorld,
 } from '../renderer/src/schematic/schematicDocument';
@@ -133,6 +134,7 @@ for (const fixture of fixtures) {
   }
 
   assertReadableLayout(document.module);
+  assertRailLabels(document.module, document.netLabels, document.wires);
 }
 
 console.log(JSON.stringify({
@@ -182,6 +184,25 @@ function assertReadableLayout(module: CircuitModule) {
     assertActivePins(reference, module.module_id);
     assertActivePins(output, module.module_id);
     assert.ok(reference.position.x < output.position.x, 'current mirror reference device should be left of output device');
+  }
+}
+
+function assertRailLabels(module: CircuitModule, netLabels: ReturnType<typeof createSchematicDocument>['netLabels'], wires: ReturnType<typeof createSchematicDocument>['wires']) {
+  const railNets = new Set(
+    module.ports
+      .filter((port) => port.signal_type === 'power' || isGroundPort(port))
+      .map((port) => port.net),
+  );
+  const railPins = module.components.flatMap((component) => (
+    component.pins
+      .filter((pin) => railNets.has(pin.net))
+      .map((pin) => ({ component, pin }))
+  ));
+  if (railPins.length === 0) return;
+
+  assert.ok(netLabels.length > 0, `${module.module_id} should expose local rail labels`);
+  for (const wire of wires) {
+    assert.ok(!railNets.has(wire.net ?? ''), `${module.module_id}.${wire.id} should not render a generated rail bus for ${wire.net}`);
   }
 }
 

@@ -31,6 +31,15 @@ export interface SchematicBounds {
   maxY: number;
 }
 
+export interface SchematicNetLabel {
+  id: string;
+  kind: 'power' | 'ground';
+  net: string;
+  name: string;
+  position: CircuitPosition;
+  endpoint: CircuitWireEndpoint;
+}
+
 export interface SchematicDocument {
   schema: 'actoviq.schematic-document.v1';
   moduleId: string;
@@ -38,6 +47,7 @@ export interface SchematicDocument {
   module: CircuitModule;
   portPositions: Map<string, CircuitPosition>;
   connectedPortIds: Set<string>;
+  netLabels: SchematicNetLabel[];
   wires: CircuitWire[];
   bounds: SchematicBounds;
   viewBox: SchematicBounds;
@@ -87,8 +97,9 @@ export function createSchematicDocument(
   }
   const portPositions = computePortPositions(next);
   const connectedPortIds = computeConnectedPortIds(next);
+  const netLabels = createRailNetLabels(next);
   const wires = materializeNetWires(next, portPositions);
-  const bounds = moduleBounds(next, filterPortPositions(portPositions, connectedPortIds), wires);
+  const bounds = moduleBounds(next, filterPortPositions(portPositions, connectedPortIds), wires, netLabels);
   const viewBox = padBounds(bounds, 70);
   return {
     schema: 'actoviq.schematic-document.v1',
@@ -97,6 +108,7 @@ export function createSchematicDocument(
     module: next,
     portPositions,
     connectedPortIds,
+    netLabels,
     wires,
     bounds,
     viewBox,
@@ -662,6 +674,7 @@ export function moduleBounds(
   module: CircuitModule,
   portPositions: Map<string, CircuitPosition>,
   wires: CircuitWire[],
+  netLabels: SchematicNetLabel[] = [],
 ): SchematicBounds {
   const xs: number[] = [];
   const ys: number[] = [];
@@ -679,6 +692,10 @@ export function moduleBounds(
   for (const point of portPositions.values()) {
     xs.push(point.x);
     ys.push(point.y);
+  }
+  for (const label of netLabels) {
+    xs.push(label.position.x - 72, label.position.x + 72);
+    ys.push(label.position.y - 58, label.position.y + 58);
   }
   if (xs.length === 0) {
     xs.push(0, 600);
@@ -1268,6 +1285,7 @@ function materializeNetWires(
   const wires: CircuitWire[] = [...stored];
   for (const [net, endpoints] of endpointsByNet) {
     if (endpoints.length < 2) continue;
+    if (shouldRepresentNetWithLocalLabel(module, net)) continue;
     const anchor = chooseNetAnchor(endpoints);
     for (const endpoint of endpoints) {
       if (endpoint === anchor) continue;
@@ -1290,6 +1308,50 @@ function materializeNetWires(
     }
   }
   return wires;
+}
+
+function createRailNetLabels(module: CircuitModule): SchematicNetLabel[] {
+  const labels: SchematicNetLabel[] = [];
+  for (const component of module.components) {
+    component.pins.forEach((pin, index) => {
+      if (!shouldRepresentNetWithLocalLabel(module, pin.net)) return;
+      if (!shouldLabelRailPin(component, pin)) return;
+      const position = pinWorld(component, pin, index);
+      labels.push({
+        id: `label_${wireIdToken(pin.net)}_${component.id}_${pin.id}`,
+        kind: isGroundNet(pin.net, module) ? 'ground' : 'power',
+        net: pin.net,
+        name: railLabelName(module, pin.net),
+        position,
+        endpoint: {
+          x: position.x,
+          y: position.y,
+          component_id: component.id,
+          pin_id: pin.id,
+        },
+      });
+    });
+  }
+  return labels;
+}
+
+function shouldRepresentNetWithLocalLabel(module: CircuitModule, net: string | undefined): boolean {
+  return Boolean(net && isRailNet(net, module));
+}
+
+function shouldLabelRailPin(component: CircuitComponent, pin: CircuitPin): boolean {
+  if (component.type !== 'M') return true;
+  const pinKey = `${pin.id} ${pin.name}`.toLowerCase();
+  if (!/body|bulk|\bb\b/.test(pinKey)) return true;
+  const source = component.pins.find((entry) => /source|\bs\b/.test(`${entry.id} ${entry.name}`.toLowerCase()));
+  return source?.net !== pin.net;
+}
+
+function railLabelName(module: CircuitModule, net: string): string {
+  if (isGroundNet(net, module)) {
+    return module.ports.find((port) => port.net === net && isGroundPort(port))?.name || 'GND';
+  }
+  return module.ports.find((port) => port.net === net && port.signal_type === 'power')?.name || net.toUpperCase();
 }
 
 function hitWireGroup(wires: CircuitWire[], world: CircuitPosition): CircuitWire | null {

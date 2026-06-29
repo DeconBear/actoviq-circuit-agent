@@ -766,6 +766,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-viewport={JSON.stringify(activeViewBox)}
       data-component-count={draft.components.length}
       data-wire-count={document.wires.length}
+      data-net-label-count={document.netLabels.length}
       data-component-positions={JSON.stringify(Object.fromEntries(
         draft.components.map((component) => [component.id, component.position]),
       ))}
