@@ -7,7 +7,6 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
 } from 'react';
 import type { CircuitComponent, CircuitModule, CircuitPosition } from '../../types';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
@@ -136,15 +135,29 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     return clientToWorld(event.currentTarget, event.clientX, event.clientY);
   }
 
-  function handleWheel(event: ReactWheelEvent<SVGSVGElement>) {
-    event.stopPropagation();
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return undefined;
+
+    function handleWheel(event: WheelEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!svg) return;
+      zoomAtClientPoint(svg, event.clientX, event.clientY, event.deltaY);
+    }
+
+    svg.addEventListener('wheel', handleWheel, { passive: false });
+    return () => svg.removeEventListener('wheel', handleWheel);
+  }, [activeViewBox, document.viewBox]);
+
+  function zoomAtClientPoint(svg: SVGSVGElement, clientX: number, clientY: number, deltaY: number) {
     editorShellRef.current?.focus();
     const current = activeViewBox;
-    const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
+    const world = clientToWorld(svg, clientX, clientY);
     const width = current.maxX - current.minX;
     const height = current.maxY - current.minY;
     const baseWidth = document.viewBox.maxX - document.viewBox.minX;
-    const factor = event.deltaY > 0 ? 1.14 : 0.88;
+    const factor = deltaY > 0 ? 1.14 : 0.88;
     const nextWidth = clamp(width * factor, Math.max(120, baseWidth * 0.18), Math.max(2400, baseWidth * 5));
     const nextHeight = nextWidth * (height / Math.max(1, width));
     const ratioX = (world.x - current.minX) / Math.max(1, width);
@@ -656,7 +669,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerCancel}
-            onWheel={handleWheel}
+            svgRef={svgRef}
           />
         </div>
         <aside style={styles.panel} data-testid="schematic-editor-panel">

@@ -403,11 +403,25 @@ try {
   assert.ok(box);
   const zoomBefore = await editorZoom(page);
   const viewportBeforeZoom = await editorViewport(page);
+  const pageScrollBeforeZoom = await page.evaluate(() => ({
+    x: window.scrollX,
+    y: window.scrollY,
+    top: document.scrollingElement?.scrollTop ?? 0,
+  }));
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, -500);
   await page.waitForFunction((previousZoom) => (
     Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') > previousZoom
   ), zoomBefore);
+  assert.deepEqual(
+    await page.evaluate(() => ({
+      x: window.scrollX,
+      y: window.scrollY,
+      top: document.scrollingElement?.scrollTop ?? 0,
+    })),
+    pageScrollBeforeZoom,
+    'mouse wheel zoom should not scroll the application page',
+  );
   const viewportAfterZoom = await editorViewport(page);
   assert.ok(
     viewportAfterZoom.maxX - viewportAfterZoom.minX < viewportBeforeZoom.maxX - viewportBeforeZoom.minX,

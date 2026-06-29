@@ -1,4 +1,4 @@
-import type { PointerEventHandler, WheelEventHandler } from 'react';
+import type { PointerEventHandler, Ref } from 'react';
 import type { CircuitComponent, CircuitPosition, CircuitWire } from '../types';
 import {
   componentBounds,
@@ -33,7 +33,7 @@ interface Props {
   onPointerMove?: PointerEventHandler<SVGSVGElement>;
   onPointerUp?: PointerEventHandler<SVGSVGElement>;
   onPointerCancel?: PointerEventHandler<SVGSVGElement>;
-  onWheel?: WheelEventHandler<SVGSVGElement>;
+  svgRef?: Ref<SVGSVGElement>;
 }
 
 export function SchematicDocumentSvg({
@@ -50,7 +50,7 @@ export function SchematicDocumentSvg({
   onPointerMove,
   onPointerUp,
   onPointerCancel,
-  onWheel,
+  svgRef,
 }: Props) {
   const viewBox = viewBoxOverride ?? document.viewBox;
   const width = Math.max(1, viewBox.maxX - viewBox.minX);
@@ -59,6 +59,7 @@ export function SchematicDocumentSvg({
   const previewPoints = wireStart && wirePreview ? routePoints(wireStart, wirePreview) : [];
   return (
     <svg
+      ref={svgRef}
       xmlns="http://www.w3.org/2000/svg"
       viewBox={`${viewBox.minX} ${viewBox.minY} ${width} ${height}`}
       preserveAspectRatio="xMidYMid meet"
@@ -71,7 +72,6 @@ export function SchematicDocumentSvg({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
-      onWheel={onWheel}
     >
       <defs>
         <pattern id={gridId} width={SCHEMATIC_GRID} height={SCHEMATIC_GRID} patternUnits="userSpaceOnUse">
