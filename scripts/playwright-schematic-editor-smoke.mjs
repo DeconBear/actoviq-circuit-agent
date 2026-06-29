@@ -873,7 +873,7 @@ try {
   const ldoWires = await editorWires(page);
   assert.equal(ldoWires.some((wire) => wire.net === 'vin' || wire.net === '0'), false, 'LDO rail nets should not be rendered as long generated wires');
   assert.equal(
-    ldoWires.some((wire) => ['fb', 'tail', 'eaout'].includes(wire.net)),
+    ldoWires.some((wire) => ['fb', 'tail', 'eaout', 'vref'].includes(wire.net)),
     false,
     'LDO long named internal nets should be represented by local labels instead of long generated wires',
   );

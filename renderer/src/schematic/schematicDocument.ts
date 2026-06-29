@@ -1411,10 +1411,13 @@ function railLabelName(module: CircuitModule, net: string): string {
 }
 
 function shouldRepresentSignalNetWithLocalLabel(module: CircuitModule, net: string | undefined, endpoints: EndpointHit[]): boolean {
-  if (!net || endpoints.length < 3) return false;
+  if (!net || endpoints.length < 2) return false;
   if (!isReadableSignalNetName(net)) return false;
   if (module.ports.some((port) => port.net === net)) return false;
-  return true;
+  if (endpoints.length >= 3) return true;
+  const [first, second] = endpoints;
+  if (!first || !second) return false;
+  return Math.abs(first.x - second.x) > 260 || Math.abs(first.y - second.y) > 180;
 }
 
 function isReadableSignalNetName(net: string): boolean {
