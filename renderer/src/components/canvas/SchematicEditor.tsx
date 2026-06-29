@@ -74,6 +74,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
   const [interactionCursor, setInteractionCursor] = useState<EditorCursor>('default');
   const [viewport, setViewport] = useState<SchematicBounds | null>(null);
+  const [spacePanActive, setSpacePanActive] = useState(false);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const editorShellRef = useRef<HTMLDivElement | null>(null);
@@ -94,11 +95,13 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const wirePreview = hoverWorld
     ? hoverEndpoint ?? pointEndpoint(snapPoint(hoverWorld))
     : null;
-  const editorCursor: EditorCursor = tool === 'wire'
-    ? 'crosshair'
-    : tool === 'place'
-      ? 'copy'
-      : interactionCursor;
+  const editorCursor: EditorCursor = (() => {
+    if (interactionCursor === 'grabbing') return 'grabbing';
+    if (spacePanActive) return 'grab';
+    if (tool === 'wire') return 'crosshair';
+    if (tool === 'place') return 'copy';
+    return interactionCursor;
+  })();
 
   useEffect(() => {
     setDraft(createSchematicDocument(module).module);
@@ -109,6 +112,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setHoverEndpoint(null);
     setInteractionCursor('default');
     setViewport(null);
+    setSpacePanActive(false);
     setHistory([]);
     setFuture([]);
   }, [module.module_id, module.revision]);
@@ -193,7 +197,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     editorShellRef.current?.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
 
-    if (event.button === 1 || (event.button === 0 && event.altKey)) {
+    if (event.button === 1 || (event.button === 0 && (event.altKey || spacePanActive))) {
       panRef.current = {
         startClient: { x: event.clientX, y: event.clientY },
         originalViewBox: activeViewBox,
@@ -422,7 +426,14 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setHoverEndpoint(null);
       setSelection(null);
       setTool('select');
+      setSpacePanActive(false);
       setInteractionCursor('default');
+      return;
+    }
+    if (isSpacePanKey(event) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      setSpacePanActive(true);
+      setInteractionCursor((current) => (current === 'grabbing' ? current : 'default'));
       return;
     }
     if ((event.key === 'Delete' || event.key === 'Backspace') && selection) {
@@ -509,6 +520,14 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     handleKeyboardEvent(event);
   }
 
+  function handleKeyUp(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (isSpacePanKey(event)) {
+      event.preventDefault();
+      setSpacePanActive(false);
+      if (!panRef.current) setInteractionCursor('default');
+    }
+  }
+
   useEffect(() => {
     function handleWindowKeyDown(event: KeyboardEvent) {
       const shell = editorShellRef.current;
@@ -520,8 +539,26 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       handleKeyboardEvent(event);
     }
 
+    function handleWindowKeyUp(event: KeyboardEvent) {
+      if (!isSpacePanKey(event) || isEditableKeyboardTarget(event.target)) return;
+      setSpacePanActive(false);
+      if (!panRef.current) setInteractionCursor('default');
+    }
+
+    function handleWindowBlur() {
+      setSpacePanActive(false);
+      panRef.current = null;
+      setInteractionCursor('default');
+    }
+
     window.addEventListener('keydown', handleWindowKeyDown);
-    return () => window.removeEventListener('keydown', handleWindowKeyDown);
+    window.addEventListener('keyup', handleWindowKeyUp);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('keydown', handleWindowKeyDown);
+      window.removeEventListener('keyup', handleWindowKeyUp);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
   });
 
   function undo() {
@@ -602,6 +639,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
       data-cursor-mode={editorCursor}
       data-zoom={zoom.toFixed(3)}
+      data-space-pan={spacePanActive ? 'true' : 'false'}
       data-viewport={JSON.stringify(activeViewBox)}
       data-component-count={draft.components.length}
       data-wire-count={document.wires.length}
@@ -620,6 +658,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       })))}
       data-schematic-source="document"
       onKeyDown={handleKeyDown}
+      onKeyUp={handleKeyUp}
       tabIndex={0}
     >
       <div style={styles.toolbar}>
@@ -778,6 +817,10 @@ function clamp(value: number, min: number, max: number): number {
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function isSpacePanKey(event: Pick<KeyboardEvent | ReactKeyboardEvent<HTMLDivElement>, 'key'>): boolean {
+  return event.key === ' ' || event.key === 'Spacebar';
 }
 
 const styles: Record<string, CSSProperties> = {

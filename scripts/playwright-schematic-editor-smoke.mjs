@@ -195,19 +195,13 @@ function worldToScreen(point, viewBox, svgBox) {
 }
 
 async function componentScreenCenter(page, componentId) {
-  return page.getByTestId('schematic-editor-svg').locator(`g[data-component-id="${componentId}"]`).evaluate((node) => {
-    if (!(node instanceof SVGGraphicsElement)) {
-      throw new Error(`Component ${componentId} is not an SVG graphics element`);
-    }
-    const svg = node.ownerSVGElement;
-    if (!svg) throw new Error(`Component ${componentId} is not inside an SVG`);
-    const box = node.getBBox();
-    const point = svg.createSVGPoint();
-    point.x = box.x + box.width / 2;
-    point.y = box.y + box.height / 2;
-    const screenPoint = point.matrixTransform(svg.getScreenCTM());
-    return { x: screenPoint.x, y: screenPoint.y };
-  });
+  const positions = await componentPositions(page);
+  const position = positions[componentId];
+  if (!position) throw new Error(`Component ${componentId} position is not exposed`);
+  const viewBox = await editorViewBox(page);
+  const svgBox = await page.getByTestId('schematic-editor-svg').boundingBox();
+  assert.ok(svgBox);
+  return worldToScreen(position, viewBox, svgBox);
 }
 
 function assertPositionEqual(actual, expected, label) {
@@ -466,7 +460,34 @@ try {
   await page.waitForFunction(() => (
     Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
   ));
-  console.log('[e2e] viewport zoom pan keyboard fit verified');
+  const viewportBeforeSpacePan = await editorViewport(page);
+  const positionsBeforeSpacePan = await componentPositions(page);
+  await editor.focus();
+  await page.keyboard.down('Space');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-space-pan') === 'true' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(box.x + box.width / 2 - 90, box.y + box.height / 2 - 55, { steps: 10 });
+  await page.mouse.up();
+  await page.keyboard.up('Space');
+  await page.waitForFunction((before) => {
+    const editorNode = document.querySelector('[data-testid="schematic-editor"]');
+    const viewport = JSON.parse(editorNode?.getAttribute('data-viewport') ?? '{}');
+    return editorNode?.getAttribute('data-space-pan') === 'false' &&
+      (Number(viewport.minX) !== Number(before.minX) || Number(viewport.minY) !== Number(before.minY));
+  }, viewportBeforeSpacePan);
+  assert.deepEqual(
+    await componentPositions(page),
+    positionsBeforeSpacePan,
+    'space-pan should not move any schematic component',
+  );
+  console.log('[e2e] viewport zoom alt-pan space-pan keyboard fit verified');
   const initialWireCount = Number(await editor.getAttribute('data-wire-count'));
   const filterPositionsInitial = await componentPositions(page);
   const filterViewBoxInitial = await editorViewBox(page);
@@ -779,7 +800,7 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
-  await page.mouse.move(mpPoint.x + 150, mpPoint.y + 80, { steps: 14 });
+  await page.mouse.move(mpPoint.x - 130, mpPoint.y - 70, { steps: 14 });
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
