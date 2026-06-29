@@ -237,9 +237,13 @@ try {
   await page.getByTestId('workspace-name-input').fill(workspaceName);
   await page.getByTestId('workspace-name-input').press('Enter');
   await page.getByTestId('sidebar-notice').getByText(`Workspace created: ${workspaceName}`, { exact: true }).waitFor({ timeout: 20_000 });
+  const emptyBlankProjectName = `Playwright Empty Blank ${Date.now()}`;
   await page.getByTestId('create-blank-project').waitFor({ timeout: 20_000 });
   await page.getByTestId('create-blank-project').click();
-  await page.getByTestId('circuit-workbench').getByText('New circuit project', { exact: true }).waitFor({ timeout: 30_000 });
+  await page.getByTestId('empty-project-create-panel').waitFor({ timeout: 10_000 });
+  await page.getByTestId('empty-project-name-input').fill(emptyBlankProjectName);
+  await page.getByTestId('empty-project-name-input').press('Enter');
+  await page.getByTestId('circuit-workbench').getByText(emptyBlankProjectName, { exact: true }).waitFor({ timeout: 30_000 });
   await page.getByTestId('sidebar-open-workspace-root').click();
   await page.getByTestId('sidebar-notice').getByText(/^Workspace opened: /).waitFor({ timeout: 20_000 });
   await page.getByTestId('sidebar-open-references').scrollIntoViewIfNeeded();

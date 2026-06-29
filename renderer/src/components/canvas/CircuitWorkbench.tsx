@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
@@ -37,6 +38,11 @@ interface ModuleEditorState {
   functionText: string;
   parametersText: string;
   position: { x: number; y: number };
+}
+
+interface EmptyProjectFormState {
+  demo: boolean;
+  name: string;
 }
 
 function commandId(): string {
@@ -276,6 +282,7 @@ export function CircuitWorkbench({
   } | null>(null);
   const [moduleEditor, setModuleEditor] = useState<ModuleEditorState | null>(null);
   const [moduleEditorError, setModuleEditorError] = useState('');
+  const [emptyProjectForm, setEmptyProjectForm] = useState<EmptyProjectFormState | null>(null);
   const canvasPanelRef = useRef<HTMLDivElement | null>(null);
   const [modulePreviewPositions, setModulePreviewPositions] = useState<
     Record<string, { x: number; y: number }>
@@ -828,6 +835,30 @@ export function CircuitWorkbench({
     });
   }
 
+  async function createProjectFromEmptyState() {
+    if (!emptyProjectForm) return;
+    const name = emptyProjectForm.name.trim();
+    if (!name || busy) return;
+    setError('');
+    setNotice('');
+    try {
+      await onCreateProject(emptyProjectForm.demo, name);
+      setEmptyProjectForm(null);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    }
+  }
+
+  function handleEmptyProjectFormKeyDown(event: ReactKeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void createProjectFromEmptyState();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setEmptyProjectForm(null);
+    }
+  }
+
   async function saveModuleEditor() {
     if (!moduleEditor || !project) return;
     const id = moduleEditor.id.trim().toLowerCase();
@@ -915,19 +946,74 @@ export function CircuitWorkbench({
         <div style={styles.actionRow}>
           <button
             style={styles.primaryButton}
-            onClick={() => { void onCreateProject(true, 'Modular analog chain').catch(() => undefined); }}
+            onClick={() => {
+              setError('');
+              setNotice('');
+              setEmptyProjectForm({ demo: true, name: 'Modular analog chain' });
+            }}
+            disabled={busy}
             data-testid="create-demo-project"
           >
             Create three-module demo
           </button>
           <button
             style={styles.secondaryButton}
-            onClick={() => { void onCreateProject(false, 'New circuit project').catch(() => undefined); }}
+            onClick={() => {
+              setError('');
+              setNotice('');
+              setEmptyProjectForm({ demo: false, name: 'New circuit project' });
+            }}
+            disabled={busy}
             data-testid="create-blank-project"
           >
             Create blank project
           </button>
         </div>
+        {emptyProjectForm ? (
+          <div
+            style={styles.emptyCreatePanel}
+            data-testid="empty-project-create-panel"
+            onKeyDown={handleEmptyProjectFormKeyDown}
+          >
+            <div style={styles.emptyCreateTitle}>
+              {emptyProjectForm.demo ? 'Demo project' : 'Blank project'}
+            </div>
+            <input
+              value={emptyProjectForm.name}
+              onChange={(event) => setEmptyProjectForm({ ...emptyProjectForm, name: event.target.value })}
+              placeholder="Project name"
+              style={styles.emptyProjectInput}
+              disabled={busy}
+              autoFocus
+              data-testid="empty-project-name-input"
+            />
+            <div style={styles.emptyCreateActions}>
+              <button
+                type="button"
+                style={styles.secondaryButton}
+                onClick={() => setEmptyProjectForm(null)}
+                disabled={busy}
+                data-testid="empty-project-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                style={styles.primaryButton}
+                onClick={() => void createProjectFromEmptyState()}
+                disabled={busy || !emptyProjectForm.name.trim()}
+                data-testid="empty-project-create-submit"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {error ? (
+          <div style={{ ...styles.emptyNotice, ...styles.noticeError }} role="alert">
+            {error}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -2602,5 +2688,20 @@ const styles: Record<string, CSSProperties> = {
   emptyBadge: { border: '1px solid #b9c0c9', borderRadius: 5, padding: '8px 14px', fontSize: 10, fontWeight: 800, color: '#2563eb' },
   emptyTitle: { fontSize: 24, margin: '18px 0 4px' },
   emptyText: { maxWidth: 560, color: '#69727d', lineHeight: 1.6, fontSize: 13 },
+  emptyCreatePanel: {
+    width: 'min(420px, 100%)',
+    marginTop: 14,
+    padding: 12,
+    border: '1px solid #d8dee8',
+    borderRadius: 6,
+    background: '#fff',
+    boxShadow: '0 6px 18px rgba(27, 38, 51, 0.08)',
+    display: 'grid',
+    gap: 10,
+  },
+  emptyCreateTitle: { color: '#4f5965', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', textAlign: 'left' },
+  emptyProjectInput: { width: '100%', border: '1px solid #c8ced6', borderRadius: 5, padding: '8px 9px', color: '#303741', background: '#fff', fontFamily: 'inherit', fontSize: 12, fontWeight: 400 },
+  emptyCreateActions: { display: 'flex', justifyContent: 'flex-end', gap: 8 },
+  emptyNotice: { width: 'min(420px, 100%)', marginTop: 10, padding: '7px 9px', borderRadius: 5, fontSize: 11, textAlign: 'left' },
   actionRow: { display: 'flex', gap: 8, marginTop: 14 },
 };
