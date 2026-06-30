@@ -1322,6 +1322,9 @@ def write_project_report(
 
 def compile_project(root: Path) -> dict[str, Any]:
     project, modules = load_project(root)
+    for module_ref in project["modules"]:
+        sync_module_from_netlist(root, module_ref["id"])
+    project, modules = load_project(root)
     union = UnionFind()
     port_lookup: dict[tuple[str, str], dict[str, Any]] = {}
     for module_ref in project["modules"]:
@@ -1491,6 +1494,9 @@ def compile_project(root: Path) -> dict[str, Any]:
     # Recompiling invalidates any prior run, so the report is design-only until
     # the next simulate_project regenerates it with fresh AC metrics.
     write_project_report(root, project, modules, "\n".join(lines) + "\n", None)
+    module_results = []
+    for module_ref in project["modules"]:
+        module_results.append(compile_module(root, module_ref["id"]))
     return {
         "ok": True,
         "project_id": project["project_id"],
@@ -1498,6 +1504,9 @@ def compile_project(root: Path) -> dict[str, Any]:
         "netlist_path": str(netlist_path),
         "manifest_path": str(root / "build" / "build-manifest.json"),
         "primary_output_node": source_map.get("primary_output_node"),
+        "modules": {
+            result["module_id"]: result for result in module_results
+        },
     }
 
 

@@ -958,16 +958,17 @@ try {
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
   console.log('[e2e] legacy ldo loaded');
-  const mpPoint = await componentScreenPoint(page, 'mp', { x: 12, y: 0 });
+  const mpPoint = await componentScreenPoint(page, 'mp');
   await page.getByTestId('schematic-editor-select').click();
   await page.mouse.move(mpPoint.x, mpPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
   ));
-  await page.mouse.down();
+  await page.mouse.click(mpPoint.x, mpPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:mp'
   ));
+  await page.mouse.down();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));

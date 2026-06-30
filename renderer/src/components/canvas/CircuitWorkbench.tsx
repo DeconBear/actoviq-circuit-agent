@@ -541,14 +541,9 @@ export function CircuitWorkbench({
     setError('');
     setNotice(simulate ? 'Running system simulation...' : 'Building netlist and module SVG previews...');
     try {
-      // Always assemble the system netlist and refresh every module SVG so the
-      // Design and SVG tabs stay populated, then simulate when requested. The
-      // module SVGs live on disk under build/modules/<id>/; simulate does not
-      // remove them, so this keeps previews and metrics in sync after one click.
+      // Project compile assembles the system netlist and refreshes every module
+      // SVG before returning, so the manifest never exposes a half-built module set.
       await window.electronAPI.compileCircuitProject(activeProjectId);
-      for (const module of project.modules) {
-        await window.electronAPI.compileCircuitModule(activeProjectId, module.id);
-      }
       if (simulate) {
         await window.electronAPI.simulateCircuitProject(activeProjectId);
       }

@@ -1171,32 +1171,32 @@ function componentLocalPoint(component: CircuitComponent, world: CircuitPosition
 }
 
 function pointNearMosGraphic(component: CircuitComponent, world: CircuitPosition): boolean {
-  const { x, y } = component.position;
-  if (Math.abs(world.x - x) <= 46 && Math.abs(world.y - y) <= 58) return true;
+  const local = componentLocalPoint(component, world);
+  if (Math.abs(local.x) <= 46 && Math.abs(local.y) <= 58) return true;
   const pmos = isPmosComponent(component);
-  const gateX = x - 20;
-  const channelX = x + 12;
+  const gateX = -20;
+  const channelX = 12;
   const segments: Array<[CircuitPosition, CircuitPosition]> = [
-    [{ x: gateX, y: y - 34 }, { x: gateX, y: y + 34 }],
-    [{ x: channelX, y: y - 38 }, { x: channelX, y: y + 38 }],
-    [{ x: x - 58, y }, { x: pmos ? x - 31 : gateX, y }],
-    [{ x: channelX, y: y - 30 }, { x: x + 26, y: y - 52 }],
-    [{ x: channelX, y: y + 30 }, { x: x + 26, y: y + 52 }],
-    [{ x: channelX, y }, { x: x + 58, y }],
+    [{ x: gateX, y: -34 }, { x: gateX, y: 34 }],
+    [{ x: channelX, y: -38 }, { x: channelX, y: 38 }],
+    [{ x: -58, y: 0 }, { x: pmos ? -31 : gateX, y: 0 }],
+    [{ x: channelX, y: -30 }, { x: 26, y: -52 }],
+    [{ x: channelX, y: 30 }, { x: 26, y: 52 }],
+    [{ x: channelX, y: 0 }, { x: 58, y: 0 }],
   ];
-  return segments.some(([start, end]) => pointToSegmentDistance(world, start, end) <= 8);
+  return segments.some(([start, end]) => pointToSegmentDistance(local, start, end) <= 8);
 }
 
 function pointNearBjtGraphic(component: CircuitComponent, world: CircuitPosition): boolean {
-  const { x, y } = component.position;
-  if (Math.abs(world.x - x) <= 44 && Math.abs(world.y - y) <= 58) return true;
+  const local = componentLocalPoint(component, world);
+  if (Math.abs(local.x) <= 44 && Math.abs(local.y) <= 58) return true;
   const segments: Array<[CircuitPosition, CircuitPosition]> = [
-    [{ x: x - 18, y: y - 34 }, { x: x - 18, y: y + 34 }],
-    [{ x: x - 58, y }, { x: x - 18, y }],
-    [{ x: x - 18, y: y - 20 }, { x: x + 30, y: y - 52 }],
-    [{ x: x - 18, y: y + 20 }, { x: x + 30, y: y + 52 }],
+    [{ x: -18, y: -34 }, { x: -18, y: 34 }],
+    [{ x: -58, y: 0 }, { x: -18, y: 0 }],
+    [{ x: -18, y: -20 }, { x: 30, y: -52 }],
+    [{ x: -18, y: 20 }, { x: 30, y: 52 }],
   ];
-  return segments.some(([start, end]) => pointToSegmentDistance(world, start, end) <= 8);
+  return segments.some(([start, end]) => pointToSegmentDistance(local, start, end) <= 8);
 }
 
 export function pointToSegmentDistance(point: CircuitPosition, start: CircuitPosition, end: CircuitPosition): number {

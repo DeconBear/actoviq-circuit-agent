@@ -19,6 +19,10 @@ const SYMBOL_COLOR = '#a00012';
 const LABEL_COLOR = '#0000cc';
 const MUTED_LABEL_COLOR = '#334155';
 const LABEL_HALO_COLOR = '#ffffff';
+const LABEL_FONT = 'Arial, Helvetica, sans-serif';
+const MONO_FONT = 'Consolas, monospace';
+const WIRE_STROKE = 3;
+const SYMBOL_STROKE = 2.4;
 
 interface Props {
   document: SchematicDocument;
@@ -145,8 +149,8 @@ export function SchematicDocumentSvg({
                 x={labelPosition.name.x}
                 y={labelPosition.name.y}
                 textAnchor={labelPosition.name.anchor}
-                fontSize="12"
-                fontFamily="Consolas, monospace"
+                fontSize="14"
+                fontFamily={LABEL_FONT}
                 fontWeight="700"
                 fill={LABEL_COLOR}
                 stroke={LABEL_HALO_COLOR}
@@ -159,8 +163,8 @@ export function SchematicDocumentSvg({
                 x={labelPosition.net.x}
                 y={labelPosition.net.y}
                 textAnchor={labelPosition.net.anchor}
-                fontSize="9"
-                fontFamily="Consolas, monospace"
+                fontSize="10"
+                fontFamily={MONO_FONT}
                 fill={MUTED_LABEL_COLOR}
                 stroke={LABEL_HALO_COLOR}
                 strokeWidth="2.5"
@@ -183,7 +187,7 @@ export function SchematicDocumentSvg({
       </g>
       <g data-layer="junctions" pointerEvents="none">
         {junctions(document).map((point) => (
-          <circle key={`${point.x},${point.y}`} cx={point.x} cy={point.y} r="3.8" fill="#cc0000" stroke="#ffffff" strokeWidth="1" />
+          <circle key={`${point.x},${point.y}`} cx={point.x} cy={point.y} r="4.6" fill="#cc0000" stroke="#ffffff" strokeWidth="1.2" />
         ))}
       </g>
       {wireStart ? (
@@ -222,8 +226,8 @@ function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
         x={position.x}
         y={nameY}
         textAnchor="middle"
-        fontSize="12"
-        fontFamily="Consolas, monospace"
+        fontSize="14"
+        fontFamily={LABEL_FONT}
         fontWeight="700"
         fill={LABEL_COLOR}
         stroke={LABEL_HALO_COLOR}
@@ -259,15 +263,15 @@ function SignalNetLabelSymbol({ label }: { label: SchematicNetLabel }) {
         x2={end.x}
         y2={end.y}
         stroke={WIRE_COLOR}
-        strokeWidth="2.8"
+        strokeWidth={WIRE_STROKE}
       />
       <circle cx={position.x} cy={position.y} r="3.8" fill="#9aa3ad" stroke="#ffffff" strokeWidth="1" />
       <text
         x={text.x}
         y={text.y}
         textAnchor={text.anchor}
-        fontSize="12"
-        fontFamily="Consolas, monospace"
+        fontSize="14"
+        fontFamily={LABEL_FONT}
         fontWeight="700"
         fill={LABEL_COLOR}
         stroke={LABEL_HALO_COLOR}
@@ -321,7 +325,7 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
         points={points}
         fill="none"
         stroke={WIRE_COLOR}
-        strokeWidth="2.8"
+        strokeWidth={WIRE_STROKE}
         strokeLinecap="round"
         strokeLinejoin="round"
         pointerEvents="none"
@@ -382,8 +386,8 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         x={labels.name.x}
         y={labels.name.y}
         textAnchor={labels.name.anchor}
-        fontSize="13"
-        fontFamily="Consolas, monospace"
+        fontSize="15"
+        fontFamily={LABEL_FONT}
         fontWeight="700"
         fill={LABEL_COLOR}
         stroke={LABEL_HALO_COLOR}
@@ -397,8 +401,8 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         x={labels.value.x}
         y={labels.value.y}
         textAnchor={labels.value.anchor}
-        fontSize="12"
-        fontFamily="Consolas, monospace"
+        fontSize="14"
+        fontFamily={LABEL_FONT}
         fill={LABEL_COLOR}
         stroke={LABEL_HALO_COLOR}
         strokeWidth="3"
@@ -561,7 +565,15 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
     const gateX = x - 20;
     const channelX = x + 12;
     return (
-      <g fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none">
+      <g
+        transform={`rotate(${rotation} ${x} ${y})`}
+        fill="none"
+        stroke={SYMBOL_COLOR}
+        strokeWidth={SYMBOL_STROKE}
+        strokeLinecap="square"
+        strokeLinejoin="miter"
+        pointerEvents="none"
+      >
         <line x1={gateX} y1={y - 34} x2={gateX} y2={y + 34} />
         <line x1={channelX} y1={y - 38} x2={channelX} y2={y + 38} />
         <line x1={x - 58} y1={y} x2={pmos ? x - 31 : gateX} y2={y} />
@@ -580,12 +592,28 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
     );
   }
   if (component.type === 'Q') {
+    const pnp = isPnpComponent(component);
     return (
-      <g fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none">
+      <g
+        transform={`rotate(${rotation} ${x} ${y})`}
+        fill="none"
+        stroke={SYMBOL_COLOR}
+        strokeWidth={SYMBOL_STROKE}
+        strokeLinecap="square"
+        strokeLinejoin="miter"
+        pointerEvents="none"
+      >
         <line x1={x - 18} y1={y - 34} x2={x - 18} y2={y + 34} />
         <line x1={x - 58} y1={y} x2={x - 18} y2={y} />
         <line x1={x - 18} y1={y - 20} x2={x + 30} y2={y - 52} />
         <line x1={x - 18} y1={y + 20} x2={x + 30} y2={y + 52} />
+        <path
+          d={pnp
+            ? `M ${x + 4} ${y + 34} L ${x + 20} ${y + 39} L ${x + 9} ${y + 51} Z`
+            : `M ${x + 31} ${y + 52} L ${x + 14} ${y + 48} L ${x + 24} ${y + 36} Z`}
+          fill={SYMBOL_COLOR}
+          stroke="none"
+        />
       </g>
     );
   }
@@ -594,8 +622,9 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
       <circle cx={x} cy={y} r="28" fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2.4" />
       {component.type === 'V' ? (
         <>
-          <text x={x} y={y - 7} textAnchor="middle" fontSize="16" fontFamily="Consolas, monospace" fontWeight="700">+</text>
-          <text x={x} y={y + 16} textAnchor="middle" fontSize="18" fontFamily="Consolas, monospace" fontWeight="700">-</text>
+          <text x={x} y={y + 6} textAnchor="middle" fontSize="20" fontFamily={LABEL_FONT} fontWeight="700" fill="#0f172a">V</text>
+          <text x={x - 18} y={y - 16} textAnchor="middle" fontSize="13" fontFamily={LABEL_FONT} fontWeight="700" fill={SYMBOL_COLOR}>+</text>
+          <text x={x - 18} y={y + 24} textAnchor="middle" fontSize="15" fontFamily={LABEL_FONT} fontWeight="700" fill={SYMBOL_COLOR}>-</text>
         </>
       ) : component.type === 'I' ? (
         <>
@@ -603,12 +632,16 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
           <path d={`M ${x - 7} ${y - 6} L ${x} ${y - 17} L ${x + 7} ${y - 6}`} fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.2" />
         </>
       ) : (
-        <text x={x} y={y + 4} textAnchor="middle" fontSize="15" fontFamily="Consolas, monospace" fontWeight="700">
+        <text x={x} y={y + 4} textAnchor="middle" fontSize="15" fontFamily={LABEL_FONT} fontWeight="700">
           {component.type}
         </text>
       )}
     </g>
   );
+}
+
+function isPnpComponent(component: CircuitComponent): boolean {
+  return /\bpnp\b|p-bipolar|p bipolar/i.test(`${component.id} ${component.name} ${component.value}`);
 }
 
 function bodyTerminalOffsets(component: CircuitComponent): [CircuitPosition, CircuitPosition] {
@@ -640,7 +673,7 @@ function EndpointHover({ endpoint }: { endpoint: EndpointHit }) {
         x={endpoint.x + 12}
         y={endpoint.y - 12}
         fontSize="11"
-        fontFamily="Consolas, monospace"
+        fontFamily={LABEL_FONT}
         fontWeight="700"
         fill={LABEL_COLOR}
         stroke={LABEL_HALO_COLOR}
@@ -655,7 +688,7 @@ function EndpointHover({ endpoint }: { endpoint: EndpointHit }) {
           x={endpoint.x + 12}
           y={endpoint.y + 3}
           fontSize="9"
-          fontFamily="Consolas, monospace"
+          fontFamily={MONO_FONT}
           fill={MUTED_LABEL_COLOR}
           stroke={LABEL_HALO_COLOR}
           strokeWidth="2.5"
