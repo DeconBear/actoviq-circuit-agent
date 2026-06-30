@@ -426,6 +426,11 @@ try {
     'unconnected module ports should not be visible or influence the editor plot bounds',
   );
   assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="gnd"]').count(),
+    0,
+    'rail ports with local schematic labels should not render as duplicate floating ports',
+  );
+  assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('circle[data-endpoint-kind="pin"][data-visible="true"]').count(),
     0,
     'unselected component pins should not render as persistent red endpoint dots',

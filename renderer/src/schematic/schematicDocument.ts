@@ -301,11 +301,11 @@ function autoLayoutLdoModule(module: CircuitModule, activeComponents: CircuitCom
   const fallbackActives = differential.filter((component) => !currentSources.includes(component) && !signalPair.includes(component));
 
   const activeSlots: Array<{ component: CircuitComponent | undefined; x: number; y: number }> = [
-    { component: currentSources[0], x: 380, y: 145 },
-    { component: currentSources[1], x: 600, y: 145 },
-    { component: signalPair[0] ?? fallbackActives[0], x: 380, y: 390 },
-    { component: signalPair[1] ?? fallbackActives[1], x: 600, y: 390 },
-    { component: pass, x: 820, y: 265 },
+    { component: currentSources[0], x: 360, y: 125 },
+    { component: currentSources[1], x: 680, y: 125 },
+    { component: signalPair[0] ?? fallbackActives[0], x: 360, y: 430 },
+    { component: signalPair[1] ?? fallbackActives[1], x: 680, y: 430 },
+    { component: pass, x: 980, y: 280 },
   ];
 
   activeSlots.forEach(({ component, x, y }) => {
@@ -316,13 +316,13 @@ function autoLayoutLdoModule(module: CircuitModule, activeComponents: CircuitCom
   });
 
   const twoPinComponents = module.components.filter((component) => component.pins.length === 2 && !placed.has(component.id));
-  placeNamedTwoPin(twoPinComponents, placed, /v(in|dd|supply)|input/i, powerNet, groundNet, { x: 160, y: 300 });
-  placeNamedTwoPin(twoPinComponents, placed, /vref|reference/i, 'vref', groundNet, { x: 185, y: 535 });
-  placeNamedTwoPin(twoPinComponents, placed, /itail|tail|bias/i, 'tail', groundNet, { x: 500, y: 575 });
-  placeNamedTwoPin(twoPinComponents, placed, /r(top|fb1|upper)|feedback.*top/i, outputNet, 'fb', { x: 1010, y: 345 });
-  placeNamedTwoPin(twoPinComponents, placed, /r(bot|fb2|lower)|feedback.*bot/i, 'fb', groundNet, { x: 1010, y: 535 });
-  placeNamedTwoPin(twoPinComponents, placed, /r(load|out)|load/i, outputNet, groundNet, { x: 1160, y: 480 });
-  placeNamedTwoPin(twoPinComponents, placed, /c(out|load)|output.*cap/i, outputNet, groundNet, { x: 1300, y: 480 });
+  placeNamedTwoPin(twoPinComponents, placed, /v(in|dd|supply)|input/i, powerNet, groundNet, { x: 145, y: 330 });
+  placeNamedTwoPin(twoPinComponents, placed, /vref|reference/i, 'vref', groundNet, { x: 165, y: 600 });
+  placeNamedTwoPin(twoPinComponents, placed, /itail|tail|bias/i, 'tail', groundNet, { x: 540, y: 650 });
+  placeNamedTwoPin(twoPinComponents, placed, /r(top|fb1|upper)|feedback.*top/i, outputNet, 'fb', { x: 1180, y: 380 });
+  placeNamedTwoPin(twoPinComponents, placed, /r(bot|fb2|lower)|feedback.*bot/i, 'fb', groundNet, { x: 1180, y: 590 });
+  placeNamedTwoPin(twoPinComponents, placed, /r(load|out)|load/i, outputNet, groundNet, { x: 1370, y: 535 });
+  placeNamedTwoPin(twoPinComponents, placed, /c(out|load)|output.*cap/i, outputNet, groundNet, { x: 1530, y: 535 });
 
   for (const component of twoPinComponents) {
     if (placed.has(component.id)) continue;

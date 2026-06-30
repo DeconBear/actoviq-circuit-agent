@@ -121,6 +121,9 @@ export function SchematicDocumentSvg({
           if (!position) return null;
           const connected = document.connectedPortIds.has(port.id);
           if (!connected) return null;
+          const isRailPort = isGroundPort(port) || port.signal_type === 'power';
+          const hasLocalRailLabel = isRailPort && document.netLabels.some((label) => label.net === port.net);
+          if (hasLocalRailLabel) return null;
           const portKind = isGroundPort(port) ? 'ground' : port.signal_type === 'power' ? 'power' : port.direction === 'output' ? 'output' : 'input';
           const labelPosition = portLabelPositions(position, portKind);
           return (
