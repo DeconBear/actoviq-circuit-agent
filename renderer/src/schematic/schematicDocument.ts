@@ -234,7 +234,12 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
   const primary = sortedActive[0];
   const primaryNets = primary ? activeNetMap(primary) : {};
   const placed = new Set(sortedActive.map((component) => component.id));
-  const usedSlots = { top: 0, bottom: 0, right: 0 };
+  const usedSlots = { right: 0 };
+  const upperCounts = new Map<string, number>();
+  const lowerCounts = new Map<string, number>();
+  const outputCounts = new Map<string, number>();
+  const nodeAnchors = new Map<string, CircuitPosition>();
+  sortedActive.forEach((component) => rememberComponentPinAnchors(nodeAnchors, component));
 
   for (const component of module.components) {
     if (placed.has(component.id)) continue;
@@ -250,23 +255,42 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
     const secondRail = isRailNet(second.net, module);
     const signalNet = firstRail ? second.net : first.net;
     const railNet = firstRail ? first.net : secondRail ? second.net : '';
-    const signalPin = nearestPinPointForNet(sortedActive, signalNet);
+    const signalPin = nearestPinPointForNet(sortedActive, signalNet) ?? nodeAnchors.get(signalNet);
 
     if (railNet && signalPin) {
       if (isGroundNet(railNet, module)) {
+        const index = lowerCounts.get(signalNet) ?? 0;
+        lowerCounts.set(signalNet, index + 1);
         placeVertical(component, signalNet, railNet, {
-          x: signalPin.x + usedSlots.bottom * 110,
+          x: signalPin.x + index * 110,
           y: signalPin.y + 90,
         });
-        usedSlots.bottom += 1;
       } else {
+        const index = upperCounts.get(signalNet) ?? 0;
+        upperCounts.set(signalNet, index + 1);
         placeVertical(component, railNet, signalNet, {
-          x: signalPin.x + usedSlots.top * 110,
+          x: signalPin.x + index * 110,
           y: signalPin.y - 90,
         });
-        usedSlots.top += 1;
       }
+      rememberComponentPinAnchors(nodeAnchors, component);
       continue;
+    }
+
+    const primaryOutputNet = primaryNets.drain;
+    if (primaryOutputNet && (first.net === primaryOutputNet || second.net === primaryOutputNet)) {
+      const anchor = nearestPinPointForNet(sortedActive, primaryOutputNet) ?? nodeAnchors.get(primaryOutputNet);
+      if (anchor) {
+        const index = outputCounts.get(primaryOutputNet) ?? 0;
+        outputCounts.set(primaryOutputNet, index + 1);
+        const otherNet = first.net === primaryOutputNet ? second.net : first.net;
+        placeHorizontal(component, primaryOutputNet, otherNet, {
+          x: anchor.x + 170 + index * 150,
+          y: anchor.y,
+        });
+        rememberComponentPinAnchors(nodeAnchors, component);
+        continue;
+      }
     }
 
     if (primaryNets.gate && (first.net === primaryNets.gate || second.net === primaryNets.gate)) {
@@ -274,12 +298,14 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
         x: (primary?.position.x ?? 250) - 160,
         y: mainY,
       });
+      rememberComponentPinAnchors(nodeAnchors, component);
       continue;
     }
 
     component.position = snapPoint({ x: 250 + sortedActive.length * 190 + usedSlots.right * 150, y: mainY + 100 });
     component.rotation = 0;
     usedSlots.right += 1;
+    rememberComponentPinAnchors(nodeAnchors, component);
   }
   return module;
 }
@@ -416,6 +442,12 @@ function placeVertical(component: CircuitComponent, topNet: string, bottomNet: s
   } else {
     component.rotation = 90;
   }
+}
+
+function rememberComponentPinAnchors(anchors: Map<string, CircuitPosition>, component: CircuitComponent) {
+  component.pins.forEach((pin, index) => {
+    anchors.set(pin.net, pinWorld(component, pin, index));
+  });
 }
 
 interface SeriesPathEntry {

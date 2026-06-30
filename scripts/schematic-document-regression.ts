@@ -63,9 +63,14 @@ const fixtures: CircuitModule[] = [
     component('r1', 'R', '10k', 420, 220, [['a', '1', 'out'], ['b', '2', '0']]),
   ]),
   moduleFixture('bjt_common_emitter', [
-    component('q1', 'Q', 'NPN', 220, 180, [['c', 'C', 'out'], ['b', 'B', 'in'], ['e', 'E', '0']]),
+    component('cin', 'C', '100n', 80, 180, [['a', '1', 'in'], ['b', '2', 'b']]),
+    component('r1', 'R', '47k', 150, 80, [['a', '1', 'vdd'], ['b', '2', 'b']]),
+    component('r2', 'R', '10k', 150, 300, [['a', '1', 'b'], ['b', '2', '0']]),
+    component('q1', 'Q', 'NPN', 220, 180, [['c', 'C', 'out'], ['b', 'B', 'b'], ['e', 'E', 'e']]),
     component('rc', 'R', '4.7k', 220, 60, [['a', '1', 'vdd'], ['b', '2', 'out']]),
-    component('re', 'R', '1k', 220, 310, [['a', '1', '0'], ['b', '2', '0']]),
+    component('re', 'R', '1k', 220, 310, [['a', '1', 'e'], ['b', '2', '0']]),
+    component('cout', 'C', '1u', 360, 180, [['a', '1', 'out'], ['b', '2', 'load']]),
+    component('rload', 'R', '10k', 500, 260, [['a', '1', 'load'], ['b', '2', '0']]),
   ]),
   moduleFixture('mos_common_source', [
     component('m1', 'M', 'NMOS W=10u L=1u', 220, 180, [
@@ -168,7 +173,23 @@ function assertReadableLayout(module: CircuitModule) {
   }
   if (module.module_id === 'bjt_common_emitter') {
     const transistor = mustComponent(module, 'q1');
+    const inputCoupling = mustComponent(module, 'cin');
+    const collectorLoad = mustComponent(module, 'rc');
+    const emitterLoad = mustComponent(module, 're');
+    const outputCoupling = mustComponent(module, 'cout');
+    const outputLoad = mustComponent(module, 'rload');
     assertActivePins(transistor, module.module_id);
+    assert.ok(inputCoupling.position.x < transistor.position.x, 'BJT input coupling should sit before the transistor base');
+    assert.ok(outputCoupling.position.x > transistor.position.x, 'BJT output coupling should sit after the collector');
+    assert.ok(outputLoad.position.x >= outputCoupling.position.x, 'BJT output load should sit on the output side');
+    assert.ok(collectorLoad.position.y < transistor.position.y, 'BJT collector load should sit above the transistor');
+    assert.ok(emitterLoad.position.y > transistor.position.y, 'BJT emitter load should sit below the transistor');
+    assert.ok(outputLoad.position.y > outputCoupling.position.y, 'BJT output load should drop toward ground');
+    assertPinLeftOf(inputCoupling, 'in', 'b', module.module_id);
+    assertPinLeftOf(outputCoupling, 'out', 'load', module.module_id);
+    assertPinAbove(collectorLoad, 'vdd', 'out', module.module_id);
+    assertPinAbove(emitterLoad, 'e', '0', module.module_id);
+    assertPinAbove(outputLoad, 'load', '0', module.module_id);
   }
   if (module.module_id === 'mos_common_source') {
     const transistor = mustComponent(module, 'm1');
