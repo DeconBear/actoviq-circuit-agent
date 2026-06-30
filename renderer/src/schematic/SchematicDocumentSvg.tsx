@@ -186,7 +186,7 @@ export function SchematicDocumentSvg({
           <ComponentSymbol
             key={component.id}
             component={component}
-            selected={selection?.kind === 'component' && selection.id === component.id}
+            selected={selectionHasComponent(selection, component.id)}
           />
         ))}
       </g>
@@ -211,6 +211,12 @@ export function SchematicDocumentSvg({
       {hoverEndpoint ? <EndpointHover endpoint={hoverEndpoint} /> : null}
     </svg>
   );
+}
+
+function selectionHasComponent(selection: SchematicSelection, componentId: string): boolean {
+  if (selection?.kind === 'component') return selection.id === componentId;
+  if (selection?.kind === 'components') return selection.ids.includes(componentId);
+  return false;
 }
 
 function MarqueeRect({ bounds }: { bounds: SchematicBounds }) {

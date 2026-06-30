@@ -15,6 +15,7 @@ export type ToolComponentType = CircuitComponent['type'];
 
 export type SchematicSelection =
   | { kind: 'component'; id: string }
+  | { kind: 'components'; ids: string[] }
   | { kind: 'wire'; id: string }
   | null;
 

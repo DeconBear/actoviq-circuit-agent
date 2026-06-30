@@ -533,7 +533,7 @@ try {
   const filterPositionsInitial = await componentPositions(page);
   const filterViewBoxInitial = await editorViewBox(page);
   const cFilterMarqueeStart = worldToScreen(
-    { x: filterPositionsInitial.c_filter.x - 70, y: filterPositionsInitial.c_filter.y - 70 },
+    { x: filterPositionsInitial.c_filter.x + 10, y: filterPositionsInitial.c_filter.y - 70 },
     filterViewBoxInitial,
     box,
   );
@@ -557,6 +557,59 @@ try {
     filterPositionsInitial,
     'marquee selection should not move schematic components',
   );
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  ));
+  const rFilterScreenPoint = await componentScreenPoint(page, 'r_filter');
+  const cFilterScreenPoint = await componentScreenPoint(page, 'c_filter');
+  const multiMarqueeStart = {
+    x: Math.min(rFilterScreenPoint.x, cFilterScreenPoint.x) - 90,
+    y: Math.min(rFilterScreenPoint.y, cFilterScreenPoint.y) - 40,
+  };
+  const multiMarqueeEnd = {
+    x: Math.max(rFilterScreenPoint.x, cFilterScreenPoint.x) + 120,
+    y: Math.max(rFilterScreenPoint.y, cFilterScreenPoint.y) + 120,
+  };
+  await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(multiMarqueeEnd.x, multiMarqueeEnd.y, { steps: 10 });
+  await page.getByTestId('schematic-selection-marquee').waitFor();
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
+  ));
+  assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 2, 'marquee multi-selection should show two component frames');
+  const cFilterGroupDragPoint = await componentScreenPoint(page, 'c_filter');
+  await page.mouse.move(cFilterGroupDragPoint.x, cFilterGroupDragPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(cFilterGroupDragPoint.x + 90, cFilterGroupDragPoint.y + 30, { steps: 8 });
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
+      (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
+  }, filterPositionsInitial);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
+      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+      Number(positions.c_filter?.x) === Number(previous.c_filter.x) &&
+      Number(positions.c_filter?.y) === Number(previous.c_filter.y);
+  }, filterPositionsInitial);
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'cancelled multi-selection drag should restore schematic components',
+  );
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  ));
   const filterWireSnapPoint = worldToScreen(
     { x: filterPositionsInitial.r_filter.x + 52, y: filterPositionsInitial.r_filter.y },
     filterViewBoxInitial,

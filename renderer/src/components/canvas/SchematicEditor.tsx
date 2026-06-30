@@ -45,10 +45,10 @@ interface Props {
 }
 
 interface DragState {
-  componentId: string;
+  componentIds: string[];
   startWorld: CircuitPosition;
-  originalPosition: CircuitPosition;
-  lastPosition: CircuitPosition;
+  originalPositions: Record<string, CircuitPosition>;
+  lastPositions: Record<string, CircuitPosition>;
   originalModule: CircuitModule;
   originalDirty: boolean;
   moved: boolean;
@@ -124,6 +124,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     0.05,
     (document.viewBox.maxX - document.viewBox.minX) / Math.max(1, activeViewBox.maxX - activeViewBox.minX),
   );
+  const selectedComponentIds = componentIdsForSelection(selection);
   const selectedComponent = selection?.kind === 'component'
     ? draft.components.find((component) => component.id === selection.id) ?? null
     : null;
@@ -281,13 +282,17 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
 
     const componentHit = hitComponent(document, world) ?? hitSelectedComponentFrame(document, selection, world);
     if (componentHit) {
-      setSelection({ kind: 'component', id: componentHit.id });
+      const currentComponentIds = componentIdsForSelection(selection);
+      const componentIds = currentComponentIds.includes(componentHit.id) ? currentComponentIds : [componentHit.id];
+      if (!currentComponentIds.includes(componentHit.id)) {
+        setSelection({ kind: 'component', id: componentHit.id });
+      }
       setInteractionCursor('grabbing');
       dragRef.current = {
-        componentId: componentHit.id,
+        componentIds,
         startWorld: world,
-        originalPosition: { ...componentHit.position },
-        lastPosition: { ...componentHit.position },
+        originalPositions: componentPositionsById(draft, componentIds),
+        lastPositions: componentPositionsById(draft, componentIds),
         originalModule: cloneModule(draft),
         originalDirty: dirty,
         moved: false,
@@ -441,23 +446,25 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const dy = world.y - drag.startWorld.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
     drag.moved = true;
-    const nextPosition = snapPoint({
-      x: drag.originalPosition.x + dx,
-      y: drag.originalPosition.y + dy,
-    });
-    if (drag.lastPosition.x === nextPosition.x && drag.lastPosition.y === nextPosition.y) return;
-    drag.lastPosition = nextPosition;
+    const nextPositions = Object.fromEntries(
+      drag.componentIds.map((componentId) => {
+        const original = drag.originalPositions[componentId];
+        return [componentId, original ? snapPoint({ x: original.x + dx, y: original.y + dy }) : undefined];
+      }).filter((entry): entry is [string, CircuitPosition] => Boolean(entry[1])),
+    );
+    if (samePositionMap(drag.lastPositions, nextPositions)) return;
+    drag.lastPositions = clonePositionMap(nextPositions);
     setDraft((current) => {
-      const currentComponent = current.components.find((entry) => entry.id === drag.componentId);
-      if (
-        !currentComponent ||
-        (currentComponent.position.x === nextPosition.x && currentComponent.position.y === nextPosition.y)
-      ) {
-        return current;
-      }
       const next = cloneModule(current);
-      const component = next.components.find((entry) => entry.id === drag.componentId);
-      if (component) component.position = nextPosition;
+      let changed = false;
+      for (const [componentId, nextPosition] of Object.entries(nextPositions)) {
+        const component = next.components.find((entry) => entry.id === componentId);
+        if (!component) continue;
+        if (component.position.x === nextPosition.x && component.position.y === nextPosition.y) continue;
+        component.position = nextPosition;
+        changed = true;
+      }
+      if (!changed) return current;
       next.wires = rerouteStoredWires(next);
       return next;
     });
@@ -556,17 +563,22 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     }
   }
 
-  function nudgeSelectedComponent(dx: number, dy: number) {
-    if (!selectedComponent || busy) return;
+  function nudgeSelectedComponents(dx: number, dy: number) {
+    if (selectedComponentIds.length === 0 || busy) return;
     const next = cloneModule(draft);
-    const component = next.components.find((entry) => entry.id === selectedComponent.id);
-    if (!component) return;
-    const nextPosition = snapPoint({
-      x: component.position.x + dx,
-      y: component.position.y + dy,
-    });
-    if (component.position.x === nextPosition.x && component.position.y === nextPosition.y) return;
-    component.position = nextPosition;
+    let changed = false;
+    for (const componentId of selectedComponentIds) {
+      const component = next.components.find((entry) => entry.id === componentId);
+      if (!component) continue;
+      const nextPosition = snapPoint({
+        x: component.position.x + dx,
+        y: component.position.y + dy,
+      });
+      if (component.position.x === nextPosition.x && component.position.y === nextPosition.y) continue;
+      component.position = nextPosition;
+      changed = true;
+    }
+    if (!changed) return;
     next.wires = rerouteStoredWires(next);
     commitDraft(next);
   }
@@ -635,23 +647,23 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       fitViewport();
       return;
     }
-    if (event.key.startsWith('Arrow') && selectedComponent) {
+    if (event.key.startsWith('Arrow') && selectedComponentIds.length > 0) {
       event.preventDefault();
       const step = event.shiftKey ? SCHEMATIC_GRID * 5 : SCHEMATIC_GRID;
-      if (event.key === 'ArrowLeft') nudgeSelectedComponent(-step, 0);
-      if (event.key === 'ArrowRight') nudgeSelectedComponent(step, 0);
-      if (event.key === 'ArrowUp') nudgeSelectedComponent(0, -step);
-      if (event.key === 'ArrowDown') nudgeSelectedComponent(0, step);
+      if (event.key === 'ArrowLeft') nudgeSelectedComponents(-step, 0);
+      if (event.key === 'ArrowRight') nudgeSelectedComponents(step, 0);
+      if (event.key === 'ArrowUp') nudgeSelectedComponents(0, -step);
+      if (event.key === 'ArrowDown') nudgeSelectedComponents(0, step);
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    if (key === 'r' && selectedComponent) {
+    if (key === 'r' && selectedComponentIds.length > 0) {
       event.preventDefault();
       setTool('select');
       setWireStart(null);
       setHoverEndpoint(null);
       setInteractionCursor('default');
-      rotateSelectedComponent();
+      if (selectedComponent) rotateSelectedComponent();
       return;
     }
     if (key === 'w') {
@@ -757,12 +769,15 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   function deleteSelection() {
     if (!selection || busy) return;
     const next = cloneModule(draft);
-    if (selection.kind === 'component') {
-      next.components = next.components.filter((component) => component.id !== selection.id);
+    const componentIds = componentIdsForSelection(selection);
+    if (componentIds.length > 0) {
+      const selectedIds = new Set(componentIds);
+      next.components = next.components.filter((component) => !selectedIds.has(component.id));
       next.wires = (next.wires ?? []).filter((wire) => (
-        wire.from?.component_id !== selection.id && wire.to?.component_id !== selection.id
+        !selectedIds.has(wire.from?.component_id ?? '') &&
+        !selectedIds.has(wire.to?.component_id ?? '')
       ));
-    } else {
+    } else if (selection.kind === 'wire') {
       const selectedWire = document.wires.find((wire) => wire.id === selection.id);
       const updated = removeWireAndUpdateConnectivity(next, selectedWire ?? selection.id);
       next.components = updated.components;
@@ -802,7 +817,8 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-testid="schematic-editor"
       data-tool={tool}
       data-dirty={dirty ? 'true' : 'false'}
-      data-selected={selection ? `${selection.kind}:${selection.id}` : ''}
+      data-selected={selectionAttribute(selection)}
+      data-selected-component-count={String(selectedComponentIds.length)}
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
       data-cursor-mode={editorCursor}
       data-zoom={zoom.toFixed(3)}
@@ -961,6 +977,8 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
                 ))}
               </div>
             </>
+          ) : selection?.kind === 'components' ? (
+            <div style={styles.emptyText}>{selection.ids.length} components selected</div>
           ) : selection?.kind === 'wire' ? (
             <div style={styles.emptyText}>Wire {selection.id}</div>
           ) : (
@@ -1042,31 +1060,81 @@ function hitSelectedComponentFrame(
   selection: SchematicSelection,
   world: CircuitPosition,
 ): CircuitComponent | null {
-  if (selection?.kind !== 'component') return null;
-  const component = document.module.components.find((entry) => entry.id === selection.id);
-  if (!component) return null;
-  const bounds = componentBounds(component);
+  const selectedIds = new Set(componentIdsForSelection(selection));
+  if (selectedIds.size === 0) return null;
   const padding = 14;
-  return (
-    world.x >= bounds.minX - padding &&
-    world.x <= bounds.maxX + padding &&
-    world.y >= bounds.minY - padding &&
-    world.y <= bounds.maxY + padding
-  ) ? component : null;
+  for (let index = document.module.components.length - 1; index >= 0; index -= 1) {
+    const component = document.module.components[index];
+    if (!component || !selectedIds.has(component.id)) continue;
+    const bounds = componentBounds(component);
+    if (
+      world.x >= bounds.minX - padding &&
+      world.x <= bounds.maxX + padding &&
+      world.y >= bounds.minY - padding &&
+      world.y <= bounds.maxY + padding
+    ) {
+      return component;
+    }
+  }
+  return null;
 }
 
 function selectionForMarquee(
   document: ReturnType<typeof createSchematicDocument>,
   bounds: SchematicBounds,
 ): SchematicSelection {
+  const componentIds: string[] = [];
   for (let index = document.module.components.length - 1; index >= 0; index -= 1) {
     const component = document.module.components[index];
     if (component && boundsIntersect(bounds, componentBounds(component))) {
-      return { kind: 'component', id: component.id };
+      componentIds.unshift(component.id);
     }
   }
+  if (componentIds.length === 1) {
+    const componentId = componentIds[0];
+    return componentId ? { kind: 'component', id: componentId } : null;
+  }
+  if (componentIds.length > 1) return { kind: 'components', ids: componentIds };
   const wire = document.wires.find((entry) => wireIntersectsBounds(entry, bounds));
   return wire ? { kind: 'wire', id: wire.id } : null;
+}
+
+function componentIdsForSelection(selection: SchematicSelection): string[] {
+  if (selection?.kind === 'component') return [selection.id];
+  if (selection?.kind === 'components') return selection.ids;
+  return [];
+}
+
+function selectionAttribute(selection: SchematicSelection): string {
+  if (!selection) return '';
+  if (selection.kind === 'components') return `components:${selection.ids.join(',')}`;
+  return `${selection.kind}:${selection.id}`;
+}
+
+function componentPositionsById(module: CircuitModule, componentIds: string[]): Record<string, CircuitPosition> {
+  return Object.fromEntries(
+    componentIds
+      .map((componentId) => {
+        const component = module.components.find((entry) => entry.id === componentId);
+        return component ? [componentId, { ...component.position }] : null;
+      })
+      .filter((entry): entry is [string, CircuitPosition] => Boolean(entry)),
+  );
+}
+
+function clonePositionMap(positions: Record<string, CircuitPosition>): Record<string, CircuitPosition> {
+  return Object.fromEntries(
+    Object.entries(positions).map(([componentId, position]) => [componentId, { ...position }]),
+  );
+}
+
+function samePositionMap(left: Record<string, CircuitPosition>, right: Record<string, CircuitPosition>): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length && leftKeys.every((componentId) => (
+    left[componentId]?.x === right[componentId]?.x &&
+    left[componentId]?.y === right[componentId]?.y
+  ));
 }
 
 function normalizedBounds(start: CircuitPosition, end: CircuitPosition): SchematicBounds {
