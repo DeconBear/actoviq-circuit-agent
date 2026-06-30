@@ -30,6 +30,7 @@ interface Props {
   wireStart?: EndpointHit | null;
   wirePreview?: EndpointHit | null;
   hoverEndpoint?: EndpointHit | null;
+  marqueeBounds?: SchematicBounds | null;
   showGrid?: boolean;
   cursor?: CSSCursor;
   viewBoxOverride?: SchematicBounds;
@@ -47,6 +48,7 @@ export function SchematicDocumentSvg({
   wireStart = null,
   wirePreview = null,
   hoverEndpoint = null,
+  marqueeBounds = null,
   showGrid = false,
   cursor = 'default',
   viewBoxOverride,
@@ -205,8 +207,26 @@ export function SchematicDocumentSvg({
           pointerEvents="none"
         />
       ) : null}
+      {marqueeBounds ? <MarqueeRect bounds={marqueeBounds} /> : null}
       {hoverEndpoint ? <EndpointHover endpoint={hoverEndpoint} /> : null}
     </svg>
+  );
+}
+
+function MarqueeRect({ bounds }: { bounds: SchematicBounds }) {
+  return (
+    <rect
+      x={bounds.minX}
+      y={bounds.minY}
+      width={Math.max(1, bounds.maxX - bounds.minX)}
+      height={Math.max(1, bounds.maxY - bounds.minY)}
+      fill="rgba(37, 99, 235, 0.08)"
+      stroke="#2563eb"
+      strokeWidth="1.8"
+      strokeDasharray="8 5"
+      pointerEvents="none"
+      data-testid="schematic-selection-marquee"
+    />
   );
 }
 

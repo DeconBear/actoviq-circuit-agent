@@ -87,6 +87,13 @@ interface WirePointDragState {
   moved: boolean;
 }
 
+interface MarqueeState {
+  startWorld: CircuitPosition;
+  currentWorld: CircuitPosition;
+  startClient: CircuitPosition;
+  moved: boolean;
+}
+
 export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
@@ -98,6 +105,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
   const [interactionCursor, setInteractionCursor] = useState<EditorCursor>('default');
   const [viewport, setViewport] = useState<SchematicBounds | null>(null);
+  const [marqueeBounds, setMarqueeBounds] = useState<SchematicBounds | null>(null);
   const [spacePanActive, setSpacePanActive] = useState(false);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
@@ -107,6 +115,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
   const wireDragRef = useRef<WireDragState | null>(null);
   const wireSegmentDragRef = useRef<WireSegmentDragState | null>(null);
   const wirePointDragRef = useRef<WirePointDragState | null>(null);
+  const marqueeRef = useRef<MarqueeState | null>(null);
   const panRef = useRef<PanState | null>(null);
 
   const document = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
@@ -138,6 +147,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setHoverEndpoint(null);
     setInteractionCursor('default');
     setViewport(null);
+    setMarqueeBounds(null);
     setSpacePanActive(false);
     setHistory([]);
     setFuture([]);
@@ -323,6 +333,17 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       }
       return;
     }
+    if (tool === 'select') {
+      marqueeRef.current = {
+        startWorld: world,
+        currentWorld: world,
+        startClient: { x: event.clientX, y: event.clientY },
+        moved: false,
+      };
+      setMarqueeBounds(null);
+      setInteractionCursor('default');
+      return;
+    }
     setSelection(null);
     setInteractionCursor('default');
   }
@@ -395,6 +416,16 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setDirty(true);
       return;
     }
+    const marquee = marqueeRef.current;
+    if (marquee) {
+      marquee.currentWorld = world;
+      if (!marquee.moved) {
+        marquee.moved = Math.abs(event.clientX - marquee.startClient.x) + Math.abs(event.clientY - marquee.startClient.y) > 6;
+      }
+      setMarqueeBounds(marquee.moved ? normalizedBounds(marquee.startWorld, world) : null);
+      setInteractionCursor('default');
+      return;
+    }
     const drag = dragRef.current;
     if (!drag) {
       if (tool === 'select') {
@@ -462,11 +493,18 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     const drag = dragRef.current;
     const wirePointDrag = wirePointDragRef.current;
     const wireSegmentDrag = wireSegmentDragRef.current;
+    const marquee = marqueeRef.current;
     dragRef.current = null;
     wirePointDragRef.current = null;
     wireSegmentDragRef.current = null;
+    marqueeRef.current = null;
+    setMarqueeBounds(null);
     const world = screenToWorld(event);
     setInteractionCursor(cursorForWorld(document, draft, selection, world));
+    if (marquee) {
+      setSelection(marquee.moved ? selectionForMarquee(document, normalizedBounds(marquee.startWorld, marquee.currentWorld)) : null);
+      return;
+    }
     if (wirePointDrag?.moved) {
       setHistory((items) => [...items, wirePointDrag.originalModule].slice(-40));
       setFuture([]);
@@ -497,7 +535,9 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     wirePointDragRef.current = null;
     const wireSegmentDrag = wireSegmentDragRef.current;
     wireSegmentDragRef.current = null;
+    marqueeRef.current = null;
     panRef.current = null;
+    setMarqueeBounds(null);
     setInteractionCursor('default');
     if (wirePointDrag?.moved) {
       setDraft(wirePointDrag.originalModule);
@@ -696,6 +736,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setSelection(null);
     setWireStart(null);
     setHoverEndpoint(null);
+    setMarqueeBounds(null);
     setInteractionCursor('default');
   }
 
@@ -709,6 +750,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     setSelection(null);
     setWireStart(null);
     setHoverEndpoint(null);
+    setMarqueeBounds(null);
     setInteractionCursor('default');
   }
 
@@ -859,6 +901,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
             wireStart={wireStart}
             wirePreview={wirePreview}
             hoverEndpoint={hoverEndpoint}
+            marqueeBounds={marqueeBounds}
             showGrid
             cursor={editorCursor}
             viewBoxOverride={activeViewBox}
@@ -1010,6 +1053,81 @@ function hitSelectedComponentFrame(
     world.y >= bounds.minY - padding &&
     world.y <= bounds.maxY + padding
   ) ? component : null;
+}
+
+function selectionForMarquee(
+  document: ReturnType<typeof createSchematicDocument>,
+  bounds: SchematicBounds,
+): SchematicSelection {
+  for (let index = document.module.components.length - 1; index >= 0; index -= 1) {
+    const component = document.module.components[index];
+    if (component && boundsIntersect(bounds, componentBounds(component))) {
+      return { kind: 'component', id: component.id };
+    }
+  }
+  const wire = document.wires.find((entry) => wireIntersectsBounds(entry, bounds));
+  return wire ? { kind: 'wire', id: wire.id } : null;
+}
+
+function normalizedBounds(start: CircuitPosition, end: CircuitPosition): SchematicBounds {
+  return {
+    minX: Math.min(start.x, end.x),
+    minY: Math.min(start.y, end.y),
+    maxX: Math.max(start.x, end.x),
+    maxY: Math.max(start.y, end.y),
+  };
+}
+
+function boundsIntersect(left: SchematicBounds, right: SchematicBounds): boolean {
+  return left.minX <= right.maxX &&
+    left.maxX >= right.minX &&
+    left.minY <= right.maxY &&
+    left.maxY >= right.minY;
+}
+
+function wireIntersectsBounds(wire: CircuitWire, bounds: SchematicBounds): boolean {
+  const points = wire.points ?? [];
+  if (points.some((point) => pointInBounds(point, bounds))) return true;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    if (start && end && segmentIntersectsBounds(start, end, bounds)) return true;
+  }
+  return false;
+}
+
+function pointInBounds(point: CircuitPosition, bounds: SchematicBounds): boolean {
+  return point.x >= bounds.minX && point.x <= bounds.maxX && point.y >= bounds.minY && point.y <= bounds.maxY;
+}
+
+function segmentIntersectsBounds(start: CircuitPosition, end: CircuitPosition, bounds: SchematicBounds): boolean {
+  if (pointInBounds(start, bounds) || pointInBounds(end, bounds)) return true;
+  const topLeft = { x: bounds.minX, y: bounds.minY };
+  const topRight = { x: bounds.maxX, y: bounds.minY };
+  const bottomRight = { x: bounds.maxX, y: bounds.maxY };
+  const bottomLeft = { x: bounds.minX, y: bounds.maxY };
+  const edges: Array<[CircuitPosition, CircuitPosition]> = [
+    [topLeft, topRight],
+    [topRight, bottomRight],
+    [bottomRight, bottomLeft],
+    [bottomLeft, topLeft],
+  ];
+  return edges.some(([edgeStart, edgeEnd]) => segmentsIntersect(start, end, edgeStart, edgeEnd));
+}
+
+function segmentsIntersect(a: CircuitPosition, b: CircuitPosition, c: CircuitPosition, d: CircuitPosition): boolean {
+  const direction = (p: CircuitPosition, q: CircuitPosition, r: CircuitPosition) => (
+    (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+  );
+  const abC = direction(a, b, c);
+  const abD = direction(a, b, d);
+  const cdA = direction(c, d, a);
+  const cdB = direction(c, d, b);
+  if (abC === 0 && pointInBounds(c, normalizedBounds(a, b))) return true;
+  if (abD === 0 && pointInBounds(d, normalizedBounds(a, b))) return true;
+  if (cdA === 0 && pointInBounds(a, normalizedBounds(c, d))) return true;
+  if (cdB === 0 && pointInBounds(b, normalizedBounds(c, d))) return true;
+  return (abC > 0) !== (abD > 0) && (cdA > 0) !== (cdB > 0);
 }
 
 function applyWirePointDrag(

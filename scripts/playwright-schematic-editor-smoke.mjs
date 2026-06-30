@@ -532,6 +532,31 @@ try {
   const initialWireCount = Number(await editor.getAttribute('data-wire-count'));
   const filterPositionsInitial = await componentPositions(page);
   const filterViewBoxInitial = await editorViewBox(page);
+  const cFilterMarqueeStart = worldToScreen(
+    { x: filterPositionsInitial.c_filter.x - 70, y: filterPositionsInitial.c_filter.y - 70 },
+    filterViewBoxInitial,
+    box,
+  );
+  const cFilterMarqueeEnd = worldToScreen(
+    { x: filterPositionsInitial.c_filter.x + 70, y: filterPositionsInitial.c_filter.y + 70 },
+    filterViewBoxInitial,
+    box,
+  );
+  await page.getByTestId('schematic-editor-select').click();
+  await page.mouse.move(cFilterMarqueeStart.x, cFilterMarqueeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(cFilterMarqueeEnd.x, cFilterMarqueeEnd.y, { steps: 8 });
+  await page.getByTestId('schematic-selection-marquee').waitFor();
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter'
+  ));
+  assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 1, 'marquee component selection frame is missing');
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'marquee selection should not move schematic components',
+  );
   const filterWireSnapPoint = worldToScreen(
     { x: filterPositionsInitial.r_filter.x + 52, y: filterPositionsInitial.r_filter.y },
     filterViewBoxInitial,
@@ -554,6 +579,10 @@ try {
   const placePoint = { x: box.x + Math.min(430, box.width * 0.62), y: box.y + Math.min(280, box.height * 0.48) };
 
   await editor.focus();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  ));
   await page.keyboard.press('w');
   assert.equal(await editor.getAttribute('data-tool'), 'wire', 'W hotkey did not activate wire tool');
   await page.keyboard.press('r');
