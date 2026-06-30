@@ -8,6 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type UIEvent as ReactUIEvent,
 } from 'react';
 import { useAppStore } from '../../store/appStore';
 import type {
@@ -47,6 +48,14 @@ interface EmptyProjectFormState {
 
 function commandId(): string {
   return `gui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function clampCanvasZoom(value: number): number {
+  return Math.max(35, Math.min(160, value));
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('input, textarea, select, button, [contenteditable="true"]'));
 }
 
 function prepareSvg(svg: string): string {
@@ -274,6 +283,8 @@ export function CircuitWorkbench({
   const [copiedId, setCopiedId] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
   const [isPanning, setIsPanning] = useState(false);
+  const [spacePanActive, setSpacePanActive] = useState(false);
+  const [canvasScroll, setCanvasScroll] = useState({ left: 0, top: 0 });
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -644,6 +655,7 @@ export function CircuitWorkbench({
 
   function beginModuleDrag(event: ReactPointerEvent, module: CircuitModuleRef) {
     if (event.button !== 0) return;
+    if (event.altKey || spacePanActive) return;
     if ((event.target as HTMLElement).closest('button, input, textarea, label, [data-resize-handle]')) return;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -749,7 +761,7 @@ export function CircuitWorkbench({
     if (!panel) return;
     const rect = panel.getBoundingClientRect();
     const oldScale = zoom / 100;
-    const nextZoom = Math.max(35, Math.min(110, zoom + (event.deltaY < 0 ? 10 : -10)));
+    const nextZoom = clampCanvasZoom(zoom + (event.deltaY < 0 ? 10 : -10));
     if (nextZoom === zoom) return;
     const boardX = (panel.scrollLeft + event.clientX - rect.left) / oldScale;
     const boardY = (panel.scrollTop + event.clientY - rect.top) / oldScale;
@@ -761,8 +773,75 @@ export function CircuitWorkbench({
     });
   }
 
+  function zoomCanvasAtPanelCenter(nextZoom: number) {
+    const panel = canvasPanelRef.current;
+    const clampedZoom = clampCanvasZoom(nextZoom);
+    if (!panel || clampedZoom === zoom) return;
+    const oldScale = zoom / 100;
+    const rect = panel.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    const boardX = (panel.scrollLeft + centerX) / oldScale;
+    const boardY = (panel.scrollTop + centerY) / oldScale;
+    setZoom(clampedZoom);
+    window.requestAnimationFrame(() => {
+      const nextScale = clampedZoom / 100;
+      panel.scrollLeft = boardX * nextScale - centerX;
+      panel.scrollTop = boardY * nextScale - centerY;
+      setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
+    });
+  }
+
+  function resetCanvasView() {
+    setZoom(65);
+    const panel = canvasPanelRef.current;
+    if (!panel) return;
+    window.requestAnimationFrame(() => {
+      panel.scrollLeft = 0;
+      panel.scrollTop = 0;
+      setCanvasScroll({ left: 0, top: 0 });
+    });
+  }
+
+  function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (view !== 'board' || isEditableTarget(event.target)) return;
+    if (event.key === ' ') {
+      event.preventDefault();
+      setSpacePanActive(true);
+      return;
+    }
+    if (event.key === '+' || event.key === '=') {
+      event.preventDefault();
+      zoomCanvasAtPanelCenter(zoom + 10);
+      return;
+    }
+    if (event.key === '-' || event.key === '_') {
+      event.preventDefault();
+      zoomCanvasAtPanelCenter(zoom - 10);
+      return;
+    }
+    if (event.key === 'Home' || event.key === '0') {
+      event.preventDefault();
+      resetCanvasView();
+    }
+  }
+
+  function handleCanvasKeyUp(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === ' ') {
+      event.preventDefault();
+      setSpacePanActive(false);
+    }
+  }
+
+  function handleCanvasScroll(event: ReactUIEvent<HTMLDivElement>) {
+    const target = event.currentTarget;
+    setCanvasScroll({ left: target.scrollLeft, top: target.scrollTop });
+  }
+
   function beginCanvasPan(event: ReactPointerEvent<HTMLDivElement>) {
-    if (view !== 'board' || event.button !== 1) return;
+    if (view !== 'board') return;
+    const leftTemporaryPan = event.button === 0 && (event.altKey || spacePanActive);
+    if (event.button !== 1 && !leftTemporaryPan) return;
     const panel = canvasPanelRef.current;
     if (!panel) return;
     event.preventDefault();
@@ -774,6 +853,7 @@ export function CircuitWorkbench({
     const move = (moveEvent: PointerEvent) => {
       panel.scrollLeft = startLeft - (moveEvent.clientX - startX);
       panel.scrollTop = startTop - (moveEvent.clientY - startY);
+      setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
@@ -1048,7 +1128,7 @@ export function CircuitWorkbench({
               <div style={styles.zoomControl}>
                 <button
                   style={styles.zoomButton}
-                  onClick={() => setZoom((value) => Math.max(35, value - 10))}
+                  onClick={() => setZoom((value) => clampCanvasZoom(value - 10))}
                   title="Zoom out"
                 >
                   -
@@ -1056,7 +1136,7 @@ export function CircuitWorkbench({
                 <span style={styles.zoomValue} data-testid="canvas-zoom">{zoom}%</span>
                 <button
                   style={styles.zoomButton}
-                  onClick={() => setZoom((value) => Math.min(110, value + 10))}
+                  onClick={() => setZoom((value) => clampCanvasZoom(value + 10))}
                   title="Zoom in"
                 >
                   +
@@ -1106,10 +1186,19 @@ export function CircuitWorkbench({
       <div style={styles.body}>
         <div
           ref={canvasPanelRef}
-          style={{ ...styles.canvasPanel, cursor: isPanning ? 'grabbing' : 'default' }}
+          style={{ ...styles.canvasPanel, cursor: isPanning ? 'grabbing' : spacePanActive ? 'grab' : 'default' }}
           onPointerDown={beginCanvasPan}
+          onKeyDown={handleCanvasKeyDown}
+          onKeyUp={handleCanvasKeyUp}
+          onBlur={() => setSpacePanActive(false)}
+          onScroll={handleCanvasScroll}
           onContextMenu={(event) => openCanvasContextMenu(event)}
+          tabIndex={0}
           data-testid="canvas-panel"
+          data-canvas-zoom={zoom}
+          data-space-pan={spacePanActive ? 'true' : 'false'}
+          data-panning={isPanning ? 'true' : 'false'}
+          data-canvas-scroll={JSON.stringify(canvasScroll)}
         >
           {view === 'board' ? (
             <ModuleBoard

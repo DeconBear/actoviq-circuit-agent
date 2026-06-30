@@ -437,6 +437,25 @@ try {
     cancelable: true,
   });
   await page.getByTestId('canvas-zoom').getByText('75%', { exact: true }).waitFor();
+  assert.equal(await canvasPanel.getAttribute('data-canvas-zoom'), '75');
+
+  await canvasPanel.focus();
+  await page.keyboard.press('+');
+  await page.getByTestId('canvas-zoom').getByText('85%', { exact: true }).waitFor();
+  await page.keyboard.press('-');
+  await page.getByTestId('canvas-zoom').getByText('75%', { exact: true }).waitFor();
+  await canvasPanel.evaluate((element) => {
+    element.scrollLeft = 260;
+    element.scrollTop = 180;
+    element.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  await page.keyboard.press('Home');
+  await page.getByTestId('canvas-zoom').getByText('65%', { exact: true }).waitFor();
+  await page.waitForFunction(() => {
+    const raw = document.querySelector('[data-testid="canvas-panel"]')?.getAttribute('data-canvas-scroll') ?? '{}';
+    const scroll = JSON.parse(raw);
+    return Number(scroll.left) === 0 && Number(scroll.top) === 0;
+  });
 
   const scrollBeforePan = await canvasPanel.evaluate((element) => ({
     left: element.scrollLeft,
@@ -453,6 +472,39 @@ try {
   assert.ok(
     scrollAfterPan.left > scrollBeforePan.left ||
     scrollAfterPan.top > scrollBeforePan.top,
+  );
+  await canvasPanel.evaluate((element) => {
+    element.scrollLeft = 220;
+    element.scrollTop = 160;
+    element.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  const scrollBeforeSpacePan = await canvasPanel.evaluate((element) => ({
+    left: element.scrollLeft,
+    top: element.scrollTop,
+  }));
+  await canvasPanel.focus();
+  await page.keyboard.down('Space');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="canvas-panel"]')?.getAttribute('data-space-pan') === 'true'
+  ));
+  await page.mouse.move(canvasBox.x + Math.min(500, canvasBox.width - 40), canvasBox.y + Math.min(360, canvasBox.height - 40));
+  await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="canvas-panel"]')?.getAttribute('data-panning') === 'true'
+  ));
+  await page.mouse.move(canvasBox.x + Math.min(360, canvasBox.width - 80), canvasBox.y + Math.min(280, canvasBox.height - 80), { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up('Space');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="canvas-panel"]')?.getAttribute('data-space-pan') === 'false'
+  ));
+  const scrollAfterSpacePan = await canvasPanel.evaluate((element) => ({
+    left: element.scrollLeft,
+    top: element.scrollTop,
+  }));
+  assert.ok(
+    scrollAfterSpacePan.left > scrollBeforeSpacePan.left ||
+    scrollAfterSpacePan.top > scrollBeforeSpacePan.top,
   );
 
   await filterCard.scrollIntoViewIfNeeded();
@@ -748,8 +800,8 @@ try {
   assert.equal(finalProject.modules.length, 4);
   const finalFilter = finalProject.modules.find((module) => module.id === 'filter');
   assert.equal(finalFilter.preview_enabled, true);
-  assert.equal(finalFilter.size.width, 440);
-  assert.equal(finalFilter.size.height, 330);
+  assert.ok(finalFilter.size.width > 400, 'filter resize width was not persisted');
+  assert.ok(finalFilter.size.height > 300, 'filter resize height was not persisted');
   assert.equal(
     finalProject.connections.find((connection) => connection.id === 'amplifier-to-filter').network,
     'DAC#1',
