@@ -14,6 +14,7 @@ import {
   addWire,
   cloneModule,
   COMPONENT_TYPES,
+  componentBounds,
   createSchematicDocument,
   hitComponent,
   hitEndpoint,
@@ -268,7 +269,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       return;
     }
 
-    const componentHit = hitComponent(document, world);
+    const componentHit = hitComponent(document, world) ?? hitSelectedComponentFrame(document, selection, world);
     if (componentHit) {
       setSelection({ kind: 'component', id: componentHit.id });
       setInteractionCursor('grabbing');
@@ -988,8 +989,27 @@ function cursorForWorld(
   world: CircuitPosition,
 ): EditorCursor {
   if (hitComponent(document, world)) return 'grab';
+  if (hitSelectedComponentFrame(document, selection, world)) return 'grab';
   if (hitSelectedStoredWirePoint(document.wires, module, selection, world)) return 'move';
   return hitStoredWireSegment(document.wires, module, world) ? 'move' : 'default';
+}
+
+function hitSelectedComponentFrame(
+  document: ReturnType<typeof createSchematicDocument>,
+  selection: SchematicSelection,
+  world: CircuitPosition,
+): CircuitComponent | null {
+  if (selection?.kind !== 'component') return null;
+  const component = document.module.components.find((entry) => entry.id === selection.id);
+  if (!component) return null;
+  const bounds = componentBounds(component);
+  const padding = 14;
+  return (
+    world.x >= bounds.minX - padding &&
+    world.x <= bounds.maxX + padding &&
+    world.y >= bounds.minY - padding &&
+    world.y <= bounds.maxY + padding
+  ) ? component : null;
 }
 
 function applyWirePointDrag(

@@ -640,6 +640,36 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
   ));
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 1, 'component selection frame is missing');
+  const r1FrameDragPoint = await componentScreenPoint(page, 'r1', { x: 0, y: 42 });
+  await page.mouse.move(r1FrameDragPoint.x, r1FrameDragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(r1FrameDragPoint.x + 80, r1FrameDragPoint.y + 40, { steps: 8 });
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r1?.x) !== Number(previous.x) || Number(positions.r1?.y) !== Number(previous.y);
+  }, filterPositionsAfterNudge.r1);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r1?.x) === Number(previous.x) && Number(positions.r1?.y) === Number(previous.y);
+  }, filterPositionsAfterNudge.r1);
+  const filterPositionsAfterFrameDragCancel = await componentPositions(page);
+  assertPositionEqual(filterPositionsAfterFrameDragCancel.r_filter, filterPositionsAfterNudge.r_filter, 'cancelled frame drag moved r_filter');
+  assertPositionEqual(filterPositionsAfterFrameDragCancel.c_filter, filterPositionsAfterNudge.c_filter, 'cancelled frame drag moved c_filter');
+  assertPositionEqual(filterPositionsAfterFrameDragCancel.r1, filterPositionsAfterNudge.r1, 'Escape did not cancel selected-frame drag');
+  await page.mouse.click(r1PlacePoint.x, r1PlacePoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
+  ));
   await editor.focus();
   await page.keyboard.press('Delete');
   await page.waitForFunction(() => (
