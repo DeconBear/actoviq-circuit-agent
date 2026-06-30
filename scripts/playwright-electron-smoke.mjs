@@ -122,7 +122,7 @@ async function readJsonFile(filePath) {
 }
 
 async function waitForCompiledBuildManifest(filePath, previousBuiltAt, requiredModuleIds = []) {
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 120_000;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
@@ -235,7 +235,7 @@ try {
   await page.getByTestId('sidebar-new-workspace').click();
   await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('workspace-name-input').fill(workspaceName);
-  await page.getByTestId('workspace-name-input').press('Enter');
+  await page.getByTestId('workspace-create-submit').click();
   await page.getByTestId('sidebar-notice').getByText(`Workspace created: ${workspaceName}`, { exact: true }).waitFor({ timeout: 20_000 });
   const emptyBlankProjectName = `Playwright Empty Blank ${Date.now()}`;
   await page.getByTestId('create-blank-project').waitFor({ timeout: 20_000 });

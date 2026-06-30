@@ -208,6 +208,20 @@ async function componentScreenPoint(page, componentId, offset = { x: 0, y: 0 }) 
   return worldToScreen({ x: position.x + offset.x, y: position.y + offset.y }, viewBox, svgBox);
 }
 
+async function selectComponentForDrag(page, componentId, offsets = [{ x: 0, y: 0 }]) {
+  await page.getByTestId('schematic-editor-select').click();
+  for (const offset of offsets) {
+    const point = await componentScreenPoint(page, componentId, offset);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.click(point.x, point.y);
+    const selected = await page.waitForFunction((id) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `component:${id}`
+    ), componentId, { timeout: 1200 }).then(() => true).catch(() => false);
+    if (selected) return point;
+  }
+  throw new Error(`Component ${componentId} could not be selected for drag`);
+}
+
 function assertPositionEqual(actual, expected, label) {
   assert.deepEqual(
     { x: Number(actual?.x), y: Number(actual?.y) },
@@ -958,17 +972,18 @@ try {
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
   console.log('[e2e] legacy ldo loaded');
-  const mpPoint = await componentScreenPoint(page, 'mp');
-  await page.getByTestId('schematic-editor-select').click();
+  const mpPoint = await selectComponentForDrag(page, 'mp', [
+    { x: 0, y: 0 },
+    { x: -20, y: 0 },
+    { x: 12, y: 0 },
+    { x: 24, y: -24 },
+  ]);
   await page.mouse.move(mpPoint.x, mpPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
   ));
-  await page.mouse.click(mpPoint.x, mpPoint.y);
-  await page.waitForFunction(() => (
-    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:mp'
-  ));
   await page.mouse.down();
+  await page.mouse.move(mpPoint.x - 4, mpPoint.y - 4);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));

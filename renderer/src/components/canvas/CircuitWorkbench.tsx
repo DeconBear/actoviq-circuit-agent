@@ -435,24 +435,6 @@ export function CircuitWorkbench({
     }
   }
 
-  async function moveSchematicItems(
-    moduleId: string,
-    items: Array<{ itemId: string; x: number; y: number }>,
-  ): Promise<void> {
-    if (items.length === 0) return;
-    const saved = await applyOperations('Lock schematic layout baseline', items.map((item) => ({
-      op: 'move_schematic_item',
-      module_id: moduleId,
-      item_id: item.itemId,
-      x: Math.round(item.x * 10) / 10,
-      y: Math.round(item.y * 10) / 10,
-    })));
-    if (saved) {
-      await buildModulePreview(moduleId, false);
-      setNotice(`Locked ${items.length} schematic items`);
-    }
-  }
-
   async function resetSchematicItem(moduleId: string, itemId: string): Promise<void> {
     const saved = await applyOperations(`Reset schematic item ${itemId}`, [{
       op: 'reset_schematic_item',
@@ -1222,7 +1204,6 @@ export function CircuitWorkbench({
               onBuild={() => buildModulePreview(selectedRef.id)}
               onSaveSchematic={(moduleData) => saveModuleSchematic(selectedRef.id, moduleData)}
               onMoveItem={(itemId, x, y) => moveSchematicItem(selectedRef.id, itemId, x, y)}
-              onMoveItems={(items) => moveSchematicItems(selectedRef.id, items)}
               onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
             />
@@ -1646,7 +1627,6 @@ function ModuleSchematic({
   onBuild,
   onSaveSchematic,
   onMoveItem,
-  onMoveItems,
   onResetItem,
   onResetLayout,
 }: {
@@ -1658,7 +1638,6 @@ function ModuleSchematic({
   onBuild: () => void;
   onSaveSchematic: (moduleData: CircuitModule) => Promise<void>;
   onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
-  onMoveItems: (items: Array<{ itemId: string; x: number; y: number }>) => Promise<void>;
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
 }) {
@@ -1681,7 +1660,6 @@ function ModuleSchematic({
   const editLayoutRef = useRef(editLayout);
   const busyRef = useRef(busy);
   const onMoveItemRef = useRef(onMoveItem);
-  const onMoveItemsRef = useRef(onMoveItems);
   const onResetItemRef = useRef(onResetItem);
   const selectedItemRef = useRef(selectedItem);
   const snapToGridRef = useRef(snapToGrid);
@@ -1703,7 +1681,6 @@ function ModuleSchematic({
   editLayoutRef.current = editLayout;
   busyRef.current = busy;
   onMoveItemRef.current = onMoveItem;
-  onMoveItemsRef.current = onMoveItems;
   onResetItemRef.current = onResetItem;
   selectedItemRef.current = selectedItem;
   snapToGridRef.current = snapToGrid;
@@ -1755,18 +1732,6 @@ function ModuleSchematic({
 
   function currentItemPosition(itemId: string): { x: number; y: number } | null {
     return parseSvgTranslate(groupForItem(itemId)?.getAttribute('transform') ?? null);
-  }
-
-  function currentLayoutPositions(): Array<{ itemId: string; x: number; y: number }> {
-    const container = svgContainerRef.current;
-    if (!container) return [];
-    return Array.from(container.querySelectorAll('svg g[id^="cell_"]'))
-      .map((group) => {
-        const itemId = group.id.replace(/^cell_/, '');
-        const position = parseSvgTranslate(group.getAttribute('transform'));
-        return itemId && position ? { itemId, x: position.x, y: position.y } : null;
-      })
-      .filter((entry): entry is { itemId: string; x: number; y: number } => Boolean(entry));
   }
 
   function findSchematicCellGroup(
@@ -1874,14 +1839,7 @@ function ModuleSchematic({
         },
       ].slice(-30));
       setRedoStack([]);
-      const baseline = currentLayoutPositions();
-      if (Object.keys(overridesRef.current?.items ?? {}).length === 0 && baseline.length > 1) {
-        void onMoveItemsRef.current(baseline.map((item) => (
-          item.itemId === current.itemId ? { ...item, x: nextX, y: nextY } : item
-        )));
-      } else {
-        void onMoveItemRef.current(current.itemId, nextX, nextY);
-      }
+      void onMoveItemRef.current(current.itemId, nextX, nextY);
     };
     window.addEventListener(moveEventName, move as EventListener);
     window.addEventListener(upEventName, up as EventListener, { once: true });
@@ -1905,14 +1863,7 @@ function ModuleSchematic({
       },
     ].slice(-30));
     setRedoStack([]);
-    const baseline = currentLayoutPositions();
-    if (Object.keys(overrides?.items ?? {}).length === 0 && baseline.length > 1) {
-      await onMoveItems(baseline.map((item) => (
-        item.itemId === selectedItem ? { ...item, x: next.x, y: next.y } : item
-      )));
-    } else {
-      await onMoveItem(selectedItem, next.x, next.y);
-    }
+    await onMoveItem(selectedItem, next.x, next.y);
   }
 
   async function undoLayoutMove(): Promise<void> {

@@ -1486,9 +1486,10 @@ def compile_project(root: Path) -> dict[str, Any]:
         "project_id": project["project_id"],
         "revision": project["revision"],
         "built_at": utc_now(),
-        "status": "compiled",
+        "status": "compiling",
         "netlist": "system/design.final.cir",
         "source_map": "system/source-map.json",
+        "modules": {},
     }
     atomic_write_json(root / "build" / "build-manifest.json", manifest)
     # Recompiling invalidates any prior run, so the report is design-only until
@@ -1497,6 +1498,27 @@ def compile_project(root: Path) -> dict[str, Any]:
     module_results = []
     for module_ref in project["modules"]:
         module_results.append(compile_module(root, module_ref["id"]))
+    final_manifest = {
+        **manifest,
+        "built_at": utc_now(),
+        "status": "compiled",
+        "modules": {
+            result["module_id"]: {
+                "status": "compiled",
+                "revision": result["revision"],
+                "netlist": f"modules/{result['module_id']}/design.cir",
+                "schematic": (
+                    f"modules/{result['module_id']}/schematic.svg"
+                    if result.get("render", {}).get("ok")
+                    else None
+                ),
+                "renderer": result.get("render", {}).get("renderer", "netlistsvg"),
+                "render_ok": bool(result.get("render", {}).get("ok")),
+            }
+            for result in module_results
+        },
+    }
+    atomic_write_json(root / "build" / "build-manifest.json", final_manifest)
     return {
         "ok": True,
         "project_id": project["project_id"],
