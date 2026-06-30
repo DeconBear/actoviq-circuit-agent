@@ -736,6 +736,37 @@ try {
   assert.equal(await editor.getAttribute('data-selected'), `wire:${drawnWire.id}`, 'dragged wire should stay selected');
   assert.ok(await isWireVisible(page, drawnWire.id), 'dragged wire segment is not visibly drawn');
   console.log('[e2e] stored wire segment drag isolated');
+  const wiresAfterSegmentDrag = await editorWires(page);
+  const wireAfterSegmentDrag = wiresAfterSegmentDrag.find((wire) => wire.id === drawnWire.id);
+  assert.ok(wireAfterSegmentDrag, 'dragged wire disappeared before cancel-drag regression');
+  const wireCancelDragPoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
+  await page.mouse.move(wireCancelDragPoint.x, wireCancelDragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'move'
+  ));
+  await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(wireCancelDragPoint.x - 80, wireCancelDragPoint.y + 50, { steps: 8 });
+  await page.waitForFunction(({ wireId, before }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    const wire = JSON.parse(raw).find((entry) => entry.id === wireId);
+    return wire && JSON.stringify(wire.points) !== JSON.stringify(before);
+  }, { wireId: drawnWire.id, before: wireAfterSegmentDrag.points });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction(({ wireId, before }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    const wire = JSON.parse(raw).find((entry) => entry.id === wireId);
+    return wire && JSON.stringify(wire.points) === JSON.stringify(before);
+  }, { wireId: drawnWire.id, before: wireAfterSegmentDrag.points });
+  assert.deepEqual(
+    await componentPositions(page),
+    positionsBeforeWireDrag,
+    'Escape-canceling a stored wire segment drag moved schematic components',
+  );
+  console.log('[e2e] stored wire segment cancel isolated');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-wire-visible.png') });
   console.log('[e2e] wire drawn');
 
@@ -788,6 +819,43 @@ try {
   );
   assert.equal(await editor.getAttribute('data-selected'), `wire:${drawnWire.id}`, 'wire point drag should keep the wire selected');
   console.log('[e2e] stored wire point handle drag isolated');
+  const wiresAfterPointDrag = await editorWires(page);
+  const wireAfterPointDrag = wiresAfterPointDrag.find((wire) => wire.id === drawnWire.id);
+  assert.ok(wireAfterPointDrag?.points?.[1], 'wire point drag result is missing an interior point handle');
+  const wirePointCancelHandle = await wireHandleScreenPoint(page, drawnWire.id, 1);
+  await page.mouse.move(wirePointCancelHandle.x, wirePointCancelHandle.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'move'
+  ));
+  await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(wirePointCancelHandle.x - 55, wirePointCancelHandle.y - 35, { steps: 8 });
+  await page.waitForFunction(({ wireId, before }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    const wire = JSON.parse(raw).find((entry) => entry.id === wireId);
+    return wire && JSON.stringify(wire.points) !== JSON.stringify(before);
+  }, { wireId: drawnWire.id, before: wireAfterPointDrag.points });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction(({ wireId, before }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
+    const wire = JSON.parse(raw).find((entry) => entry.id === wireId);
+    return wire && JSON.stringify(wire.points) === JSON.stringify(before);
+  }, { wireId: drawnWire.id, before: wireAfterPointDrag.points });
+  assert.deepEqual(
+    await componentPositions(page),
+    positionsBeforeWirePointDrag,
+    'Escape-canceling a wire point handle drag moved schematic components',
+  );
+  console.log('[e2e] stored wire point cancel isolated');
+  const wireDeletePoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
+  await page.getByTestId('schematic-editor-select').click();
+  await page.mouse.click(wireDeletePoint.x, wireDeletePoint.y);
+  await page.waitForFunction((wireId) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `wire:${wireId}`
+  ), drawnWire.id);
   await page.keyboard.press('Delete');
   await page.waitForFunction((wireId) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]';
