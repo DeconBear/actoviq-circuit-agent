@@ -165,6 +165,7 @@ export function makePlacedComponent(
 function autoLayoutModule(module: CircuitModule): CircuitModule {
   if (module.components.length === 0) return module;
   const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
+  if (activeComponents.length > 0 && isBjtResetLikeModule(module, activeComponents)) return autoLayoutBjtResetModule(module, activeComponents);
   if (activeComponents.length > 0 && isLdoLikeModule(module, activeComponents)) return autoLayoutLdoModule(module, activeComponents);
   if (activeComponents.length > 0) return autoLayoutActiveModule(module, activeComponents);
   return autoLayoutPassiveModule(module);
@@ -307,6 +308,110 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
     component.rotation = 0;
     usedSlots.right += 1;
     rememberComponentPinAnchors(nodeAnchors, component);
+  }
+  return module;
+}
+
+function isBjtResetLikeModule(module: CircuitModule, activeComponents: CircuitComponent[]): boolean {
+  const bjtCount = activeComponents.filter((component) => component.type === 'Q').length;
+  if (bjtCount < 2 || !module.components.some((component) => component.type === 'D')) return false;
+  const text = [
+    module.module_id,
+    module.name,
+    ...module.components.flatMap((component) => [
+      component.id,
+      component.name,
+      component.value,
+      ...component.pins.map((pin) => pin.net),
+    ]),
+  ].join(' ').toLowerCase();
+  return /rst|reset/.test(text) && /dtr/.test(text) && /rts/.test(text) && /boot/.test(text);
+}
+
+function autoLayoutBjtResetModule(module: CircuitModule, activeComponents: CircuitComponent[]): CircuitModule {
+  const placed = new Set<string>();
+  const bjtComponents = activeComponents.filter((component) => component.type === 'Q');
+  const reset = findNamedComponent(bjtComponents, /rst|reset/) ?? bjtComponents[1] ?? bjtComponents[0];
+  const boot = findNamedComponent(bjtComponents, /boot/) ?? bjtComponents.find((component) => component.id !== reset?.id) ?? bjtComponents[0];
+  const resetNets = reset ? activeNetMap(reset) : {};
+  const bootNets = boot ? activeNetMap(boot) : {};
+  const powerNet = module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net ?? 'vdd';
+
+  if (boot) {
+    boot.position = snapPoint({ x: 260, y: 300 });
+    boot.rotation = 0;
+    placed.add(boot.id);
+  }
+  if (reset) {
+    reset.position = snapPoint({ x: 620, y: 220 });
+    reset.rotation = 0;
+    placed.add(reset.id);
+  }
+
+  const resetCollector = reset && resetNets.drain ? pinPointForComponentNet(reset, resetNets.drain) : null;
+  const resetBase = reset && resetNets.gate ? pinPointForComponentNet(reset, resetNets.gate) : null;
+  const resetEmitter = reset && resetNets.source ? pinPointForComponentNet(reset, resetNets.source) : null;
+  const bootBase = boot && bootNets.gate ? pinPointForComponentNet(boot, bootNets.gate) : null;
+  const bootEmitter = boot && bootNets.source ? pinPointForComponentNet(boot, bootNets.source) : null;
+
+  const twoPinComponents = module.components.filter((component) => component.pins.length === 2 && !placed.has(component.id));
+  const pullup = findTwoPinWithNets(twoPinComponents, placed, /r50|pull|up/i, powerNet, resetNets.drain);
+  if (pullup && resetCollector && resetNets.drain) {
+    placeVertical(pullup, powerNet, resetNets.drain, {
+      x: resetCollector.x,
+      y: resetCollector.y - 95,
+    });
+    placed.add(pullup.id);
+  }
+
+  const diode = findTwoPinWithNets(twoPinComponents, placed, /d|diode|rst|reset/i, undefined, resetNets.drain);
+  if (diode && resetCollector && resetNets.drain) {
+    const leftNet = diode.pins.find((pin) => pin.net !== resetNets.drain)?.net ?? diode.pins[0]?.net ?? resetNets.drain;
+    placeHorizontal(diode, leftNet, resetNets.drain, {
+      x: resetCollector.x - 165,
+      y: resetCollector.y,
+    });
+    placed.add(diode.id);
+  }
+
+  const dtrResistor = findTwoPinWithNets(twoPinComponents, placed, /r51|dtr/i, resetNets.gate, undefined);
+  if (dtrResistor && resetBase && resetNets.gate) {
+    const rightNet = dtrResistor.pins.find((pin) => pin.net !== resetNets.gate)?.net ?? dtrResistor.pins[1]?.net ?? resetNets.gate;
+    placeHorizontal(dtrResistor, resetNets.gate, rightNet, {
+      x: resetBase.x + 170,
+      y: resetBase.y,
+    });
+    placed.add(dtrResistor.id);
+  }
+
+  const rtsResistor = findTwoPinWithNets(twoPinComponents, placed, /r49|rts/i, bootNets.gate, resetNets.source);
+  if (rtsResistor && bootBase && resetEmitter && bootNets.gate && resetNets.source) {
+    placeHorizontal(rtsResistor, bootNets.gate, resetNets.source, {
+      x: (bootBase.x + resetEmitter.x) / 2,
+      y: resetEmitter.y + 54,
+    });
+    placed.add(rtsResistor.id);
+  }
+
+  const bootResistor = findTwoPinWithNets(twoPinComponents, placed, /r52|boot/i, bootNets.source, undefined);
+  if (bootResistor && bootEmitter && bootNets.source) {
+    const bottomNet = bootResistor.pins.find((pin) => pin.net !== bootNets.source)?.net ?? bootResistor.pins[1]?.net ?? bootNets.source;
+    placeVertical(bootResistor, bootNets.source, bottomNet, {
+      x: bootEmitter.x,
+      y: bootEmitter.y + 100,
+    });
+    placed.add(bootResistor.id);
+  }
+
+  let fallbackIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    component.position = snapPoint({
+      x: 820 + (fallbackIndex % 3) * 170,
+      y: 200 + Math.floor(fallbackIndex / 3) * 135,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+    fallbackIndex += 1;
   }
   return module;
 }
@@ -546,6 +651,31 @@ function findPassDevice(activeComponents: CircuitComponent[], powerNet: string, 
       component.pins.some((pin) => pin.net === outputNet)
     )) ??
     activeComponents.find(isPmosComponent);
+}
+
+function findNamedComponent(components: CircuitComponent[], pattern: RegExp): CircuitComponent | undefined {
+  return components.find((component) => pattern.test(`${component.id} ${component.name} ${component.value}`));
+}
+
+function findTwoPinWithNets(
+  components: CircuitComponent[],
+  placed: Set<string>,
+  pattern: RegExp,
+  firstNet?: string,
+  secondNet?: string,
+): CircuitComponent | undefined {
+  const matchesNets = (component: CircuitComponent) => {
+    const nets = new Set(component.pins.map((pin) => pin.net));
+    return (!firstNet || nets.has(firstNet)) && (!secondNet || nets.has(secondNet));
+  };
+  return components.find((component) => !placed.has(component.id) && pattern.test(`${component.id} ${component.name} ${component.value}`) && matchesNets(component)) ??
+    components.find((component) => !placed.has(component.id) && matchesNets(component));
+}
+
+function pinPointForComponentNet(component: CircuitComponent, net: string): CircuitPosition | null {
+  const index = component.pins.findIndex((pin) => pin.net === net);
+  const pin = index >= 0 ? component.pins[index] : undefined;
+  return pin ? pinWorld(component, pin, index) : null;
 }
 
 function placeNamedTwoPin(
@@ -1447,10 +1577,11 @@ function shouldRepresentSignalNetWithLocalLabel(module: CircuitModule, net: stri
   if (!net || endpoints.length < 2) return false;
   if (!isReadableSignalNetName(net)) return false;
   if (module.ports.some((port) => port.net === net)) return false;
-  if (endpoints.length >= 3) return true;
-  const [first, second] = endpoints;
-  if (!first || !second) return false;
-  return Math.abs(first.x - second.x) > 260 || Math.abs(first.y - second.y) > 180;
+  const xs = endpoints.map((endpoint) => endpoint.x);
+  const ys = endpoints.map((endpoint) => endpoint.y);
+  const spanX = Math.max(...xs) - Math.min(...xs);
+  const spanY = Math.max(...ys) - Math.min(...ys);
+  return spanX > 260 || spanY > 180;
 }
 
 function isReadableSignalNetName(net: string): boolean {

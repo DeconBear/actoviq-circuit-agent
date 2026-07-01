@@ -72,6 +72,15 @@ const fixtures: CircuitModule[] = [
     component('cout', 'C', '1u', 360, 180, [['a', '1', 'out'], ['b', '2', 'load']]),
     component('rload', 'R', '10k', 500, 260, [['a', '1', 'load'], ['b', '2', '0']]),
   ]),
+  moduleFixture('bjt_reset_network', [
+    component('q_boot', 'Q', 'S8050', 160, 220, [['c', 'C', 'vdd'], ['b', 'B', 'rts_drive'], ['e', 'E', 'boot_node']]),
+    component('q_rst', 'Q', 'S8050', 420, 180, [['c', 'C', 'rst_pull'], ['b', 'B', 'dtr_drive'], ['e', 'E', 'rts']]),
+    component('d_rst', 'D', '1N4148W', 280, 120, [['a', 'A', 'rst'], ['b', 'K', 'rst_pull']]),
+    component('r50', 'R', '10k', 420, 60, [['a', '1', 'vdd'], ['b', '2', 'rst_pull']]),
+    component('r51', 'R', '1k', 560, 180, [['a', '1', 'dtr_drive'], ['b', '2', 'dtr']]),
+    component('r49', 'R', '1k', 290, 280, [['a', '1', 'rts_drive'], ['b', '2', 'rts']]),
+    component('r52', 'R', '1k', 160, 380, [['a', '1', 'boot_node'], ['b', '2', 'boot0']]),
+  ]),
   moduleFixture('mos_common_source', [
     component('m1', 'M', 'NMOS W=10u L=1u', 220, 180, [
       ['d', 'D', 'out'],
@@ -191,6 +200,29 @@ function assertReadableLayout(module: CircuitModule) {
     assertPinAbove(emitterLoad, 'e', '0', module.module_id);
     assertPinAbove(outputLoad, 'load', '0', module.module_id);
   }
+  if (module.module_id === 'bjt_reset_network') {
+    const boot = mustComponent(module, 'q_boot');
+    const reset = mustComponent(module, 'q_rst');
+    const diode = mustComponent(module, 'd_rst');
+    const pullup = mustComponent(module, 'r50');
+    const dtr = mustComponent(module, 'r51');
+    const rts = mustComponent(module, 'r49');
+    const boot0 = mustComponent(module, 'r52');
+    assertActivePins(boot, module.module_id);
+    assertActivePins(reset, module.module_id);
+    assert.ok(boot.position.x < reset.position.x, 'BJT reset boot transistor should be left of reset transistor');
+    assert.ok(diode.position.x < reset.position.x, 'BJT reset diode should feed the reset transistor from the left');
+    assert.ok(pullup.position.y < reset.position.y, 'BJT reset pull-up should sit above reset transistor');
+    assert.ok(dtr.position.x > reset.position.x, 'BJT reset DTR resistor should sit on the output side');
+    assert.ok(rts.position.x > boot.position.x && rts.position.x < reset.position.x, 'BJT reset RTS resistor should bridge the two transistor stages');
+    assert.ok(boot0.position.y > boot.position.y, 'BJT reset BOOT resistor should sit below boot transistor');
+    assertPinLeftOf(diode, 'rst', 'rst_pull', module.module_id);
+    assertPinAbove(pullup, 'vdd', 'rst_pull', module.module_id);
+    assertPinLeftOf(dtr, 'dtr_drive', 'dtr', module.module_id);
+    assertPinLeftOf(rts, 'rts_drive', 'rts', module.module_id);
+    assertPinAbove(boot0, 'boot_node', 'boot0', module.module_id);
+    assertNoComponentOverlap(module, ['q_boot', 'q_rst', 'd_rst', 'r50', 'r51', 'r49', 'r52']);
+  }
   if (module.module_id === 'mos_common_source') {
     const transistor = mustComponent(module, 'm1');
     assertActivePins(transistor, module.module_id);
@@ -256,6 +288,38 @@ function assertActivePins(component: CircuitComponent, label: string) {
   } else {
     assert.ok(drain.y < source.y, `${label}.${component.id} drain/collector should be above source/emitter`);
   }
+}
+
+function assertNoComponentOverlap(module: CircuitModule, componentIds: string[]) {
+  const components = componentIds.map((id) => mustComponent(module, id));
+  for (let leftIndex = 0; leftIndex < components.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < components.length; rightIndex += 1) {
+      const left = components[leftIndex];
+      const right = components[rightIndex];
+      assert.ok(left && right);
+      const leftBounds = boundsForComponent(left);
+      const rightBounds = boundsForComponent(right);
+      assert.ok(
+        leftBounds.maxX < rightBounds.minX ||
+          rightBounds.maxX < leftBounds.minX ||
+          leftBounds.maxY < rightBounds.minY ||
+          rightBounds.maxY < leftBounds.minY,
+        `${module.module_id}.${left.id} overlaps ${right.id}`,
+      );
+    }
+  }
+}
+
+function boundsForComponent(component: CircuitComponent) {
+  const points = component.pins.map((pin, index) => pinWorld(component, pin, index));
+  const xs = [component.position.x - 58, component.position.x + 58, ...points.map((point) => point.x)];
+  const ys = [component.position.y - 58, component.position.y + 58, ...points.map((point) => point.y)];
+  return {
+    minX: Math.min(...xs),
+    minY: Math.min(...ys),
+    maxX: Math.max(...xs),
+    maxY: Math.max(...ys),
+  };
 }
 
 function pinPointForNet(component: CircuitComponent, net: string) {

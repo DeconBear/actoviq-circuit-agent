@@ -13,6 +13,7 @@ const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const projectPrefix = 'playwright-schematic-editor-';
 const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
+const legacyBjtResetPrefix = `${projectPrefix}legacy-bjt-reset-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -154,6 +155,72 @@ async function createLegacyLdoProject() {
   return { projectId: project.project_id, projectName: project.name };
 }
 
+async function createLegacyBjtResetProject() {
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyBjtResetPrefix}${Date.now()}`,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  const modulePorts = [
+    { id: 'vdd', name: '+3.3V', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'rst', name: 'RST', direction: 'input', signal_type: 'digital', net: 'rst' },
+    { id: 'dtr', name: 'DTR', direction: 'input', signal_type: 'digital', net: 'dtr' },
+    { id: 'rts', name: 'RTS', direction: 'output', signal_type: 'digital', net: 'rts' },
+    { id: 'boot0', name: 'BOOT0', direction: 'output', signal_type: 'digital', net: 'boot0' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'reset',
+    name: 'BJT reset handshake',
+    kind: 'interface',
+    function: 'Two-transistor reset/boot control network used to verify KiCad-like discrete schematic layout.',
+    parameters: { Vdd: '3.3 V' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/reset/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 420, height: 280 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'reset',
+    name: 'BJT reset handshake',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'reset');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# BJT reset handshake',
+    '',
+    '```spice',
+    '* Legacy notebook-only BJT reset/boot fixture',
+    '.model S8050 NPN (IS=1e-14 BF=160)',
+    '.model D4148 D (IS=2.52n RS=0.568 N=1.906)',
+    'Q_BOOT vdd rts_drive boot_node S8050',
+    'Q_RST rst_pull dtr_drive rts S8050',
+    'D1 rst rst_pull D4148',
+    'R50 vdd rst_pull 10k',
+    'R51 dtr_drive dtr 1k',
+    'R49 rts_drive rts 1k',
+    'R52 boot_node boot0 1k',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
 async function componentPositions(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-positions');
   return JSON.parse(raw || '{}');
@@ -206,6 +273,25 @@ async function componentScreenPoint(page, componentId, offset = { x: 0, y: 0 }) 
   const svgBox = await page.getByTestId('schematic-editor-svg').boundingBox();
   assert.ok(svgBox);
   return worldToScreen({ x: position.x + offset.x, y: position.y + offset.y }, viewBox, svgBox);
+}
+
+async function selectedComponentFrameScreenPoint(page, componentId, offset = { x: 0, y: 0 }) {
+  return page.getByTestId('schematic-editor-svg').locator(
+    `g[data-component-id="${componentId}"] [data-testid="schematic-selected-component-frame"]`,
+  ).evaluate((node, pointOffset) => {
+    if (!(node instanceof SVGGraphicsElement)) {
+      throw new Error('selected component frame is not an SVG graphics element');
+    }
+    const svg = node.ownerSVGElement;
+    const matrix = svg?.getScreenCTM();
+    if (!svg || !matrix) throw new Error('selected component frame has no SVG screen matrix');
+    const box = node.getBBox();
+    const point = svg.createSVGPoint();
+    point.x = box.x + box.width / 2 + Number(pointOffset.x);
+    point.y = box.y + box.height / 2 + Number(pointOffset.y);
+    const screenPoint = point.matrixTransform(matrix);
+    return { x: screenPoint.x, y: screenPoint.y };
+  }, offset);
 }
 
 async function selectComponentForDrag(page, componentId, offsets = [{ x: 0, y: 0 }]) {
@@ -344,6 +430,7 @@ for (const module of created.project.modules) {
   assert.equal(compiled.render.ok, true);
 }
 const legacyLdoProject = await createLegacyLdoProject();
+const legacyBjtResetProject = await createLegacyBjtResetProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -1123,18 +1210,25 @@ try {
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
   console.log('[e2e] legacy ldo loaded');
-  const mpPoint = await selectComponentForDrag(page, 'mp', [
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false'
+  ));
+  await selectComponentForDrag(page, 'mp', [
     { x: 0, y: 0 },
     { x: -20, y: 0 },
     { x: 12, y: 0 },
     { x: 24, y: -24 },
   ]);
+  const mpPoint = await selectedComponentFrameScreenPoint(page, 'mp');
   await page.mouse.move(mpPoint.x, mpPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
   ));
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false'
+  ));
   await page.mouse.down();
-  await page.mouse.move(mpPoint.x - 4, mpPoint.y - 4);
+  await page.mouse.move(mpPoint.x - 30, mpPoint.y - 20, { steps: 4 });
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
@@ -1150,6 +1244,36 @@ try {
   }
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
   console.log('[e2e] legacy ldo drag isolated');
+
+  await page.getByTestId(`sidebar-project-${legacyBjtResetProject.projectId}`).click();
+  await page.getByTestId('circuit-workbench').getByText(legacyBjtResetProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-reset').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 7 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 4;
+  });
+  const bjtResetPositions = await componentPositions(page);
+  for (const id of ['q_boot', 'q_rst', 'd1', 'r50', 'r51', 'r49', 'r52']) {
+    assert.ok(bjtResetPositions[id], `hydrated BJT reset component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 7, 'hydrated BJT reset components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 4, 'hydrated BJT reset signal wires are not visibly drawn');
+  assert.ok(bjtResetPositions.q_boot.x < bjtResetPositions.q_rst.x, 'BJT reset boot transistor should be left of reset transistor in GUI');
+  assert.ok(bjtResetPositions.d1.x < bjtResetPositions.q_rst.x, 'BJT reset diode should feed reset transistor from the left in GUI');
+  assert.ok(bjtResetPositions.r50.y < bjtResetPositions.q_rst.y, 'BJT reset pull-up should sit above reset transistor in GUI');
+  assert.ok(bjtResetPositions.r51.x > bjtResetPositions.q_rst.x, 'BJT reset DTR resistor should sit on the output side in GUI');
+  assert.ok(
+    bjtResetPositions.r49.x > bjtResetPositions.q_boot.x && bjtResetPositions.r49.x < bjtResetPositions.q_rst.x,
+    'BJT reset RTS resistor should bridge the two transistor stages in GUI',
+  );
+  assert.ok(bjtResetPositions.r52.y > bjtResetPositions.q_boot.y, 'BJT reset BOOT resistor should sit below boot transistor in GUI');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-bjt-reset.png') });
+  console.log('[e2e] legacy bjt reset loaded');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();

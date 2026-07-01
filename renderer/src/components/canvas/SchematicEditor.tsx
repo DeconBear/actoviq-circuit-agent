@@ -824,6 +824,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       style={styles.editorShell}
       data-testid="schematic-editor"
       data-tool={tool}
+      data-busy={busy ? 'true' : 'false'}
       data-dirty={dirty ? 'true' : 'false'}
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}

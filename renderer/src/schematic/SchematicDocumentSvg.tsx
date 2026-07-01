@@ -527,6 +527,12 @@ function componentLabelPositions(component: CircuitComponent): {
     };
   }
   const isActive = component.type === 'M' || component.type === 'Q';
+  if (component.type === 'Q') {
+    return {
+      name: { x: x + 48, y: y - 10, anchor: 'start' },
+      value: { x: x + 48, y: y + 72, anchor: 'start' },
+    };
+  }
   return {
     name: { x, y: y - (isActive ? 68 : 42), anchor: 'middle' },
     value: { x, y: y + (isActive ? 74 : 44), anchor: 'middle' },
