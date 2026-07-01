@@ -26,6 +26,8 @@ const SYMBOL_STROKE = 2.4;
 const WIRE_SELECTION_COLOR = '#0ea5e9';
 const COMPONENT_SELECTION_COLOR = '#f59e0b';
 
+type PortSide = 'left' | 'right' | 'top' | 'bottom';
+
 interface Props {
   document: SchematicDocument;
   selection?: SchematicSelection;
@@ -128,14 +130,15 @@ export function SchematicDocumentSvg({
           const isRailPort = isGroundPort(port) || port.signal_type === 'power';
           const hasLocalRailLabel = isRailPort && document.netLabels.some((label) => label.net === port.net);
           if (hasLocalRailLabel) return null;
-          const portKind = isGroundPort(port) ? 'ground' : port.signal_type === 'power' ? 'power' : port.direction === 'output' ? 'output' : 'input';
-          const labelPosition = portLabelPositions(position, portKind);
+          const portSide = portRenderSide(document, port, position);
+          const labelPosition = portLabelPositions(position, portSide);
           return (
             <g
               key={port.id}
               data-port-id={port.id}
               data-net={port.net}
               data-connected={connected ? 'true' : 'false'}
+              data-port-side={portSide}
               opacity={connected ? 1 : 0.38}
             >
               {isGroundPort(port) ? (
@@ -143,7 +146,7 @@ export function SchematicDocumentSvg({
               ) : port.signal_type === 'power' ? (
                 <PowerFlagSymbol position={position} />
               ) : (
-                <PortSymbol position={position} direction={port.direction === 'output' ? 'output' : 'input'} />
+                <PortSymbol position={position} side={portSide === 'right' ? 'right' : 'left'} />
               )}
               <EndpointCircle
                 point={position}
@@ -496,23 +499,23 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
 
 type TextAnchor = 'start' | 'middle' | 'end';
 
-function portLabelPositions(position: CircuitPosition, direction: 'input' | 'output' | 'ground' | 'power'): {
+function portLabelPositions(position: CircuitPosition, side: PortSide): {
   name: CircuitPosition & { anchor: TextAnchor };
   net: CircuitPosition & { anchor: TextAnchor };
 } {
-  if (direction === 'output') {
+  if (side === 'right') {
     return {
       name: { x: position.x + 50, y: position.y - 12, anchor: 'start' },
       net: { x: position.x + 50, y: position.y + 14, anchor: 'start' },
     };
   }
-  if (direction === 'input') {
+  if (side === 'left') {
     return {
       name: { x: position.x - 50, y: position.y - 22, anchor: 'start' },
       net: { x: position.x - 50, y: position.y + 4, anchor: 'start' },
     };
   }
-  if (direction === 'power') {
+  if (side === 'top') {
     return {
       name: { x: position.x, y: position.y - 54, anchor: 'middle' },
       net: { x: position.x + 12, y: position.y + 16, anchor: 'start' },
@@ -789,8 +792,8 @@ function EndpointCircle({
   );
 }
 
-function PortSymbol({ position, direction }: { position: CircuitPosition; direction: 'input' | 'output' }) {
-  const points = direction === 'input'
+function PortSymbol({ position, side }: { position: CircuitPosition; side: 'left' | 'right' }) {
+  const points = side === 'left'
     ? [
         `${position.x} ${position.y}`,
         `${position.x - 24} ${position.y - 18}`,
@@ -806,6 +809,31 @@ function PortSymbol({ position, direction }: { position: CircuitPosition; direct
         `${position.x} ${position.y + 18}`,
       ];
   return <polygon points={points.join(' ')} fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2" pointerEvents="none" />;
+}
+
+function portRenderSide(document: SchematicDocument, port: SchematicDocument['module']['ports'][number], position: CircuitPosition): PortSide {
+  if (isGroundPort(port)) return 'bottom';
+  if (port.signal_type === 'power') return 'top';
+  const pinPoints = document.module.components.flatMap((component) => (
+    component.pins
+      .flatMap((pin, index) => (pin.net === port.net ? [pinWorld(component, pin, index)] : []))
+  ));
+  if (pinPoints.length === 0) return port.direction === 'output' ? 'right' : 'left';
+  const first = pinPoints[0];
+  if (!first) return port.direction === 'output' ? 'right' : 'left';
+  const nearest = pinPoints.slice(1).reduce((best, point) => (
+    distanceSquared(position, point) < distanceSquared(position, best) ? point : best
+  ), first);
+  const dx = position.x - nearest.x;
+  const dy = position.y - nearest.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
+  return dy >= 0 ? 'bottom' : 'top';
+}
+
+function distanceSquared(left: CircuitPosition, right: CircuitPosition): number {
+  const dx = left.x - right.x;
+  const dy = left.y - right.y;
+  return dx * dx + dy * dy;
 }
 
 function PowerFlagSymbol({ position }: { position: CircuitPosition }) {

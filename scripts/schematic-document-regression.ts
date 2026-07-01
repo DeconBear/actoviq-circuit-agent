@@ -8,10 +8,19 @@ import {
   pinWorld,
 } from '../renderer/src/schematic/schematicDocument';
 
-const ports: CircuitPort[] = [
+const defaultPorts: CircuitPort[] = [
   { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
   { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
   { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
+const bjtResetPorts: CircuitPort[] = [
+  { id: 'vdd', name: '+3.3V', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'rst', name: 'RST', direction: 'input', signal_type: 'digital', net: 'rst' },
+  { id: 'dtr', name: 'DTR', direction: 'input', signal_type: 'digital', net: 'dtr' },
+  { id: 'rts', name: 'RTS', direction: 'output', signal_type: 'digital', net: 'rts' },
+  { id: 'boot0', name: 'BOOT0', direction: 'output', signal_type: 'digital', net: 'boot0' },
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
@@ -34,13 +43,13 @@ function component(
   };
 }
 
-function moduleFixture(moduleId: string, components: CircuitComponent[]): CircuitModule {
+function moduleFixture(moduleId: string, components: CircuitComponent[], modulePorts: CircuitPort[] = defaultPorts): CircuitModule {
   return {
     schema: 'actoviq.module.v1',
     module_id: moduleId,
     name: moduleId,
     revision: 0,
-    ports,
+    ports: modulePorts,
     components,
     wires: [],
     annotations: [],
@@ -80,7 +89,7 @@ const fixtures: CircuitModule[] = [
     component('r51', 'R', '1k', 560, 180, [['a', '1', 'dtr_drive'], ['b', '2', 'dtr']]),
     component('r49', 'R', '1k', 290, 280, [['a', '1', 'rts_drive'], ['b', '2', 'rts']]),
     component('r52', 'R', '1k', 160, 380, [['a', '1', 'boot_node'], ['b', '2', 'boot0']]),
-  ]),
+  ], bjtResetPorts),
   moduleFixture('mos_common_source', [
     component('m1', 'M', 'NMOS W=10u L=1u', 220, 180, [
       ['d', 'D', 'out'],
@@ -148,6 +157,7 @@ for (const fixture of fixtures) {
   }
 
   assertReadableLayout(document.module);
+  assertReadablePortPlacement(document);
   assertRailLabels(document.module, document.netLabels, document.wires);
 }
 
@@ -240,6 +250,23 @@ function assertReadableLayout(module: CircuitModule) {
   }
 }
 
+function assertReadablePortPlacement(document: ReturnType<typeof createSchematicDocument>) {
+  const { module, portPositions } = document;
+  if (module.module_id !== 'bjt_reset_network') return;
+
+  const resetDiode = mustComponent(module, 'd_rst');
+  const dtrResistor = mustComponent(module, 'r51');
+  const rstPort = mustPortPosition(portPositions, 'rst');
+  const dtrPort = mustPortPosition(portPositions, 'dtr');
+  const rtsPort = mustPortPosition(portPositions, 'rts');
+  const boot0Port = mustPortPosition(portPositions, 'boot0');
+
+  assert.ok(rstPort.x < pinPointForNet(resetDiode, 'rst').x, 'BJT reset RST input should stay outside the left edge');
+  assert.ok(dtrPort.x > pinPointForNet(dtrResistor, 'dtr').x, 'BJT reset DTR input should sit outside R51 on the right edge');
+  assert.ok(rtsPort.x > pinPointForNet(mustComponent(module, 'q_rst'), 'rts').x, 'BJT reset RTS output should sit on the right edge');
+  assert.ok(boot0Port.x > pinPointForNet(mustComponent(module, 'r52'), 'boot0').x, 'BJT reset BOOT0 output should sit outside R52');
+}
+
 function assertRailLabels(module: CircuitModule, netLabels: ReturnType<typeof createSchematicDocument>['netLabels'], wires: ReturnType<typeof createSchematicDocument>['wires']) {
   const railNets = new Set(
     module.ports
@@ -263,6 +290,12 @@ function mustComponent(module: CircuitModule, id: string): CircuitComponent {
   const component = module.components.find((entry) => entry.id === id);
   assert.ok(component, `${module.module_id}.${id} missing`);
   return component;
+}
+
+function mustPortPosition(portPositions: ReturnType<typeof createSchematicDocument>['portPositions'], id: string) {
+  const position = portPositions.get(id);
+  assert.ok(position, `port ${id} missing`);
+  return position;
 }
 
 function assertPinLeftOf(component: CircuitComponent, leftNet: string, rightNet: string, label: string) {

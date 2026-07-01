@@ -1303,6 +1303,26 @@ try {
     return Number(node?.getAttribute('data-component-count') ?? '0') >= 7 &&
       Number(node?.getAttribute('data-wire-count') ?? '0') >= 4;
   });
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="rst"]').getAttribute('data-port-side'),
+    'left',
+    'BJT reset RST input should render on the left edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="dtr"]').getAttribute('data-port-side'),
+    'right',
+    'BJT reset DTR input should render outside R51 on the right edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="rts"]').getAttribute('data-port-side'),
+    'right',
+    'BJT reset RTS output should render on the right edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="boot0"]').getAttribute('data-port-side'),
+    'right',
+    'BJT reset BOOT0 output should render outside R52',
+  );
   const bjtResetPositions = await componentPositions(page);
   for (const id of ['q_boot', 'q_rst', 'd1', 'r50', 'r51', 'r49', 'r52']) {
     assert.ok(bjtResetPositions[id], `hydrated BJT reset component ${id} is missing from editable schematic`);

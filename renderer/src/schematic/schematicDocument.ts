@@ -19,6 +19,8 @@ export type SchematicSelection =
   | { kind: 'wire'; id: string }
   | null;
 
+type SignalPortSide = 'left' | 'right';
+
 export interface EndpointHit extends CircuitWireEndpoint {
   kind: 'pin' | 'port' | 'point';
   label: string;
@@ -796,26 +798,28 @@ function bottommost(points: CircuitPosition[]): CircuitPosition | null {
 
 export function computePortPositions(module: CircuitModule): Map<string, CircuitPosition> {
   const bounds = moduleBounds(module, new Map(), module.wires ?? []);
-  const inputs = module.ports.filter((port) => !isGroundPort(port) && port.signal_type !== 'power' && port.direction !== 'output');
-  const outputs = module.ports.filter((port) => !isGroundPort(port) && port.direction === 'output');
+  const signalPorts = module.ports.filter((port) => !isGroundPort(port) && port.signal_type !== 'power');
   const powers = module.ports.filter((port) => !isGroundPort(port) && port.signal_type === 'power');
   const grounds = module.ports.filter(isGroundPort);
   const pinPointsByNet = pinPointsByNetName(module);
   const map = new Map<string, CircuitPosition>();
+  const signalSideCounts: Record<SignalPortSide, number> = { left: 0, right: 0 };
 
-  inputs.forEach((port, index) => {
+  signalPorts.forEach((port) => {
     const points = pinPointsByNet.get(port.net) ?? [];
-    const anchor = leftmost(points);
-    map.set(port.id, snapPoint(anchor
-      ? { x: anchor.x - 110, y: anchor.y + index * 16 }
-      : { x: bounds.minX - 120, y: bounds.minY + 70 + index * 60 }));
-  });
-  outputs.forEach((port, index) => {
-    const points = pinPointsByNet.get(port.net) ?? [];
-    const anchor = rightmost(points);
-    map.set(port.id, snapPoint(anchor
-      ? { x: anchor.x + 110, y: anchor.y + index * 16 }
-      : { x: bounds.maxX + 120, y: bounds.minY + 70 + index * 60 }));
+    const side = signalPortSide(port, points, bounds);
+    const index = signalSideCounts[side];
+    signalSideCounts[side] += 1;
+    const anchor = side === 'right' ? rightmost(points) : leftmost(points);
+    const fallback = {
+      x: side === 'right' ? bounds.maxX : bounds.minX,
+      y: bounds.minY + 70 + index * 60,
+    };
+    const base = anchor ?? fallback;
+    map.set(port.id, snapPoint({
+      x: base.x + (side === 'right' ? 110 : -110),
+      y: base.y + index * 16,
+    }));
   });
   powers.forEach((port, index) => {
     const points = pinPointsByNet.get(port.net) ?? [];
@@ -832,6 +836,15 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
       : { x: bounds.minX + 110 + index * 110, y: bounds.maxY + 100 }));
   });
   return map;
+}
+
+function signalPortSide(port: CircuitPort, points: CircuitPosition[], bounds: SchematicBounds): SignalPortSide {
+  if (points.length === 0) return port.direction === 'output' ? 'right' : 'left';
+  if (port.direction === 'output') return 'right';
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const anchor = leftmost(points);
+  if (!anchor) return 'left';
+  return anchor.x > centerX + SCHEMATIC_GRID ? 'right' : 'left';
 }
 
 export function moduleBounds(
