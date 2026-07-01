@@ -843,6 +843,17 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
   ));
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 1, 'component selection frame is missing');
+  const componentSelectionFrame = page.getByTestId('schematic-selected-component-frame').first();
+  assert.equal(await componentSelectionFrame.evaluate((node) => node.tagName.toLowerCase()), 'rect', 'component selection should use a frame rectangle');
+  assert.equal(await componentSelectionFrame.getAttribute('data-selection-kind'), 'component');
+  assert.equal(await componentSelectionFrame.getAttribute('data-selection-shape'), 'frame');
+  const componentSelectionStroke = await componentSelectionFrame.getAttribute('stroke');
+  assert.equal(await page.getByTestId('schematic-selected-component-corner').count(), 4, 'component selection should use square corner handles');
+  assert.equal(
+    await page.getByTestId('schematic-selected-component-corner').first().getAttribute('data-selection-handle-shape'),
+    'square',
+    'component selection handles should be square',
+  );
   const r1FrameDragPoint = await componentScreenPoint(page, 'r1', { x: 0, y: 42 });
   await page.mouse.move(r1FrameDragPoint.x, r1FrameDragPoint.y);
   await page.waitForFunction(() => (
@@ -1039,10 +1050,25 @@ try {
   }
   assert.equal(selectedAfterWireClick, `wire:${drawnWire.id}`, 'clicking the drawn wire did not select that stored wire');
   assert.equal(await page.getByTestId('schematic-selected-wire-highlight').count(), 1, 'wire selection highlight is missing');
+  const wireSelectionHighlight = page.getByTestId('schematic-selected-wire-highlight').first();
+  assert.equal(await wireSelectionHighlight.evaluate((node) => node.tagName.toLowerCase()), 'polyline', 'wire selection should follow the selected route');
+  assert.equal(await wireSelectionHighlight.getAttribute('data-selection-kind'), 'wire');
+  assert.equal(await wireSelectionHighlight.getAttribute('data-selection-shape'), 'route');
+  assert.notEqual(
+    await wireSelectionHighlight.getAttribute('stroke'),
+    componentSelectionStroke,
+    'wire and component selections should use visibly different strokes',
+  );
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 0, 'wire selection should not show component selection frame');
+  assert.equal(await page.getByTestId('schematic-selected-component-corner').count(), 0, 'wire selection should not show component corner handles');
   assert.ok(
     await page.getByTestId('schematic-wire-point-handle').count() >= 4,
     'selected stored wire should expose visible point handles after segment drag',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-wire-point-handle').first().getAttribute('data-selection-handle-shape'),
+    'circle',
+    'wire selection handles should be circular',
   );
   const positionsBeforeWirePointDrag = await componentPositions(page);
   const wiresBeforePointDrag = await editorWires(page);

@@ -23,6 +23,8 @@ const LABEL_FONT = 'Arial, Helvetica, sans-serif';
 const MONO_FONT = 'Consolas, monospace';
 const WIRE_STROKE = 3;
 const SYMBOL_STROKE = 2.4;
+const WIRE_SELECTION_COLOR = '#0ea5e9';
+const COMPONENT_SELECTION_COLOR = '#f59e0b';
 
 interface Props {
   document: SchematicDocument;
@@ -342,13 +344,15 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
       <polyline
         points={points}
         fill="none"
-        stroke={selected ? '#2563eb' : 'transparent'}
-        strokeWidth="9"
+        stroke={selected ? WIRE_SELECTION_COLOR : 'transparent'}
+        strokeWidth="11"
         strokeLinecap="round"
         strokeLinejoin="round"
-        opacity={selected ? 0.36 : 0}
+        opacity={selected ? 0.42 : 0}
         pointerEvents="none"
         data-testid={selected ? 'schematic-selected-wire-highlight' : undefined}
+        data-selection-kind={selected ? 'wire' : undefined}
+        data-selection-shape={selected ? 'route' : undefined}
       />
       <polyline
         points={points}
@@ -376,12 +380,14 @@ function WirePointHandles({ wire }: { wire: CircuitWire }) {
             cx={point.x}
             cy={point.y}
             r={endpoint ? 5.2 : 4.8}
-            fill={endpoint ? '#ffffff' : '#2563eb'}
-            stroke="#2563eb"
+            fill={endpoint ? '#ffffff' : WIRE_SELECTION_COLOR}
+            stroke={WIRE_SELECTION_COLOR}
             strokeWidth="1.8"
             data-testid="schematic-wire-point-handle"
             data-wire-id={wire.id}
             data-point-index={index}
+            data-selection-kind="wire"
+            data-selection-handle-shape="circle"
           />
         );
       })}
@@ -461,10 +467,12 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
         width={bounds.maxX - bounds.minX + inset * 2}
         height={bounds.maxY - bounds.minY + inset * 2}
         fill="rgba(245, 158, 11, 0.07)"
-        stroke="#f59e0b"
+        stroke={COMPONENT_SELECTION_COLOR}
         strokeWidth="1.8"
         strokeDasharray="8 6"
         data-testid="schematic-selected-component-frame"
+        data-selection-kind="component"
+        data-selection-shape="frame"
       />
       {corners.map((corner) => (
         <rect
@@ -475,8 +483,11 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
           height={size}
           rx="1.5"
           fill="#ffffff"
-          stroke="#f59e0b"
+          stroke={COMPONENT_SELECTION_COLOR}
           strokeWidth="1.6"
+          data-testid="schematic-selected-component-corner"
+          data-selection-kind="component"
+          data-selection-handle-shape="square"
         />
       ))}
     </g>

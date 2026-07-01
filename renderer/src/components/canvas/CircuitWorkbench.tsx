@@ -416,6 +416,14 @@ export function CircuitWorkbench({
     setModulePreviewBusy(Object.fromEntries([...next].map((id) => [id, true])));
   }
 
+  async function waitForModulePreviewBuilds(): Promise<boolean> {
+    const deadline = Date.now() + 60_000;
+    while (modulePreviewBusyRef.current.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return modulePreviewBusyRef.current.size === 0;
+  }
+
   async function buildModulePreview(moduleId: string, showNotice = true): Promise<boolean> {
     if (!activeProjectId) return false;
     if (modulePreviewBusyRef.current.has(moduleId)) return false;
@@ -536,7 +544,11 @@ export function CircuitWorkbench({
   }
 
   async function runBuild(simulate: boolean) {
-    if (!activeProjectId || !project || modulePreviewBusyRef.current.size > 0) return;
+    if (!activeProjectId || !project) return;
+    if (!(await waitForModulePreviewBuilds())) {
+      setError('Timed out waiting for module preview build to finish.');
+      return;
+    }
     setBusy(true);
     setError('');
     setNotice(simulate ? 'Running system simulation...' : 'Building netlist and module SVG previews...');
@@ -559,7 +571,11 @@ export function CircuitWorkbench({
   }
 
   async function saveDesignMemory(kind: 'template' | 'flow') {
-    if (!activeProjectId || modulePreviewBusyRef.current.size > 0) return;
+    if (!activeProjectId) return;
+    if (!(await waitForModulePreviewBuilds())) {
+      setError('Timed out waiting for module preview build to finish.');
+      return;
+    }
     setBusy(true);
     setError('');
     setNotice(kind === 'template' ? 'Saving reusable design template...' : 'Saving design flow...');
