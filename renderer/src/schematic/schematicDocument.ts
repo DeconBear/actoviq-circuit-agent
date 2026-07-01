@@ -169,6 +169,9 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
   const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
   if (activeComponents.length > 0 && isBjtResetLikeModule(module, activeComponents)) return autoLayoutBjtResetModule(module, activeComponents);
   if (activeComponents.length > 0 && isLdoLikeModule(module, activeComponents)) return autoLayoutLdoModule(module, activeComponents);
+  if (activeComponents.length === 1 && isSingleTransistorStageLikeModule(activeComponents[0])) {
+    return autoLayoutSingleTransistorStageModule(module, activeComponents[0]);
+  }
   if (activeComponents.length > 0) return autoLayoutActiveModule(module, activeComponents);
   return autoLayoutPassiveModule(module);
 }
@@ -362,6 +365,104 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
     component.rotation = 0;
     usedSlots.right += 1;
     rememberComponentPinAnchors(nodeAnchors, component);
+  }
+  return module;
+}
+
+function isSingleTransistorStageLikeModule(component: CircuitComponent | undefined): component is CircuitComponent {
+  if (!component) return false;
+  const nets = activeNetMap(component);
+  return Boolean(nets.gate && nets.drain && nets.source);
+}
+
+function autoLayoutSingleTransistorStageModule(module: CircuitModule, active: CircuitComponent): CircuitModule {
+  const placed = new Set<string>();
+  const nets = activeNetMap(active);
+  const inputNet = preferredPortNet(module, 'input');
+  const outputNet = preferredPortNet(module, 'output');
+  const groundNet = module.ports.find(isGroundPort)?.net ?? '0';
+  const powerNet = module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net ?? 'vdd';
+
+  active.position = snapPoint({ x: 380, y: 240 });
+  active.rotation = 0;
+  placed.add(active.id);
+
+  const twoPinComponents = module.components.filter((component) => component.pins.length === 2 && !placed.has(component.id));
+  const inputCoupling = inputNet && nets.gate && inputNet !== nets.gate
+    ? findTwoPinWithNets(twoPinComponents, placed, /c(in|input|coupl)|input/i, inputNet, nets.gate)
+    : undefined;
+  if (inputCoupling && inputNet && nets.gate) {
+    placeHorizontal(inputCoupling, inputNet, nets.gate, { x: 150, y: 240 });
+    placed.add(inputCoupling.id);
+  }
+
+  const gatePullup = nets.gate
+    ? findTwoPinWithNets(twoPinComponents, placed, /r(g|bias|1)|pull|up/i, powerNet, nets.gate)
+    : undefined;
+  if (gatePullup && nets.gate) {
+    placeVertical(gatePullup, powerNet, nets.gate, { x: 280, y: 115 });
+    placed.add(gatePullup.id);
+  }
+
+  const gatePulldown = nets.gate
+    ? findTwoPinWithNets(twoPinComponents, placed, /r(g|bias|2)|pull|down/i, nets.gate, groundNet)
+    : undefined;
+  if (gatePulldown && nets.gate) {
+    placeVertical(gatePulldown, nets.gate, groundNet, { x: 280, y: 365 });
+    placed.add(gatePulldown.id);
+  }
+
+  const drainLoad = nets.drain
+    ? findTwoPinWithNets(twoPinComponents, placed, /r(d|c)|drain|collector|load/i, powerNet, nets.drain)
+    : undefined;
+  if (drainLoad && nets.drain) {
+    placeVertical(drainLoad, powerNet, nets.drain, { x: 405, y: 100 });
+    placed.add(drainLoad.id);
+  }
+
+  const sourceResistor = nets.source
+    ? findTwoPinWithNets(twoPinComponents, placed, /r(s|e)|source|emitter|degeneration/i, nets.source, groundNet)
+    : undefined;
+  if (sourceResistor && nets.source) {
+    placeVertical(sourceResistor, nets.source, groundNet, { x: 405, y: 410 });
+    placed.add(sourceResistor.id);
+  }
+
+  const sourceBypass = nets.source
+    ? findTwoPinWithNets(twoPinComponents, placed, /c(s|e)|source|emitter|bypass/i, nets.source, groundNet)
+    : undefined;
+  if (sourceBypass && nets.source) {
+    placeVertical(sourceBypass, nets.source, groundNet, { x: 540, y: 410 });
+    placed.add(sourceBypass.id);
+  }
+
+  let outputLoadNet = outputNet && outputNet !== nets.drain ? outputNet : undefined;
+  const outputCoupling = nets.drain
+    ? findOutputCouplingComponent(twoPinComponents, placed, nets.drain, outputLoadNet, module)
+    : undefined;
+  if (outputCoupling && nets.drain) {
+    outputLoadNet = outputLoadNet ?? otherComponentNet(outputCoupling, nets.drain);
+    if (outputLoadNet) placeHorizontal(outputCoupling, nets.drain, outputLoadNet, { x: 590, y: 188 });
+    placed.add(outputCoupling.id);
+  }
+
+  const outputLoad = outputLoadNet
+    ? findTwoPinWithNets(twoPinComponents, placed, /r(load|out)|load/i, outputLoadNet, groundNet)
+    : undefined;
+  if (outputLoad && outputLoadNet) {
+    placeVertical(outputLoad, outputLoadNet, groundNet, { x: 745, y: 360 });
+    placed.add(outputLoad.id);
+  }
+
+  let fallbackIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    component.position = snapPoint({
+      x: 700 + (fallbackIndex % 3) * 150,
+      y: 180 + Math.floor(fallbackIndex / 3) * 140,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+    fallbackIndex += 1;
   }
   return module;
 }
@@ -671,9 +772,15 @@ function activeNetMap(component: CircuitComponent): { gate?: string; drain?: str
   const result: { gate?: string; drain?: string; source?: string } = {};
   for (const pin of component.pins) {
     const key = `${pin.id} ${pin.name}`.toLowerCase();
-    if (/gate|base|\bg\b|\bb\b/.test(key)) result.gate = pin.net;
-    if (/drain|collector|\bd\b|\bc\b/.test(key)) result.drain = pin.net;
-    if (/source|emitter|\bs\b|\be\b/.test(key)) result.source = pin.net;
+    if (component.type === 'M') {
+      if (/gate|\bg\b/.test(key)) result.gate = pin.net;
+      if (/drain|\bd\b/.test(key)) result.drain = pin.net;
+      if (/source|\bs\b/.test(key)) result.source = pin.net;
+      continue;
+    }
+    if (/base|\bb\b/.test(key)) result.gate = pin.net;
+    if (/collector|\bc\b/.test(key)) result.drain = pin.net;
+    if (/emitter|\be\b/.test(key)) result.source = pin.net;
   }
   return result;
 }
@@ -750,6 +857,27 @@ function findTwoPinWithNets(
   };
   return components.find((component) => !placed.has(component.id) && pattern.test(`${component.id} ${component.name} ${component.value}`) && matchesNets(component)) ??
     components.find((component) => !placed.has(component.id) && matchesNets(component));
+}
+
+function findOutputCouplingComponent(
+  components: CircuitComponent[],
+  placed: Set<string>,
+  drainNet: string,
+  preferredOutputNet: string | undefined,
+  module: CircuitModule,
+): CircuitComponent | undefined {
+  if (preferredOutputNet) {
+    return findTwoPinWithNets(components, placed, /c(out|output|coupl)|output/i, drainNet, preferredOutputNet);
+  }
+  return components.find((component) => {
+    if (placed.has(component.id) || component.type !== 'C' || component.pins.length !== 2) return false;
+    const otherNet = otherComponentNet(component, drainNet);
+    return Boolean(otherNet && !isRailNet(otherNet, module));
+  });
+}
+
+function otherComponentNet(component: CircuitComponent, net: string): string | undefined {
+  return component.pins.find((pin) => pin.net !== net)?.net;
 }
 
 function componentHasNets(component: CircuitComponent, firstNet: string, secondNet: string): boolean {

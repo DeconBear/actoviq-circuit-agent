@@ -110,6 +110,22 @@ const fixtures: CircuitModule[] = [
     ]),
     component('rd', 'R', '10k', 220, 60, [['a', '1', 'vdd'], ['b', '2', 'out']]),
   ]),
+  moduleFixture('mos_common_source_full', [
+    component('cin', 'C', '100n', 80, 180, [['a', '1', 'in'], ['b', '2', 'gate']]),
+    component('rg1', 'R', '1M', 150, 80, [['a', '1', 'vdd'], ['b', '2', 'gate']]),
+    component('rg2', 'R', '220k', 150, 300, [['a', '1', 'gate'], ['b', '2', '0']]),
+    component('m1', 'M', 'NMOS W=20u L=1u', 260, 180, [
+      ['d', 'D', 'drain'],
+      ['g', 'G', 'gate'],
+      ['s', 'S', 'source'],
+      ['b', 'B', '0'],
+    ]),
+    component('rd', 'R', '10k', 260, 60, [['a', '1', 'vdd'], ['b', '2', 'drain']]),
+    component('rs', 'R', '1k', 260, 320, [['a', '1', 'source'], ['b', '2', '0']]),
+    component('cs', 'C', '10u', 380, 320, [['a', '1', 'source'], ['b', '2', '0']]),
+    component('cout', 'C', '1u', 420, 180, [['a', '1', 'drain'], ['b', '2', 'out']]),
+    component('rload', 'R', '100k', 560, 300, [['a', '1', 'out'], ['b', '2', '0']]),
+  ]),
   moduleFixture('mos_ldo', [
     component('m_pass', 'M', 'PMOS W=40u L=1u', 220, 150, [
       ['d', 'D', 'out'],
@@ -258,6 +274,35 @@ function assertReadableLayout(module: CircuitModule) {
   if (module.module_id === 'mos_common_source') {
     const transistor = mustComponent(module, 'm1');
     assertActivePins(transistor, module.module_id);
+  }
+  if (module.module_id === 'mos_common_source_full') {
+    const transistor = mustComponent(module, 'm1');
+    const inputCoupling = mustComponent(module, 'cin');
+    const gatePullup = mustComponent(module, 'rg1');
+    const gatePulldown = mustComponent(module, 'rg2');
+    const drainLoad = mustComponent(module, 'rd');
+    const sourceResistor = mustComponent(module, 'rs');
+    const sourceBypass = mustComponent(module, 'cs');
+    const outputCoupling = mustComponent(module, 'cout');
+    const outputLoad = mustComponent(module, 'rload');
+    assertActivePins(transistor, module.module_id);
+    assert.ok(inputCoupling.position.x < transistor.position.x, 'MOS input coupling should sit before the gate');
+    assert.ok(outputCoupling.position.x > transistor.position.x, 'MOS output coupling should sit after the drain');
+    assert.ok(outputLoad.position.x >= outputCoupling.position.x, 'MOS output load should sit on the output side');
+    assert.ok(gatePullup.position.y < transistor.position.y, 'MOS gate pull-up should sit above the gate');
+    assert.ok(gatePulldown.position.y > transistor.position.y, 'MOS gate pull-down should sit below the gate');
+    assert.ok(drainLoad.position.y < transistor.position.y, 'MOS drain load should sit above the transistor');
+    assert.ok(sourceResistor.position.y > transistor.position.y, 'MOS source resistor should sit below the transistor');
+    assert.ok(sourceBypass.position.y > transistor.position.y, 'MOS source bypass should sit below the transistor');
+    assertPinLeftOf(inputCoupling, 'in', 'gate', module.module_id);
+    assertPinLeftOf(outputCoupling, 'drain', 'out', module.module_id);
+    assertPinAbove(gatePullup, 'vdd', 'gate', module.module_id);
+    assertPinAbove(gatePulldown, 'gate', '0', module.module_id);
+    assertPinAbove(drainLoad, 'vdd', 'drain', module.module_id);
+    assertPinAbove(sourceResistor, 'source', '0', module.module_id);
+    assertPinAbove(sourceBypass, 'source', '0', module.module_id);
+    assertPinAbove(outputLoad, 'out', '0', module.module_id);
+    assertNoComponentOverlap(module, ['cin', 'rg1', 'rg2', 'm1', 'rd', 'rs', 'cs', 'cout', 'rload']);
   }
   if (module.module_id === 'mos_ldo') {
     const pass = mustComponent(module, 'm_pass');

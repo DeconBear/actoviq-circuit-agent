@@ -74,7 +74,7 @@ export function SchematicDocumentSvg({
       xmlns="http://www.w3.org/2000/svg"
       viewBox={`${viewBox.minX} ${viewBox.minY} ${width} ${height}`}
       preserveAspectRatio="xMidYMid meet"
-      style={{ width: '100%', height: '100%', display: 'block', background: '#ffffff', touchAction: 'none', cursor }}
+      style={{ width: '100%', height: '100%', display: 'block', background: '#ffffff', touchAction: 'none', userSelect: 'none', cursor }}
       data-testid={testId}
       data-schematic-source="document"
       data-module-id={document.moduleId}
@@ -469,10 +469,12 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
         y={bounds.minY - inset}
         width={bounds.maxX - bounds.minX + inset * 2}
         height={bounds.maxY - bounds.minY + inset * 2}
-        fill="rgba(245, 158, 11, 0.07)"
+        fill="#f59e0b"
+        fillOpacity="0.07"
         stroke={COMPONENT_SELECTION_COLOR}
         strokeWidth="1.8"
         strokeDasharray="8 6"
+        pointerEvents="all"
         data-testid="schematic-selected-component-frame"
         data-selection-kind="component"
         data-selection-shape="frame"
@@ -488,6 +490,7 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
           fill="#ffffff"
           stroke={COMPONENT_SELECTION_COLOR}
           strokeWidth="1.6"
+          pointerEvents="all"
           data-testid="schematic-selected-component-corner"
           data-selection-kind="component"
           data-selection-handle-shape="square"

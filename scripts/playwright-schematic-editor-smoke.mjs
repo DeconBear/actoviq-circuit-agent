@@ -15,6 +15,7 @@ const projectPrefix = 'playwright-schematic-editor-';
 const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
 const legacyBjtResetPrefix = `${projectPrefix}legacy-bjt-reset-`;
 const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
+const legacyMosAmplifierPrefix = `${projectPrefix}legacy-mos-amp-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -279,6 +280,71 @@ async function createLegacyVoltageDividerProject() {
   return { projectId: project.project_id, projectName: project.name };
 }
 
+async function createLegacyMosAmplifierProject() {
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyMosAmplifierPrefix}${Date.now()}`,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  const modulePorts = [
+    { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+    { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'mosamp',
+    name: 'MOS common-source amplifier',
+    kind: 'amplifier',
+    function: 'Legacy notebook-only common-source stage used to verify MOS gate/body layout hydration.',
+    parameters: { Gain: 'midband', Bias: 'resistive divider' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/mosamp/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 420, height: 280 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'mosamp',
+    name: 'MOS common-source amplifier',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'mosamp');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# MOS common-source amplifier',
+    '',
+    '```spice',
+    '* Legacy notebook-only MOS common-source amplifier fixture',
+    '.model NMOS1 NMOS (LEVEL=1 VTO=1 KP=120u)',
+    'Cin in gate 100n',
+    'Rg1 vdd gate 1Meg',
+    'Rg2 gate 0 220k',
+    'M1 drain gate source 0 NMOS1 W=20u L=1u',
+    'Rd vdd drain 10k',
+    'Rs source 0 1k',
+    'Cs source 0 10u',
+    'Cout drain out 1u',
+    'Rload out 0 100k',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
 async function componentPositions(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-positions');
   return JSON.parse(raw || '{}');
@@ -496,6 +562,7 @@ for (const module of created.project.modules) {
 const legacyLdoProject = await createLegacyLdoProject();
 const legacyBjtResetProject = await createLegacyBjtResetProject();
 const legacyVoltageDividerProject = await createLegacyVoltageDividerProject();
+const legacyMosAmplifierProject = await createLegacyMosAmplifierProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -1569,6 +1636,45 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-voltage-divider.png') });
   console.log('[e2e] legacy voltage divider loaded');
+
+  await page.getByTestId(`sidebar-project-${legacyMosAmplifierProject.projectId}`).click();
+  await page.getByTestId('circuit-workbench').getByText(legacyMosAmplifierProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-mosamp').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 9 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 7;
+  });
+  const mosAmpPositions = await componentPositions(page);
+  for (const id of ['cin', 'rg1', 'rg2', 'm1', 'rd', 'rs', 'cs', 'cout', 'rload']) {
+    assert.ok(mosAmpPositions[id], `hydrated MOS amplifier component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 9, 'hydrated MOS amplifier components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 7, 'hydrated MOS amplifier wires are not visibly drawn');
+  assert.ok(mosAmpPositions.cin.x < mosAmpPositions.m1.x, 'MOS amplifier input capacitor should sit left of M1 in GUI');
+  assert.ok(mosAmpPositions.rg1.y < mosAmpPositions.m1.y, 'MOS amplifier gate pull-up should sit above M1 in GUI');
+  assert.ok(mosAmpPositions.rg2.y > mosAmpPositions.m1.y, 'MOS amplifier gate pull-down should sit below M1 in GUI');
+  assert.ok(mosAmpPositions.rd.y < mosAmpPositions.m1.y, 'MOS amplifier drain load should sit above M1 in GUI');
+  assert.ok(mosAmpPositions.rs.y > mosAmpPositions.m1.y, 'MOS amplifier source resistor should sit below M1 in GUI');
+  assert.ok(mosAmpPositions.cs.y > mosAmpPositions.m1.y, 'MOS amplifier source bypass should sit below M1 in GUI');
+  assert.ok(mosAmpPositions.cout.x > mosAmpPositions.m1.x, 'MOS amplifier output capacitor should sit right of M1 in GUI');
+  assert.ok(mosAmpPositions.rload.x > mosAmpPositions.cout.x, 'MOS amplifier output load should sit beyond the output capacitor in GUI');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="input"]').getAttribute('data-port-side'),
+    'left',
+    'MOS amplifier input should render on the left edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="output"]').getAttribute('data-port-side'),
+    'right',
+    'MOS amplifier output should render on the right edge',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier.png') });
+  console.log('[e2e] legacy mos amplifier loaded');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
