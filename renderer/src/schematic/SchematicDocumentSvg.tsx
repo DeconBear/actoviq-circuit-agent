@@ -557,8 +557,8 @@ function componentLabelPositions(component: CircuitComponent): {
   const isActive = component.type === 'M' || component.type === 'Q';
   if (component.type === 'Q') {
     return {
-      name: { x: x + 48, y: y - 10, anchor: 'start' },
-      value: { x: x + 48, y: y + 72, anchor: 'start' },
+      name: { x: x + 52, y: y - 52, anchor: 'start' },
+      value: { x: x + 52, y: y + 58, anchor: 'start' },
     };
   }
   return {
