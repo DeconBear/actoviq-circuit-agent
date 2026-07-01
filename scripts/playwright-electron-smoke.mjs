@@ -167,6 +167,24 @@ async function findProjectByNameInRoot(searchProjectsRoot, name) {
   }
   throw new Error(`Project not found by name: ${name}`);
 }
+
+async function waitForWorkbenchProject(page, projectId) {
+  await page.waitForFunction((id) => {
+    const node = document.querySelector('[data-testid="circuit-workbench"]');
+    return node?.getAttribute('data-project-id') === id &&
+      node?.getAttribute('data-action-project-id') === id;
+  }, projectId);
+}
+
+async function clickEnabledTestId(page, testId) {
+  const locator = page.getByTestId(testId);
+  await locator.waitFor();
+  await page.waitForFunction((id) => {
+    const node = document.querySelector(`[data-testid="${id}"]`);
+    return node instanceof HTMLButtonElement && !node.disabled;
+  }, testId);
+  await locator.click();
+}
 await Promise.all([
   removePrefixedDirectories(projectsRoot, e2eProjectPrefix),
   removePrefixedDirectories(projectsRoot, e2eUiProjectPrefix),
@@ -288,6 +306,7 @@ try {
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
+  await waitForWorkbenchProject(page, projectId);
 
   const sidebarProjectName = `Playwright Inline Project ${Date.now()}`;
   await page.getByTestId('sidebar-new-blank-project').click();
@@ -310,6 +329,7 @@ try {
   assert.equal(await page.getByTestId('project-title').textContent(), sidebarProjectName);
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
+  await waitForWorkbenchProject(page, projectId);
   assert.equal(await page.getByTestId(`sidebar-project-${projectId}`).getAttribute('data-active'), 'true');
 
   const sidebarDemoProjectName = `${e2eUiProjectPrefix}${Date.now()}`;
@@ -331,7 +351,8 @@ try {
   assert.ok(sidebarDemoProjectManifest.project.modules.some((module) => module.id === 'filter'));
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
-  await page.getByTestId('open-project-folder').click();
+  await waitForWorkbenchProject(page, projectId);
+  await clickEnabledTestId(page, 'open-project-folder');
   await page.getByText(/^Opened project folder: /).waitFor({ timeout: 20_000 });
 
   assert.equal(await page.getByTestId('system-canvas').count(), 1);
@@ -722,7 +743,8 @@ try {
 
   const buildManifestPath = path.resolve(projectRoot, 'build', 'build-manifest.json');
   const previousBuildManifest = await readJsonFile(buildManifestPath).catch(() => null);
-  await page.getByTestId('build-project').click();
+  await waitForWorkbenchProject(page, projectId);
+  await clickEnabledTestId(page, 'build-project');
   const buildManifest = await waitForCompiledBuildManifest(
     buildManifestPath,
     previousBuildManifest?.built_at ?? '',
@@ -732,11 +754,13 @@ try {
   assert.equal(buildManifest.modules.filter.render_ok, true);
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();
 
-  await page.getByTestId('simulate-project').click();
+  await waitForWorkbenchProject(page, projectId);
+  await clickEnabledTestId(page, 'simulate-project');
   await page.getByText('System simulation complete', { exact: true }).waitFor({ timeout: 30_000 });
   await page.getByText('output_1khz_db', { exact: true }).waitFor();
 
-  await page.getByTestId('save-design-template').click();
+  await waitForWorkbenchProject(page, projectId);
+  await clickEnabledTestId(page, 'save-design-template');
   await page.getByText(/Saved template playwright-module-hub-/).waitFor({ timeout: 30_000 });
   const templateNotice = await page.locator('[role="status"]').textContent();
   const templateId = templateNotice?.match(/Saved template (\S+)/)?.[1] ?? '';
@@ -749,7 +773,8 @@ try {
   assert.match(await readFile(path.resolve(savedTemplate.rootDir, 'agent-guide.md'), 'utf8'), /Saved Design Template/);
   assert.match(await readFile(path.resolve(savedTemplate.rootDir, 'template.cir'), 'utf8'), /22n/);
 
-  await page.getByTestId('save-design-flow').click();
+  await waitForWorkbenchProject(page, projectId);
+  await clickEnabledTestId(page, 'save-design-flow');
   await page.getByText(/Saved flow playwright-module-hub-/).waitFor({ timeout: 30_000 });
   const flowNotice = await page.locator('[role="status"]').textContent();
   const flowId = flowNotice?.match(/Saved flow (\S+)/)?.[1] ?? '';

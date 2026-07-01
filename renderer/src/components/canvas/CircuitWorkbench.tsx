@@ -315,6 +315,7 @@ export function CircuitWorkbench({
   const [designMemoryLoading, setDesignMemoryLoading] = useState(false);
 
   const project = bundle?.project ?? null;
+  const currentProjectId = project?.project_id ?? activeProjectId;
   const systemNetworks = useMemo(
     () => resolveSystemNetworks(project?.modules ?? [], project?.connections ?? []),
     [project],
@@ -380,7 +381,7 @@ export function CircuitWorkbench({
     message: string,
     operations: Array<Record<string, unknown>>,
   ): Promise<boolean> {
-    if (!project || !activeProjectId) return false;
+    if (!project || !currentProjectId) return false;
     const command: CircuitCommand = {
       schema: 'actoviq.command.v1',
       command_id: commandId(),
@@ -393,7 +394,7 @@ export function CircuitWorkbench({
     setBusy(true);
     setError('');
     try {
-      await window.electronAPI.applyCircuitCommand(activeProjectId, command);
+      await window.electronAPI.applyCircuitCommand(currentProjectId, command);
       await onReloadProject();
       setNotice(message);
       return true;
@@ -425,13 +426,13 @@ export function CircuitWorkbench({
   }
 
   async function buildModulePreview(moduleId: string, showNotice = true): Promise<boolean> {
-    if (!activeProjectId) return false;
+    if (!currentProjectId) return false;
     if (modulePreviewBusyRef.current.has(moduleId)) return false;
     setModulePreviewBuildBusy(moduleId, true);
     setError('');
     if (showNotice) setNotice('Rendering module with netlistsvg...');
     try {
-      const result = await window.electronAPI.compileCircuitModule(activeProjectId, moduleId);
+      const result = await window.electronAPI.compileCircuitModule(currentProjectId, moduleId);
       if (!result.schematic_path) {
         throw new Error('netlistsvg did not produce a module SVG.');
       }
@@ -490,7 +491,7 @@ export function CircuitWorkbench({
   }
 
   async function saveModuleSchematic(moduleId: string, moduleData: CircuitModule): Promise<void> {
-    if (!activeProjectId) return;
+    if (!currentProjectId) return;
     const saved = await applyOperations(`Edit schematic ${moduleId}`, [{
       op: 'set_module_schematic',
       module_id: moduleId,
@@ -505,7 +506,7 @@ export function CircuitWorkbench({
       setNotice('Applying schematic netlist and rebuilding SVG...');
       try {
         const result = await window.electronAPI.saveCircuitModuleNotebook(
-          activeProjectId,
+          currentProjectId,
           moduleId,
           moduleNotebookMarkdown(moduleId, moduleData),
         );
@@ -544,7 +545,7 @@ export function CircuitWorkbench({
   }
 
   async function runBuild(simulate: boolean) {
-    if (!activeProjectId || !project) return;
+    if (!currentProjectId || !project) return;
     if (!(await waitForModulePreviewBuilds())) {
       setError('Timed out waiting for module preview build to finish.');
       return;
@@ -555,11 +556,11 @@ export function CircuitWorkbench({
     try {
       // Project compile assembles the system netlist and refreshes every module
       // SVG before returning, so the manifest never exposes a half-built module set.
-      await window.electronAPI.compileCircuitProject(activeProjectId);
+      await window.electronAPI.compileCircuitProject(currentProjectId);
       if (simulate) {
-        await window.electronAPI.simulateCircuitProject(activeProjectId);
+        await window.electronAPI.simulateCircuitProject(currentProjectId);
       }
-      setBuild(await window.electronAPI.readCircuitBuild(activeProjectId));
+      setBuild(await window.electronAPI.readCircuitBuild(currentProjectId));
       await onReloadProject();
       setNotice(simulate ? 'System simulation complete' : 'Netlist and previews updated');
     } catch (buildError) {
@@ -571,7 +572,7 @@ export function CircuitWorkbench({
   }
 
   async function saveDesignMemory(kind: 'template' | 'flow') {
-    if (!activeProjectId) return;
+    if (!currentProjectId) return;
     if (!(await waitForModulePreviewBuilds())) {
       setError('Timed out waiting for module preview build to finish.');
       return;
@@ -581,13 +582,13 @@ export function CircuitWorkbench({
     setNotice(kind === 'template' ? 'Saving reusable design template...' : 'Saving design flow...');
     try {
       if (kind === 'template') {
-        await window.electronAPI.compileCircuitProject(activeProjectId);
-        setBuild(await window.electronAPI.readCircuitBuild(activeProjectId));
+        await window.electronAPI.compileCircuitProject(currentProjectId);
+        setBuild(await window.electronAPI.readCircuitBuild(currentProjectId));
         await onReloadProject();
       }
       const result = kind === 'template'
-        ? await window.electronAPI.saveCircuitDesignTemplate(activeProjectId)
-        : await window.electronAPI.saveCircuitDesignFlow(activeProjectId);
+        ? await window.electronAPI.saveCircuitDesignTemplate(currentProjectId)
+        : await window.electronAPI.saveCircuitDesignFlow(currentProjectId);
       await refreshDesignMemory();
       await onReferencesChanged?.();
       setNotice(
@@ -615,11 +616,11 @@ export function CircuitWorkbench({
   }
 
   async function openProjectFolder(): Promise<void> {
-    if (!activeProjectId) return;
+    if (!currentProjectId) return;
     setError('');
     setNotice('');
     try {
-      const openedPath = await window.electronAPI.openCircuitProjectFolder(activeProjectId);
+      const openedPath = await window.electronAPI.openCircuitProjectFolder(currentProjectId);
       setNotice(`Opened project folder: ${openedPath}`);
     } catch (openError) {
       setError(openError instanceof Error ? openError.message : String(openError));
@@ -637,12 +638,12 @@ export function CircuitWorkbench({
   }
 
   async function runModuleSimulation() {
-    if (!activeProjectId || !activeModuleId) return;
+    if (!currentProjectId || !activeModuleId) return;
     setBusy(true);
     setError('');
     setNotice('Running module testbench...');
     try {
-      const result = await window.electronAPI.simulateCircuitModule(activeProjectId, activeModuleId);
+      const result = await window.electronAPI.simulateCircuitModule(currentProjectId, activeModuleId);
       setModuleSimulation(result);
       await onReloadProject();
       setNotice('Module simulation complete');
@@ -1116,7 +1117,12 @@ export function CircuitWorkbench({
   }));
 
   return (
-    <div style={styles.root} data-testid="circuit-workbench">
+    <div
+      style={styles.root}
+      data-testid="circuit-workbench"
+      data-project-id={project.project_id}
+      data-action-project-id={currentProjectId ?? ''}
+    >
       <header style={styles.header}>
         <div style={styles.titleBlock}>
           <div style={styles.eyebrow}>Schematic Module Hub</div>
