@@ -72,6 +72,7 @@ export function SchematicDocumentSvg({
     <svg
       ref={svgRef}
       xmlns="http://www.w3.org/2000/svg"
+      className="schematic-document-svg"
       viewBox={`${viewBox.minX} ${viewBox.minY} ${width} ${height}`}
       preserveAspectRatio="xMidYMid meet"
       style={{ width: '100%', height: '100%', display: 'block', background: '#ffffff', touchAction: 'none', userSelect: 'none', cursor }}
@@ -85,6 +86,16 @@ export function SchematicDocumentSvg({
       onPointerCancel={onPointerCancel}
     >
       <defs>
+        <style>{`
+          .schematic-document-svg line,
+          .schematic-document-svg path,
+          .schematic-document-svg rect,
+          .schematic-document-svg polygon,
+          .schematic-document-svg polyline,
+          .schematic-document-svg circle {
+            vector-effect: non-scaling-stroke;
+          }
+        `}</style>
         <pattern id={gridId} width={SCHEMATIC_GRID} height={SCHEMATIC_GRID} patternUnits="userSpaceOnUse">
           <path
             d={`M ${SCHEMATIC_GRID / 2} 0 L ${SCHEMATIC_GRID / 2} ${SCHEMATIC_GRID} M 0 ${SCHEMATIC_GRID / 2} L ${SCHEMATIC_GRID} ${SCHEMATIC_GRID / 2}`}

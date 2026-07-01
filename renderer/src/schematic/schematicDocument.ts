@@ -2074,8 +2074,7 @@ function shouldLabelRailPin(component: CircuitComponent, pin: CircuitPin): boole
   if (component.type !== 'M') return true;
   const pinKey = `${pin.id} ${pin.name}`.toLowerCase();
   if (!/body|bulk|\bb\b/.test(pinKey)) return true;
-  const source = component.pins.find((entry) => /source|\bs\b/.test(`${entry.id} ${entry.name}`.toLowerCase()));
-  return source?.net !== pin.net;
+  return false;
 }
 
 function railLabelName(module: CircuitModule, net: string): string {

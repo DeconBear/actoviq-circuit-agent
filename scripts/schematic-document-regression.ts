@@ -227,6 +227,7 @@ for (const fixture of fixtures) {
   assertReadableLayout(document.module);
   assertReadablePortPlacement(document);
   assertRailLabels(document.module, document.netLabels, document.wires);
+  assertNoMosBodyRailLabels(document.module, document.netLabels);
 }
 
 console.log(JSON.stringify({
@@ -423,6 +424,26 @@ function assertRailLabels(module: CircuitModule, netLabels: ReturnType<typeof cr
   assert.ok(netLabels.length > 0, `${module.module_id} should expose local rail labels`);
   for (const wire of wires) {
     assert.ok(!railNets.has(wire.net ?? ''), `${module.module_id}.${wire.id} should not render a generated rail bus for ${wire.net}`);
+  }
+}
+
+function assertNoMosBodyRailLabels(module: CircuitModule, netLabels: ReturnType<typeof createSchematicDocument>['netLabels']) {
+  const bodyPinKeys = new Set(
+    module.components
+      .filter((component) => component.type === 'M')
+      .flatMap((component) => component.pins
+        .filter((pin) => /body|bulk|\bb\b/i.test(`${pin.id} ${pin.name}`))
+        .map((pin) => `${component.id}:${pin.id}`)),
+  );
+  for (const label of netLabels) {
+    const componentId = label.endpoint.component_id;
+    const pinId = label.endpoint.pin_id;
+    if (!componentId || !pinId) continue;
+    assert.equal(
+      bodyPinKeys.has(`${componentId}:${pinId}`),
+      false,
+      `${module.module_id}.${componentId}.${pinId} should not render a MOS body rail label`,
+    );
   }
 }
 
