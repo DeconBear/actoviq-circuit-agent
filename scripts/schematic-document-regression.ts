@@ -228,6 +228,7 @@ for (const fixture of fixtures) {
   assertReadablePortPlacement(document);
   assertRailLabels(document.module, document.netLabels, document.wires);
   assertNoMosBodyRailLabels(document.module, document.netLabels);
+  assertLdoInternalLabels(document);
 }
 
 console.log(JSON.stringify({
@@ -443,6 +444,26 @@ function assertNoMosBodyRailLabels(module: CircuitModule, netLabels: ReturnType<
       bodyPinKeys.has(`${componentId}:${pinId}`),
       false,
       `${module.module_id}.${componentId}.${pinId} should not render a MOS body rail label`,
+    );
+  }
+}
+
+function assertLdoInternalLabels(document: ReturnType<typeof createSchematicDocument>) {
+  if (document.module.module_id !== 'mos_ldo') return;
+  const localNets = new Set(['fb', 'tail', 'eaout', 'vref']);
+  const moduleNets = new Set(document.module.components.flatMap((component) => component.pins.map((pin) => pin.net)));
+  const signalLabelNets = new Set(
+    document.netLabels
+      .filter((label) => label.kind === 'signal')
+      .map((label) => label.net),
+  );
+  for (const net of localNets) {
+    if (!moduleNets.has(net)) continue;
+    assert.equal(signalLabelNets.has(net), true, `mos_ldo should render ${net} as local labels`);
+    assert.equal(
+      document.wires.some((wire) => wire.net === net),
+      false,
+      `mos_ldo should not render ${net} as a generated long wire`,
     );
   }
 }
