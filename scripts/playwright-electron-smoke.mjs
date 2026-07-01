@@ -521,7 +521,11 @@ try {
   await page.waitForFunction(() => {
     const raw = document.querySelector('[data-testid="canvas-panel"]')?.getAttribute('data-canvas-scroll') ?? '{}';
     const scroll = JSON.parse(raw);
-    return Number(scroll.left) === 0 && Number(scroll.top) === 0;
+    const canvas = document.querySelector('[data-testid="system-canvas"]');
+    const zoom = Number(document.querySelector('[data-testid="canvas-panel"]')?.getAttribute('data-canvas-zoom') ?? '65') / 100;
+    const expectedLeft = Math.round(Number(canvas?.getAttribute('data-board-origin-x') ?? '0') * zoom);
+    const expectedTop = Math.round(Number(canvas?.getAttribute('data-board-origin-y') ?? '0') * zoom);
+    return Number(scroll.left) === expectedLeft && Number(scroll.top) === expectedTop;
   });
 
   const scrollBeforePan = await canvasPanel.evaluate((element) => ({
@@ -787,7 +791,16 @@ try {
   assert.match(await readFile(path.resolve(savedFlow.rootDir, 'design-flow.md'), 'utf8'), /Agent updates module filter/);
   await page.screenshot({ path: path.resolve(outputRoot, 'saved-design-memory.png') });
 
-  await canvasPanel.click({ button: 'right', position: { x: 520, y: 500 } });
+  await canvasPanel.evaluate((element) => {
+    const canvas = document.querySelector('[data-testid="system-canvas"]');
+    const zoom = Number(element.getAttribute('data-canvas-zoom') ?? '65') / 100;
+    const originX = Number(canvas?.getAttribute('data-board-origin-x') ?? '0');
+    const originY = Number(canvas?.getAttribute('data-board-origin-y') ?? '0');
+    element.scrollLeft = Math.max(0, Math.round(originX * zoom - 260));
+    element.scrollTop = Math.max(0, Math.round(originY * zoom - 180));
+    element.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  await canvasPanel.click({ button: 'right', position: { x: 80, y: 80 } });
   await page.getByTestId('canvas-context-menu').waitFor();
   await page.getByTestId('context-add-module').click();
   await page.getByTestId('module-editor').waitFor();
@@ -799,9 +812,14 @@ try {
   const projectBeforeSensorAdd = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
   await page.getByTestId('save-module-editor').click();
   await page.getByText(new RegExp(`revision ${projectBeforeSensorAdd.revision + 1}`)).waitFor({ timeout: 10_000 });
+  const projectAfterSensorAdd = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
+  const sensorAfterAdd = projectAfterSensorAdd.modules.find((module) => module.id === 'sensor');
+  assert.ok(sensorAfterAdd.position.x < 0, 'infinite canvas add should allow negative logical x');
+  assert.ok(sensorAfterAdd.position.y < 0, 'infinite canvas add should allow negative logical y');
   await page.getByTestId('module-card-sensor').waitFor();
   await page.getByTestId('module-summary-sensor').getByText('0-1 V', { exact: true }).waitFor();
 
+  await page.getByTestId('module-card-sensor').scrollIntoViewIfNeeded();
   await page.getByTestId('module-card-sensor').click({ button: 'right' });
   await page.getByTestId('context-edit-module').click();
   await page.getByTestId('module-editor-function').fill(

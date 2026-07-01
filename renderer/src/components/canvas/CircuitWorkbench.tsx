@@ -46,12 +46,34 @@ interface EmptyProjectFormState {
   name: string;
 }
 
+const BOARD_MARGIN = 1200;
+const BOARD_MIN_WIDTH = 3600;
+const BOARD_MIN_HEIGHT = 2600;
+
 function commandId(): string {
   return `gui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function clampCanvasZoom(value: number): number {
   return Math.max(35, Math.min(160, value));
+}
+
+function modulePlaneMetrics(modules: CircuitModuleRef[]): {
+  width: number;
+  height: number;
+  originX: number;
+  originY: number;
+} {
+  const minX = Math.min(0, ...modules.map((module) => module.position.x));
+  const minY = Math.min(0, ...modules.map((module) => module.position.y));
+  const maxX = Math.max(0, ...modules.map((module) => module.position.x + module.size.width));
+  const maxY = Math.max(0, ...modules.map((module) => module.position.y + module.size.height));
+  return {
+    width: Math.max(BOARD_MIN_WIDTH, maxX - minX + BOARD_MARGIN * 2),
+    height: Math.max(BOARD_MIN_HEIGHT, maxY - minY + BOARD_MARGIN * 2),
+    originX: BOARD_MARGIN - minX,
+    originY: BOARD_MARGIN - minY,
+  };
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -325,6 +347,14 @@ export function CircuitWorkbench({
   const selectedPreview = activeModuleId ? bundle?.module_previews[activeModuleId] : undefined;
   const selectedPreviewBusy = activeModuleId ? Boolean(modulePreviewBusy[activeModuleId]) : false;
   const anyPreviewBusy = Object.keys(modulePreviewBusy).length > 0;
+  const displayedModules = useMemo(() => (
+    project?.modules.map((module) => ({
+      ...module,
+      position: modulePreviewPositions[module.id] ?? module.position,
+      size: modulePreviewSizes[module.id] ?? module.size,
+    })) ?? []
+  ), [modulePreviewPositions, modulePreviewSizes, project]);
+  const boardMetrics = useMemo(() => modulePlaneMetrics(displayedModules), [displayedModules]);
 
   useEffect(() => {
     if (!project) return;
@@ -343,6 +373,18 @@ export function CircuitWorkbench({
     setModulePreviewBusy({});
     modulePreviewBusyRef.current = new Set();
   }, [activeProjectId]);
+
+  useEffect(() => {
+    if (view !== 'board') return;
+    const panel = canvasPanelRef.current;
+    if (!panel) return;
+    const scale = zoom / 100;
+    window.requestAnimationFrame(() => {
+      panel.scrollLeft = Math.round(boardMetrics.originX * scale);
+      panel.scrollTop = Math.round(boardMetrics.originY * scale);
+      setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
+    });
+  }, [activeProjectId, project?.project_id, view]);
 
   const refreshDesignMemory = useCallback(async () => {
     setDesignMemoryLoading(true);
@@ -680,8 +722,8 @@ export function CircuitWorkbench({
       setModulePreviewPositions((current) => ({
         ...current,
         [module.id]: {
-          x: Math.max(40, origin.x + (moveEvent.clientX - startX) / scale),
-          y: Math.max(40, origin.y + (moveEvent.clientY - startY) / scale),
+          x: origin.x + (moveEvent.clientX - startX) / scale,
+          y: origin.y + (moveEvent.clientY - startY) / scale,
         },
       }));
     };
@@ -690,8 +732,8 @@ export function CircuitWorkbench({
       window.removeEventListener('pointerup', up);
       if (!moved) return;
       const position = {
-        x: Math.max(40, origin.x + (upEvent.clientX - startX) / scale),
-        y: Math.max(40, origin.y + (upEvent.clientY - startY) / scale),
+        x: origin.x + (upEvent.clientX - startX) / scale,
+        y: origin.y + (upEvent.clientY - startY) / scale,
       };
       void applyOperations(`Move module ${module.name}`, [{
         op: 'move_module',
@@ -809,9 +851,10 @@ export function CircuitWorkbench({
     const panel = canvasPanelRef.current;
     if (!panel) return;
     window.requestAnimationFrame(() => {
-      panel.scrollLeft = 0;
-      panel.scrollTop = 0;
-      setCanvasScroll({ left: 0, top: 0 });
+      const scale = 0.65;
+      panel.scrollLeft = Math.round(boardMetrics.originX * scale);
+      panel.scrollTop = Math.round(boardMetrics.originY * scale);
+      setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
     });
   }
 
@@ -892,8 +935,8 @@ export function CircuitWorkbench({
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 150)),
       moduleId,
       boardPosition: {
-        x: Math.max(40, Math.round((panel.scrollLeft + event.clientX - rect.left - 20) / scale)),
-        y: Math.max(40, Math.round((panel.scrollTop + event.clientY - rect.top - 20) / scale)),
+        x: Math.round((panel.scrollLeft + event.clientX - rect.left - 20) / scale - boardMetrics.originX),
+        y: Math.round((panel.scrollTop + event.clientY - rect.top - 20) / scale - boardMetrics.originY),
       },
     });
   }
@@ -1110,12 +1153,6 @@ export function CircuitWorkbench({
     );
   }
 
-  const displayedModules = project.modules.map((module) => ({
-    ...module,
-    position: modulePreviewPositions[module.id] ?? module.position,
-    size: modulePreviewSizes[module.id] ?? module.size,
-  }));
-
   return (
     <div
       style={styles.root}
@@ -1227,6 +1264,7 @@ export function CircuitWorkbench({
               systemNetworks={systemNetworks}
               selectedId={activeModuleId}
               zoom={zoom}
+              metrics={boardMetrics}
               onSelect={setActiveModuleId}
               onOpen={openModule}
               onTogglePreview={togglePreview}
@@ -1402,6 +1440,7 @@ function ModuleBoard({
   systemNetworks,
   selectedId,
   zoom,
+  metrics,
   onSelect,
   onOpen,
   onTogglePreview,
@@ -1417,6 +1456,7 @@ function ModuleBoard({
   systemNetworks: SystemNetworkMap;
   selectedId: string | null;
   zoom: number;
+  metrics: ReturnType<typeof modulePlaneMetrics>;
   onSelect: (moduleId: string) => void;
   onOpen: (moduleId: string) => void;
   onTogglePreview: (module: CircuitModuleRef) => void;
@@ -1426,39 +1466,36 @@ function ModuleBoard({
   onResizeStart: (event: ReactPointerEvent, module: CircuitModuleRef) => void;
   onContextMenu: (event: ReactMouseEvent, moduleId?: string) => void;
 }) {
-  const boardWidth = Math.max(
-    1440,
-    ...modules.map((module) => module.position.x + module.size.width + 100),
-  );
-  const boardHeight = Math.max(
-    900,
-    ...modules.map((module) => module.position.y + module.size.height + 100),
-  );
   const scale = zoom / 100;
   return (
     <div
       style={{
         ...styles.boardViewport,
-        minWidth: boardWidth * scale,
-        minHeight: boardHeight * scale,
+        minWidth: metrics.width * scale,
+        minHeight: metrics.height * scale,
       }}
       data-testid="system-canvas"
+      data-board-origin-x={metrics.originX}
+      data-board-origin-y={metrics.originY}
+      data-board-width={metrics.width}
+      data-board-height={metrics.height}
     >
       <div
         style={{
           ...styles.board,
-          width: boardWidth,
-          height: boardHeight,
+          width: metrics.width,
+          height: metrics.height,
           transform: `scale(${scale})`,
         }}
       >
-        <div style={styles.boardGuide}>
+        <div style={{ ...styles.boardGuide, left: metrics.originX + 28, top: metrics.originY + 24 }}>
           Drag modules anywhere | double-click to open the netlistsvg schematic
         </div>
         {modules.map((module) => (
           <ModuleCard
             key={module.id}
             module={module}
+            origin={{ x: metrics.originX, y: metrics.originY }}
             moduleData={moduleData[module.id]}
             svg={previews[module.id]?.svg ?? ''}
             systemNetworks={systemNetworks}
@@ -1480,6 +1517,7 @@ function ModuleBoard({
 
 function ModuleCard({
   module,
+  origin,
   moduleData,
   svg,
   systemNetworks,
@@ -1494,6 +1532,7 @@ function ModuleCard({
   onContextMenu,
 }: {
   module: CircuitModuleRef;
+  origin: { x: number; y: number };
   moduleData?: CircuitModule;
   svg: string;
   systemNetworks: SystemNetworkMap;
@@ -1520,8 +1559,8 @@ function ModuleCard({
     <article
       style={{
         ...styles.moduleCard,
-        left: module.position.x,
-        top: module.position.y,
+        left: module.position.x + origin.x,
+        top: module.position.y + origin.y,
         width: module.size.width || 320,
         height: module.size.height || 250,
         ...(selected ? styles.moduleCardSelected : {}),
