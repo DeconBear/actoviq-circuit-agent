@@ -30,6 +30,15 @@ const voltageDividerPorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const differentialPairPorts: CircuitPort[] = [
+  { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'inp', name: 'IN+', direction: 'input', signal_type: 'analog', net: 'inp' },
+  { id: 'inn', name: 'IN-', direction: 'input', signal_type: 'analog', net: 'inn' },
+  { id: 'outp', name: 'OUT+', direction: 'output', signal_type: 'analog', net: 'outp' },
+  { id: 'outn', name: 'OUT-', direction: 'output', signal_type: 'analog', net: 'outn' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
 function component(
   id: string,
   type: CircuitComponent['type'],
@@ -141,6 +150,23 @@ const fixtures: CircuitModule[] = [
     ]),
     component('cload', 'C', '10p', 430, 250, [['a', '1', 'out'], ['b', '2', '0']]),
   ]),
+  moduleFixture('mos_differential_pair', [
+    component('m_inp', 'M', 'NMOS W=20u L=1u', 220, 240, [
+      ['d', 'D', 'outp'],
+      ['g', 'G', 'inp'],
+      ['s', 'S', 'tail'],
+      ['b', 'B', '0'],
+    ]),
+    component('m_inn', 'M', 'NMOS W=20u L=1u', 430, 240, [
+      ['d', 'D', 'outn'],
+      ['g', 'G', 'inn'],
+      ['s', 'S', 'tail'],
+      ['b', 'B', '0'],
+    ]),
+    component('rdp', 'R', '10k', 220, 80, [['a', '1', 'vdd'], ['b', '2', 'outp']]),
+    component('rdn', 'R', '10k', 430, 80, [['a', '1', 'vdd'], ['b', '2', 'outn']]),
+    component('itail', 'I', 'DC 100u', 325, 420, [['p', '+', 'tail'], ['n', '-', '0']]),
+  ], differentialPairPorts),
   moduleFixture('mos_ldo', [
     component('m_pass', 'M', 'PMOS W=40u L=1u', 220, 150, [
       ['d', 'D', 'out'],
@@ -332,6 +358,24 @@ function assertReadableLayout(module: CircuitModule) {
     assertPinAbove(nmos, 'out', '0', module.module_id);
     assertPinAbove(load, 'out', '0', module.module_id);
     assertNoComponentOverlap(module, ['mp1', 'mn1', 'cload']);
+  }
+  if (module.module_id === 'mos_differential_pair') {
+    const left = mustComponent(module, 'm_inp');
+    const right = mustComponent(module, 'm_inn');
+    const leftLoad = mustComponent(module, 'rdp');
+    const rightLoad = mustComponent(module, 'rdn');
+    const tail = mustComponent(module, 'itail');
+    assertActivePins(left, module.module_id);
+    assertActivePins(right, module.module_id);
+    assert.ok(left.position.x < right.position.x, 'differential pair positive input device should sit left of negative input device');
+    assert.ok(Math.abs(left.position.y - right.position.y) <= 1, 'differential pair devices should align horizontally');
+    assert.ok(leftLoad.position.y < left.position.y, 'differential pair left drain load should sit above the device');
+    assert.ok(rightLoad.position.y < right.position.y, 'differential pair right drain load should sit above the device');
+    assert.ok(tail.position.y > left.position.y && tail.position.y > right.position.y, 'differential pair tail source should sit below both devices');
+    assertPinAbove(leftLoad, 'vdd', 'outp', module.module_id);
+    assertPinAbove(rightLoad, 'vdd', 'outn', module.module_id);
+    assertPinAbove(tail, 'tail', '0', module.module_id);
+    assertNoComponentOverlap(module, ['m_inp', 'm_inn', 'rdp', 'rdn', 'itail']);
   }
   if (module.module_id === 'mos_ldo') {
     const pass = mustComponent(module, 'm_pass');

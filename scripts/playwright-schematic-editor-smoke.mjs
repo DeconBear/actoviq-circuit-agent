@@ -17,6 +17,7 @@ const legacyBjtResetPrefix = `${projectPrefix}legacy-bjt-reset-`;
 const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
 const legacyMosAmplifierPrefix = `${projectPrefix}legacy-mos-amp-`;
 const legacyCmosInverterPrefix = `${projectPrefix}legacy-cmos-inverter-`;
+const legacyDifferentialPairPrefix = `${projectPrefix}legacy-diff-pair-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -406,6 +407,69 @@ async function createLegacyCmosInverterProject() {
   return { projectId: project.project_id, projectName: project.name };
 }
 
+async function createLegacyDifferentialPairProject() {
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyDifferentialPairPrefix}${Date.now()}`,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  const modulePorts = [
+    { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'inp', name: 'IN+', direction: 'input', signal_type: 'analog', net: 'inp' },
+    { id: 'inn', name: 'IN-', direction: 'input', signal_type: 'analog', net: 'inn' },
+    { id: 'outp', name: 'OUT+', direction: 'output', signal_type: 'analog', net: 'outp' },
+    { id: 'outn', name: 'OUT-', direction: 'output', signal_type: 'analog', net: 'outn' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'diffpair',
+    name: 'MOS differential pair',
+    kind: 'amplifier',
+    function: 'Legacy notebook-only NMOS differential pair used to verify analog pair layout hydration.',
+    parameters: { Tail: '100 uA', Load: '10 kohm' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/diffpair/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 460, height: 300 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'diffpair',
+    name: 'MOS differential pair',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'diffpair');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# MOS differential pair',
+    '',
+    '```spice',
+    '* Legacy notebook-only MOS differential pair fixture',
+    '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+    'M_INP outp inp tail 0 NMOS1 W=20u L=1u',
+    'M_INN outn inn tail 0 NMOS1 W=20u L=1u',
+    'RDP vdd outp 10k',
+    'RDN vdd outn 10k',
+    'Itail tail 0 DC 100u',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
 async function componentPositions(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-positions');
   return JSON.parse(raw || '{}');
@@ -644,6 +708,7 @@ const legacyBjtResetProject = await createLegacyBjtResetProject();
 const legacyVoltageDividerProject = await createLegacyVoltageDividerProject();
 const legacyMosAmplifierProject = await createLegacyMosAmplifierProject();
 const legacyCmosInverterProject = await createLegacyCmosInverterProject();
+const legacyDifferentialPairProject = await createLegacyDifferentialPairProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -1835,6 +1900,48 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-inverter.png') });
   console.log('[e2e] legacy cmos inverter loaded');
+
+  await page.getByTestId(`sidebar-project-${legacyDifferentialPairProject.projectId}`).click();
+  await page.getByTestId('circuit-workbench').getByText(legacyDifferentialPairProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-diffpair').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 5 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 5;
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
+  const diffPairPositions = await componentPositions(page);
+  for (const id of ['m_inp', 'm_inn', 'rdp', 'rdn', 'itail']) {
+    assert.ok(diffPairPositions[id], `hydrated differential pair component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 5, 'hydrated differential pair components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 5, 'hydrated differential pair wires are not visibly drawn');
+  assert.ok(diffPairPositions.m_inp.x < diffPairPositions.m_inn.x, 'differential pair IN+ device should sit left of IN- device in GUI');
+  assert.ok(
+    Math.abs(diffPairPositions.m_inp.y - diffPairPositions.m_inn.y) <= schematicGrid,
+    'differential pair input devices should align horizontally in GUI',
+  );
+  assert.ok(diffPairPositions.rdp.y < diffPairPositions.m_inp.y, 'differential pair left load should sit above M_INP in GUI');
+  assert.ok(diffPairPositions.rdn.y < diffPairPositions.m_inn.y, 'differential pair right load should sit above M_INN in GUI');
+  assert.ok(diffPairPositions.itail.y > diffPairPositions.m_inp.y, 'differential pair tail current source should sit below the pair in GUI');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="outp"]').getAttribute('data-port-side'),
+    'right',
+    'differential pair OUT+ should render on the right edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="outn"]').getAttribute('data-port-side'),
+    'right',
+    'differential pair OUT- should render on the right edge',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-differential-pair.png') });
+  console.log('[e2e] legacy differential pair loaded');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();

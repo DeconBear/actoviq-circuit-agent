@@ -169,6 +169,8 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
   const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
   if (activeComponents.length > 0 && isBjtResetLikeModule(module, activeComponents)) return autoLayoutBjtResetModule(module, activeComponents);
   if (activeComponents.length > 0 && isLdoLikeModule(module, activeComponents)) return autoLayoutLdoModule(module, activeComponents);
+  const differentialPairLayout = findDifferentialPairLayout(module, activeComponents);
+  if (differentialPairLayout) return autoLayoutDifferentialPairModule(module, differentialPairLayout);
   const cmosInverterLayout = findCmosInverterLayout(module, activeComponents);
   if (cmosInverterLayout) return autoLayoutCmosInverterModule(module, cmosInverterLayout);
   if (activeComponents.length === 1 && isSingleTransistorStageLikeModule(activeComponents[0])) {
@@ -248,6 +250,18 @@ interface CmosInverterLayout {
   groundNet: string;
 }
 
+interface DifferentialPairLayout {
+  left: CircuitComponent;
+  right: CircuitComponent;
+  leftInputNet: string;
+  rightInputNet: string;
+  leftOutputNet: string;
+  rightOutputNet: string;
+  tailNet: string;
+  powerNet: string;
+  groundNet: string;
+}
+
 function isVoltageDividerLikeModule(module: CircuitModule): boolean {
   return Boolean(findVoltageDividerLayout(module));
 }
@@ -323,6 +337,149 @@ function findCmosInverterLayout(module: CircuitModule, activeComponents: Circuit
     }
   }
   return null;
+}
+
+function findDifferentialPairLayout(module: CircuitModule, activeComponents: CircuitComponent[]): DifferentialPairLayout | null {
+  const powerNet = module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net ?? 'vdd';
+  const groundNet = module.ports.find(isGroundPort)?.net ?? '0';
+  for (let leftIndex = 0; leftIndex < activeComponents.length; leftIndex += 1) {
+    const first = activeComponents[leftIndex];
+    if (!first || (first.type === 'M' && isPmosComponent(first))) continue;
+    const firstNets = activeNetMap(first);
+    if (!firstNets.gate || !firstNets.drain || !firstNets.source) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < activeComponents.length; rightIndex += 1) {
+      const second = activeComponents[rightIndex];
+      if (!second || second.type !== first.type || (second.type === 'M' && isPmosComponent(second))) continue;
+      const secondNets = activeNetMap(second);
+      if (!secondNets.gate || !secondNets.drain || !secondNets.source) continue;
+      if (firstNets.source !== secondNets.source) continue;
+      if (firstNets.gate === secondNets.gate || firstNets.drain === secondNets.drain) continue;
+      if (isRailNet(firstNets.source, module)) continue;
+
+      const [left, right] = orderDifferentialPairDevices(module, first, second);
+      const leftNets = activeNetMap(left);
+      const rightNets = activeNetMap(right);
+      if (!leftNets.gate || !rightNets.gate || !leftNets.drain || !rightNets.drain || !leftNets.source) continue;
+      return {
+        left,
+        right,
+        leftInputNet: leftNets.gate,
+        rightInputNet: rightNets.gate,
+        leftOutputNet: leftNets.drain,
+        rightOutputNet: rightNets.drain,
+        tailNet: leftNets.source,
+        powerNet,
+        groundNet,
+      };
+    }
+  }
+  return null;
+}
+
+function orderDifferentialPairDevices(
+  module: CircuitModule,
+  first: CircuitComponent,
+  second: CircuitComponent,
+): [CircuitComponent, CircuitComponent] {
+  const firstGate = activeNetMap(first).gate ?? '';
+  const secondGate = activeNetMap(second).gate ?? '';
+  const firstRank = differentialInputRank(module, firstGate);
+  const secondRank = differentialInputRank(module, secondGate);
+  if (firstRank !== secondRank) return firstRank < secondRank ? [first, second] : [second, first];
+  return first.id.localeCompare(second.id) <= 0 ? [first, second] : [second, first];
+}
+
+function differentialInputRank(module: CircuitModule, net: string): number {
+  const portIndex = module.ports.findIndex((port) => port.net === net);
+  const port = portIndex >= 0 ? module.ports[portIndex] : undefined;
+  const label = `${port?.id ?? ''} ${port?.name ?? ''} ${net}`.toLowerCase();
+  if (/inp|vinp|\bin\+|\+|plus|pos|noninv|non-inv/.test(label)) return 0;
+  if (/inn|vinn|\bin-|-|minus|neg|inv/.test(label)) return 1;
+  return 10 + (portIndex >= 0 ? portIndex : 100);
+}
+
+function autoLayoutDifferentialPairModule(module: CircuitModule, layout: DifferentialPairLayout): CircuitModule {
+  const placed = new Set<string>();
+  layout.left.position = snapPoint({ x: 360, y: 330 });
+  layout.left.rotation = 0;
+  placed.add(layout.left.id);
+  layout.right.position = snapPoint({ x: 620, y: 330 });
+  layout.right.rotation = 0;
+  placed.add(layout.right.id);
+
+  const activeLoads = module.components.filter((component) => (
+    !placed.has(component.id) &&
+    (component.type === 'M' || component.type === 'Q') &&
+    (
+      componentHasNets(component, layout.powerNet, layout.leftOutputNet) ||
+      componentHasNets(component, layout.powerNet, layout.rightOutputNet)
+    )
+  ));
+  for (const component of activeLoads) {
+    const nets = activeNetMap(component);
+    const outputNet = nets.drain === layout.leftOutputNet ? layout.leftOutputNet : layout.rightOutputNet;
+    const anchor = outputNet === layout.leftOutputNet
+      ? pinPointForComponentNet(layout.left, layout.leftOutputNet)
+      : pinPointForComponentNet(layout.right, layout.rightOutputNet);
+    component.position = snapPoint({ x: anchor?.x ?? component.position.x, y: 130 });
+    component.rotation = 0;
+    placed.add(component.id);
+  }
+
+  const drainLoads = [
+    { outputNet: layout.leftOutputNet, pair: layout.left, side: -1 },
+    { outputNet: layout.rightOutputNet, pair: layout.right, side: 1 },
+  ];
+  for (const { outputNet, pair } of drainLoads) {
+    const load = findTwoPinWithNets(module.components, placed, /r(d|c)|load|collector|drain/i, layout.powerNet, outputNet);
+    const anchor = pinPointForComponentNet(pair, outputNet);
+    if (load && anchor) {
+      placeVertical(load, layout.powerNet, outputNet, { x: anchor.x, y: 165 });
+      placed.add(load.id);
+    }
+  }
+
+  const tail = findTwoPinWithNets(module.components, placed, /tail|bias|i(ref)?|source/i, layout.tailNet, layout.groundNet);
+  if (tail) {
+    placeVertical(tail, layout.tailNet, layout.groundNet, { x: 490, y: 525 });
+    placed.add(tail.id);
+  }
+
+  let fallbackIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    const [first, second] = component.pins;
+    if (first && second && component.pins.length === 2) {
+      const nets = new Set([first.net, second.net]);
+      const leftOutputBranch = nets.has(layout.leftOutputNet) && nets.has(layout.groundNet);
+      const rightOutputBranch = nets.has(layout.rightOutputNet) && nets.has(layout.groundNet);
+      if (leftOutputBranch || rightOutputBranch) {
+        const outputNet = leftOutputBranch ? layout.leftOutputNet : layout.rightOutputNet;
+        const x = leftOutputBranch ? 220 : 760;
+        placeVertical(component, outputNet, layout.groundNet, { x, y: 470 + fallbackIndex * 12 });
+        placed.add(component.id);
+        fallbackIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.leftInputNet) || nets.has(layout.rightInputNet)) {
+        const inputNet = nets.has(layout.leftInputNet) ? layout.leftInputNet : layout.rightInputNet;
+        const otherNet = first.net === inputNet ? second.net : first.net;
+        const x = inputNet === layout.leftInputNet ? 185 : 705;
+        placeHorizontal(component, otherNet, inputNet, { x, y: 330 });
+        placed.add(component.id);
+        fallbackIndex += 1;
+        continue;
+      }
+    }
+    component.position = snapPoint({
+      x: 850 + (fallbackIndex % 3) * 150,
+      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+    placed.add(component.id);
+    fallbackIndex += 1;
+  }
+  return module;
 }
 
 function autoLayoutCmosInverterModule(module: CircuitModule, layout: CmosInverterLayout): CircuitModule {
