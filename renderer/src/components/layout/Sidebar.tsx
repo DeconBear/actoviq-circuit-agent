@@ -124,10 +124,10 @@ export function Sidebar({
   }, []);
 
   const handleChooseWorkspaceRoot = useCallback(async () => {
-    if (!window.electronAPI) return;
+    if (!window.electronAPI || creating) return;
     const root = await window.electronAPI.chooseWorkspaceRoot();
     if (root) setWorkspaceRoot(root);
-  }, []);
+  }, [creating]);
 
   const handleOpenWorkspaceRoot = useCallback(async () => {
     if (!window.electronAPI || creating) return;
@@ -193,30 +193,31 @@ export function Sidebar({
   }, [creating, onCreateProject, projectForm]);
 
   const closeWorkspaceForm = useCallback(() => {
+    if (creating) return;
     setWorkspaceFormOpen(false);
     setWorkspaceName('');
     setWorkspaceRoot('');
-  }, []);
+  }, [creating]);
 
   const handleWorkspaceFormKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key === 'Enter') {
       event.preventDefault();
       void handleCreateWorkspace();
-    } else if (event.key === 'Escape') {
+    } else if (event.key === 'Escape' && !creating) {
       event.preventDefault();
       closeWorkspaceForm();
     }
-  }, [closeWorkspaceForm, handleCreateWorkspace]);
+  }, [closeWorkspaceForm, creating, handleCreateWorkspace]);
 
   const handleProjectFormKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key === 'Enter') {
       event.preventDefault();
       void handleCreateProject();
-    } else if (event.key === 'Escape') {
+    } else if (event.key === 'Escape' && !creating) {
       event.preventDefault();
       setProjectForm(null);
     }
-  }, [handleCreateProject]);
+  }, [creating, handleCreateProject]);
 
   if (collapsed) {
     return (
@@ -251,11 +252,13 @@ export function Sidebar({
         <div style={styles.workspaceActions}>
           <button
             onClick={() => {
+              if (creating) return;
               setWorkspaceFormOpen((open) => !open);
               setProjectForm(null);
               setNotice(null);
             }}
             style={styles.smallBtn}
+            disabled={creating}
             data-testid="sidebar-new-workspace"
           >
             + Workspace
@@ -273,6 +276,8 @@ export function Sidebar({
           <div
             style={styles.createPanel}
             data-testid="workspace-create-panel"
+            data-busy={creating ? 'true' : 'false'}
+            aria-busy={creating}
             onKeyDown={handleWorkspaceFormKeyDown}
           >
             <input
@@ -291,7 +296,13 @@ export function Sidebar({
                 style={styles.inlineInput}
                 data-testid="workspace-root-input"
               />
-              <button type="button" onClick={handleChooseWorkspaceRoot} style={styles.iconBtn} title="Choose folder">
+              <button
+                type="button"
+                onClick={handleChooseWorkspaceRoot}
+                style={styles.iconBtn}
+                title="Choose folder"
+                disabled={creating}
+              >
                 ...
               </button>
             </div>
@@ -300,6 +311,8 @@ export function Sidebar({
                 type="button"
                 onClick={closeWorkspaceForm}
                 style={styles.formBtn}
+                disabled={creating}
+                data-testid="workspace-create-cancel"
               >
                 Cancel
               </button>
@@ -310,7 +323,7 @@ export function Sidebar({
                 disabled={creating || !workspaceName.trim()}
                 data-testid="workspace-create-submit"
               >
-                Create
+                {creating ? 'Creating...' : 'Create'}
               </button>
             </div>
           </div>
@@ -322,22 +335,26 @@ export function Sidebar({
       <div style={styles.projectActions}>
         <button
           onClick={() => {
+            if (creating) return;
             setProjectForm({ demo: true, name: 'Modular analog chain' });
             setWorkspaceFormOpen(false);
             setNotice(null);
           }}
           style={styles.newBtn}
+          disabled={creating}
           data-testid="sidebar-new-demo-project"
         >
           + Demo Project
         </button>
         <button
           onClick={() => {
+            if (creating) return;
             setProjectForm({ demo: false, name: 'New circuit project' });
             setWorkspaceFormOpen(false);
             setNotice(null);
           }}
           style={styles.blankProjectBtn}
+          disabled={creating}
           data-testid="sidebar-new-blank-project"
         >
           Blank
@@ -347,6 +364,8 @@ export function Sidebar({
         <div
           style={styles.createPanel}
           data-testid="project-create-panel"
+          data-busy={creating ? 'true' : 'false'}
+          aria-busy={creating}
           onKeyDown={handleProjectFormKeyDown}
         >
           <div style={styles.formTitle}>{projectForm.demo ? 'Demo project' : 'Blank project'}</div>
@@ -359,7 +378,17 @@ export function Sidebar({
             autoFocus
           />
           <div style={styles.formActions}>
-            <button type="button" onClick={() => setProjectForm(null)} style={styles.formBtn}>Cancel</button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!creating) setProjectForm(null);
+              }}
+              style={styles.formBtn}
+              disabled={creating}
+              data-testid="project-create-cancel"
+            >
+              Cancel
+            </button>
             <button
               type="button"
               onClick={() => void handleCreateProject()}
@@ -367,7 +396,7 @@ export function Sidebar({
               disabled={creating || !projectForm.name.trim()}
               data-testid="project-create-submit"
             >
-              Create
+              {creating ? 'Creating...' : 'Create'}
             </button>
           </div>
         </div>

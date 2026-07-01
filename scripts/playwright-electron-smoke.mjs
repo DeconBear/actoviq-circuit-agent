@@ -234,6 +234,15 @@ try {
   const workspaceName = `Playwright Workspace ${Date.now()}`;
   await page.getByTestId('sidebar-new-workspace').click();
   await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
+  assert.equal(await page.getByTestId('workspace-create-submit').isDisabled(), true);
+  await page.keyboard.press('Escape');
+  await page.getByTestId('workspace-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
+  await page.getByTestId('sidebar-new-workspace').click();
+  await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
+  await page.getByTestId('workspace-create-cancel').click();
+  await page.getByTestId('workspace-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
+  await page.getByTestId('sidebar-new-workspace').click();
+  await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('workspace-name-input').fill(workspaceName);
   await page.getByTestId('workspace-create-submit').click();
   await page.getByTestId('sidebar-notice').getByText(`Workspace created: ${workspaceName}`, { exact: true }).waitFor({ timeout: 20_000 });
@@ -259,6 +268,10 @@ try {
   await page.getByTestId('sidebar-new-blank-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.keyboard.press('Escape');
+  await page.getByTestId('project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
+  await page.getByTestId('sidebar-new-blank-project').click();
+  await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
+  await page.getByTestId('project-create-cancel').click();
   await page.getByTestId('project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   await page.getByTestId('sidebar-new-blank-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
