@@ -19,6 +19,7 @@ import {
   hitComponent,
   hitEndpoint,
   hitWire,
+  makeId,
   makePlacedComponent,
   normalizeConnectivity,
   normalizeRotation,
@@ -610,6 +611,40 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     commitDraft(next);
   }
 
+  function duplicateSelectedComponents() {
+    if (selectedComponentIds.length === 0 || busy) return;
+    const next = cloneModule(draft);
+    const selectedIds = new Set(selectedComponentIds);
+    const existingIds = new Set(next.components.map((component) => component.id));
+    const selectedComponents = draft.components.filter((component) => selectedIds.has(component.id));
+    const duplicatedIds: string[] = [];
+    for (const component of selectedComponents) {
+      const id = makeId(component.type.toLowerCase(), existingIds);
+      existingIds.add(id);
+      next.components.push({
+        ...cloneComponent(component),
+        id,
+        name: `${component.type}${id.replace(/^[a-z]+/i, '')}`,
+        position: snapPoint({
+          x: component.position.x + SCHEMATIC_GRID * 2,
+          y: component.position.y + SCHEMATIC_GRID * 2,
+        }),
+        pins: component.pins.map((pin, index) => ({
+          ...pin,
+          net: `n_${id}_${index + 1}`,
+        })),
+      });
+      duplicatedIds.push(id);
+    }
+    if (duplicatedIds.length === 0) return;
+    commitDraft(next);
+    setSelection(selectionForComponentIds(duplicatedIds));
+    setTool('select');
+    setWireStart(null);
+    setHoverEndpoint(null);
+    setInteractionCursor('grab');
+  }
+
   function handleKeyboardEvent(event: Pick<KeyboardEvent | ReactKeyboardEvent<HTMLDivElement>, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'preventDefault' | 'shiftKey' | 'target'>) {
     if (isEditableKeyboardTarget(event.target)) return;
     const key = event.key.toLowerCase();
@@ -642,6 +677,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setHoverEndpoint(null);
       setSelection(selectionForComponentIds(draft.components.map((component) => component.id)));
       setInteractionCursor('default');
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && key === 'd') {
+      event.preventDefault();
+      duplicateSelectedComponents();
       return;
     }
     if ((event.ctrlKey || event.metaKey) && key === 'z') {
@@ -1024,6 +1064,14 @@ function endpointIdentity(endpoint: EndpointHit | null): string {
   if (endpoint.component_id && endpoint.pin_id) return `pin:${endpoint.component_id}:${endpoint.pin_id}`;
   if (endpoint.port_id) return `port:${endpoint.port_id}`;
   return `point:${endpoint.x},${endpoint.y}`;
+}
+
+function cloneComponent(component: CircuitComponent): CircuitComponent {
+  return {
+    ...component,
+    position: { ...component.position },
+    pins: component.pins.map((pin) => ({ ...pin })),
+  };
 }
 
 function hitStoredWireSegment(

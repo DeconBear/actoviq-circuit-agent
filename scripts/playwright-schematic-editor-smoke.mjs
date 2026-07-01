@@ -231,6 +231,12 @@ async function componentRotations(page) {
   return JSON.parse(raw || '{}');
 }
 
+async function componentPinNets(page, componentId) {
+  return page.getByTestId('schematic-editor-svg').locator(
+    `g[data-component-id="${componentId}"] circle[data-endpoint-kind="pin"]`,
+  ).evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-net') ?? ''));
+}
+
 async function editorViewBox(page) {
   const raw = await page.getByTestId('schematic-editor-svg').getAttribute('viewBox');
   const [minX, minY, width, height] = String(raw || '0 0 1 1').trim().split(/\s+/).map(Number);
@@ -847,6 +853,37 @@ try {
     'selected resistor should reveal only its own pin snap points',
   );
   const filterPositionsAfterPlace = await componentPositions(page);
+  const r1NetsBeforeDuplicate = await componentPinNets(page, 'r1');
+  await editor.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+D' : 'Control+D');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '4' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r2'
+  ));
+  const filterPositionsAfterDuplicate = await componentPositions(page);
+  assert.deepEqual(
+    filterPositionsAfterDuplicate.r2,
+    {
+      x: filterPositionsAfterPlace.r1.x + schematicGrid * 2,
+      y: filterPositionsAfterPlace.r1.y + schematicGrid * 2,
+    },
+    'duplicate component should be offset by two grid steps',
+  );
+  assert.notDeepEqual(
+    await componentPinNets(page, 'r2'),
+    r1NetsBeforeDuplicate,
+    'duplicated component should receive fresh pin nets instead of shorting to the original',
+  );
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3' &&
+    !document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions')?.includes('"r2"')
+  ));
+  const r1AfterDuplicateUndo = await componentScreenPoint(page, 'r1');
+  await page.mouse.click(r1AfterDuplicateUndo.x, r1AfterDuplicateUndo.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
+  ));
   await editor.focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForFunction(({ previousX, grid }) => {
