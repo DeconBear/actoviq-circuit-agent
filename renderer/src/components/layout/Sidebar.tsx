@@ -329,7 +329,13 @@ export function Sidebar({
           </div>
         )}
         {activeWorkspace && (
-          <div style={styles.workspacePath}>{activeWorkspace.root}</div>
+          <div
+            style={styles.workspacePath}
+            data-testid="active-workspace-path"
+            data-workspace-id={activeWorkspace.id}
+          >
+            {activeWorkspace.root}
+          </div>
         )}
       </div>
       <div style={styles.projectActions}>

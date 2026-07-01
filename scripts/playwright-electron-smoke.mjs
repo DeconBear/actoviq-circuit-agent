@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -149,10 +149,14 @@ async function waitForCompiledBuildManifest(filePath, previousBuiltAt, requiredM
 }
 
 async function findProjectByName(name) {
-  const entries = await readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
+  return findProjectByNameInRoot(projectsRoot, name);
+}
+
+async function findProjectByNameInRoot(searchProjectsRoot, name) {
+  const entries = await readdir(searchProjectsRoot, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const projectRoot = path.resolve(projectsRoot, entry.name);
+    const projectRoot = path.resolve(searchProjectsRoot, entry.name);
     const manifestPath = path.resolve(projectRoot, 'project.circuit.json');
     try {
       const project = JSON.parse(await readFile(manifestPath, 'utf8'));
@@ -232,6 +236,7 @@ try {
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
 
   const workspaceName = `Playwright Workspace ${Date.now()}`;
+  let createdWorkspaceRoot = '';
   await page.getByTestId('sidebar-new-workspace').click();
   await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
   assert.equal(await page.getByTestId('workspace-create-submit').isDisabled(), true);
@@ -246,6 +251,19 @@ try {
   await page.getByTestId('workspace-name-input').fill(workspaceName);
   await page.getByTestId('workspace-create-submit').click();
   await page.getByTestId('sidebar-notice').getByText(`Workspace created: ${workspaceName}`, { exact: true }).waitFor({ timeout: 20_000 });
+  await page.waitForFunction((name) => {
+    const select = document.querySelector('[data-testid="workspace-select"]');
+    if (!(select instanceof HTMLSelectElement)) return false;
+    return [...select.options].some((option) => option.textContent === name) &&
+      select.selectedOptions[0]?.textContent === name;
+  }, workspaceName);
+  createdWorkspaceRoot = String(await page.getByTestId('active-workspace-path').textContent());
+  assert.ok(createdWorkspaceRoot.endsWith(workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')));
+  const workspaceMarker = JSON.parse(await readFile(path.resolve(createdWorkspaceRoot, '.actoviq-workspace.json'), 'utf8'));
+  assert.equal(workspaceMarker.name, workspaceName);
+  for (const relative of ['projects', 'references', 'jobs']) {
+    assert.equal((await stat(path.resolve(createdWorkspaceRoot, relative))).isDirectory(), true);
+  }
   const emptyBlankProjectName = `Playwright Empty Blank ${Date.now()}`;
   await page.getByTestId('create-blank-project').waitFor({ timeout: 20_000 });
   await page.getByTestId('create-blank-project').click();
@@ -253,6 +271,9 @@ try {
   await page.getByTestId('empty-project-name-input').fill(emptyBlankProjectName);
   await page.getByTestId('empty-project-name-input').press('Enter');
   await page.getByTestId('circuit-workbench').getByText(emptyBlankProjectName, { exact: true }).waitFor({ timeout: 30_000 });
+  const emptyProjectManifest = await findProjectByNameInRoot(path.resolve(createdWorkspaceRoot, 'projects'), emptyBlankProjectName);
+  assert.equal(emptyProjectManifest.project.modules.length, 0);
+  await page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: emptyBlankProjectName }).first().waitFor({ timeout: 30_000 });
   await page.getByTestId('sidebar-open-workspace-root').click();
   await page.getByTestId('sidebar-notice').getByText(/^Workspace opened: /).waitFor({ timeout: 20_000 });
   await page.getByTestId('sidebar-open-references').scrollIntoViewIfNeeded();
