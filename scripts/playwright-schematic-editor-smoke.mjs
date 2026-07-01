@@ -485,6 +485,25 @@ async function selectedComponentFrameScreenPoint(page, componentId, offset = { x
   }, offset);
 }
 
+async function selectedComponentCornerScreenPoint(page, componentId, cornerIndex = 0) {
+  return page.getByTestId('schematic-editor-svg').locator(
+    `g[data-component-id="${componentId}"] [data-testid="schematic-selected-component-corner"]`,
+  ).nth(cornerIndex).evaluate((node) => {
+    if (!(node instanceof SVGGraphicsElement)) {
+      throw new Error('selected component corner is not an SVG graphics element');
+    }
+    const svg = node.ownerSVGElement;
+    const matrix = svg?.getScreenCTM();
+    if (!svg || !matrix) throw new Error('selected component corner has no SVG screen matrix');
+    const box = node.getBBox();
+    const point = svg.createSVGPoint();
+    point.x = box.x + box.width / 2;
+    point.y = box.y + box.height / 2;
+    const screenPoint = point.matrixTransform(matrix);
+    return { x: screenPoint.x, y: screenPoint.y };
+  });
+}
+
 async function selectComponentForDrag(page, componentId, offsets = [{ x: 0, y: 0 }]) {
   await page.getByTestId('schematic-editor-select').click();
   for (const offset of offsets) {
@@ -892,7 +911,9 @@ try {
   await page.waitForFunction((previous) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
     const positions = JSON.parse(raw);
-    return (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter' &&
+      Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
+      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
       (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
   }, filterPositionsInitial);
   await page.keyboard.press('Escape');
@@ -911,7 +932,7 @@ try {
   assert.deepEqual(
     await componentPositions(page),
     filterPositionsInitial,
-    'cancelled Shift-click multi-selection drag should restore schematic components',
+    'cancelled direct drag from a Shift-click multi-selection should restore schematic components',
   );
   const multiMarqueeStart = {
     x: Math.min(rFilterScreenPoint.x, cFilterScreenPoint.x) - 90,
@@ -931,14 +952,16 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
   ));
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 2, 'marquee multi-selection should show two component frames');
-  const cFilterGroupDragPoint = await componentScreenPoint(page, 'c_filter');
-  await page.mouse.move(cFilterGroupDragPoint.x, cFilterGroupDragPoint.y);
+  const cFilterDirectDragPoint = await componentScreenPoint(page, 'c_filter');
+  await page.mouse.move(cFilterDirectDragPoint.x, cFilterDirectDragPoint.y);
   await page.mouse.down();
-  await page.mouse.move(cFilterGroupDragPoint.x + 90, cFilterGroupDragPoint.y + 30, { steps: 8 });
+  await page.mouse.move(cFilterDirectDragPoint.x + 90, cFilterDirectDragPoint.y + 30, { steps: 8 });
   await page.waitForFunction((previous) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
     const positions = JSON.parse(raw);
-    return (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter' &&
+      Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
+      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
       (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
   }, filterPositionsInitial);
   await page.keyboard.press('Escape');
@@ -954,7 +977,42 @@ try {
   assert.deepEqual(
     await componentPositions(page),
     filterPositionsInitial,
-    'cancelled multi-selection drag should restore schematic components',
+    'cancelled direct drag from a multi-selection should restore schematic components',
+  );
+  await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(multiMarqueeEnd.x, multiMarqueeEnd.y, { steps: 10 });
+  await page.getByTestId('schematic-selection-marquee').waitFor();
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
+  ));
+  const cFilterGroupHandlePoint = await selectedComponentCornerScreenPoint(page, 'c_filter', 0);
+  await page.mouse.move(cFilterGroupHandlePoint.x, cFilterGroupHandlePoint.y);
+  await page.mouse.down();
+  await page.mouse.move(cFilterGroupHandlePoint.x + 90, cFilterGroupHandlePoint.y + 30, { steps: 8 });
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
+      (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
+      (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
+  }, filterPositionsInitial);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
+      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+      Number(positions.c_filter?.x) === Number(previous.c_filter.x) &&
+      Number(positions.c_filter?.y) === Number(previous.c_filter.y);
+  }, filterPositionsInitial);
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'cancelled selection-handle group drag should restore schematic components',
   );
   await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
   await page.mouse.down();
@@ -1148,7 +1206,7 @@ try {
     'square',
     'component selection handles should be square',
   );
-  const r1FrameDragPoint = await componentScreenPoint(page, 'r1', { x: 0, y: 42 });
+  const r1FrameDragPoint = await selectedComponentCornerScreenPoint(page, 'r1', 2);
   await page.mouse.move(r1FrameDragPoint.x, r1FrameDragPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'

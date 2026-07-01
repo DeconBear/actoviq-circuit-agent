@@ -1645,7 +1645,7 @@ function pointHitsComponentGraphic(component: CircuitComponent, world: CircuitPo
 
   const local = componentLocalPoint(component, world);
   if (component.type === 'R') return Math.abs(local.x) <= 32 && Math.abs(local.y) <= 14;
-  if (component.type === 'C') return Math.abs(Math.abs(local.x) - 8) <= 7 && Math.abs(local.y) <= 34;
+  if (component.type === 'C') return Math.abs(local.x) <= 16 && Math.abs(local.y) <= 36;
   if (component.type === 'L') return Math.abs(local.x) <= 38 && Math.abs(local.y) <= 12;
   if (component.type === 'D') return local.x >= -26 && local.x <= 26 && local.y >= -29 && local.y <= 29;
   if (component.type === 'V' || component.type === 'I') return Math.hypot(local.x, local.y) <= 31;
