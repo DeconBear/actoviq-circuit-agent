@@ -284,6 +284,14 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     const componentHit = hitComponent(document, world) ?? hitSelectedComponentFrame(document, selection, world);
     if (componentHit) {
       const currentComponentIds = componentIdsForSelection(selection);
+      if (event.shiftKey) {
+        const nextComponentIds = currentComponentIds.includes(componentHit.id)
+          ? currentComponentIds.filter((componentId) => componentId !== componentHit.id)
+          : [...currentComponentIds, componentHit.id];
+        setSelection(selectionForComponentIds(nextComponentIds));
+        setInteractionCursor(nextComponentIds.includes(componentHit.id) ? 'grab' : 'default');
+        return;
+      }
       const componentIds = currentComponentIds.includes(componentHit.id) ? currentComponentIds : [componentHit.id];
       if (!currentComponentIds.includes(componentHit.id)) {
         setSelection({ kind: 'component', id: componentHit.id });
@@ -1114,6 +1122,14 @@ function componentIdsForSelection(selection: SchematicSelection): string[] {
   if (selection?.kind === 'component') return [selection.id];
   if (selection?.kind === 'components') return selection.ids;
   return [];
+}
+
+function selectionForComponentIds(componentIds: string[]): SchematicSelection {
+  const uniqueIds = [...new Set(componentIds)].filter(Boolean);
+  if (uniqueIds.length === 0) return null;
+  const firstId = uniqueIds[0];
+  if (uniqueIds.length === 1 && firstId) return { kind: 'component', id: firstId };
+  return { kind: 'components', ids: uniqueIds };
 }
 
 function selectionAttribute(selection: SchematicSelection): string {

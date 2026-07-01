@@ -650,6 +650,58 @@ try {
   ));
   const rFilterScreenPoint = await componentScreenPoint(page, 'r_filter');
   const cFilterScreenPoint = await componentScreenPoint(page, 'c_filter');
+  await page.mouse.click(rFilterScreenPoint.x, rFilterScreenPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r_filter'
+  ));
+  await page.keyboard.down('Shift');
+  await page.mouse.click(cFilterScreenPoint.x, cFilterScreenPoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'components:r_filter,c_filter' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
+  ));
+  assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 2, 'Shift-click multi-selection should show two component frames');
+  await page.keyboard.down('Shift');
+  await page.mouse.click(cFilterScreenPoint.x, cFilterScreenPoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r_filter' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '1'
+  ));
+  await page.keyboard.down('Shift');
+  await page.mouse.click(cFilterScreenPoint.x, cFilterScreenPoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'components:r_filter,c_filter'
+  ));
+  await page.mouse.move(cFilterScreenPoint.x, cFilterScreenPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(cFilterScreenPoint.x + 90, cFilterScreenPoint.y + 30, { steps: 8 });
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
+      (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
+  }, filterPositionsInitial);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
+      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+      Number(positions.c_filter?.x) === Number(previous.c_filter.x) &&
+      Number(positions.c_filter?.y) === Number(previous.c_filter.y);
+  }, filterPositionsInitial);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  ));
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'cancelled Shift-click multi-selection drag should restore schematic components',
+  );
   const multiMarqueeStart = {
     x: Math.min(rFilterScreenPoint.x, cFilterScreenPoint.x) - 90,
     y: Math.min(rFilterScreenPoint.y, cFilterScreenPoint.y) - 40,
