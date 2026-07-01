@@ -635,6 +635,15 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       deleteSelection();
       return;
     }
+    if ((event.ctrlKey || event.metaKey) && key === 'a') {
+      event.preventDefault();
+      setTool('select');
+      setWireStart(null);
+      setHoverEndpoint(null);
+      setSelection(selectionForComponentIds(draft.components.map((component) => component.id)));
+      setInteractionCursor('default');
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && key === 'z') {
       event.preventDefault();
       if (event.shiftKey) {

@@ -526,6 +526,23 @@ try {
     await page.getByTestId('schematic-editor-svg').locator('text[paint-order="stroke"]').count() >= 6,
     'schematic labels should render with a white halo for wire overlap readability',
   );
+  const positionsBeforeSelectAll = await componentPositions(page);
+  await editor.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'components:r_filter,c_filter'
+  ));
+  assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 2, 'select-all should show all component frames');
+  assert.deepEqual(
+    await componentPositions(page),
+    positionsBeforeSelectAll,
+    'select-all should not move schematic components',
+  );
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  ));
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-document-backed.png') });
   console.log('[e2e] filter editor loaded');
 
