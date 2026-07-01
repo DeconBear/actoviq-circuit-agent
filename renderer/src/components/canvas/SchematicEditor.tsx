@@ -274,7 +274,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       addWire(next, wireStart, hit);
       commitDraft(next);
       setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
-      setWireStart(null);
+      setWireStart(hit);
       setHoverWorld(null);
       setHoverEndpoint(null);
       wireDragRef.current = null;
@@ -500,7 +500,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       addWire(next, wireDrag.start, end);
       commitDraft(next);
       setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
-      setWireStart(null);
+      setWireStart(end);
       setHoverWorld(null);
       setHoverEndpoint(null);
       setInteractionCursor('default');
@@ -839,6 +839,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
+      data-wire-start={endpointIdentity(wireStart)}
       data-cursor-mode={editorCursor}
       data-zoom={zoom.toFixed(3)}
       data-space-pan={spacePanActive ? 'true' : 'false'}

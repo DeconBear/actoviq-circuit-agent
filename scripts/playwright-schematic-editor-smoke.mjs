@@ -1024,6 +1024,33 @@ try {
   assert.ok(drawnWire, 'drawn stored wire was not exposed to the editor');
   assert.ok(Array.isArray(drawnWire.points) && drawnWire.points.length >= 2, 'drawn wire points were not exposed to the editor');
   assert.ok(await isWireVisible(page, drawnWire.id), 'drawn wire is not visibly drawn');
+  assert.notEqual(
+    await editor.getAttribute('data-wire-start'),
+    '',
+    'wire tool should keep the last endpoint active for KiCad-like continuous drawing',
+  );
+  const chainWireCount = Number(await editor.getAttribute('data-wire-count'));
+  const chainViewBox = await editorViewBox(page);
+  const chainCanvasBox = await canvas.boundingBox();
+  assert.ok(chainCanvasBox);
+  const chainEnd = worldToScreen(
+    { x: filterPositionsAfterDrag.r1.x - 52, y: filterPositionsAfterDrag.r1.y + 80 },
+    chainViewBox,
+    chainCanvasBox,
+  );
+  await page.mouse.click(chainEnd.x, chainEnd.y);
+  await page.waitForFunction((count) => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') > count
+  ), chainWireCount);
+  assert.match(
+    await editor.getAttribute('data-wire-start') ?? '',
+    /^point:/,
+    'wire tool should continue from the chained free point',
+  );
+  const wiresAfterChain = await editorWires(page);
+  const chainedWire = wiresAfterChain.filter((wire) => wire.source === 'stored').at(-1);
+  assert.ok(chainedWire && chainedWire.id !== drawnWire.id, 'continuous wire drawing did not create a second stored wire');
+  assert.ok(await isWireVisible(page, chainedWire.id), 'continuous wire segment is not visibly drawn');
   const positionsBeforeWireDrag = await componentPositions(page);
   const wirePointsBeforeDrag = drawnWire.points;
   const wireDragPoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
