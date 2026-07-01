@@ -429,6 +429,8 @@ export function Sidebar({
               ...(activeProjectId === project.projectId ? styles.itemActive : {}),
             }}
             data-testid={`sidebar-project-${project.projectId}`}
+            data-active={activeProjectId === project.projectId ? 'true' : 'false'}
+            aria-current={activeProjectId === project.projectId ? 'true' : undefined}
           >
             <div style={styles.itemName}>{project.name}</div>
             <div style={styles.itemMeta}>

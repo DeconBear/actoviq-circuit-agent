@@ -1120,7 +1120,9 @@ export function CircuitWorkbench({
       <header style={styles.header}>
         <div style={styles.titleBlock}>
           <div style={styles.eyebrow}>Schematic Module Hub</div>
-          <div style={styles.projectTitle}>{project.name}</div>
+          <div style={styles.projectTitle} data-testid="project-title" data-project-id={project.project_id}>
+            {project.name}
+          </div>
           <div style={styles.projectMeta}>
             revision {project.revision} | {project.modules.length} modules
             {build ? ` | ${build.manifest.status}` : ''}
