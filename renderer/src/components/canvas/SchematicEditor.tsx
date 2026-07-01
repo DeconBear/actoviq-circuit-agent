@@ -522,7 +522,10 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setFuture([]);
       return;
     }
-    if (!drag?.moved) return;
+    if (!drag?.moved) {
+      if (drag) setInteractionCursor('grab');
+      return;
+    }
     setHistory((items) => [...items, drag.originalModule].slice(-40));
     setFuture([]);
   }
@@ -583,12 +586,17 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
     commitDraft(next);
   }
 
-  function rotateSelectedComponent() {
-    if (!selectedComponent || busy) return;
+  function rotateSelectedComponents() {
+    if (selectedComponentIds.length === 0 || busy) return;
     const next = cloneModule(draft);
-    const component = next.components.find((entry) => entry.id === selectedComponent.id);
-    if (!component) return;
-    component.rotation = normalizeRotation((component.rotation ?? 0) + 90);
+    let changed = false;
+    for (const componentId of selectedComponentIds) {
+      const component = next.components.find((entry) => entry.id === componentId);
+      if (!component) continue;
+      component.rotation = normalizeRotation((component.rotation ?? 0) + 90);
+      changed = true;
+    }
+    if (!changed) return;
     next.wires = rerouteStoredWires(next);
     commitDraft(next);
   }
@@ -663,7 +671,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       setWireStart(null);
       setHoverEndpoint(null);
       setInteractionCursor('default');
-      if (selectedComponent) rotateSelectedComponent();
+      rotateSelectedComponents();
       return;
     }
     if (key === 'w') {

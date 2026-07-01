@@ -606,7 +606,41 @@ try {
     filterPositionsInitial,
     'cancelled multi-selection drag should restore schematic components',
   );
-  await page.keyboard.press('Escape');
+  await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(multiMarqueeEnd.x, multiMarqueeEnd.y, { steps: 10 });
+  await page.getByTestId('schematic-selection-marquee').waitFor();
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
+  ));
+  const filterRotationsBeforeMultiRotate = await componentRotations(page);
+  await editor.focus();
+  await page.keyboard.press('r');
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
+    const rotations = JSON.parse(raw);
+    return Number(rotations.r_filter) === (Number(previous.r_filter ?? 0) + 90) % 360 &&
+      Number(rotations.c_filter) === (Number(previous.c_filter ?? 0) + 90) % 360;
+  }, filterRotationsBeforeMultiRotate);
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'rotating multi-selection should not move schematic components',
+  );
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
+    const rotations = JSON.parse(raw);
+    return Number(rotations.r_filter) === Number(previous.r_filter ?? 0) &&
+      Number(rotations.c_filter) === Number(previous.c_filter ?? 0);
+  }, filterRotationsBeforeMultiRotate);
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'undoing multi-selection rotation should restore schematic component positions',
+  );
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
   ));
