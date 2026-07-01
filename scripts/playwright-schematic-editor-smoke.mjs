@@ -14,6 +14,7 @@ const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const projectPrefix = 'playwright-schematic-editor-';
 const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
 const legacyBjtResetPrefix = `${projectPrefix}legacy-bjt-reset-`;
+const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -214,6 +215,63 @@ async function createLegacyBjtResetProject() {
     'R51 dtr_drive dtr 1k',
     'R49 rts_drive rts 1k',
     'R52 boot_node boot0 1k',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
+async function createLegacyVoltageDividerProject() {
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyVoltageDividerPrefix}${Date.now()}`,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  const modulePorts = [
+    { id: 'vdd', name: '+5V', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'output', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'divider',
+    name: 'Power-input voltage divider',
+    kind: 'bias',
+    function: 'Legacy notebook-only voltage divider used to verify power-fed passive schematic layout.',
+    parameters: { Vin: '5.0 V', Ratio: '2:1' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/divider/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 360, height: 260 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'divider',
+    name: 'Power-input voltage divider',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'divider');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# Power-input voltage divider',
+    '',
+    '```spice',
+    '* Legacy notebook-only voltage divider fixture',
+    'Rtop vdd vout 10k',
+    'Rbot vout 0 20k',
+    'Cflt vout 0 100n',
     '.end',
     '```',
     '',
@@ -437,6 +495,7 @@ for (const module of created.project.modules) {
 }
 const legacyLdoProject = await createLegacyLdoProject();
 const legacyBjtResetProject = await createLegacyBjtResetProject();
+const legacyVoltageDividerProject = await createLegacyVoltageDividerProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -1474,6 +1533,43 @@ try {
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-bjt-reset.png') });
   console.log('[e2e] legacy bjt reset loaded');
 
+  await page.getByTestId(`sidebar-project-${legacyVoltageDividerProject.projectId}`).click();
+  await page.getByTestId('circuit-workbench').getByText(legacyVoltageDividerProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-divider').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 3 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 3;
+  });
+  const dividerPositions = await componentPositions(page);
+  for (const id of ['rtop', 'rbot', 'cflt']) {
+    assert.ok(dividerPositions[id], `hydrated voltage divider component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 3, 'hydrated voltage divider components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 3, 'hydrated voltage divider wires are not visibly drawn');
+  assert.ok(
+    Math.abs(dividerPositions.rtop.x - dividerPositions.rbot.x) <= schematicGrid,
+    'voltage divider resistors should align vertically in GUI',
+  );
+  assert.ok(dividerPositions.rtop.y < dividerPositions.rbot.y, 'voltage divider top resistor should sit above bottom resistor in GUI');
+  assert.ok(dividerPositions.cflt.x > dividerPositions.rbot.x, 'voltage divider shunt capacitor should sit beside the divider in GUI');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="output"]').getAttribute('data-port-side'),
+    'right',
+    'voltage divider output should render on the right edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="gnd"]').count(),
+    0,
+    'voltage divider ground rail should render as a local label instead of a duplicate floating port',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-voltage-divider.png') });
+  console.log('[e2e] legacy voltage divider loaded');
+
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
   if (await page.getByTestId('back-to-board').count()) {
@@ -1485,31 +1581,31 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'power'
   ));
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
   const powerCanvas = page.getByTestId('schematic-editor-svg');
   const powerBox = await powerCanvas.boundingBox();
   assert.ok(powerBox);
-  const powerPlacePoint = {
-    x: powerBox.x + Math.min(430, powerBox.width * 0.62),
-    y: powerBox.y + Math.min(260, powerBox.height * 0.45),
-  };
+  const powerPlacePoint = worldToScreen({ x: 520, y: 320 }, await editorViewBox(page), powerBox);
   await page.getByTestId('schematic-editor-place-R').click();
   await page.mouse.click(powerPlacePoint.x, powerPlacePoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3'
   ));
   const powerPositionsAfterPlace = await componentPositions(page);
-  await page.getByTestId('schematic-editor-select').click();
-  const powerR1PlaceViewBox = await editorViewBox(page);
-  const powerR1PlaceBox = await powerCanvas.boundingBox();
-  assert.ok(powerR1PlaceBox);
-  const powerR1PlacePoint = worldToScreen(powerPositionsAfterPlace.r1, powerR1PlaceViewBox, powerR1PlaceBox);
+  await selectComponentForDrag(page, 'r1', [{ x: 0, y: -10 }, { x: 0, y: 0 }, { x: 10, y: 0 }]);
+  const powerR1PlacePoint = await selectedComponentFrameScreenPoint(page, 'r1');
   await page.mouse.move(powerR1PlacePoint.x, powerR1PlacePoint.y);
   await page.mouse.down();
   await page.mouse.move(powerR1PlacePoint.x + 70, powerR1PlacePoint.y + 40, { steps: 10 });
   await page.mouse.up();
-  await page.waitForFunction(() => (
-    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
-  ));
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r1?.x) !== Number(previous.r1.x) ||
+      Number(positions.r1?.y) !== Number(previous.r1.y);
+  }, powerPositionsAfterPlace);
   const powerPositionsAfterDrag = await componentPositions(page);
   assertPositionEqual(powerPositionsAfterDrag.v_signal, powerPositionsAfterPlace.v_signal, 'dragging resistor moved Vsignal');
   assertPositionEqual(powerPositionsAfterDrag.v_supply, powerPositionsAfterPlace.v_supply, 'dragging resistor moved VDD source');

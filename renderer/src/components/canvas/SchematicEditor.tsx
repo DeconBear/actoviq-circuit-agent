@@ -282,7 +282,9 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return;
     }
 
-    const componentHit = hitComponent(document, world) ?? hitSelectedComponentFrame(document, selection, world);
+    const componentHit = componentFromPointerTarget(document, event.target) ??
+      hitComponent(document, world) ??
+      hitSelectedComponentFrame(document, selection, world);
     if (componentHit) {
       const currentComponentIds = componentIdsForSelection(selection);
       if (event.shiftKey) {
@@ -1154,6 +1156,16 @@ function hitSelectedComponentFrame(
     }
   }
   return null;
+}
+
+function componentFromPointerTarget(
+  document: ReturnType<typeof createSchematicDocument>,
+  target: EventTarget | null,
+): CircuitComponent | null {
+  if (!(target instanceof Element)) return null;
+  const componentId = target.closest('[data-component-id]')?.getAttribute('data-component-id');
+  if (!componentId) return null;
+  return document.module.components.find((component) => component.id === componentId) ?? null;
 }
 
 function selectionForMarquee(

@@ -463,7 +463,7 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
     { x: bounds.minX - inset, y: bounds.maxY + inset },
   ];
   return (
-    <g data-testid="schematic-selected-component-handles" pointerEvents="none">
+    <g data-testid="schematic-selected-component-handles" pointerEvents="all">
       <rect
         x={bounds.minX - inset}
         y={bounds.minY - inset}

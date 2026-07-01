@@ -24,6 +24,12 @@ const bjtResetPorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const voltageDividerPorts: CircuitPort[] = [
+  { id: 'vdd', name: '+5V', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'output', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
 function component(
   id: string,
   type: CircuitComponent['type'],
@@ -66,6 +72,11 @@ const fixtures: CircuitModule[] = [
     component('l1', 'L', '10u', 220, 120, [['a', '1', 'n1'], ['b', '2', 'out']]),
     component('c1', 'C', '100n', 360, 220, [['a', '1', 'out'], ['b', '2', '0']]),
   ]),
+  moduleFixture('voltage_divider', [
+    component('rtop', 'R', '10k', 120, 80, [['a', '1', 'vdd'], ['b', '2', 'vout']]),
+    component('rbot', 'R', '20k', 120, 240, [['a', '1', 'vout'], ['b', '2', '0']]),
+    component('cflt', 'C', '100n', 260, 240, [['a', '1', 'vout'], ['b', '2', '0']]),
+  ], voltageDividerPorts),
   moduleFixture('diode_rectifier', [
     component('d1', 'D', 'D', 120, 120, [['a', 'A', 'in'], ['b', 'K', 'out']]),
     component('c1', 'C', '10u', 270, 220, [['a', '1', 'out'], ['b', '2', '0']]),
@@ -183,6 +194,17 @@ function assertReadableLayout(module: CircuitModule) {
     assertPinLeftOf(resistor, 'in', 'n1', module.module_id);
     assertPinLeftOf(inductor, 'n1', 'out', module.module_id);
     assertPinAbove(capacitor, 'out', '0', module.module_id);
+  }
+  if (module.module_id === 'voltage_divider') {
+    const top = mustComponent(module, 'rtop');
+    const bottom = mustComponent(module, 'rbot');
+    const filter = mustComponent(module, 'cflt');
+    assertPinAbove(top, 'vdd', 'vout', module.module_id);
+    assertPinAbove(bottom, 'vout', '0', module.module_id);
+    assertPinAbove(filter, 'vout', '0', module.module_id);
+    assert.ok(Math.abs(top.position.x - bottom.position.x) <= 1, 'voltage divider resistors should align vertically');
+    assert.ok(top.position.y < bottom.position.y, 'voltage divider top resistor should sit above bottom resistor');
+    assert.ok(filter.position.x > bottom.position.x, 'voltage divider shunt capacitor should sit beside the divider');
   }
   if (module.module_id === 'diode_rectifier') {
     const diode = mustComponent(module, 'd1');

@@ -174,6 +174,7 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
 }
 
 function autoLayoutPassiveModule(module: CircuitModule): CircuitModule {
+  if (isVoltageDividerLikeModule(module)) return autoLayoutVoltageDividerModule(module);
   const inputNet = preferredPortNet(module, 'input');
   const outputNet = preferredPortNet(module, 'output');
   const path = inputNet && outputNet ? findSeriesPath(module, inputNet, outputNet) : [];
@@ -222,6 +223,57 @@ function autoLayoutPassiveModule(module: CircuitModule): CircuitModule {
     component.position = snapPoint({ x: xStart + path.length * spacing + 120, y: yMain + index * 120 });
     component.rotation = normalizeRotation(component.rotation);
   });
+  return module;
+}
+
+interface VoltageDividerLayout {
+  top: CircuitComponent;
+  bottom: CircuitComponent;
+  powerNet: string;
+  outputNet: string;
+  groundNet: string;
+}
+
+function isVoltageDividerLikeModule(module: CircuitModule): boolean {
+  return Boolean(findVoltageDividerLayout(module));
+}
+
+function autoLayoutVoltageDividerModule(module: CircuitModule): CircuitModule {
+  const layout = findVoltageDividerLayout(module);
+  if (!layout) return module;
+
+  const placed = new Set<string>();
+  const xMain = 280;
+  placeVertical(layout.top, layout.powerNet, layout.outputNet, { x: xMain, y: 150 });
+  placed.add(layout.top.id);
+  placeVertical(layout.bottom, layout.outputNet, layout.groundNet, { x: xMain, y: 330 });
+  placed.add(layout.bottom.id);
+
+  let shuntIndex = 0;
+  let floatingIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    const [first, second] = component.pins;
+    if (first && second && component.pins.length === 2) {
+      const nets = new Set([first.net, second.net]);
+      if (nets.has(layout.outputNet) && (nets.has(layout.groundNet) || nets.has(layout.powerNet))) {
+        const railNet = nets.has(layout.groundNet) ? layout.groundNet : layout.powerNet;
+        const topNet = railNet === layout.groundNet ? layout.outputNet : railNet;
+        const bottomNet = railNet === layout.groundNet ? railNet : layout.outputNet;
+        placeVertical(component, topNet, bottomNet, {
+          x: xMain + 130 + shuntIndex * 110,
+          y: railNet === layout.groundNet ? 330 : 150,
+        });
+        shuntIndex += 1;
+        placed.add(component.id);
+        continue;
+      }
+    }
+    component.position = snapPoint({ x: xMain + 160 + (floatingIndex % 2) * 130, y: 150 + Math.floor(floatingIndex / 2) * 130 });
+    component.rotation = normalizeRotation(component.rotation);
+    floatingIndex += 1;
+    placed.add(component.id);
+  }
   return module;
 }
 
@@ -659,6 +711,32 @@ function findNamedComponent(components: CircuitComponent[], pattern: RegExp): Ci
   return components.find((component) => pattern.test(`${component.id} ${component.name} ${component.value}`));
 }
 
+function findVoltageDividerLayout(module: CircuitModule): VoltageDividerLayout | null {
+  const groundNet = module.ports.find(isGroundPort)?.net ?? '0';
+  const powerNets = module.ports
+    .filter((port) => port.signal_type === 'power' && !isGroundPort(port))
+    .map((port) => port.net);
+  if (powerNets.length === 0) return null;
+
+  const resistors = module.components.filter((component) => component.type === 'R' && component.pins.length === 2);
+  if (resistors.length < 2) return null;
+  const outputCandidates = uniqueStrings([
+    preferredPortNet(module, 'output'),
+    ...resistors.flatMap((component) => component.pins.map((pin) => pin.net))
+      .filter((net) => net !== groundNet && !powerNets.includes(net)),
+  ]);
+
+  for (const outputNet of outputCandidates) {
+    if (!outputNet) continue;
+    for (const powerNet of powerNets) {
+      const top = resistors.find((component) => componentHasNets(component, powerNet, outputNet));
+      const bottom = resistors.find((component) => component.id !== top?.id && componentHasNets(component, outputNet, groundNet));
+      if (top && bottom) return { top, bottom, powerNet, outputNet, groundNet };
+    }
+  }
+  return null;
+}
+
 function findTwoPinWithNets(
   components: CircuitComponent[],
   placed: Set<string>,
@@ -672,6 +750,15 @@ function findTwoPinWithNets(
   };
   return components.find((component) => !placed.has(component.id) && pattern.test(`${component.id} ${component.name} ${component.value}`) && matchesNets(component)) ??
     components.find((component) => !placed.has(component.id) && matchesNets(component));
+}
+
+function componentHasNets(component: CircuitComponent, firstNet: string, secondNet: string): boolean {
+  const nets = new Set(component.pins.map((pin) => pin.net));
+  return nets.has(firstNet) && nets.has(secondNet);
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
 function pinPointForComponentNet(component: CircuitComponent, net: string): CircuitPosition | null {
