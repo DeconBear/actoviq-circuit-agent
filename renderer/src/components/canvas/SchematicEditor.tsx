@@ -479,7 +479,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         changed = true;
       }
       if (!changed) return current;
-      next.wires = rerouteStoredWires(next);
+      next.wires = rerouteStoredWires(next, { componentIds: drag.componentIds });
       return next;
     });
     setDirty(true);
@@ -542,6 +542,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
     setHistory((items) => [...items, drag.originalModule].slice(-40));
     setFuture([]);
+    setDraft((current) => {
+      const next = cloneModule(current);
+      next.wires = rerouteStoredWires(next);
+      return next;
+    });
   }
 
   function handlePointerCancel(event: ReactPointerEvent<SVGSVGElement>) {

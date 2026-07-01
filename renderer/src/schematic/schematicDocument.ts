@@ -1726,9 +1726,26 @@ function syncWireEndpointPoints(
   };
 }
 
-export function rerouteStoredWires(module: CircuitModule): CircuitWire[] {
+export function rerouteStoredWires(
+  module: CircuitModule,
+  options: { componentIds?: Iterable<string> } = {},
+): CircuitWire[] {
   const portPositions = computePortPositions(module);
-  return (module.wires ?? []).map((wire) => rerouteWire(module, wire, portPositions));
+  const componentIds = new Set(options.componentIds ?? []);
+  return (module.wires ?? []).map((wire) => (
+    componentIds.size === 0 || wireTouchesAnyComponent(wire, componentIds)
+      ? rerouteWire(module, wire, portPositions)
+      : wire
+  ));
+}
+
+function wireTouchesAnyComponent(wire: CircuitWire, componentIds: Set<string>): boolean {
+  const leftComponentId = wire.from?.component_id;
+  const rightComponentId = wire.to?.component_id;
+  return Boolean(
+    leftComponentId && componentIds.has(leftComponentId) ||
+    rightComponentId && componentIds.has(rightComponentId),
+  );
 }
 
 export function pointEndpoint(point: CircuitPosition): EndpointHit {
