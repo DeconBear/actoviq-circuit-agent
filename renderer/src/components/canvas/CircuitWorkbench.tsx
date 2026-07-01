@@ -301,6 +301,8 @@ export function CircuitWorkbench({
   const [modulePreviewSizes, setModulePreviewSizes] = useState<
     Record<string, { width: number; height: number }>
   >({});
+  const [modulePreviewBusy, setModulePreviewBusy] = useState<Record<string, boolean>>({});
+  const modulePreviewBusyRef = useRef<Set<string>>(new Set());
   const [moduleSimulation, setModuleSimulation] = useState<{
     ok: boolean;
     module_id: string;
@@ -320,6 +322,8 @@ export function CircuitWorkbench({
   const selectedRef = project?.modules.find((module) => module.id === activeModuleId) ?? null;
   const selectedModule = activeModuleId ? bundle?.modules[activeModuleId] : undefined;
   const selectedPreview = activeModuleId ? bundle?.module_previews[activeModuleId] : undefined;
+  const selectedPreviewBusy = activeModuleId ? Boolean(modulePreviewBusy[activeModuleId]) : false;
+  const anyPreviewBusy = Object.keys(modulePreviewBusy).length > 0;
 
   useEffect(() => {
     if (!project) return;
@@ -335,6 +339,8 @@ export function CircuitWorkbench({
   useEffect(() => {
     setModulePreviewPositions({});
     setModulePreviewSizes({});
+    setModulePreviewBusy({});
+    modulePreviewBusyRef.current = new Set();
   }, [activeProjectId]);
 
   const refreshDesignMemory = useCallback(async () => {
@@ -399,9 +405,21 @@ export function CircuitWorkbench({
     }
   }
 
+  function setModulePreviewBuildBusy(moduleId: string, value: boolean) {
+    const next = new Set(modulePreviewBusyRef.current);
+    if (value) {
+      next.add(moduleId);
+    } else {
+      next.delete(moduleId);
+    }
+    modulePreviewBusyRef.current = next;
+    setModulePreviewBusy(Object.fromEntries([...next].map((id) => [id, true])));
+  }
+
   async function buildModulePreview(moduleId: string, showNotice = true): Promise<boolean> {
     if (!activeProjectId) return false;
-    setBusy(true);
+    if (modulePreviewBusyRef.current.has(moduleId)) return false;
+    setModulePreviewBuildBusy(moduleId, true);
     setError('');
     if (showNotice) setNotice('Rendering module with netlistsvg...');
     try {
@@ -417,7 +435,7 @@ export function CircuitWorkbench({
       setNotice('');
       return false;
     } finally {
-      setBusy(false);
+      setModulePreviewBuildBusy(moduleId, false);
     }
   }
 
@@ -518,7 +536,7 @@ export function CircuitWorkbench({
   }
 
   async function runBuild(simulate: boolean) {
-    if (!activeProjectId || !project) return;
+    if (!activeProjectId || !project || modulePreviewBusyRef.current.size > 0) return;
     setBusy(true);
     setError('');
     setNotice(simulate ? 'Running system simulation...' : 'Building netlist and module SVG previews...');
@@ -541,7 +559,7 @@ export function CircuitWorkbench({
   }
 
   async function saveDesignMemory(kind: 'template' | 'flow') {
-    if (!activeProjectId) return;
+    if (!activeProjectId || modulePreviewBusyRef.current.size > 0) return;
     setBusy(true);
     setError('');
     setNotice(kind === 'template' ? 'Saving reusable design template...' : 'Saving design flow...');
@@ -1121,16 +1139,16 @@ export function CircuitWorkbench({
               </div>
             </>
           )}
-          <button style={styles.secondaryButton} onClick={() => runBuild(false)} disabled={busy} data-testid="build-project">
+          <button style={styles.secondaryButton} onClick={() => runBuild(false)} disabled={busy || anyPreviewBusy} data-testid="build-project">
             Refresh SVGs
           </button>
-          <button style={styles.primaryButton} onClick={() => runBuild(true)} disabled={busy} data-testid="simulate-project">
+          <button style={styles.primaryButton} onClick={() => runBuild(true)} disabled={busy || anyPreviewBusy} data-testid="simulate-project">
             Simulate system
           </button>
           <button
             style={styles.secondaryButton}
             onClick={() => saveDesignMemory('template')}
-            disabled={busy}
+            disabled={busy || anyPreviewBusy}
             data-testid="save-design-template"
           >
             Save template
@@ -1138,7 +1156,7 @@ export function CircuitWorkbench({
           <button
             style={styles.secondaryButton}
             onClick={() => saveDesignMemory('flow')}
-            disabled={busy}
+            disabled={busy || anyPreviewBusy}
             data-testid="save-design-flow"
           >
             Save flow
@@ -1201,6 +1219,7 @@ export function CircuitWorkbench({
               svg={selectedPreview?.svg ?? ''}
               overrides={selectedPreview?.schematicOverrides}
               busy={busy}
+              previewBusy={selectedPreviewBusy}
               onBuild={() => buildModulePreview(selectedRef.id)}
               onSaveSchematic={(moduleData) => saveModuleSchematic(selectedRef.id, moduleData)}
               onMoveItem={(itemId, x, y) => moveSchematicItem(selectedRef.id, itemId, x, y)}
@@ -1624,6 +1643,7 @@ function ModuleSchematic({
   svg,
   overrides,
   busy,
+  previewBusy,
   onBuild,
   onSaveSchematic,
   onMoveItem,
@@ -1635,6 +1655,7 @@ function ModuleSchematic({
   svg: string;
   overrides?: SchematicOverrides;
   busy: boolean;
+  previewBusy: boolean;
   onBuild: () => void;
   onSaveSchematic: (moduleData: CircuitModule) => Promise<void>;
   onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
@@ -1944,7 +1965,7 @@ function ModuleSchematic({
   }, [selectedItem, svg]);
 
   return (
-    <div style={styles.moduleViewer} data-testid="module-canvas">
+    <div style={styles.moduleViewer} data-testid="module-canvas" data-preview-busy={previewBusy ? 'true' : 'false'}>
       <div style={styles.moduleViewerHeader}>
         <div>
           <span style={styles.moduleKind}>{module.kind}</span>
@@ -1974,11 +1995,11 @@ function ModuleSchematic({
           <button
             style={styles.secondaryButton}
             onClick={onBuild}
-            disabled={busy}
+            disabled={busy || previewBusy}
             title="Refresh the legacy netlistsvg build artifact used by compile/export checks."
             data-testid="rebuild-module-svg"
           >
-            Build netlistsvg
+            {previewBusy ? 'Building netlistsvg' : 'Build netlistsvg'}
           </button>
         </div>
       </div>
@@ -2041,6 +2062,7 @@ function ModuleSchematic({
           <SchematicEditor
             module={moduleData}
             busy={busy}
+            buildBusy={previewBusy}
             onSave={onSaveSchematic}
             onBuild={onBuild}
           />
@@ -2107,7 +2129,9 @@ function ModuleSchematic({
           <div style={styles.fullSvgEmpty}>
             <strong>No module SVG yet</strong>
             <span>Build the module to run the existing netlist to netlistsvg pipeline.</span>
-            <button style={styles.primaryButton} onClick={onBuild} disabled={busy}>Build preview</button>
+            <button style={styles.primaryButton} onClick={onBuild} disabled={busy || previewBusy}>
+              {previewBusy ? 'Building preview' : 'Build preview'}
+            </button>
           </div>
         )}
       </div>

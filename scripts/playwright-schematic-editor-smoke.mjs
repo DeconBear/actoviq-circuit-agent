@@ -1211,7 +1211,27 @@ try {
   }
   console.log('[e2e] legacy ldo loaded');
   await page.waitForFunction(() => (
-    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false'
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
+  await page.getByTestId('schematic-editor-rebuild-svg').click();
+  await page.waitForFunction(() => {
+    const editorNode = document.querySelector('[data-testid="schematic-editor"]');
+    const text = document.body.textContent ?? '';
+    return editorNode?.getAttribute('data-preview-busy') === 'true' || text.includes('Module SVG updated');
+  });
+  assert.equal(
+    await page.getByTestId('schematic-editor').getAttribute('data-busy'),
+    'false',
+    'background netlistsvg build should not lock the editable schematic',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-select').isEnabled(),
+    true,
+    'select tool should remain available while background netlistsvg build runs',
+  );
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
   ));
   await selectComponentForDrag(page, 'mp', [
     { x: 0, y: 0 },

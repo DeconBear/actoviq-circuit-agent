@@ -40,6 +40,7 @@ type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'mo
 interface Props {
   module: CircuitModule;
   busy: boolean;
+  buildBusy?: boolean;
   onSave: (module: CircuitModule) => Promise<void>;
   onBuild: () => void;
 }
@@ -94,7 +95,7 @@ interface MarqueeState {
   moved: boolean;
 }
 
-export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
+export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBuild }: Props) {
   const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
@@ -825,6 +826,7 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
       data-testid="schematic-editor"
       data-tool={tool}
       data-busy={busy ? 'true' : 'false'}
+      data-preview-busy={buildBusy ? 'true' : 'false'}
       data-dirty={dirty ? 'true' : 'false'}
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}
@@ -903,8 +905,8 @@ export function SchematicEditor({ module, busy, onSave, onBuild }: Props) {
         >
           Fit
         </button>
-        <button style={styles.toolButton} onClick={onBuild} disabled={busy} data-testid="schematic-editor-rebuild-svg">
-          Build netlistsvg
+        <button style={styles.toolButton} onClick={onBuild} disabled={busy || buildBusy} data-testid="schematic-editor-rebuild-svg">
+          {buildBusy ? 'Building...' : 'Build netlistsvg'}
         </button>
         <span style={styles.statusText} data-testid="schematic-editor-status">
           {wireStart
