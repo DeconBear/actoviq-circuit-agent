@@ -16,6 +16,7 @@ const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
 const legacyBjtResetPrefix = `${projectPrefix}legacy-bjt-reset-`;
 const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
 const legacyMosAmplifierPrefix = `${projectPrefix}legacy-mos-amp-`;
+const legacyCmosInverterPrefix = `${projectPrefix}legacy-cmos-inverter-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -345,6 +346,66 @@ async function createLegacyMosAmplifierProject() {
   return { projectId: project.project_id, projectName: project.name };
 }
 
+async function createLegacyCmosInverterProject() {
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyCmosInverterPrefix}${Date.now()}`,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  const modulePorts = [
+    { id: 'input', name: 'IN', direction: 'input', signal_type: 'digital', net: 'in' },
+    { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'output', name: 'OUT', direction: 'output', signal_type: 'digital', net: 'out' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'inverter',
+    name: 'CMOS inverter',
+    kind: 'logic',
+    function: 'Legacy notebook-only CMOS inverter used to verify complementary MOS layout hydration.',
+    parameters: { Vdd: '3.3 V', Load: '10 pF' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/inverter/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 420, height: 280 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'inverter',
+    name: 'CMOS inverter',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'inverter');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# CMOS inverter',
+    '',
+    '```spice',
+    '* Legacy notebook-only CMOS inverter fixture',
+    '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+    '.model PMOS1 PMOS (LEVEL=1 VTO=-0.7 KP=40u)',
+    'MP1 out in vdd vdd PMOS1 W=40u L=1u',
+    'MN1 out in 0 0 NMOS1 W=20u L=1u',
+    'Cload out 0 10p',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
 async function componentPositions(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-positions');
   return JSON.parse(raw || '{}');
@@ -563,6 +624,7 @@ const legacyLdoProject = await createLegacyLdoProject();
 const legacyBjtResetProject = await createLegacyBjtResetProject();
 const legacyVoltageDividerProject = await createLegacyVoltageDividerProject();
 const legacyMosAmplifierProject = await createLegacyMosAmplifierProject();
+const legacyCmosInverterProject = await createLegacyCmosInverterProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -1675,6 +1737,46 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier.png') });
   console.log('[e2e] legacy mos amplifier loaded');
+
+  await page.getByTestId(`sidebar-project-${legacyCmosInverterProject.projectId}`).click();
+  await page.getByTestId('circuit-workbench').getByText(legacyCmosInverterProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-inverter').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 3 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 3;
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
+  const cmosInverterPositions = await componentPositions(page);
+  for (const id of ['mp1', 'mn1', 'cload']) {
+    assert.ok(cmosInverterPositions[id], `hydrated CMOS inverter component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 3, 'hydrated CMOS inverter components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 3, 'hydrated CMOS inverter wires are not visibly drawn');
+  assert.ok(cmosInverterPositions.mp1.y < cmosInverterPositions.mn1.y, 'CMOS inverter PMOS should sit above NMOS in GUI');
+  assert.ok(
+    Math.abs(cmosInverterPositions.mp1.x - cmosInverterPositions.mn1.x) <= schematicGrid,
+    'CMOS inverter devices should share the output column in GUI',
+  );
+  assert.ok(cmosInverterPositions.cload.x > cmosInverterPositions.mn1.x, 'CMOS inverter load should sit on the output side in GUI');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="input"]').getAttribute('data-port-side'),
+    'left',
+    'CMOS inverter input should render on the left edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="output"]').getAttribute('data-port-side'),
+    'right',
+    'CMOS inverter output should render on the right edge',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-inverter.png') });
+  console.log('[e2e] legacy cmos inverter loaded');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();

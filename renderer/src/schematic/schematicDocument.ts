@@ -169,6 +169,8 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
   const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
   if (activeComponents.length > 0 && isBjtResetLikeModule(module, activeComponents)) return autoLayoutBjtResetModule(module, activeComponents);
   if (activeComponents.length > 0 && isLdoLikeModule(module, activeComponents)) return autoLayoutLdoModule(module, activeComponents);
+  const cmosInverterLayout = findCmosInverterLayout(module, activeComponents);
+  if (cmosInverterLayout) return autoLayoutCmosInverterModule(module, cmosInverterLayout);
   if (activeComponents.length === 1 && isSingleTransistorStageLikeModule(activeComponents[0])) {
     return autoLayoutSingleTransistorStageModule(module, activeComponents[0]);
   }
@@ -237,6 +239,15 @@ interface VoltageDividerLayout {
   groundNet: string;
 }
 
+interface CmosInverterLayout {
+  pmos: CircuitComponent;
+  nmos: CircuitComponent;
+  inputNet: string;
+  outputNet: string;
+  powerNet: string;
+  groundNet: string;
+}
+
 function isVoltageDividerLikeModule(module: CircuitModule): boolean {
   return Boolean(findVoltageDividerLayout(module));
 }
@@ -276,6 +287,122 @@ function autoLayoutVoltageDividerModule(module: CircuitModule): CircuitModule {
     component.rotation = normalizeRotation(component.rotation);
     floatingIndex += 1;
     placed.add(component.id);
+  }
+  return module;
+}
+
+function findCmosInverterLayout(module: CircuitModule, activeComponents: CircuitComponent[]): CmosInverterLayout | null {
+  const mosComponents = activeComponents.filter((component) => component.type === 'M');
+  const pmosComponents = mosComponents.filter(isPmosComponent);
+  const nmosComponents = mosComponents.filter((component) => !isPmosComponent(component));
+  if (pmosComponents.length === 0 || nmosComponents.length === 0) return null;
+
+  const preferredOutputNet = preferredPortNet(module, 'output');
+  const powerNets = module.ports
+    .filter((port) => port.signal_type === 'power' && !isGroundPort(port))
+    .map((port) => port.net);
+
+  for (const pmos of pmosComponents) {
+    const pmosNets = activeNetMap(pmos);
+    for (const nmos of nmosComponents) {
+      const nmosNets = activeNetMap(nmos);
+      if (!pmosNets.gate || pmosNets.gate !== nmosNets.gate) continue;
+      if (!pmosNets.drain || pmosNets.drain !== nmosNets.drain) continue;
+      if (!pmosNets.source || !nmosNets.source) continue;
+      if (preferredOutputNet && pmosNets.drain !== preferredOutputNet) continue;
+      if (isGroundNet(pmosNets.source, module) || !isGroundNet(nmosNets.source, module)) continue;
+      if (powerNets.length > 0 && !powerNets.includes(pmosNets.source)) continue;
+      return {
+        pmos,
+        nmos,
+        inputNet: pmosNets.gate,
+        outputNet: pmosNets.drain,
+        powerNet: pmosNets.source,
+        groundNet: nmosNets.source,
+      };
+    }
+  }
+  return null;
+}
+
+function autoLayoutCmosInverterModule(module: CircuitModule, layout: CmosInverterLayout): CircuitModule {
+  const placed = new Set<string>();
+  layout.pmos.position = snapPoint({ x: 420, y: 150 });
+  layout.pmos.rotation = 0;
+  placed.add(layout.pmos.id);
+
+  layout.nmos.position = snapPoint({ x: 420, y: 370 });
+  layout.nmos.rotation = 0;
+  placed.add(layout.nmos.id);
+
+  let outputShuntIndex = 0;
+  let inputBiasIndex = 0;
+  let outputSeriesIndex = 0;
+  let fallbackIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    const [first, second] = component.pins;
+    if (first && second && component.pins.length === 2) {
+      const nets = new Set([first.net, second.net]);
+      if (nets.has(layout.outputNet) && nets.has(layout.groundNet)) {
+        placeVertical(component, layout.outputNet, layout.groundNet, {
+          x: 620 + outputShuntIndex * 130,
+          y: 310 + outputShuntIndex * 20,
+        });
+        placed.add(component.id);
+        outputShuntIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.powerNet) && nets.has(layout.outputNet)) {
+        placeVertical(component, layout.powerNet, layout.outputNet, {
+          x: 620 + outputShuntIndex * 130,
+          y: 150,
+        });
+        placed.add(component.id);
+        outputShuntIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.inputNet) && (nets.has(layout.groundNet) || nets.has(layout.powerNet))) {
+        const railNet = nets.has(layout.groundNet) ? layout.groundNet : layout.powerNet;
+        const topNet = railNet === layout.groundNet ? layout.inputNet : railNet;
+        const bottomNet = railNet === layout.groundNet ? railNet : layout.inputNet;
+        placeVertical(component, topNet, bottomNet, {
+          x: 245 + inputBiasIndex * 120,
+          y: railNet === layout.groundNet ? 405 : 110,
+        });
+        placed.add(component.id);
+        inputBiasIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.outputNet)) {
+        const rightNet = first.net === layout.outputNet ? second.net : first.net;
+        placeHorizontal(component, layout.outputNet, rightNet, {
+          x: 650 + outputSeriesIndex * 150,
+          y: 260,
+        });
+        placed.add(component.id);
+        outputSeriesIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.inputNet)) {
+        const leftNet = first.net === layout.inputNet ? second.net : first.net;
+        placeHorizontal(component, leftNet, layout.inputNet, {
+          x: 250,
+          y: 260 + inputBiasIndex * 90,
+        });
+        placed.add(component.id);
+        inputBiasIndex += 1;
+        continue;
+      }
+    }
+
+    component.position = snapPoint({
+      x: 760 + (fallbackIndex % 3) * 150,
+      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+    placed.add(component.id);
+    fallbackIndex += 1;
   }
   return module;
 }

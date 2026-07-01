@@ -126,6 +126,21 @@ const fixtures: CircuitModule[] = [
     component('cout', 'C', '1u', 420, 180, [['a', '1', 'drain'], ['b', '2', 'out']]),
     component('rload', 'R', '100k', 560, 300, [['a', '1', 'out'], ['b', '2', '0']]),
   ]),
+  moduleFixture('cmos_inverter', [
+    component('mp1', 'M', 'PMOS W=40u L=1u', 240, 120, [
+      ['d', 'D', 'out'],
+      ['g', 'G', 'in'],
+      ['s', 'S', 'vdd'],
+      ['b', 'B', 'vdd'],
+    ]),
+    component('mn1', 'M', 'NMOS W=20u L=1u', 240, 300, [
+      ['d', 'D', 'out'],
+      ['g', 'G', 'in'],
+      ['s', 'S', '0'],
+      ['b', 'B', '0'],
+    ]),
+    component('cload', 'C', '10p', 430, 250, [['a', '1', 'out'], ['b', '2', '0']]),
+  ]),
   moduleFixture('mos_ldo', [
     component('m_pass', 'M', 'PMOS W=40u L=1u', 220, 150, [
       ['d', 'D', 'out'],
@@ -303,6 +318,20 @@ function assertReadableLayout(module: CircuitModule) {
     assertPinAbove(sourceBypass, 'source', '0', module.module_id);
     assertPinAbove(outputLoad, 'out', '0', module.module_id);
     assertNoComponentOverlap(module, ['cin', 'rg1', 'rg2', 'm1', 'rd', 'rs', 'cs', 'cout', 'rload']);
+  }
+  if (module.module_id === 'cmos_inverter') {
+    const pmos = mustComponent(module, 'mp1');
+    const nmos = mustComponent(module, 'mn1');
+    const load = mustComponent(module, 'cload');
+    assertActivePins(pmos, module.module_id);
+    assertActivePins(nmos, module.module_id);
+    assert.ok(pmos.position.y < nmos.position.y, 'CMOS inverter PMOS should sit above NMOS');
+    assert.ok(Math.abs(pmos.position.x - nmos.position.x) <= 1, 'CMOS inverter devices should share the output column');
+    assert.ok(load.position.x > nmos.position.x, 'CMOS inverter output load should sit on the right side');
+    assertPinAbove(pmos, 'vdd', 'out', module.module_id);
+    assertPinAbove(nmos, 'out', '0', module.module_id);
+    assertPinAbove(load, 'out', '0', module.module_id);
+    assertNoComponentOverlap(module, ['mp1', 'mn1', 'cload']);
   }
   if (module.module_id === 'mos_ldo') {
     const pass = mustComponent(module, 'm_pass');
