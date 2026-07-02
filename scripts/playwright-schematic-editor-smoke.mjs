@@ -506,6 +506,24 @@ async function editorWires(page) {
   return JSON.parse(raw || '[]');
 }
 
+function longestEditableGeneratedWireSegment(wires) {
+  let best = null;
+  for (const wire of wires.filter((entry) => entry.source === 'net')) {
+    const points = wire.points ?? [];
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      if (!start || !end) continue;
+      const length = Math.abs(end.x - start.x) + Math.abs(end.y - start.y);
+      if (length < 60) continue;
+      if (!best || length > best.length) {
+        best = { wire, segmentIndex: index, start, end, length };
+      }
+    }
+  }
+  return best;
+}
+
 function worldToScreen(point, viewBox, svgBox) {
   const scale = Math.min(svgBox.width / viewBox.width, svgBox.height / viewBox.height);
   const xOffset = (svgBox.width - viewBox.width * scale) / 2;
@@ -1198,10 +1216,56 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
   ));
+  const generatedSegment = longestEditableGeneratedWireSegment(await editorWires(page));
+  assert.ok(generatedSegment, 'initial generated net wire segment was not exposed to the editor');
+  const dirtyBeforeGeneratedWire = await editor.getAttribute('data-dirty');
+  const generatedSegmentBox = await canvas.boundingBox();
+  assert.ok(generatedSegmentBox);
+  const generatedSegmentViewBox = await editorViewBox(page);
+  const generatedSegmentMidpoint = {
+    x: (generatedSegment.start.x + generatedSegment.end.x) / 2,
+    y: (generatedSegment.start.y + generatedSegment.end.y) / 2,
+  };
+  const generatedSegmentScreenPoint = worldToScreen(generatedSegmentMidpoint, generatedSegmentViewBox, generatedSegmentBox);
+  await page.mouse.move(generatedSegmentScreenPoint.x, generatedSegmentScreenPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'move'
+  ));
+  const generatedHorizontal = Math.abs(generatedSegment.end.x - generatedSegment.start.x) >=
+    Math.abs(generatedSegment.end.y - generatedSegment.start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    generatedSegmentScreenPoint.x + (generatedHorizontal ? 0 : 70),
+    generatedSegmentScreenPoint.y + (generatedHorizontal ? 70 : 0),
+    { steps: 8 },
+  );
+  await page.waitForFunction((wireId) => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    const wires = JSON.parse(node?.getAttribute('data-wires') ?? '[]');
+    return node?.getAttribute('data-dirty') === 'true' &&
+      wires.some((wire) => wire.id === wireId && wire.source === 'stored');
+  }, generatedSegment.wire.id);
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'dragging a generated net wire should not move schematic components',
+  );
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction((wireId) => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    const wires = JSON.parse(node?.getAttribute('data-wires') ?? '[]');
+    return node?.getAttribute('data-selected') === '' &&
+      !wires.some((wire) => wire.id === wireId && wire.source === 'stored');
+  }, generatedSegment.wire.id);
+  assert.equal(await editor.getAttribute('data-dirty'), dirtyBeforeGeneratedWire);
+  const filterViewBoxAfterGeneratedWire = await editorViewBox(page);
+  const filterBoxAfterGeneratedWire = await canvas.boundingBox();
+  assert.ok(filterBoxAfterGeneratedWire);
   const filterWireSnapPoint = worldToScreen(
     { x: filterPositionsInitial.r_filter.x + 52, y: filterPositionsInitial.r_filter.y },
-    filterViewBoxInitial,
-    box,
+    filterViewBoxAfterGeneratedWire,
+    filterBoxAfterGeneratedWire,
   );
   await page.getByTestId('schematic-editor-wire').click();
   await page.mouse.move(filterWireSnapPoint.x, filterWireSnapPoint.y);
@@ -1989,13 +2053,12 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier.png') });
   console.log('[e2e] legacy mos amplifier loaded');
-  await selectComponentForDrag(page, 'm1', [
+  const mosAmpM1DragPoint = await selectComponentForDrag(page, 'm1', [
     { x: 0, y: 0 },
     { x: -18, y: 0 },
     { x: 12, y: 18 },
     { x: 26, y: -18 },
   ]);
-  const mosAmpM1DragPoint = await selectedComponentFrameScreenPoint(page, 'm1');
   await page.mouse.move(mosAmpM1DragPoint.x, mosAmpM1DragPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'

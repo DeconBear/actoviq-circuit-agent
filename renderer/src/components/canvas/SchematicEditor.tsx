@@ -77,6 +77,7 @@ interface WireSegmentDragState {
   originalModule: CircuitModule;
   originalDirty: boolean;
   moved: boolean;
+  materializedWire?: CircuitWire;
 }
 
 interface WirePointDragState {
@@ -335,11 +336,14 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return;
     }
 
-    const wireSegmentHit = hitStoredWireSegment(document.wires, draft, world);
+    const wireSegmentHit = hitEditableWireSegment(document.wires, draft, world);
     const wireHit = wireSegmentHit?.wire ?? hitWire(document, world);
     if (wireHit) {
       setSelection({ kind: 'wire', id: wireHit.id });
       if (wireSegmentHit) {
+        const materializedWire = isStoredWire(wireSegmentHit.wire, draft)
+          ? undefined
+          : materializeEditableWire(wireSegmentHit.wire);
         setInteractionCursor('grabbing');
         wireSegmentDragRef.current = {
           wireId: wireSegmentHit.wire.id,
@@ -350,6 +354,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           originalModule: cloneModule(draft),
           originalDirty: dirty,
           moved: false,
+          materializedWire,
         };
       } else {
         setInteractionCursor('default');
@@ -429,10 +434,14 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       wireSegmentDrag.lastPoints = clonePoints(nextPoints);
       wireSegmentDrag.moved = true;
       setDraft((current) => {
-        const existingWire = current.wires?.find((wire) => wire.id === wireSegmentDrag.wireId);
-        if (!existingWire) return current;
         const next = cloneModule(current);
-        const wire = next.wires?.find((entry) => entry.id === wireSegmentDrag.wireId);
+        if (!next.wires) next.wires = [];
+        let wire = next.wires.find((entry) => entry.id === wireSegmentDrag.wireId);
+        if (!wire && wireSegmentDrag.materializedWire) {
+          const materialized = cloneWire(wireSegmentDrag.materializedWire);
+          next.wires.push(materialized);
+          wire = materialized;
+        }
         if (wire) wire.points = clonePoints(nextPoints);
         return next;
       });
@@ -1106,15 +1115,43 @@ function cloneComponent(component: CircuitComponent): CircuitComponent {
   };
 }
 
-function hitStoredWireSegment(
+function cloneWire(wire: CircuitWire): CircuitWire {
+  return {
+    ...wire,
+    points: clonePoints(wire.points),
+    from: wire.from ? { ...wire.from } : undefined,
+    to: wire.to ? { ...wire.to } : undefined,
+  };
+}
+
+function isStoredWire(wire: CircuitWire, module: CircuitModule): boolean {
+  return wire.source === 'stored' || Boolean((module.wires ?? []).some((entry) => entry.id === wire.id));
+}
+
+function materializeEditableWire(wire: CircuitWire): CircuitWire {
+  return {
+    ...cloneWire(wire),
+    source: 'stored',
+  };
+}
+
+function hitEditableWireSegment(
   wires: CircuitWire[],
   module: CircuitModule,
   world: CircuitPosition,
 ): { wire: CircuitWire; segmentIndex: number } | null {
-  const storedIds = new Set((module.wires ?? []).map((wire) => wire.id));
+  return hitWireSegment(wires, world, (wire) => isStoredWire(wire, module)) ??
+    hitWireSegment(wires, world, (wire) => !isStoredWire(wire, module));
+}
+
+function hitWireSegment(
+  wires: CircuitWire[],
+  world: CircuitPosition,
+  includeWire: (wire: CircuitWire) => boolean,
+): { wire: CircuitWire; segmentIndex: number } | null {
   for (let wireIndex = wires.length - 1; wireIndex >= 0; wireIndex -= 1) {
     const wire = wires[wireIndex];
-    if (!wire || (wire.source !== 'stored' && !storedIds.has(wire.id))) continue;
+    if (!wire || !includeWire(wire)) continue;
     const points = wire.points ?? [];
     for (let segmentIndex = 1; segmentIndex < points.length; segmentIndex += 1) {
       const start = points[segmentIndex - 1];
@@ -1161,7 +1198,7 @@ function cursorForWorld(
   if (hitComponent(document, world)) return 'grab';
   if (hitSelectedComponentFrame(document, selection, world)) return 'grab';
   if (hitSelectedStoredWirePoint(document.wires, module, selection, world)) return 'move';
-  return hitStoredWireSegment(document.wires, module, world) ? 'move' : 'default';
+  return hitEditableWireSegment(document.wires, module, world) ? 'move' : 'default';
 }
 
 function hitSelectedComponentFrame(
