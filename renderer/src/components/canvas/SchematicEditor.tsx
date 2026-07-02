@@ -492,7 +492,6 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         changed = true;
       }
       if (!changed) return current;
-      next.wires = rerouteStoredWires(next, { componentIds: drag.componentIds });
       return next;
     });
     setDirty(true);
@@ -955,6 +954,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         id: wire.id,
         net: wire.net,
         source: wire.source,
+        from: wire.from,
+        to: wire.to,
         points: wire.points,
       })))}
       data-schematic-source="document"

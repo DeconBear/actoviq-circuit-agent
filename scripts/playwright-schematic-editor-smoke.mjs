@@ -506,6 +506,43 @@ async function editorWires(page) {
   return JSON.parse(raw || '[]');
 }
 
+async function componentPinWorldPoints(page, componentId) {
+  return page.getByTestId('schematic-editor-svg').locator(
+    `circle[data-endpoint-kind="pin"][data-component-id="${componentId}"]`,
+  ).evaluateAll((nodes) => Object.fromEntries(nodes.map((node) => [
+    node.getAttribute('data-pin-id') ?? '',
+    {
+      x: Number(node.getAttribute('cx')),
+      y: Number(node.getAttribute('cy')),
+    },
+  ]).filter(([pinId]) => pinId)));
+}
+
+async function assertWireEndpointsMatchComponentPins(page, componentId, label) {
+  const [pins, wires] = await Promise.all([
+    componentPinWorldPoints(page, componentId),
+    editorWires(page),
+  ]);
+  const endpoints = [];
+  for (const wire of wires) {
+    const first = wire.points?.[0];
+    const last = wire.points?.[wire.points.length - 1];
+    if (wire.from?.component_id === componentId && first) {
+      endpoints.push({ endpoint: wire.from, point: first, wireId: wire.id, side: 'from' });
+    }
+    if (wire.to?.component_id === componentId && last) {
+      endpoints.push({ endpoint: wire.to, point: last, wireId: wire.id, side: 'to' });
+    }
+  }
+  assert.ok(endpoints.length > 0, `${label}: no connected wire endpoints for ${componentId}`);
+  for (const { endpoint, point, wireId, side } of endpoints) {
+    const pin = pins[endpoint.pin_id];
+    assert.ok(pin, `${label}: missing pin ${endpoint.pin_id} for ${componentId}.${side} on ${wireId}`);
+    assert.equal(Number(point.x), Number(pin.x), `${label}: ${wireId}.${side} x is not on ${componentId}.${endpoint.pin_id}`);
+    assert.equal(Number(point.y), Number(pin.y), `${label}: ${wireId}.${side} y is not on ${componentId}.${endpoint.pin_id}`);
+  }
+}
+
 function longestEditableGeneratedWireSegment(wires) {
   let best = null;
   for (const wire of wires.filter((entry) => entry.source === 'net')) {
@@ -1044,6 +1081,7 @@ try {
       Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
       (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
   }, filterPositionsInitial);
+  await assertWireEndpointsMatchComponentPins(page, 'c_filter', 'dragging Cfilter should keep wire endpoints on moving pins');
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await page.waitForFunction((previous) => {
@@ -2108,6 +2146,12 @@ try {
   ));
   await page.mouse.down();
   await page.mouse.move(mosAmpM1DragPoint.x + 110, mosAmpM1DragPoint.y - 40, { steps: 12 });
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.m1?.x) !== Number(previous.m1.x) ||
+      Number(positions.m1?.y) !== Number(previous.m1.y);
+  }, mosAmpPositions);
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
