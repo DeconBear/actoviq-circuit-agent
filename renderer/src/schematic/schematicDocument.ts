@@ -104,7 +104,7 @@ export function createSchematicDocument(
   const netLabels = createNetLabels(next, portPositions);
   const wires = materializeNetWires(next, portPositions);
   const bounds = moduleBounds(next, filterPortPositions(portPositions, connectedPortIds), wires, netLabels);
-  const viewBox = padBounds(bounds, 70);
+  const viewBox = padBounds(bounds, viewBoxPadding(bounds));
   return {
     schema: 'actoviq.schematic-document.v1',
     moduleId: next.module_id,
@@ -1410,6 +1410,12 @@ export function padBounds(bounds: SchematicBounds, padding: number): SchematicBo
     maxX: bounds.maxX + padding,
     maxY: bounds.maxY + padding,
   };
+}
+
+function viewBoxPadding(bounds: SchematicBounds): number {
+  const span = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+  const scaled = Math.round((span * 0.06) / SCHEMATIC_GRID) * SCHEMATIC_GRID;
+  return Math.max(36, Math.min(70, scaled));
 }
 
 export function isGroundPort(port: CircuitPort): boolean {

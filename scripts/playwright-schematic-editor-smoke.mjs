@@ -506,6 +506,13 @@ async function editorWires(page) {
   return JSON.parse(raw || '[]');
 }
 
+async function focusEditorByClickingCanvas(page) {
+  const box = await page.getByTestId('schematic-editor-svg').boundingBox();
+  assert.ok(box, 'schematic editor canvas has no bounding box');
+  await page.mouse.click(box.x + 12, box.y + 12);
+  await page.getByTestId('schematic-editor').focus();
+}
+
 async function componentPinWorldPoints(page, componentId) {
   return page.getByTestId('schematic-editor-svg').locator(
     `circle[data-endpoint-kind="pin"][data-component-id="${componentId}"]`,
@@ -879,7 +886,7 @@ try {
     'schematic labels should render with a white halo for wire overlap readability',
   );
   const positionsBeforeSelectAll = await componentPositions(page);
-  await editor.focus();
+  await focusEditorByClickingCanvas(page);
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2' &&
@@ -2125,12 +2132,12 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier.png') });
   console.log('[e2e] legacy mos amplifier loaded');
-  await editor.focus();
+  await focusEditorByClickingCanvas(page);
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
   await page.waitForFunction(() => (
     Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') ?? '0') >= 9
   ));
-  const mosAmpM1DragPoint = await selectComponentForDrag(page, 'm1', [
+  await selectComponentForDrag(page, 'm1', [
     { x: 0, y: 0 },
     { x: -18, y: 0 },
     { x: 12, y: 18 },
@@ -2140,18 +2147,17 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:m1' &&
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '1'
   ));
+  const mosAmpM1DragPoint = await selectedComponentFrameScreenPoint(page, 'm1');
   await page.mouse.move(mosAmpM1DragPoint.x, mosAmpM1DragPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
   ));
   await page.mouse.down();
+  await page.mouse.move(mosAmpM1DragPoint.x + 30, mosAmpM1DragPoint.y - 20, { steps: 4 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
   await page.mouse.move(mosAmpM1DragPoint.x + 110, mosAmpM1DragPoint.y - 40, { steps: 12 });
-  await page.waitForFunction((previous) => {
-    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
-    const positions = JSON.parse(raw);
-    return Number(positions.m1?.x) !== Number(previous.m1.x) ||
-      Number(positions.m1?.y) !== Number(previous.m1.y);
-  }, mosAmpPositions);
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'

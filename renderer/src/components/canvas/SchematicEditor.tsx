@@ -109,6 +109,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
   const [interactionCursor, setInteractionCursor] = useState<EditorCursor>('default');
   const [viewport, setViewport] = useState<SchematicBounds | null>(null);
+  const [editorFocused, setEditorFocused] = useState(false);
   const [marqueeBounds, setMarqueeBounds] = useState<SchematicBounds | null>(null);
   const [spacePanActive, setSpacePanActive] = useState(false);
   const [history, setHistory] = useState<CircuitModule[]>([]);
@@ -926,7 +927,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   return (
     <div
       ref={editorShellRef}
-      style={styles.editorShell}
+      style={editorFocused ? { ...styles.editorShell, ...styles.editorShellFocused } : styles.editorShell}
       data-testid="schematic-editor"
       data-tool={tool}
       data-busy={busy ? 'true' : 'false'}
@@ -961,6 +962,10 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-schematic-source="document"
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
+      onFocus={() => setEditorFocused(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setEditorFocused(false);
+      }}
       tabIndex={0}
     >
       <div style={styles.toolbar}>
@@ -1499,6 +1504,11 @@ const styles: Record<string, CSSProperties> = {
     height: '100%',
     border: '1px solid #d8dee8',
     background: '#ffffff',
+    outline: 'none',
+  },
+  editorShellFocused: {
+    border: '1px solid #93b4ff',
+    boxShadow: '0 0 0 2px rgba(37, 99, 235, 0.16)',
   },
   toolbar: {
     display: 'flex',
