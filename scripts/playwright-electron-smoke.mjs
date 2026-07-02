@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const designMemoryRoot = path.resolve(workspaceRoot, 'references', 'design-memory');
 const e2eProjectPrefix = 'playwright-module-hub-';
 const e2eUiProjectPrefix = 'playwright-ui-project-';
+const e2eJobPrefix = 'playwright-job-action-';
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -100,11 +101,43 @@ async function removePrefixedDirectories(rootDir, prefix) {
   }
 }
 
+async function removePrefixedFiles(rootDir, prefix) {
+  const entries = await readdir(rootDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.startsWith(prefix)) continue;
+    const target = path.resolve(rootDir, entry.name);
+    assert.equal(path.dirname(target), rootDir);
+    await rm(target, { force: true });
+  }
+}
+
 async function cleanE2eDesignMemory() {
   await Promise.all([
     removePrefixedDirectories(path.resolve(designMemoryRoot, 'templates'), e2eProjectPrefix),
     removePrefixedDirectories(path.resolve(designMemoryRoot, 'flows'), e2eProjectPrefix),
   ]);
+}
+
+async function createFixtureJob() {
+  const jobId = `${e2eJobPrefix}${Date.now()}`;
+  const jobRoot = path.resolve(workspaceRoot, 'jobs', jobId);
+  await mkdir(path.resolve(jobRoot, 'logs'), { recursive: true });
+  await mkdir(path.resolve(jobRoot, 'reports'), { recursive: true });
+  const createdAt = new Date().toISOString();
+  await writeFile(path.resolve(jobRoot, 'logs', 'workflow-state.json'), JSON.stringify({
+    jobId,
+    createdAt,
+    lastUpdatedAt: createdAt,
+    completedStages: [{ key: 'workflow-lead', status: 'completed' }],
+  }, null, 2), 'utf8');
+  await writeFile(path.resolve(jobRoot, 'reports', 'manifest.json'), JSON.stringify({
+    jobId,
+    createdAt,
+    stageCount: 1,
+    completedStages: 1,
+    status: 'completed',
+  }, null, 2), 'utf8');
+  return { jobId, jobRoot };
 }
 
 async function readDesignMemoryManifest(kind, id) {
@@ -188,8 +221,11 @@ async function clickEnabledTestId(page, testId) {
 await Promise.all([
   removePrefixedDirectories(projectsRoot, e2eProjectPrefix),
   removePrefixedDirectories(projectsRoot, e2eUiProjectPrefix),
+  removePrefixedDirectories(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
+  removePrefixedFiles(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
 ]);
 await cleanE2eDesignMemory();
+const fixtureJob = await createFixtureJob();
 
 const created = runSkill([
   'create-demo',
@@ -252,6 +288,15 @@ try {
   });
 
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
+  const fixtureJobOpenFolder = page.getByTestId(`sidebar-job-open-folder-${fixtureJob.jobId}`);
+  const fixtureJobExport = page.getByTestId(`sidebar-job-export-${fixtureJob.jobId}`);
+  await page.getByText(fixtureJob.jobId, { exact: true }).waitFor({ timeout: 20_000 });
+  await fixtureJobExport.scrollIntoViewIfNeeded();
+  assert.equal(await fixtureJobOpenFolder.getAttribute('aria-label'), `Open job folder ${fixtureJob.jobId}`);
+  assert.equal(await fixtureJobExport.getAttribute('aria-label'), `Export job ${fixtureJob.jobId} as ZIP`);
+  await fixtureJobExport.click();
+  await page.getByTestId('sidebar-notice').getByText(/^Exported ZIP: /).waitFor({ timeout: 20_000 });
+  assert.equal((await stat(`${fixtureJob.jobRoot}.zip`)).isFile(), true);
 
   const workspaceName = `Playwright Workspace ${Date.now()}`;
   let createdWorkspaceRoot = '';

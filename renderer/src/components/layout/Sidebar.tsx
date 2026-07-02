@@ -513,12 +513,16 @@ export function Sidebar({
                   onClick={(e) => handleOpenFolder(job.jobId, e)}
                   style={styles.actionBtn}
                   title="Open folder"
+                  aria-label={`Open job folder ${job.jobId}`}
+                  data-testid={`sidebar-job-open-folder-${job.jobId}`}
                 >📂</button>
                 <button
                   onClick={(e) => handleExport(job.jobId, e)}
                   style={styles.actionBtn}
                   title="Export as ZIP"
                   disabled={exportingJobId === job.jobId}
+                  aria-label={`Export job ${job.jobId} as ZIP`}
+                  data-testid={`sidebar-job-export-${job.jobId}`}
                 >{exportingJobId === job.jobId ? '…' : '📦'}</button>
               </div>
             </div>
