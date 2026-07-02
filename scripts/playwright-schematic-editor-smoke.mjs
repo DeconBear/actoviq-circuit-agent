@@ -933,7 +933,29 @@ try {
     positionsBeforeSpacePan,
     'space-pan should not move any schematic component',
   );
-  console.log('[e2e] viewport zoom alt-pan space-pan keyboard fit verified');
+  const viewportBeforeMiddlePan = await editorViewport(page);
+  const positionsBeforeMiddlePan = await componentPositions(page);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down({ button: 'middle' });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 - 45, { steps: 8 });
+  await page.mouse.up({ button: 'middle' });
+  await page.waitForFunction((before) => {
+    const viewport = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-viewport') ?? '{}');
+    return Number(viewport.minX) !== Number(before.minX) || Number(viewport.minY) !== Number(before.minY);
+  }, viewportBeforeMiddlePan);
+  assert.deepEqual(
+    await componentPositions(page),
+    positionsBeforeMiddlePan,
+    'middle-button pan should not move any schematic component',
+  );
+  await page.getByTestId('schematic-editor-fit').click();
+  await page.waitForFunction(() => (
+    Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
+  ));
+  console.log('[e2e] viewport zoom alt-pan space-pan middle-pan keyboard fit verified');
   const initialWireCount = Number(await editor.getAttribute('data-wire-count'));
   const filterPositionsInitial = await componentPositions(page);
   const filterViewBoxInitial = await editorViewBox(page);
