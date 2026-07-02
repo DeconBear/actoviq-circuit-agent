@@ -327,6 +327,13 @@ try {
   for (const relative of ['projects', 'references', 'jobs']) {
     assert.equal((await stat(path.resolve(createdWorkspaceRoot, relative))).isDirectory(), true);
   }
+  await page.getByTestId('create-demo-project').waitFor({ timeout: 20_000 });
+  await page.getByTestId('create-demo-project').click();
+  await page.getByTestId('empty-project-create-panel').waitFor({ timeout: 10_000 });
+  await page.getByText('Demo project', { exact: true }).waitFor();
+  assert.equal(await page.getByTestId('empty-project-create-submit').isDisabled(), false);
+  await page.getByTestId('empty-project-cancel').click();
+  await page.getByTestId('empty-project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   const emptyBlankProjectName = `Playwright Empty Blank ${Date.now()}`;
   await page.getByTestId('create-blank-project').waitFor({ timeout: 20_000 });
   await page.getByTestId('create-blank-project').click();
