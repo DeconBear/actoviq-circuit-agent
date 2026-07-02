@@ -24,6 +24,7 @@ const tabLabels: Record<TabKey, string> = {
 };
 
 type WorkflowStartParams = Parameters<Window['electronAPI']['startWorkflow']>[0];
+type MenuAction = Parameters<Parameters<Window['electronAPI']['onMenuAction']>[0]>[0];
 
 interface DisplayDescriptor {
   schematic_svg?: string;
@@ -602,7 +603,70 @@ export function App() {
     }, cid);
   }, [startWorkflowRun]);
 
-  // Send a chat message — first checks intent, then decides chat vs workflow
+  const handleProjectBuildMenuAction = useCallback(async (simulate: boolean) => {
+    if (!window.electronAPI) return;
+    const state = useAppStore.getState();
+    const projectId = state.activeProjectId;
+    if (!projectId) {
+      state.setActiveTab(simulate ? 'simulation' : 'svg');
+      return;
+    }
+    state.setCircuitBusy(true);
+    state.setCircuitError('');
+    try {
+      if (simulate) {
+        await window.electronAPI.simulateCircuitProject(projectId);
+      } else {
+        await window.electronAPI.compileCircuitProject(projectId);
+      }
+      state.setCircuitBuild(await window.electronAPI.readCircuitBuild(projectId));
+      state.setActiveTab(simulate ? 'simulation' : 'svg');
+      await refreshCircuitProjects();
+    } catch (error) {
+      state.setCircuitError(error instanceof Error ? error.message : String(error));
+    } finally {
+      useAppStore.getState().setCircuitBusy(false);
+    }
+  }, [refreshCircuitProjects]);
+
+  const handleMenuAction = useCallback((action: MenuAction) => {
+    const state = useAppStore.getState();
+    switch (action) {
+      case 'new-design':
+        handleNewDesign();
+        break;
+      case 'open-settings':
+        state.setSettingsOpen(true);
+        break;
+      case 'start-workflow':
+        handleNewDesign();
+        break;
+      case 'pause-workflow':
+        window.electronAPI?.pauseWorkflow();
+        break;
+      case 'resume-workflow':
+        window.electronAPI?.resumeWorkflow();
+        break;
+      case 'validate-netlist':
+        handleValidateActiveJob();
+        break;
+      case 'run-simulation':
+        void handleProjectBuildMenuAction(true);
+        break;
+      case 'render-schematic':
+        void handleProjectBuildMenuAction(false);
+        break;
+      default:
+        break;
+    }
+  }, [handleNewDesign, handleProjectBuildMenuAction, handleValidateActiveJob]);
+
+  useEffect(() => {
+    if (!window.electronAPI?.onMenuAction) return undefined;
+    return window.electronAPI.onMenuAction(handleMenuAction);
+  }, [handleMenuAction]);
+
+  // Send a chat message: first checks intent, then decides chat vs workflow.
   const handleSendMessage = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isChatPending) return;

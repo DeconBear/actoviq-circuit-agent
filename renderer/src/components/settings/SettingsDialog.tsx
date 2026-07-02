@@ -61,11 +61,11 @@ export function SettingsDialog({ onClose }: Props) {
   }, [dirty, onClose]);
 
   return (
-    <div style={styles.overlay} onClick={requestClose}>
+    <div style={styles.overlay} onClick={requestClose} data-testid="settings-dialog">
       <div style={styles.dialog} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <h2 style={styles.title}>Settings</h2>
-          <button onClick={requestClose} style={styles.closeBtn}>✕</button>
+          <button onClick={requestClose} style={styles.closeBtn} data-testid="settings-dialog-close">✕</button>
         </div>
 
         <div style={styles.body}>

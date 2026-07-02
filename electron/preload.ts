@@ -11,6 +11,16 @@ export interface WorkflowParams {
   rerunFromStage?: string;
 }
 
+export type MenuAction =
+  | 'new-design'
+  | 'open-settings'
+  | 'start-workflow'
+  | 'pause-workflow'
+  | 'resume-workflow'
+  | 'validate-netlist'
+  | 'run-simulation'
+  | 'render-schematic';
+
 export interface WorkflowEvent {
   type: 'stage-list' | 'stage-start' | 'stage-complete' | 'stage-error' | 'output' | 'stream-chunk' | 'tool-call' | 'workflow-complete' | 'job-info' | 'confirm-request' | 'confirm-rejected';
   stageKey?: string;
@@ -84,6 +94,27 @@ const electronAPI = {
 
   sendConfirmResponse(answer: 'y' | 'n'): void {
     ipcRenderer.send('workflow:confirm-response', answer);
+  },
+
+  onMenuAction(callback: (action: MenuAction) => void): () => void {
+    const channels: Record<string, MenuAction> = {
+      'menu:new-design': 'new-design',
+      'menu:open-settings': 'open-settings',
+      'menu:start-workflow': 'start-workflow',
+      'menu:pause-workflow': 'pause-workflow',
+      'menu:resume-workflow': 'resume-workflow',
+      'menu:validate-netlist': 'validate-netlist',
+      'menu:run-simulation': 'run-simulation',
+      'menu:render-schematic': 'render-schematic',
+    };
+    const removers = Object.entries(channels).map(([channel, action]) => {
+      const handler = (): void => callback(action);
+      ipcRenderer.on(channel, handler);
+      return () => ipcRenderer.removeListener(channel, handler);
+    });
+    return () => {
+      removers.forEach((remove) => remove());
+    };
   },
 
   onWorkflowEvent(callback: (event: WorkflowEvent) => void): () => void {

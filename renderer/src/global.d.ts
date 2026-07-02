@@ -33,6 +33,16 @@ declare global {
       stopWorkflow(): void;
       retryStage(): void;
       sendConfirmResponse(answer: 'y' | 'n'): void;
+      onMenuAction(callback: (action:
+        | 'new-design'
+        | 'open-settings'
+        | 'start-workflow'
+        | 'pause-workflow'
+        | 'resume-workflow'
+        | 'validate-netlist'
+        | 'run-simulation'
+        | 'render-schematic'
+      ) => void): () => void;
       onWorkflowEvent(callback: (event: WorkflowEvent) => void): () => void;
       readJobFile(jobId: string, relativePath: string): Promise<string>;
       writeJobFile(jobId: string, relativePath: string, content: string): Promise<void>;

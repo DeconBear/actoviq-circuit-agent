@@ -218,6 +218,20 @@ async function clickEnabledTestId(page, testId) {
   }, testId);
   await locator.click();
 }
+
+async function clickApplicationMenuPath(electronApp, labels) {
+  await electronApp.evaluate(({ BrowserWindow, Menu }, menuLabels) => {
+    let items = Menu.getApplicationMenu()?.items ?? [];
+    let selected = null;
+    for (const label of menuLabels) {
+      selected = items.find((item) => item.label === label) ?? null;
+      if (!selected) throw new Error(`Application menu item not found: ${menuLabels.join(' > ')}`);
+      items = selected.submenu?.items ?? [];
+    }
+    if (!selected?.click) throw new Error(`Application menu item is not clickable: ${menuLabels.join(' > ')}`);
+    selected.click(undefined, BrowserWindow.getAllWindows()[0] ?? undefined, undefined);
+  }, labels);
+}
 await Promise.all([
   removePrefixedDirectories(projectsRoot, e2eProjectPrefix),
   removePrefixedDirectories(projectsRoot, e2eUiProjectPrefix),
@@ -288,6 +302,14 @@ try {
   });
 
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
+  await clickApplicationMenuPath(electronApp, ['File', 'Settings']);
+  await page.getByTestId('settings-dialog').waitFor({ timeout: 10_000 });
+  await page.getByTestId('settings-dialog-close').click();
+  await page.getByTestId('settings-dialog').waitFor({ state: 'detached', timeout: 10_000 });
+  await clickApplicationMenuPath(electronApp, ['File', 'New Design']);
+  await page.getByText('Chat Workflow', { exact: true }).waitFor({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Close' }).click();
+  await page.getByText('Chat Workflow', { exact: true }).waitFor({ state: 'detached', timeout: 10_000 });
   const fixtureJobOpenFolder = page.getByTestId(`sidebar-job-open-folder-${fixtureJob.jobId}`);
   const fixtureJobExport = page.getByTestId(`sidebar-job-export-${fixtureJob.jobId}`);
   await page.getByText(fixtureJob.jobId, { exact: true }).waitFor({ timeout: 20_000 });
