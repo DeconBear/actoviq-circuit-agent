@@ -885,6 +885,14 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       ));
     } else if (selection.kind === 'wire') {
       const selectedWire = document.wires.find((wire) => wire.id === selection.id);
+      if (selectedWire && !isStoredWire(selectedWire, next)) {
+        next.wires = [
+          ...(next.wires ?? []),
+          ...document.wires
+            .filter((wire) => wire.id !== selectedWire.id && wire.net === selectedWire.net && !isStoredWire(wire, next))
+            .map(materializeEditableWire),
+        ];
+      }
       const updated = removeWireAndUpdateConnectivity(next, selectedWire ?? selection.id);
       next.components = updated.components;
       next.ports = updated.ports;

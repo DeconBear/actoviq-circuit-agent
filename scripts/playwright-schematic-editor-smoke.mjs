@@ -1262,10 +1262,44 @@ try {
   const filterViewBoxAfterGeneratedWire = await editorViewBox(page);
   const filterBoxAfterGeneratedWire = await canvas.boundingBox();
   assert.ok(filterBoxAfterGeneratedWire);
+  const storedWireCountBeforeGeneratedDelete = (await editorWires(page))
+    .filter((wire) => wire.source === 'stored')
+    .length;
+  const generatedDeleteSegment = longestEditableGeneratedWireSegment(await editorWires(page));
+  assert.ok(generatedDeleteSegment, 'generated net wire segment was not available for delete');
+  const generatedDeletePoint = worldToScreen({
+    x: (generatedDeleteSegment.start.x + generatedDeleteSegment.end.x) / 2,
+    y: (generatedDeleteSegment.start.y + generatedDeleteSegment.end.y) / 2,
+  }, filterViewBoxAfterGeneratedWire, filterBoxAfterGeneratedWire);
+  await page.mouse.click(generatedDeletePoint.x, generatedDeletePoint.y);
+  await page.waitForFunction((wireId) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `wire:${wireId}`
+  ), generatedDeleteSegment.wire.id);
+  await editor.focus();
+  await page.keyboard.press('Delete');
+  await page.waitForFunction((wireId) => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return !wires.some((wire) => wire.id === wireId) &&
+      wires.some((wire) => wire.source === 'stored');
+  }, generatedDeleteSegment.wire.id);
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'deleting a generated net wire should not move schematic components',
+  );
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction(({ wireId, storedBefore }) => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return wires.some((wire) => wire.id === wireId && wire.source === 'net') &&
+      wires.filter((wire) => wire.source === 'stored').length === storedBefore;
+  }, { wireId: generatedDeleteSegment.wire.id, storedBefore: storedWireCountBeforeGeneratedDelete });
+  const filterViewBoxAfterGeneratedDelete = await editorViewBox(page);
+  const filterBoxAfterGeneratedDelete = await canvas.boundingBox();
+  assert.ok(filterBoxAfterGeneratedDelete);
   const filterWireSnapPoint = worldToScreen(
     { x: filterPositionsInitial.r_filter.x + 52, y: filterPositionsInitial.r_filter.y },
-    filterViewBoxAfterGeneratedWire,
-    filterBoxAfterGeneratedWire,
+    filterViewBoxAfterGeneratedDelete,
+    filterBoxAfterGeneratedDelete,
   );
   await page.getByTestId('schematic-editor-wire').click();
   await page.mouse.move(filterWireSnapPoint.x, filterWireSnapPoint.y);
