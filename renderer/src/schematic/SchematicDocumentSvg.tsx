@@ -485,7 +485,7 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
         stroke={COMPONENT_SELECTION_COLOR}
         strokeWidth="1.8"
         strokeDasharray="8 6"
-        pointerEvents="stroke"
+        pointerEvents="none"
         data-testid="schematic-selected-component-frame"
         data-selection-kind="component"
         data-selection-shape="frame"
