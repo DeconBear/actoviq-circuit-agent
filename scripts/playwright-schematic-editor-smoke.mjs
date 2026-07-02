@@ -2087,12 +2087,21 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier.png') });
   console.log('[e2e] legacy mos amplifier loaded');
+  await editor.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  await page.waitForFunction(() => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') ?? '0') >= 9
+  ));
   const mosAmpM1DragPoint = await selectComponentForDrag(page, 'm1', [
     { x: 0, y: 0 },
     { x: -18, y: 0 },
     { x: 12, y: 18 },
     { x: 26, y: -18 },
   ]);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:m1' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '1'
+  ));
   await page.mouse.move(mosAmpM1DragPoint.x, mosAmpM1DragPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
