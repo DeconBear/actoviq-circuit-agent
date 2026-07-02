@@ -145,7 +145,7 @@ export function SchematicDocumentSvg({
           const hasLocalRailLabel = isRailPort && document.netLabels.some((label) => label.net === port.net);
           if (hasLocalRailLabel) return null;
           const portSide = portRenderSide(document, port, position);
-          const labelPosition = portLabelPositions(position, portSide);
+          const labelPosition = portNamePosition(position, portSide);
           return (
             <g
               key={port.id}
@@ -170,9 +170,9 @@ export function SchematicDocumentSvg({
                 net={port.net}
               />
               <text
-                x={labelPosition.name.x}
-                y={labelPosition.name.y}
-                textAnchor={labelPosition.name.anchor}
+                x={labelPosition.x}
+                y={labelPosition.y}
+                textAnchor={labelPosition.anchor}
                 fontSize="14"
                 fontFamily={LABEL_FONT}
                 fontWeight="700"
@@ -182,19 +182,6 @@ export function SchematicDocumentSvg({
                 paintOrder="stroke"
               >
                 {port.name}
-              </text>
-              <text
-                x={labelPosition.net.x}
-                y={labelPosition.net.y}
-                textAnchor={labelPosition.net.anchor}
-                fontSize="10"
-                fontFamily={MONO_FONT}
-                fill={MUTED_LABEL_COLOR}
-                stroke={LABEL_HALO_COLOR}
-                strokeWidth="2.5"
-                paintOrder="stroke"
-              >
-                {port.net}
               </text>
             </g>
           );
@@ -516,32 +503,17 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
 
 type TextAnchor = 'start' | 'middle' | 'end';
 
-function portLabelPositions(position: CircuitPosition, side: PortSide): {
-  name: CircuitPosition & { anchor: TextAnchor };
-  net: CircuitPosition & { anchor: TextAnchor };
-} {
+function portNamePosition(position: CircuitPosition, side: PortSide): CircuitPosition & { anchor: TextAnchor } {
   if (side === 'right') {
-    return {
-      name: { x: position.x + 50, y: position.y - 12, anchor: 'start' },
-      net: { x: position.x + 50, y: position.y + 14, anchor: 'start' },
-    };
+    return { x: position.x + 50, y: position.y - 4, anchor: 'start' };
   }
   if (side === 'left') {
-    return {
-      name: { x: position.x - 50, y: position.y - 22, anchor: 'start' },
-      net: { x: position.x - 50, y: position.y + 4, anchor: 'start' },
-    };
+    return { x: position.x - 50, y: position.y - 4, anchor: 'start' };
   }
   if (side === 'top') {
-    return {
-      name: { x: position.x, y: position.y - 54, anchor: 'middle' },
-      net: { x: position.x + 12, y: position.y + 16, anchor: 'start' },
-    };
+    return { x: position.x, y: position.y - 54, anchor: 'middle' };
   }
-  return {
-    name: { x: position.x + 12, y: position.y - 12, anchor: 'start' },
-    net: { x: position.x + 12, y: position.y + 14, anchor: 'start' },
-  };
+  return { x: position.x + 12, y: position.y + 38, anchor: 'start' };
 }
 
 function componentLabelPositions(component: CircuitComponent): {
