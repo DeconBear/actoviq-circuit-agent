@@ -840,6 +840,10 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
   ));
+  assert.equal(await page.getByTestId('schematic-editor-undo').isDisabled(), true, 'Undo should be disabled before the first edit');
+  assert.equal(await page.getByTestId('schematic-editor-redo').isDisabled(), true, 'Redo should be disabled before the first edit');
+  assert.equal(await page.getByTestId('schematic-editor-delete').isDisabled(), true, 'Delete should be disabled without a selection');
+  assert.equal(await page.getByTestId('schematic-editor-save').isDisabled(), true, 'Apply should be disabled when there are no unsaved edits');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-document-backed.png') });
   console.log('[e2e] filter editor loaded');
 
@@ -1229,6 +1233,10 @@ try {
     2,
     'selected resistor should reveal only its own pin snap points',
   );
+  assert.equal(await page.getByTestId('schematic-editor-undo').isDisabled(), false, 'Undo should be enabled after placing a component');
+  assert.equal(await page.getByTestId('schematic-editor-redo').isDisabled(), true, 'Redo should stay disabled until an undo is available');
+  assert.equal(await page.getByTestId('schematic-editor-delete').isDisabled(), false, 'Delete should be enabled for the selected component');
+  assert.equal(await page.getByTestId('schematic-editor-save').isDisabled(), false, 'Apply should be enabled after an unsaved component edit');
   const filterPositionsAfterPlace = await componentPositions(page);
   const r1NetsBeforeDuplicate = await componentPinNets(page, 'r1');
   await editor.focus();
@@ -1251,7 +1259,19 @@ try {
     r1NetsBeforeDuplicate,
     'duplicated component should receive fresh pin nets instead of shorting to the original',
   );
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  assert.equal(await page.getByTestId('schematic-editor-undo').isDisabled(), false, 'Undo toolbar button should be enabled after duplicate');
+  await page.getByTestId('schematic-editor-undo').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3' &&
+    !document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions')?.includes('"r2"')
+  ));
+  assert.equal(await page.getByTestId('schematic-editor-redo').isDisabled(), false, 'Redo toolbar button should be enabled after toolbar undo');
+  await page.getByTestId('schematic-editor-redo').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '4' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions')?.includes('"r2"')
+  ));
+  await page.getByTestId('schematic-editor-undo').click();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3' &&
     !document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions')?.includes('"r2"')
