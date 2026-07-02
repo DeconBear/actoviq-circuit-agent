@@ -1736,6 +1736,7 @@ try {
     assert.ok(ldoPositions.cout.x >= ldoPositions.mp.x, 'LDO output capacitor should be placed on the output side');
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
   console.log('[e2e] legacy ldo loaded');
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false' &&
@@ -1789,7 +1790,7 @@ try {
   for (const id of ['m1', 'm2', 'm3', 'm4', 'rtop', 'rbot', 'rload', 'cout', 'vin', 'vref', 'itail']) {
     assertPositionEqual(ldoPositionsAfterMpDrag[id], ldoPositions[id], `dragging MP moved ${id}`);
   }
-  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo-drag.png') });
   console.log('[e2e] legacy ldo drag isolated');
 
   await page.getByTestId(`sidebar-project-${legacyBjtResetProject.projectId}`).click();

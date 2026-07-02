@@ -30,6 +30,12 @@ const voltageDividerPorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const ldoPorts: CircuitPort[] = [
+  { id: 'vin', name: 'VIN', direction: 'input', signal_type: 'power', net: 'vin' },
+  { id: 'vout', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
 const differentialPairPorts: CircuitPort[] = [
   { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
   { id: 'inp', name: 'IN+', direction: 'input', signal_type: 'analog', net: 'inp' },
@@ -168,15 +174,44 @@ const fixtures: CircuitModule[] = [
     component('itail', 'I', 'DC 100u', 325, 420, [['p', '+', 'tail'], ['n', '-', '0']]),
   ], differentialPairPorts),
   moduleFixture('mos_ldo', [
-    component('m_pass', 'M', 'PMOS W=40u L=1u', 220, 150, [
-      ['d', 'D', 'out'],
-      ['g', 'G', 'ctrl'],
-      ['s', 'S', 'vdd'],
-      ['b', 'B', 'vdd'],
+    component('m1', 'M', 'NMOS W=20u L=1u', 220, 180, [
+      ['d', 'D', 'n1'],
+      ['g', 'G', 'fb'],
+      ['s', 'S', 'tail'],
+      ['b', 'B', '0'],
     ]),
-    component('r_load', 'R', '1k', 360, 250, [['a', '1', 'out'], ['b', '2', '0']]),
-    component('c_out', 'C', '22u', 500, 250, [['a', '1', 'out'], ['b', '2', '0']]),
-  ]),
+    component('m2', 'M', 'NMOS W=20u L=1u', 390, 180, [
+      ['d', 'D', 'eaout'],
+      ['g', 'G', 'vref'],
+      ['s', 'S', 'tail'],
+      ['b', 'B', '0'],
+    ]),
+    component('m3', 'M', 'PMOS W=40u L=1u', 220, 50, [
+      ['d', 'D', 'n1'],
+      ['g', 'G', 'n1'],
+      ['s', 'S', 'vin'],
+      ['b', 'B', 'vin'],
+    ]),
+    component('m4', 'M', 'PMOS W=40u L=1u', 390, 50, [
+      ['d', 'D', 'eaout'],
+      ['g', 'G', 'n1'],
+      ['s', 'S', 'vin'],
+      ['b', 'B', 'vin'],
+    ]),
+    component('mp', 'M', 'PMOS W=2000u L=0.5u', 560, 120, [
+      ['d', 'D', 'vout'],
+      ['g', 'G', 'eaout'],
+      ['s', 'S', 'vin'],
+      ['b', 'B', 'vin'],
+    ]),
+    component('vin', 'V', 'DC 5', 80, 250, [['p', '+', 'vin'], ['n', '-', '0']]),
+    component('vref', 'V', 'DC 1.2', 80, 420, [['p', '+', 'vref'], ['n', '-', '0']]),
+    component('itail', 'I', 'DC 20u', 300, 460, [['p', '+', 'tail'], ['n', '-', '0']]),
+    component('rtop', 'R', '210k', 720, 250, [['a', '1', 'fb'], ['b', '2', 'vout']]),
+    component('rbot', 'R', '120k', 720, 420, [['a', '1', 'fb'], ['b', '2', '0']]),
+    component('rload', 'R', '330', 860, 420, [['a', '1', 'vout'], ['b', '2', '0']]),
+    component('cout', 'C', '1u', 990, 420, [['a', '1', 'vout'], ['b', '2', '0']]),
+  ], ldoPorts),
   moduleFixture('current_mirror', [
     component('m_ref', 'M', 'NMOS W=20u L=1u', 170, 180, [
       ['d', 'D', 'bias'],
@@ -380,8 +415,35 @@ function assertReadableLayout(module: CircuitModule) {
     assertNoComponentOverlap(module, ['m_inp', 'm_inn', 'rdp', 'rdn', 'itail']);
   }
   if (module.module_id === 'mos_ldo') {
-    const pass = mustComponent(module, 'm_pass');
+    const leftInput = mustComponent(module, 'm1');
+    const rightInput = mustComponent(module, 'm2');
+    const leftLoad = mustComponent(module, 'm3');
+    const rightLoad = mustComponent(module, 'm4');
+    const pass = mustComponent(module, 'mp');
+    const topDivider = mustComponent(module, 'rtop');
+    const bottomDivider = mustComponent(module, 'rbot');
+    const outputLoad = mustComponent(module, 'rload');
+    const outputCap = mustComponent(module, 'cout');
+    assertActivePins(leftInput, module.module_id);
+    assertActivePins(rightInput, module.module_id);
+    assertActivePins(leftLoad, module.module_id);
+    assertActivePins(rightLoad, module.module_id);
     assertActivePins(pass, module.module_id);
+    assert.ok(leftLoad.position.y < leftInput.position.y, 'LDO PMOS mirror load should sit above left input device');
+    assert.ok(rightLoad.position.y < rightInput.position.y, 'LDO PMOS mirror load should sit above right input device');
+    assert.ok(leftInput.position.x < rightInput.position.x, 'LDO error amplifier input devices should be separated left-to-right');
+    assert.ok(leftLoad.position.x < rightLoad.position.x, 'LDO PMOS mirror devices should be separated left-to-right');
+    assert.ok(pass.position.x > rightLoad.position.x && pass.position.x > rightInput.position.x, 'LDO pass MOSFET should sit to the right of the error amplifier');
+    assert.ok(topDivider.position.x > pass.position.x, 'LDO feedback divider should sit on the output side');
+    assert.ok(outputLoad.position.x > pass.position.x, 'LDO output load should sit on the output side');
+    assert.ok(outputCap.position.x > pass.position.x, 'LDO output capacitor should sit on the output side');
+    assert.ok(Math.abs(topDivider.position.x - bottomDivider.position.x) <= 1, 'LDO feedback divider resistors should align vertically');
+    assert.ok(topDivider.position.y < bottomDivider.position.y, 'LDO top feedback resistor should sit above bottom feedback resistor');
+    assertPinAbove(topDivider, 'vout', 'fb', module.module_id);
+    assertPinAbove(bottomDivider, 'fb', '0', module.module_id);
+    assertPinAbove(outputLoad, 'vout', '0', module.module_id);
+    assertPinAbove(outputCap, 'vout', '0', module.module_id);
+    assertNoComponentOverlap(module, ['m1', 'm2', 'm3', 'm4', 'mp', 'vin', 'vref', 'itail', 'rtop', 'rbot', 'rload', 'cout']);
   }
   if (module.module_id === 'current_mirror') {
     const reference = mustComponent(module, 'm_ref');
@@ -394,6 +456,10 @@ function assertReadableLayout(module: CircuitModule) {
 
 function assertReadablePortPlacement(document: ReturnType<typeof createSchematicDocument>) {
   const { module, portPositions } = document;
+  if (module.module_id === 'mos_ldo') {
+    const outputPort = mustPortPosition(portPositions, 'vout');
+    assert.ok(document.viewBox.maxX - outputPort.x >= 110, 'LDO VOUT port should leave room for the right-side symbol and label');
+  }
   if (module.module_id === 'mos_differential_pair') {
     const rightDevice = mustComponent(module, 'm_inn');
     const outpPort = mustPortPosition(portPositions, 'outp');
