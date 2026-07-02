@@ -1998,6 +1998,13 @@ function materializeNetWires(
     if (endpoints.length < 2) continue;
     if (shouldRepresentNetWithLocalLabel(module, net)) continue;
     if (shouldRepresentSignalNetWithLocalLabel(module, net, endpoints)) continue;
+    if (endpoints.length >= 4) {
+      const treeWires = materializeEndpointTreeWires(module, net, endpoints, existingIds, usedPairs);
+      if (treeWires.length > 0) {
+        wires.push(...treeWires);
+        continue;
+      }
+    }
     const anchor = chooseNetAnchor(endpoints);
     for (const endpoint of endpoints) {
       if (endpoint === anchor) continue;
@@ -2019,6 +2026,70 @@ function materializeNetWires(
       });
     }
   }
+  return wires;
+}
+
+function materializeEndpointTreeWires(
+  module: CircuitModule,
+  net: string,
+  endpoints: EndpointHit[],
+  existingIds: Set<string>,
+  usedPairs: Set<string>,
+): CircuitWire[] {
+  const root = endpoints.find((endpoint) => endpoint.kind === 'port') ?? chooseNetAnchor(endpoints);
+  const connected = [root];
+  const remaining = endpoints.filter((endpoint) => endpoint !== root);
+  const wires: CircuitWire[] = [];
+
+  while (remaining.length > 0) {
+    let best: {
+      source: EndpointHit;
+      target: EndpointHit;
+      targetIndex: number;
+      points: CircuitPosition[];
+      cost: number;
+      pairKey: string;
+    } | null = null;
+
+    for (const source of connected) {
+      for (let targetIndex = 0; targetIndex < remaining.length; targetIndex += 1) {
+        const target = remaining[targetIndex];
+        if (!target) continue;
+        if (distance(endpointDrawPoint(source), endpointDrawPoint(target)) < 1) continue;
+        const pairKey = endpointPairKey(source, target);
+        if (usedPairs.has(pairKey)) continue;
+        const points = routePointsForModule(
+          module,
+          endpointDrawPoint(source),
+          endpointDrawPoint(target),
+          source,
+          target,
+        );
+        const cost = routeCost(points);
+        if (!best || cost < best.cost) {
+          best = { source, target, targetIndex, points, cost, pairKey };
+        }
+      }
+    }
+
+    if (!best) break;
+    usedPairs.add(best.pairKey);
+    const id = makeId(`net_${wireIdToken(net)}_`, existingIds);
+    existingIds.add(id);
+    const startPoint = endpointDrawPoint(best.source);
+    const endPoint = endpointDrawPoint(best.target);
+    wires.push({
+      id,
+      points: best.points,
+      from: stripEndpoint(startPoint, best.source),
+      to: stripEndpoint(endPoint, best.target),
+      net,
+      source: 'net',
+    });
+    connected.push(best.target);
+    remaining.splice(best.targetIndex, 1);
+  }
+
   return wires;
 }
 
@@ -2275,6 +2346,7 @@ function chooseNetAnchor(endpoints: EndpointHit[]): EndpointHit {
   const pins = endpoints.filter((endpoint) => endpoint.kind === 'pin');
   if (ports.length > 0 && pins.length > 0) {
     const port = ports[0];
+    if (port && endpoints.length >= 4) return port;
     if (port) {
       return pins.reduce((best, endpoint) => (
         distance(endpoint, port) < distance(best, port) ? endpoint : best
