@@ -1237,6 +1237,21 @@ try {
   assert.equal(await page.getByTestId('schematic-editor-redo').isDisabled(), true, 'Redo should stay disabled until an undo is available');
   assert.equal(await page.getByTestId('schematic-editor-delete').isDisabled(), false, 'Delete should be enabled for the selected component');
   assert.equal(await page.getByTestId('schematic-editor-save').isDisabled(), false, 'Apply should be enabled after an unsaved component edit');
+  await page.getByTestId('schematic-editor-component-name').fill('Rtrim');
+  await page.getByTestId('schematic-editor-component-value').fill('2k');
+  await page.getByTestId('schematic-editor-component-rotation').selectOption('90');
+  await page.waitForFunction(() => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
+    const rotations = JSON.parse(raw);
+    return Number(rotations.r1) === 90 &&
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true';
+  });
+  await page.getByTestId('schematic-editor-component-rotation').selectOption('0');
+  await page.waitForFunction(() => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
+    const rotations = JSON.parse(raw);
+    return Number(rotations.r1 ?? 0) === 0;
+  });
   const filterPositionsAfterPlace = await componentPositions(page);
   const r1NetsBeforeDuplicate = await componentPinNets(page, 'r1');
   await editor.focus();
@@ -1702,9 +1717,12 @@ try {
   assert.equal(moduleData.components.length, 3);
   assert.ok((moduleData.wires ?? []).length >= 3, 'saved schematic document did not persist visible wires');
   assert.ok(moduleData.components.some((component) => component.id === 'r1' && component.type === 'R'));
+  const savedR1 = moduleData.components.find((component) => component.id === 'r1');
+  assert.equal(savedR1?.name, 'Rtrim');
+  assert.equal(savedR1?.value, '2k');
   assert.match(
     await readFile(path.resolve(projectRoot, 'build', 'modules', 'filter', 'design.cir'), 'utf8'),
-    /Rfilter_R1\s+out\s+\S+\s+1k/,
+    /Rfilter_Rtrim\s+out\s+\S+\s+2k/,
   );
   console.log('[e2e] apply persisted');
 
