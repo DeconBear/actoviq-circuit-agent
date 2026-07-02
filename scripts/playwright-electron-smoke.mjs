@@ -360,6 +360,8 @@ try {
   await page.getByTestId('project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   await page.getByTestId('sidebar-new-blank-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
+  await page.getByTestId('project-name-input').fill('');
+  assert.equal(await page.getByTestId('project-create-submit').isDisabled(), true);
   await page.getByTestId('project-create-cancel').click();
   await page.getByTestId('project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   await page.getByTestId('sidebar-new-blank-project').click();

@@ -1918,6 +1918,30 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier.png') });
   console.log('[e2e] legacy mos amplifier loaded');
+  await selectComponentForDrag(page, 'm1', [
+    { x: 0, y: 0 },
+    { x: -18, y: 0 },
+    { x: 12, y: 18 },
+    { x: 26, y: -18 },
+  ]);
+  const mosAmpM1DragPoint = await selectedComponentFrameScreenPoint(page, 'm1');
+  await page.mouse.move(mosAmpM1DragPoint.x, mosAmpM1DragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.mouse.move(mosAmpM1DragPoint.x + 110, mosAmpM1DragPoint.y - 40, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const mosAmpPositionsAfterM1Drag = await componentPositions(page);
+  assertPositionChanged(mosAmpPositionsAfterM1Drag.m1, mosAmpPositions.m1, 'dragging MOS amplifier M1 did not move M1');
+  for (const id of ['cin', 'rg1', 'rg2', 'rd', 'rs', 'cs', 'cout', 'rload']) {
+    assertPositionEqual(mosAmpPositionsAfterM1Drag[id], mosAmpPositions[id], `dragging MOS amplifier M1 moved ${id}`);
+  }
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier-drag.png') });
+  console.log('[e2e] legacy mos amplifier drag isolated');
 
   await page.getByTestId(`sidebar-project-${legacyCmosInverterProject.projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(legacyCmosInverterProject.projectName, { exact: true }).waitFor();
