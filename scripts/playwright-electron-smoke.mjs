@@ -824,10 +824,21 @@ try {
   const buildManifestPath = path.resolve(projectRoot, 'build', 'build-manifest.json');
   const previousBuildManifest = await readJsonFile(buildManifestPath).catch(() => null);
   await waitForWorkbenchProject(page, projectId);
+  await clickApplicationMenuPath(electronApp, ['Design', 'Render Schematic']);
+  const menuBuildManifest = await waitForCompiledBuildManifest(
+    buildManifestPath,
+    previousBuildManifest?.built_at ?? '',
+    ['power', 'amplifier', 'filter'],
+  );
+  assert.equal(menuBuildManifest.status, 'compiled');
+  await page.getByTestId('module-netlistsvg').locator('svg').waitFor({ timeout: 30_000 });
+  assert.equal(await page.getByTestId('module-netlistsvg').getAttribute('data-schematic-source'), 'document');
+  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await waitForWorkbenchProject(page, projectId);
   await clickEnabledTestId(page, 'build-project');
   const buildManifest = await waitForCompiledBuildManifest(
     buildManifestPath,
-    previousBuildManifest?.built_at ?? '',
+    menuBuildManifest.built_at,
     ['power', 'amplifier', 'filter'],
   );
   assert.equal(buildManifest.status, 'compiled');
@@ -835,9 +846,11 @@ try {
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();
 
   await waitForWorkbenchProject(page, projectId);
-  await clickEnabledTestId(page, 'simulate-project');
-  await page.getByText('System simulation complete', { exact: true }).waitFor({ timeout: 30_000 });
-  await page.getByText('output_1khz_db', { exact: true }).waitFor();
+  await clickApplicationMenuPath(electronApp, ['Design', 'Run Simulation']);
+  await page.getByTestId('project-simulation').waitFor({ timeout: 30_000 });
+  await page.getByRole('cell', { name: 'output_1khz_db', exact: true }).waitFor({ timeout: 30_000 });
+  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await waitForWorkbenchProject(page, projectId);
 
   await waitForWorkbenchProject(page, projectId);
   await clickEnabledTestId(page, 'save-design-template');
