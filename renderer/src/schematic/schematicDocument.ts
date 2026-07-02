@@ -1303,6 +1303,10 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
   const pinPointsByNet = pinPointsByNetName(module);
   const map = new Map<string, CircuitPosition>();
   const signalSideCounts: Record<SignalPortSide, number> = { left: 0, right: 0 };
+  const signalSideYs: Record<SignalPortSide, Record<'input' | 'output', number[]>> = {
+    left: { input: [], output: [] },
+    right: { input: [], output: [] },
+  };
 
   signalPorts.forEach((port) => {
     const points = pinPointsByNet.get(port.net) ?? [];
@@ -1315,9 +1319,14 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
       y: bounds.minY + 70 + index * 60,
     };
     const base = anchor ?? fallback;
+    const sideGroup = port.direction === 'output' ? 'output' : 'input';
+    const y = avoidPortY(base.y + index * 16, signalSideYs[side][sideGroup]);
+    signalSideYs[side][sideGroup].push(y);
     map.set(port.id, snapPoint({
-      x: base.x + (side === 'right' ? 110 : -110),
-      y: base.y + index * 16,
+      x: side === 'right'
+        ? Math.max(base.x, bounds.maxX) + 110
+        : Math.min(base.x, bounds.minX) - 110,
+      y,
     }));
   });
   powers.forEach((port, index) => {
@@ -1344,6 +1353,15 @@ function signalPortSide(port: CircuitPort, points: CircuitPosition[], bounds: Sc
   const anchor = leftmost(points);
   if (!anchor) return 'left';
   return anchor.x > centerX + SCHEMATIC_GRID ? 'right' : 'left';
+}
+
+function avoidPortY(preferredY: number, usedYs: number[]): number {
+  let y = preferredY;
+  const minGap = SCHEMATIC_GRID * 3;
+  for (let guard = 0; guard < 20 && usedYs.some((usedY) => Math.abs(usedY - y) < minGap); guard += 1) {
+    y += minGap;
+  }
+  return y;
 }
 
 export function moduleBounds(

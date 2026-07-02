@@ -394,6 +394,17 @@ function assertReadableLayout(module: CircuitModule) {
 
 function assertReadablePortPlacement(document: ReturnType<typeof createSchematicDocument>) {
   const { module, portPositions } = document;
+  if (module.module_id === 'mos_differential_pair') {
+    const rightDevice = mustComponent(module, 'm_inn');
+    const outpPort = mustPortPosition(portPositions, 'outp');
+    const outnPort = mustPortPosition(portPositions, 'outn');
+    const rightEdge = boundsForComponent(rightDevice).maxX;
+
+    assert.ok(outpPort.x > rightEdge, 'differential pair OUT+ should sit outside the right edge');
+    assert.ok(outnPort.x > rightEdge, 'differential pair OUT- should sit outside the right edge');
+    assert.ok(Math.abs(outpPort.y - outnPort.y) >= 60, 'differential pair output ports should be vertically separated');
+    return;
+  }
   if (module.module_id !== 'bjt_reset_network') return;
 
   const resetDiode = mustComponent(module, 'd_rst');

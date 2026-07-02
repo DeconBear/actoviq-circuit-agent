@@ -1997,6 +1997,27 @@ try {
     'right',
     'differential pair OUT- should render on the right edge',
   );
+  const differentialOutputPorts = await page.getByTestId('schematic-editor-svg').evaluate(() => {
+    const outp = document.querySelector('g[data-port-id="outp"]');
+    const outn = document.querySelector('g[data-port-id="outn"]');
+    if (!(outp instanceof SVGGraphicsElement) || !(outn instanceof SVGGraphicsElement)) {
+      throw new Error('differential pair output port SVG groups are missing');
+    }
+    const outpBox = outp.getBBox();
+    const outnBox = outn.getBBox();
+    return {
+      minX: Math.min(outpBox.x, outnBox.x),
+      centerGapY: Math.abs((outpBox.y + outpBox.height / 2) - (outnBox.y + outnBox.height / 2)),
+    };
+  });
+  assert.ok(
+    differentialOutputPorts.minX > diffPairPositions.m_inn.x + 52,
+    'differential pair output ports should render outside the right device, not between the input pair',
+  );
+  assert.ok(
+    differentialOutputPorts.centerGapY >= schematicGrid * 2,
+    'differential pair output ports should be visibly separated on the right edge',
+  );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-differential-pair.png') });
   console.log('[e2e] legacy differential pair loaded');
 

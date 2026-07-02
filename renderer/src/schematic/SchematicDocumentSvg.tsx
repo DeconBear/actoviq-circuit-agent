@@ -828,13 +828,14 @@ function PortSymbol({ position, side }: { position: CircuitPosition; side: 'left
 function portRenderSide(document: SchematicDocument, port: SchematicDocument['module']['ports'][number], position: CircuitPosition): PortSide {
   if (isGroundPort(port)) return 'bottom';
   if (port.signal_type === 'power') return 'top';
+  if (port.direction === 'output') return 'right';
   const pinPoints = document.module.components.flatMap((component) => (
     component.pins
       .flatMap((pin, index) => (pin.net === port.net ? [pinWorld(component, pin, index)] : []))
   ));
-  if (pinPoints.length === 0) return port.direction === 'output' ? 'right' : 'left';
+  if (pinPoints.length === 0) return 'left';
   const first = pinPoints[0];
-  if (!first) return port.direction === 'output' ? 'right' : 'left';
+  if (!first) return 'left';
   const nearest = pinPoints.slice(1).reduce((best, point) => (
     distanceSquared(position, point) < distanceSquared(position, best) ? point : best
   ), first);
