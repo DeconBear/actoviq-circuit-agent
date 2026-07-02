@@ -851,11 +851,19 @@ try {
   await page.getByTestId('canvas-context-menu').waitFor();
   await page.getByTestId('context-add-module').click();
   await page.getByTestId('module-editor').waitFor();
+  assert.equal(await page.getByTestId('save-module-editor').isDisabled(), false);
+  await page.getByTestId('module-editor-id').fill('');
+  assert.equal(await page.getByTestId('save-module-editor').isDisabled(), true, 'module editor save should be disabled without an ID');
+  await page.getByTestId('module-editor-id').fill('bad id');
+  assert.equal(await page.getByTestId('save-module-editor').isDisabled(), true, 'module editor save should be disabled for invalid IDs');
   await page.getByTestId('module-editor-id').fill('sensor');
+  await page.getByTestId('module-editor-parameters').fill('Input range');
+  assert.equal(await page.getByTestId('save-module-editor').isDisabled(), true, 'module editor save should be disabled for invalid parameter lines');
   await page.getByTestId('module-editor-name').fill('Sensor front end');
   await page.getByTestId('module-editor-kind').fill('input');
   await page.getByTestId('module-editor-function').fill('Conditions a sensor signal before amplification.');
   await page.getByTestId('module-editor-parameters').fill('Input range = 0-1 V');
+  assert.equal(await page.getByTestId('save-module-editor').isDisabled(), false);
   const projectBeforeSensorAdd = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
   await page.getByTestId('save-module-editor').click();
   await page.getByText(new RegExp(`revision ${projectBeforeSensorAdd.revision + 1}`)).waitFor({ timeout: 10_000 });
@@ -869,9 +877,13 @@ try {
   await page.getByTestId('module-card-sensor').scrollIntoViewIfNeeded();
   await page.getByTestId('module-card-sensor').click({ button: 'right' });
   await page.getByTestId('context-edit-module').click();
+  await page.getByTestId('module-editor-name').fill('');
+  assert.equal(await page.getByTestId('save-module-editor').isDisabled(), true, 'module edit save should be disabled without a name');
+  await page.getByTestId('module-editor-name').fill('Sensor front end');
   await page.getByTestId('module-editor-function').fill(
     'Conditions and protects the sensor signal before amplification.',
   );
+  assert.equal(await page.getByTestId('save-module-editor').isDisabled(), false);
   const projectBeforeSensorEdit = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
   await page.getByTestId('save-module-editor').click();
   await page.getByText(new RegExp(`revision ${projectBeforeSensorEdit.revision + 1}`)).waitFor({ timeout: 10_000 });

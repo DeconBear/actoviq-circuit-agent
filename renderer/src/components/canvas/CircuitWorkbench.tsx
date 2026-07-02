@@ -241,6 +241,19 @@ function parseParameters(value: string): Record<string, string> {
   );
 }
 
+function isModuleEditorSubmittable(editor: ModuleEditorState, modules: CircuitModuleRef[]): boolean {
+  const id = editor.id.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) return false;
+  if (!editor.name.trim() || !editor.kind.trim()) return false;
+  if (editor.mode === 'add' && modules.some((module) => module.id === id)) return false;
+  try {
+    parseParameters(editor.parametersText);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 function sanitizeSpiceToken(value: string): string {
   return value.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'node';
 }
@@ -347,6 +360,9 @@ export function CircuitWorkbench({
   const selectedPreview = activeModuleId ? bundle?.module_previews[activeModuleId] : undefined;
   const selectedPreviewBusy = activeModuleId ? Boolean(modulePreviewBusy[activeModuleId]) : false;
   const anyPreviewBusy = Object.keys(modulePreviewBusy).length > 0;
+  const moduleEditorCanSave = Boolean(
+    moduleEditor && project && isModuleEditorSubmittable(moduleEditor, project.modules),
+  );
   const displayedModules = useMemo(() => (
     project?.modules.map((module) => ({
       ...module,
@@ -1420,7 +1436,7 @@ export function CircuitWorkbench({
               <button
                 style={styles.primaryButton}
                 onClick={() => void saveModuleEditor()}
-                disabled={busy}
+                disabled={busy || !moduleEditorCanSave}
                 data-testid="save-module-editor"
               >
                 {moduleEditor.mode === 'add' ? 'Add module' : 'Save changes'}
