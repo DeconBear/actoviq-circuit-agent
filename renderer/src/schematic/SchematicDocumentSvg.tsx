@@ -1,4 +1,4 @@
-import type { PointerEventHandler, Ref } from 'react';
+import type { MouseEventHandler, PointerEventHandler, Ref } from 'react';
 import type { CircuitComponent, CircuitPosition, CircuitWire } from '../types';
 import {
   componentBounds,
@@ -43,6 +43,7 @@ interface Props {
   onPointerMove?: PointerEventHandler<SVGSVGElement>;
   onPointerUp?: PointerEventHandler<SVGSVGElement>;
   onPointerCancel?: PointerEventHandler<SVGSVGElement>;
+  onContextMenu?: MouseEventHandler<SVGSVGElement>;
   svgRef?: Ref<SVGSVGElement>;
 }
 
@@ -61,6 +62,7 @@ export function SchematicDocumentSvg({
   onPointerMove,
   onPointerUp,
   onPointerCancel,
+  onContextMenu,
   svgRef,
 }: Props) {
   const viewBox = viewBoxOverride ?? document.viewBox;
@@ -84,6 +86,7 @@ export function SchematicDocumentSvg({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      onContextMenu={onContextMenu}
     >
       <defs>
         <style>{`

@@ -1190,6 +1190,17 @@ try {
     /out|in/i,
     'wire endpoint snap feedback did not expose the endpoint net',
   );
+  await page.mouse.click(filterWireSnapPoint.x, filterWireSnapPoint.y);
+  await page.waitForFunction(() => (
+    Boolean(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-start'))
+  ));
+  await page.mouse.click(filterWireSnapPoint.x + 80, filterWireSnapPoint.y, { button: 'right' });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return node?.getAttribute('data-wire-start') === '' &&
+      node?.getAttribute('data-tool') === 'select';
+  });
+  assert.equal(await page.getByTestId('schematic-wire-preview').count(), 0, 'right-click should cancel the active wire preview');
   await page.getByTestId('schematic-editor-select').click();
   const placePoint = { x: box.x + Math.min(430, box.width * 0.62), y: box.y + Math.min(280, box.height * 0.48) };
 

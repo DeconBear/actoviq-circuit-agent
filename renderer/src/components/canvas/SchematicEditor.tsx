@@ -6,6 +6,7 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import type { CircuitComponent, CircuitModule, CircuitPosition, CircuitWire } from '../../types';
@@ -556,6 +557,19 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setInteractionCursor('default');
   }
 
+  function handleContextMenu(event: ReactMouseEvent<SVGSVGElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    cancelActiveDrag();
+    setWireStart(null);
+    setHoverWorld(null);
+    setHoverEndpoint(null);
+    setMarqueeBounds(null);
+    setSpacePanActive(false);
+    setTool('select');
+    setInteractionCursor('default');
+  }
+
   function cancelActiveDrag() {
     const drag = dragRef.current;
     dragRef.current = null;
@@ -1009,6 +1023,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerCancel}
+            onContextMenu={handleContextMenu}
             svgRef={svgRef}
           />
         </div>
