@@ -604,6 +604,14 @@ try {
     return Number(scroll.left) === expectedLeft && Number(scroll.top) === expectedTop;
   });
 
+  await page.getByTestId('canvas-zoom-in').click();
+  await page.getByTestId('canvas-zoom').getByText('75%', { exact: true }).waitFor();
+  assert.equal(await canvasPanel.getAttribute('data-canvas-zoom'), '75');
+  await page.getByTestId('canvas-zoom-out').click();
+  await page.getByTestId('canvas-zoom').getByText('65%', { exact: true }).waitFor();
+  assert.equal(await canvasPanel.getAttribute('data-canvas-zoom'), '65');
+  assert.equal(await page.getByTestId('arrange-modules').isEnabled(), true);
+
   const scrollBeforePan = await canvasPanel.evaluate((element) => ({
     left: element.scrollLeft,
     top: element.scrollTop,

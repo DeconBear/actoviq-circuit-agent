@@ -1194,22 +1194,24 @@ export function CircuitWorkbench({
             </button>
           ) : (
             <>
-              <button style={styles.secondaryButton} onClick={arrangeModules} disabled={busy}>
+              <button style={styles.secondaryButton} onClick={arrangeModules} disabled={busy} data-testid="arrange-modules">
                 Arrange
               </button>
               <div style={styles.zoomControl}>
                 <button
                   style={styles.zoomButton}
-                  onClick={() => setZoom((value) => clampCanvasZoom(value - 10))}
+                  onClick={() => zoomCanvasAtPanelCenter(zoom - 10)}
                   title="Zoom out"
+                  data-testid="canvas-zoom-out"
                 >
                   -
                 </button>
                 <span style={styles.zoomValue} data-testid="canvas-zoom">{zoom}%</span>
                 <button
                   style={styles.zoomButton}
-                  onClick={() => setZoom((value) => clampCanvasZoom(value + 10))}
+                  onClick={() => zoomCanvasAtPanelCenter(zoom + 10)}
                   title="Zoom in"
+                  data-testid="canvas-zoom-in"
                 >
                   +
                 </button>
