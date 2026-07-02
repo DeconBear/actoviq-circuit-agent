@@ -688,6 +688,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setInteractionCursor('default');
       return;
     }
+    if ((event.ctrlKey || event.metaKey) && key === 's') {
+      event.preventDefault();
+      if (!busy && dirty) void saveAndRebuild();
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && key === 'd') {
       event.preventDefault();
       duplicateSelectedComponents();

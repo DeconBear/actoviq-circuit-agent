@@ -1656,7 +1656,9 @@ try {
   }, drawnWire.id);
   console.log('[e2e] wire delete undo redo isolated');
 
-  await page.getByTestId('schematic-editor-save').click();
+  assert.equal(await editor.getAttribute('data-dirty'), 'true', 'Ctrl/Cmd+S persistence check requires a dirty schematic');
+  await editor.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
   await page.getByText('Applied netlist and SVG rebuilt', { exact: true }).waitFor({ timeout: 30_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
