@@ -1068,6 +1068,63 @@ def apply_mos_differential_pair_placements(
     return updated
 
 
+def apply_current_mirror_placements(
+    groups: dict[str, ET.Element],
+    pin_nodes_by_cell: dict[str, dict[str, str]],
+    components: dict[str, dict[str, object]],
+    input_node: str,
+    output_node: str,
+) -> bool:
+    mosfets = [(name, comp) for name, comp in components.items() if component_type(comp) == "mosfet"]
+    if len(mosfets) != 2:
+        return False
+    parsed: list[tuple[str, dict[str, object], str, str, str]] = []
+    for name, comp in mosfets:
+        nodes = component_nodes(comp)
+        if len(nodes) < 3:
+            return False
+        parsed.append((name, comp, nodes[0], nodes[1], nodes[2]))
+    gate_nodes = {gate.lower() for _, _, _, gate, _ in parsed}
+    if len(gate_nodes) != 1:
+        return False
+    reference = next(((name, comp, drain, gate, source) for name, comp, drain, gate, source in parsed if drain.lower() == gate.lower()), None)
+    output = next(((name, comp, drain, gate, source) for name, comp, drain, gate, source in parsed if drain.lower() != gate.lower()), None)
+    if reference is None or output is None:
+        return False
+
+    _ref_name, _ref_comp, ref_drain, ref_gate, _ref_source = reference
+    out_name, _out_comp, out_drain, _out_gate, _out_source = output
+    if output_node and out_drain.lower() != output_node.lower():
+        return False
+
+    updated = False
+    updated = place_component_node_pin(groups, pin_nodes_by_cell, reference[0], ref_drain, (250.0, 190.0)) or updated
+    updated = place_component_node_pin(groups, pin_nodes_by_cell, out_name, out_drain, (430.0, 190.0)) or updated
+    for name, comp in components.items():
+        ctype = component_type(comp)
+        lower = name.lower()
+        if ctype == "current_source" and (has_node(comp, ref_drain) or has_node(comp, ref_gate)):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, ref_drain, (250.0, 95.0)) or updated
+        elif ctype == "resistor" and has_node(comp, out_drain):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, out_drain, (430.0, 95.0)) or updated
+        elif lower.startswith(("i_ref", "iref")):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, ref_drain, (250.0, 95.0)) or updated
+    if "IN" in groups and input_node:
+        set_group_anchor(groups["IN"], (95.0, 210.0))
+        updated = True
+    if "OUT" in groups:
+        set_group_anchor(groups["OUT"], (610.0, 190.0))
+        updated = True
+    for name, group in groups.items():
+        if name.startswith("vcc_"):
+            set_group_anchor(group, (340.0, 38.0))
+            updated = True
+        elif name.startswith("gnd_"):
+            set_group_anchor(group, (340.0, 335.0))
+            updated = True
+    return updated
+
+
 def apply_mos_common_source_placements(
     groups: dict[str, ET.Element],
     pin_nodes_by_cell: dict[str, dict[str, str]],
@@ -1176,6 +1233,7 @@ def apply_single_stage_topology_placements(root: ET.Element, payload: dict[str, 
     return (
         apply_cmos_inverter_placements(groups, pin_nodes_by_cell, components, input_node, output_node)
         or apply_mos_differential_pair_placements(groups, pin_nodes_by_cell, components)
+        or apply_current_mirror_placements(groups, pin_nodes_by_cell, components, input_node, output_node)
         or apply_bjt_reset_handshake_placements(groups, pin_nodes_by_cell, components)
         or apply_mos_common_source_placements(groups, pin_nodes_by_cell, components, input_node, output_node)
     )
@@ -2473,6 +2531,19 @@ def add_linear_chain_custom_net(
             line_count += append_counted_net_line(root, net_class, (bus_x, start_y), (bus_x, end_y))
         return line_count
 
+    if profile == "single_stage_amplifier" and lower == "bias" and len(raw_points) >= 3:
+        bus_y = snap(min(point[1] for point in raw_points) - 45.0)
+        bus_points: list[tuple[float, float]] = []
+        for point in raw_points:
+            bus_point = (point[0], bus_y)
+            line_count += append_counted_net_line(root, net_class, point, bus_point)
+            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            bus_points.append(bus_point)
+        xs = sorted(set(point[0] for point in bus_points))
+        for start_x, end_x in zip(xs, xs[1:]):
+            line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
+        return line_count
+
     if profile == "signal_chain_comparator" and rail_symbol_for_format(lower) == "gnd":
         bus_y = max(point[1] for point in raw_points)
         detour_x = max(point[0] for point in raw_points) + 145.0
@@ -2864,7 +2935,7 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
-        if profile in {"lna_common_emitter", "single_stage_amplifier"} and node.lower() in {"outp", "outn", "dtr", "source"}:
+        if profile in {"lna_common_emitter", "single_stage_amplifier"} and node.lower() in {"outp", "outn", "dtr", "source", "bias"}:
             custom_line_count = add_linear_chain_custom_net(root, profile, node, net_class, raw_points, junction_counts)
             if custom_line_count is not None:
                 line_count += custom_line_count

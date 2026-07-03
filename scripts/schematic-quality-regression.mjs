@@ -254,6 +254,26 @@ const fixtures = [
       BOOT0: { x: 280, y: 277 },
     },
   },
+  {
+    id: 'current-mirror',
+    inputNode: 'bias',
+    outputNode: 'out',
+    netlist: [
+      '* NMOS current mirror fixture',
+      '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+      'IREF vdd bias DC 100u',
+      'MREF bias bias 0 0 NMOS1 W=20u L=1u',
+      'MOUT out bias 0 0 NMOS1 W=20u L=1u',
+      'RLOAD vdd out 10k',
+      '.end',
+    ],
+    overrides: {
+      MREF: { x: 185, y: 200 },
+      MOUT: { x: 360, y: 200 },
+      RLOAD: { x: 360, y: 80 },
+      OUT: { x: 545, y: 170 },
+    },
+  },
 ];
 
 function runJson(command, args) {
