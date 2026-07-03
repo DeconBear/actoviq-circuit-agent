@@ -302,6 +302,14 @@ try {
   });
 
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
+  assert.equal(await page.getByTestId('sidebar-refresh-jobs').getAttribute('aria-label'), 'Refresh jobs and projects');
+  assert.equal(await page.getByTestId('sidebar-collapse').getAttribute('aria-label'), 'Collapse sidebar');
+  await page.getByTestId('sidebar-refresh-jobs').click();
+  await page.getByTestId('sidebar-collapse').click();
+  await page.getByTestId('sidebar-expand').waitFor({ timeout: 10_000 });
+  assert.equal(await page.getByTestId('sidebar-expand').getAttribute('aria-label'), 'Expand sidebar');
+  await page.getByTestId('sidebar-expand').click();
+  await page.getByTestId('sidebar-new-workspace').waitFor({ timeout: 10_000 });
   await clickApplicationMenuPath(electronApp, ['File', 'Settings']);
   await page.getByTestId('settings-dialog').waitFor({ timeout: 10_000 });
   await page.getByTestId('settings-dialog-close').click();
@@ -375,6 +383,9 @@ try {
   await page.getByTestId('sidebar-open-references').scrollIntoViewIfNeeded();
   await page.getByTestId('sidebar-open-references').click();
   await page.getByTestId('sidebar-notice').getByText(/^References opened: /).waitFor({ timeout: 20_000 });
+  await page.getByTestId('sidebar-refresh-references').scrollIntoViewIfNeeded();
+  assert.equal(await page.getByTestId('sidebar-refresh-references').getAttribute('aria-label'), 'Refresh references');
+  await page.getByTestId('sidebar-refresh-references').click();
   await page.getByTestId('workspace-select').selectOption('default');
   await page.getByTestId(`sidebar-project-${projectId}`).waitFor({ timeout: 20_000 });
 

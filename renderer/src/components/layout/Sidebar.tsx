@@ -222,7 +222,13 @@ export function Sidebar({
   if (collapsed) {
     return (
       <div style={styles.collapsed}>
-        <button onClick={onToggle} style={styles.toggleBtn} title="Expand sidebar">
+        <button
+          onClick={onToggle}
+          style={styles.toggleBtn}
+          title="Expand sidebar"
+          aria-label="Expand sidebar"
+          data-testid="sidebar-expand"
+        >
           →
         </button>
       </div>
@@ -234,8 +240,24 @@ export function Sidebar({
       <div style={styles.header}>
         <span style={styles.title}>Workspace</span>
         <div style={styles.headerActions}>
-          <button onClick={refreshJobs} style={styles.refreshBtn} title="Refresh">↻</button>
-          <button onClick={onToggle} style={styles.toggleBtn} title="Collapse sidebar">←</button>
+          <button
+            onClick={refreshJobs}
+            style={styles.refreshBtn}
+            title="Refresh"
+            aria-label="Refresh jobs and projects"
+            data-testid="sidebar-refresh-jobs"
+          >
+            ↻
+          </button>
+          <button
+            onClick={onToggle}
+            style={styles.toggleBtn}
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+            data-testid="sidebar-collapse"
+          >
+            ←
+          </button>
         </div>
       </div>
       <div style={styles.workspaceBox}>
@@ -471,7 +493,14 @@ export function Sidebar({
             >
               Open
             </button>
-            <button onClick={onRefreshReferences} style={styles.inlineActionBtn}>Refresh</button>
+            <button
+              onClick={onRefreshReferences}
+              style={styles.inlineActionBtn}
+              aria-label="Refresh references"
+              data-testid="sidebar-refresh-references"
+            >
+              Refresh
+            </button>
           </div>
         </div>
         {referenceDocuments.length === 0 && (
