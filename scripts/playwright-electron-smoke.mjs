@@ -320,6 +320,8 @@ try {
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
   assert.equal(await page.getByTestId('sidebar-refresh-jobs').getAttribute('aria-label'), 'Refresh jobs and projects');
   assert.equal(await page.getByTestId('sidebar-collapse').getAttribute('aria-label'), 'Collapse sidebar');
+  assert.equal(await page.getByTestId('topbar-settings').getAttribute('aria-label'), 'Settings');
+  assert.equal((await page.getByTestId('topbar-settings').textContent())?.trim(), 'Settings');
   await page.getByTestId('sidebar-refresh-jobs').click();
   await page.getByTestId('sidebar-collapse').click();
   await page.getByTestId('sidebar-expand').waitFor({ timeout: 10_000 });

@@ -912,8 +912,9 @@ export function App() {
                   }}
                   style={styles.stopBtn}
                   title="Stop workflow"
+                  aria-label="Stop workflow"
                 >
-                  ⏹ Stop
+                  Stop
                 </button>
               )}
               <select
@@ -931,16 +932,19 @@ export function App() {
                   onClick={() => window.electronAPI?.openJobFolder(currentJobId)}
                   style={styles.folderBtn}
                   title="Open working directory"
+                  aria-label="Open working directory"
                 >
-                  📂
+                  Folder
                 </button>
               )}
               <button
                 onClick={() => store.setSettingsOpen(true)}
                 style={styles.settingsBtn}
                 title="Settings"
+                aria-label="Settings"
+                data-testid="topbar-settings"
               >
-                ⚙
+                Settings
               </button>
             </div>
           </div>
@@ -1108,20 +1112,26 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'nowrap',
   },
   folderBtn: {
-    background: 'transparent',
-    border: 'none',
+    background: '#ffffff',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
     color: '#69727d',
     cursor: 'pointer',
-    fontSize: 14,
-    padding: '2px 6px',
+    fontSize: 12,
+    fontWeight: 600,
+    padding: '4px 10px',
+    whiteSpace: 'nowrap',
   },
   settingsBtn: {
-    background: 'transparent',
-    border: 'none',
+    background: '#ffffff',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
     color: '#69727d',
     cursor: 'pointer',
-    fontSize: 16,
-    padding: '2px 6px',
+    fontSize: 12,
+    fontWeight: 600,
+    padding: '4px 10px',
+    whiteSpace: 'nowrap',
   },
   tabContent: {
     flex: 1,
