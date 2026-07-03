@@ -868,6 +868,7 @@ def component_type(component: dict[str, object]) -> str:
 def placement_for_opamp_feedback_component(component: dict[str, object], input_node: str, output_node: str) -> tuple[float, float] | None:
     name = str(component.get("name") or "").lower()
     hint = str(component.get("symbol_hint") or "").lower()
+    ctype = component_type(component)
     nodes = component_nodes(component)
     has_ground = any(rail_symbol_for_format(node) == "gnd" for node in nodes)
 
@@ -878,11 +879,13 @@ def placement_for_opamp_feedback_component(component: dict[str, object], input_n
     if name.startswith(("r2f", "rfb_top")) or (has_any_node(component, output_node, "vout", "out") and has_any_node(component, "vn", "fb")):
         return 188.0, 105.0
     if name.startswith(("r1f", "rfb_bot")) or (has_any_node(component, "vn", "fb") and has_ground):
-        return 20.0, 250.0
+        return 70.0, 250.0
     if name.startswith(("rout", "rop")) or (has_any_node(component, "vout_int", "op_raw") and has_any_node(component, output_node, "vout", "out")):
         return 300.0, 185.0
-    if name.startswith(("cload", "cout", "cop")) or (has_node(component, output_node) and has_ground):
+    if name.startswith(("cload", "cout", "cop")) or (ctype == "capacitor" and has_node(component, output_node) and has_ground):
         return 340.0, 258.0
+    if name.startswith(("rload", "rl")) or (ctype == "resistor" and has_node(component, output_node) and has_ground):
+        return 430.0, 258.0
     if has_node(component, output_node):
         return 430.0, 185.0
     return None
