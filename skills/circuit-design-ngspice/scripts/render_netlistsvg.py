@@ -109,6 +109,7 @@ def move_terminal_and_edges(root: ET.Element, group: ET.Element, new_x: float) -
 
     old_ax, old_ay = old_anchor
     new_ax, new_ay = new_anchor
+    additions: list[ET.Element] = []
     for elem in root.iter():
         if local_name(elem.tag) != "line":
             continue
@@ -117,11 +118,37 @@ def move_terminal_and_edges(root: ET.Element, group: ET.Element, new_x: float) -
         x2 = parse_float(elem.get("x2"))
         y2 = parse_float(elem.get("y2"))
         if nearly_equal(x1, old_ax) and nearly_equal(y1, old_ay):
-            elem.set("x1", format_num(new_ax))
-            elem.set("y1", format_num(new_ay))
+            if nearly_equal(new_ay, y2) or nearly_equal(new_ax, x2):
+                elem.set("x1", format_num(new_ax))
+                elem.set("y1", format_num(new_ay))
+            else:
+                elem.set("x1", format_num(new_ax))
+                elem.set("y1", format_num(new_ay))
+                elem.set("x2", format_num(x2))
+                elem.set("y2", format_num(new_ay))
+                attrs = dict(elem.attrib)
+                attrs["x1"] = format_num(x2)
+                attrs["y1"] = format_num(new_ay)
+                attrs["x2"] = format_num(x2)
+                attrs["y2"] = format_num(y2)
+                additions.append(ET.Element(elem.tag, attrs))
         if nearly_equal(x2, old_ax) and nearly_equal(y2, old_ay):
-            elem.set("x2", format_num(new_ax))
-            elem.set("y2", format_num(new_ay))
+            if nearly_equal(new_ay, y1) or nearly_equal(new_ax, x1):
+                elem.set("x2", format_num(new_ax))
+                elem.set("y2", format_num(new_ay))
+            else:
+                elem.set("x1", format_num(x1))
+                elem.set("y1", format_num(y1))
+                elem.set("x2", format_num(new_ax))
+                elem.set("y2", format_num(y1))
+                attrs = dict(elem.attrib)
+                attrs["x1"] = format_num(new_ax)
+                attrs["y1"] = format_num(y1)
+                attrs["x2"] = format_num(new_ax)
+                attrs["y2"] = format_num(new_ay)
+                additions.append(ET.Element(elem.tag, attrs))
+    for elem in additions:
+        root.append(elem)
     return True
 
 
@@ -4790,10 +4817,14 @@ def main() -> int:
     result["skin_path"] = skin_path
     result["stderr"] = completed.stderr.strip()
     if result["ok"]:
-        result["io_terminal_layout"] = enforce_io_terminal_sides(svg_path)
+        initial_io_terminal_layout = enforce_io_terminal_sides(svg_path)
         result["symbolic_cells"] = enhance_symbolic_cells(svg_path, json_path)
         result["formatted_layout"] = format_signal_chain_schematic(svg_path, json_path, schematic_overrides)
         result["net_cleanup"] = simplify_net_segments(svg_path)
+        final_io_terminal_layout = enforce_io_terminal_sides(svg_path)
+        if final_io_terminal_layout.get("updated"):
+            result["net_cleanup"] = simplify_net_segments(svg_path)
+        result["io_terminal_layout"] = final_io_terminal_layout
         payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
         flat_geometry_check = check_geometry(svg_path, json_path)
         hierarchy_result: dict[str, object] = {"updated": False, "reason": "not_needed"}
@@ -4842,6 +4873,8 @@ def main() -> int:
             "schematic_intent": payload.get("schematic_intent", {}),
             "passes": {
                 "io_terminal_layout": result["io_terminal_layout"],
+                "io_terminal_layout_initial": initial_io_terminal_layout,
+                "io_terminal_layout_final": final_io_terminal_layout,
                 "symbolic_cells": result["symbolic_cells"],
                 "formatted_layout": result["formatted_layout"],
                 "net_cleanup": result["net_cleanup"],

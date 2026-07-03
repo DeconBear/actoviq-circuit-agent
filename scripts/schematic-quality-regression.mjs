@@ -258,6 +258,7 @@ for (const fixture of fixtures) {
   assert.equal(geometry.ok, true, `${fixture.id} geometry failed: ${JSON.stringify(summary)}`);
   assert.equal(hardGeometryOk(summary), true, `${fixture.id} hard geometry issues: ${JSON.stringify(summary)}`);
   assert.ok((rendered.layout_report?.readability_score ?? 0) >= 85, `${fixture.id} readability below 85`);
+  assert.deepEqual(geometry.readability?.issues ?? [], [], `${fixture.id} readability issues: ${JSON.stringify(geometry.readability?.issues ?? [])}`);
 
   results.push({
     id: fixture.id,
