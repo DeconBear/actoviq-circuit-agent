@@ -2346,6 +2346,86 @@ def add_rf_mixed_custom_net(
     return None
 
 
+def add_window_comparator_custom_net(
+    root: ET.Element,
+    node: str,
+    net_class: str,
+    raw_points: list[tuple[float, float]],
+    junction_counts: dict[tuple[float, float, str], int],
+    *,
+    input_node: str,
+    output_node: str,
+) -> int | None:
+    lower = node.lower()
+    line_count = 0
+
+    def add_polyline(points: list[tuple[float, float]]) -> None:
+        nonlocal line_count
+        for start, end in zip(points, points[1:]):
+            line_count += append_counted_net_line(root, net_class, start, end)
+
+    if input_node and lower == input_node.lower() and len(raw_points) >= 2:
+        for point in sorted(raw_points):
+            end = (point[0] - 28.0, point[1]) if point[0] > 220.0 else (point[0] + 28.0, point[1])
+            line_count += append_counted_net_line(root, net_class, point, end)
+            label_x = end[0] - 20.0 if end[0] < point[0] else end[0] + 4.0
+            append_net_label(root, net_class, node, label_x, end[1] - 4.0)
+        return line_count
+
+    if lower == "vl" and len(raw_points) >= 3:
+        for point in sorted(raw_points):
+            end = (point[0] - 28.0, point[1]) if point[0] > 240.0 else (point[0] + 28.0, point[1])
+            line_count += append_counted_net_line(root, net_class, point, end)
+            label_x = end[0] - 20.0 if end[0] < point[0] else end[0] + 4.0
+            append_net_label(root, net_class, node, label_x, end[1] - 4.0)
+        return line_count
+
+    if lower in {"out_hi", "out_lo"} and len(raw_points) >= 3:
+        resistor = min(raw_points, key=lambda point: point[1])
+        diode = max(raw_points, key=lambda point: point[0])
+        collector = min((point for point in raw_points if point != resistor and point != diode), key=lambda point: abs(point[1] - 180.0))
+        if lower == "out_hi":
+            bus_y = 150.0
+            add_polyline([resistor, (resistor[0], bus_y), (collector[0], bus_y), collector])
+            add_polyline([(collector[0], bus_y), (diode[0], bus_y), diode])
+        else:
+            bus_y = 150.0
+            detour_x = diode[0] - 22.0
+            add_polyline([resistor, (resistor[0], bus_y), (collector[0], bus_y), collector])
+            add_polyline([(collector[0], bus_y), (detour_x, bus_y), (detour_x, diode[1]), diode])
+        junction_counts[(collector[0], bus_y, net_class)] += 1
+        return line_count
+
+    if output_node and lower == output_node.lower() and len(raw_points) >= 3:
+        bus_x = max(point[0] for point in raw_points) - 40.0
+        ys: list[float] = []
+        for point in raw_points:
+            bus_point = (bus_x, point[1])
+            if not nearly_equal(point[0], bus_x):
+                line_count += append_counted_net_line(root, net_class, point, bus_point)
+            ys.append(point[1])
+            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+        for start_y, end_y in zip(sorted(set(ys)), sorted(set(ys))[1:]):
+            line_count += append_counted_net_line(root, net_class, (bus_x, start_y), (bus_x, end_y))
+        return line_count
+
+    if lower == "tail_hi" and len(raw_points) >= 2:
+        upper = min(raw_points, key=lambda point: point[1])
+        lower_point = max(raw_points, key=lambda point: point[1])
+        bus_x = upper[0] + 34.0
+        add_polyline([upper, (bus_x, upper[1]), (bus_x, lower_point[1]), lower_point])
+        return line_count
+
+    if lower in {"vh"} and len(raw_points) >= 2:
+        xs = sorted(set(point[0] for point in raw_points))
+        if len(xs) == 1:
+            ys = sorted(point[1] for point in raw_points)
+            add_polyline([(xs[0], ys[0]), (xs[0], ys[-1])])
+            return line_count
+
+    return None
+
+
 def add_side_ground_symbols_net(
     root: ET.Element,
     net_class: str,
@@ -3098,6 +3178,19 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 continue
         if profile == "rf_mixed_signal":
             custom_line_count = add_rf_mixed_custom_net(root, node, net_class, raw_points, junction_counts)
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
+        if profile == "window_comparator_detail":
+            custom_line_count = add_window_comparator_custom_net(
+                root,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                input_node=input_node,
+                output_node=output_node,
+            )
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue

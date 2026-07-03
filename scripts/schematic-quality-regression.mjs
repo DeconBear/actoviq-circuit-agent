@@ -471,6 +471,33 @@ const fixtures = [
     ],
     overrides: {},
   },
+  {
+    id: 'window-comparator-detail',
+    inputNode: 'in',
+    outputNode: 'out_n',
+    moduleDetail: 'window_comparator',
+    expectedProfile: 'window_comparator_detail',
+    netlist: [
+      '* Window comparator detail fixture',
+      '.model QNPN NPN(IS=1e-15 BF=120)',
+      '.model DFAST D(IS=1n RS=1)',
+      'VDD vdd 0 DC 5',
+      'VIN in 0 DC 1',
+      'Rdiv1 vdd vh 100k',
+      'Rdiv2 vh vl 100k',
+      'Rdiv3 vl 0 100k',
+      'Q5 out_hi in tail_hi QNPN',
+      'R1 vdd out_hi 10k',
+      'Rref1 tail_hi 0 2k',
+      'Q6 out_lo vl tail_lo QNPN',
+      'R2 vdd out_lo 10k',
+      'D2 out_hi out_n DFAST',
+      'D3 out_lo out_n DFAST',
+      'Rpull vdd out_n 10k',
+      '.end',
+    ],
+    overrides: {},
+  },
 ];
 
 function runJson(command, args) {
@@ -565,7 +592,7 @@ async function renderCase({
   return {
     id: fixture.id,
     case: caseLabel,
-    profile: rendered.planner?.profile ?? rendered.formatted_layout?.profile ?? 'unknown',
+    profile: rendered.formatted_layout?.profile ?? rendered.planner?.profile ?? 'unknown',
     svgPath,
     jsonPath,
     geometryPath,
@@ -610,6 +637,14 @@ for (const fixture of fixtures) {
   }
   const converted = runJson(python, convertArgs);
   assert.equal(converted.ok, true, fixture.id);
+  if (fixture.moduleDetail) {
+    const payload = JSON.parse(await readFile(jsonPath, 'utf8'));
+    payload.schematic_intent = {
+      ...(payload.schematic_intent ?? {}),
+      module_detail: fixture.moduleDetail,
+    };
+    await writeFile(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  }
 
   const autoResult = await renderCase({
     fixture,
@@ -624,6 +659,10 @@ for (const fixture of fixtures) {
     caseRoot: path.resolve(fixtureRoot, 'adjusted'),
     overridesPath,
   });
+  if (fixture.expectedProfile) {
+    assert.equal(autoResult.profile, fixture.expectedProfile, `${fixture.id} auto profile`);
+    assert.equal(adjustedResult.profile, fixture.expectedProfile, `${fixture.id} adjusted profile`);
+  }
 
   const moved = adjustedResult.rendered.formatted_layout?.schematic_overrides?.moved ?? [];
   const skipped = adjustedResult.rendered.formatted_layout?.schematic_overrides?.skipped ?? [];
