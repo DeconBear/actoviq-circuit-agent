@@ -2459,12 +2459,114 @@ def add_ring_oscillator_custom_net(
     node: str,
     net_class: str,
     raw_points: list[tuple[float, float]],
+    junction_counts: dict[tuple[float, float, str], int],
 ) -> int | None:
     rail = rail_symbol_for_format(node)
     if rail == "gnd":
         return add_side_ground_symbols_net(root, net_class, raw_points)
     if rail in {"vcc", "vee"}:
         return add_side_power_label_net(root, node, net_class, raw_points)
+
+    by_x: dict[float, list[tuple[float, float]]] = defaultdict(list)
+    for point in raw_points:
+        by_x[round(point[0], 3)].append(point)
+
+    output_x: float | None = None
+    output_points: list[tuple[float, float]] = []
+    gate_x: float | None = None
+    gate_points: list[tuple[float, float]] = []
+
+    for x, points in by_x.items():
+        has_upper_drain = any(100.0 <= y <= 125.0 for _, y in points)
+        has_lower_drain = any(220.0 <= y <= 245.0 for _, y in points)
+        has_upper_gate = any(70.0 <= y <= 100.0 for _, y in points)
+        has_lower_gate = any(245.0 <= y <= 270.0 for _, y in points)
+        if has_upper_drain and has_lower_drain:
+            output_x = x
+            output_points = sorted(points, key=lambda item: item[1])
+        if has_upper_gate and has_lower_gate:
+            gate_x = x
+            gate_points = sorted(points, key=lambda item: item[1])
+
+    if output_x is not None and gate_x is not None and output_points and gate_points:
+        line_count = 0
+        output_top = min(point[1] for point in output_points)
+        output_bottom = max(point[1] for point in output_points)
+        signal_y = snap((output_top + output_bottom) / 2.0)
+        output_mid = (output_x, signal_y)
+
+        line_count += append_counted_net_line(root, net_class, (output_x, output_top), (output_x, output_bottom))
+        junction_counts[(output_mid[0], output_mid[1], net_class)] += 1
+
+        gate_spine_x = gate_x - 30.0 if gate_x >= output_x else gate_x
+        gate_ys = sorted(set(point[1] for point in gate_points))
+        feedback_corridor_x: float | None = None
+        if gate_x < output_x:
+            feedback_corridor_x = snap(max(output_x + 90.0, max(point[0] for point in raw_points) + 28.0))
+            top_y = 20.0
+            line_count += append_counted_net_line(root, net_class, output_mid, (feedback_corridor_x, signal_y))
+            line_count += append_counted_net_line(root, net_class, (feedback_corridor_x, signal_y), (feedback_corridor_x, top_y))
+            current_top = (feedback_corridor_x, top_y)
+            while current_top[0] - gate_spine_x > 180.0:
+                next_top = (current_top[0] - 160.0, top_y)
+                line_count += append_counted_net_line(root, net_class, current_top, next_top)
+                current_top = next_top
+            line_count += append_counted_net_line(root, net_class, current_top, (gate_spine_x, top_y))
+            line_count += append_counted_net_line(root, net_class, (gate_spine_x, top_y), (gate_spine_x, min(gate_ys)))
+        else:
+            line_count += append_counted_net_line(root, net_class, output_mid, (gate_spine_x, signal_y))
+            line_count += append_counted_net_line(root, net_class, (gate_spine_x, signal_y), (gate_spine_x, min(gate_ys)))
+
+        line_count += append_counted_net_line(root, net_class, (gate_spine_x, min(gate_ys)), (gate_spine_x, max(gate_ys)))
+        for point in gate_points:
+            tap = (gate_spine_x, point[1])
+            line_count += append_counted_net_line(root, net_class, tap, point)
+            junction_counts[(tap[0], tap[1], net_class)] += 1
+
+        shunt_points = sorted(
+            point for point in raw_points if point[1] >= 300.0 and 100.0 <= point[0] <= 660.0
+        )
+        if shunt_points:
+            shunt_y = snap(min(point[1] for point in shunt_points))
+            branch_x = min(point[0] for point in shunt_points)
+            line_count += append_counted_net_line(root, net_class, output_mid, (branch_x, signal_y))
+            line_count += append_counted_net_line(root, net_class, (branch_x, signal_y), (branch_x, shunt_y))
+            junction_counts[(branch_x, signal_y, net_class)] += 1
+            junction_counts[(branch_x, shunt_y, net_class)] += 1
+            xs = sorted(set(point[0] for point in shunt_points) | {branch_x})
+            for start_x, end_x in zip(xs, xs[1:]):
+                line_count += append_counted_net_line(root, net_class, (start_x, shunt_y), (end_x, shunt_y))
+            for point in shunt_points:
+                if not nearly_equal(point[1], shunt_y):
+                    line_count += append_counted_net_line(root, net_class, (point[0], shunt_y), point)
+                junction_counts[(point[0], shunt_y, net_class)] += 1
+
+        io_points = [
+            point for point in raw_points if point not in output_points and point not in gate_points and point not in shunt_points
+        ]
+        if io_points:
+            for point in io_points:
+                if point[0] < output_x:
+                    attach_x = min(point[0] for point in shunt_points) if shunt_points else output_x
+                    side_y = min(point[1] - 45.0, signal_y + 115.0)
+                    elbow = (point[0], side_y)
+                    line_count += append_counted_net_line(root, net_class, point, elbow)
+                    line_count += append_counted_net_line(root, net_class, elbow, (attach_x, side_y))
+                    line_count += append_counted_net_line(root, net_class, (attach_x, side_y), (attach_x, signal_y))
+                    junction_counts[(attach_x, signal_y, net_class)] += 1
+                elif point[0] > output_x:
+                    corridor_x = snap(max(point[0] + 38.0, output_x + 90.0))
+                    line_count += append_counted_net_line(root, net_class, point, (corridor_x, point[1]))
+                    line_count += append_counted_net_line(root, net_class, (corridor_x, point[1]), (corridor_x, signal_y))
+                    if feedback_corridor_x is None or not nearly_equal(corridor_x, feedback_corridor_x):
+                        line_count += append_counted_net_line(root, net_class, (corridor_x, signal_y), output_mid)
+                    junction_counts[(corridor_x, signal_y, net_class)] += 1
+                else:
+                    line_count += append_counted_net_line(root, net_class, point, output_mid)
+                    junction_counts[(output_mid[0], output_mid[1], net_class)] += 1
+
+        append_net_label(root, net_class, node, output_x + 6.0, signal_y - 6.0)
+        return line_count
 
     line_count = 0
     for point in sorted(raw_points):
@@ -2893,7 +2995,7 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 line_count += custom_line_count
                 continue
         if profile == "ring_oscillator" and rail_symbol_for_format(node) is not None:
-            custom_line_count = add_ring_oscillator_custom_net(root, node, net_class, raw_points)
+            custom_line_count = add_ring_oscillator_custom_net(root, node, net_class, raw_points, junction_counts)
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
@@ -2961,7 +3063,7 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 line_count += custom_line_count
                 continue
         if profile == "ring_oscillator":
-            custom_line_count = add_ring_oscillator_custom_net(root, node, net_class, raw_points)
+            custom_line_count = add_ring_oscillator_custom_net(root, node, net_class, raw_points, junction_counts)
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
