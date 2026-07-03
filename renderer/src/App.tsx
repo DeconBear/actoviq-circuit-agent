@@ -348,6 +348,14 @@ export function App() {
     }
   }, [refreshCircuitProjects, setJobId]);
 
+  const reloadCircuitProjectIfActive = useCallback(async (projectId: string) => {
+    if (useAppStore.getState().activeProjectId === projectId) {
+      await loadCircuitProject(projectId, false);
+      return;
+    }
+    await refreshCircuitProjects();
+  }, [loadCircuitProject, refreshCircuitProjects]);
+
   useEffect(() => {
     if (!window.electronAPI) return;
     return window.electronAPI.onCircuitProjectChanged((event) => {
@@ -377,8 +385,8 @@ export function App() {
       for (const module of bundle.project.modules) {
         await window.electronAPI.compileCircuitModule(bundle.project.project_id, module.id);
       }
-      await refreshCircuitProjects();
       await loadCircuitProject(bundle.project.project_id);
+      await refreshCircuitProjects();
     } catch (error) {
       state.setCircuitError(error instanceof Error ? error.message : String(error));
       throw error;
@@ -404,8 +412,8 @@ export function App() {
       for (const module of bundle.project.modules) {
         await window.electronAPI.compileCircuitModule(bundle.project.project_id, module.id);
       }
-      await refreshCircuitProjects();
       await loadCircuitProject(bundle.project.project_id);
+      await refreshCircuitProjects();
       await refreshReferences();
     } catch (error) {
       state.setCircuitError(error instanceof Error ? error.message : String(error));
@@ -936,20 +944,14 @@ export function App() {
                 onCreateProject={handleCreateCircuitProject}
                 onCreateProjectFromTemplate={handleCreateCircuitProjectFromTemplate}
                 onReferencesChanged={refreshReferences}
-                onReloadProject={async () => {
-                  const projectId = useAppStore.getState().activeProjectId;
-                  if (projectId) await loadCircuitProject(projectId, false);
-                }}
+                onReloadProject={reloadCircuitProjectIfActive}
               />
             )}
             {store.activeTab === 'netlist' && (
               <NetlistEditor
                 onValidate={handleValidateActiveJob}
                 isWorkflowRunning={store.isRunning}
-                onReloadProject={async () => {
-                  const projectId = useAppStore.getState().activeProjectId;
-                  if (projectId) await loadCircuitProject(projectId, false);
-                }}
+                onReloadProject={reloadCircuitProjectIfActive}
               />
             )}
             {store.activeTab === 'svg' && <SvgViewer />}

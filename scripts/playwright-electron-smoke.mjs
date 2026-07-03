@@ -373,6 +373,7 @@ try {
   await page.getByTestId('circuit-workbench').getByText(emptyBlankProjectName, { exact: true }).waitFor({ timeout: 30_000 });
   const emptyProjectManifest = await findProjectByNameInRoot(path.resolve(createdWorkspaceRoot, 'projects'), emptyBlankProjectName);
   assert.equal(emptyProjectManifest.project.modules.length, 0);
+  await waitForWorkbenchProject(page, emptyProjectManifest.project.project_id);
   const emptySidebarProject = page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: emptyBlankProjectName }).first();
   await emptySidebarProject.waitFor({ timeout: 30_000 });
   assert.equal(await emptySidebarProject.getAttribute('data-active'), 'true');
@@ -409,6 +410,8 @@ try {
   await page.getByTestId('project-name-input').fill(sidebarProjectName);
   await page.getByTestId('project-name-input').press('Enter');
   await page.getByTestId('sidebar-notice').getByText(`Project created: ${sidebarProjectName}`, { exact: true }).waitFor({ timeout: 60_000 });
+  const sidebarBlankProjectManifest = await findProjectByName(sidebarProjectName);
+  await waitForWorkbenchProject(page, sidebarBlankProjectManifest.project.project_id);
   const sidebarBlankProject = page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarProjectName }).first();
   await sidebarBlankProject.waitFor({ timeout: 30_000 });
   assert.equal(await sidebarBlankProject.getAttribute('data-active'), 'true');
@@ -426,13 +429,14 @@ try {
   await page.getByTestId('project-name-input').fill(sidebarDemoProjectName);
   await page.getByTestId('project-create-submit').click();
   await page.getByTestId('sidebar-notice').getByText(`Project created: ${sidebarDemoProjectName}`, { exact: true }).waitFor({ timeout: 60_000 });
+  const sidebarDemoProjectManifest = await findProjectByName(sidebarDemoProjectName);
+  await waitForWorkbenchProject(page, sidebarDemoProjectManifest.project.project_id);
   const sidebarDemoProject = page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarDemoProjectName }).first();
   await sidebarDemoProject.waitFor({ timeout: 30_000 });
   assert.equal(await sidebarDemoProject.getAttribute('data-active'), 'true');
   assert.equal(await sidebarDemoProject.getAttribute('aria-current'), 'true');
   assert.equal(await page.getByTestId('project-title').textContent(), sidebarDemoProjectName);
   await page.waitForFunction(() => document.querySelectorAll('[data-testid^="module-card-"]').length === 3);
-  const sidebarDemoProjectManifest = await findProjectByName(sidebarDemoProjectName);
   assert.equal(sidebarDemoProjectManifest.project.modules.length, 3);
   assert.ok(sidebarDemoProjectManifest.project.connections.length >= 2);
   assert.ok(sidebarDemoProjectManifest.project.modules.some((module) => module.id === 'filter'));

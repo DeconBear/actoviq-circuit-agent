@@ -855,6 +855,14 @@ function observeWindow(windowPage) {
 }
 electronApp.on('window', observeWindow);
 
+async function waitForWorkbenchProject(page, targetProjectId) {
+  await page.waitForFunction((projectId) => {
+    const node = document.querySelector('[data-testid="circuit-workbench"]');
+    return node?.getAttribute('data-project-id') === projectId &&
+      node?.getAttribute('data-action-project-id') === projectId;
+  }, targetProjectId);
+}
+
 let page;
 try {
   page = electronApp.windows()[0] ?? await electronApp.firstWindow({ timeout: 20_000 });
@@ -869,6 +877,7 @@ try {
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
   console.log('[e2e] shell loaded');
   await page.getByTestId(`sidebar-project-${projectId}`).click();
+  await waitForWorkbenchProject(page, projectId);
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
   await page.getByTestId('module-preview-filter').waitFor({ timeout: 20_000 });
   console.log('[e2e] project selected');
@@ -1932,6 +1941,7 @@ try {
   await page.getByTestId('back-to-board').click();
 
   await page.getByTestId(`sidebar-project-${legacyLdoProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyLdoProject.projectId);
   await page.getByTestId('circuit-workbench').getByText(legacyLdoProject.projectName, { exact: true }).waitFor();
   await page.getByTestId('module-card-ldo').dblclick();
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
@@ -2034,6 +2044,7 @@ try {
   console.log('[e2e] legacy ldo drag isolated');
 
   await page.getByTestId(`sidebar-project-${legacyBjtResetProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyBjtResetProject.projectId);
   await page.getByTestId('circuit-workbench').getByText(legacyBjtResetProject.projectName, { exact: true }).waitFor();
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
@@ -2084,6 +2095,7 @@ try {
   console.log('[e2e] legacy bjt reset loaded');
 
   await page.getByTestId(`sidebar-project-${legacyVoltageDividerProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyVoltageDividerProject.projectId);
   await page.getByTestId('circuit-workbench').getByText(legacyVoltageDividerProject.projectName, { exact: true }).waitFor();
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
@@ -2121,6 +2133,7 @@ try {
   console.log('[e2e] legacy voltage divider loaded');
 
   await page.getByTestId(`sidebar-project-${legacyMosAmplifierProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyMosAmplifierProject.projectId);
   await page.getByTestId('circuit-workbench').getByText(legacyMosAmplifierProject.projectName, { exact: true }).waitFor();
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
@@ -2197,6 +2210,7 @@ try {
   console.log('[e2e] legacy mos amplifier drag isolated');
 
   await page.getByTestId(`sidebar-project-${legacyCmosInverterProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyCmosInverterProject.projectId);
   await page.getByTestId('circuit-workbench').getByText(legacyCmosInverterProject.projectName, { exact: true }).waitFor();
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
@@ -2237,6 +2251,7 @@ try {
   console.log('[e2e] legacy cmos inverter loaded');
 
   await page.getByTestId(`sidebar-project-${legacyDifferentialPairProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyDifferentialPairProject.projectId);
   await page.getByTestId('circuit-workbench').getByText(legacyDifferentialPairProject.projectName, { exact: true }).waitFor();
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
@@ -2300,6 +2315,7 @@ try {
   console.log('[e2e] legacy differential pair loaded');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
+  await waitForWorkbenchProject(page, projectId);
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();

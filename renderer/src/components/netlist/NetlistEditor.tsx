@@ -6,7 +6,7 @@ import { createNetlistNotebook, extractNetlistCode } from '../../utils/netlistNo
 
 interface Props {
   onValidate?: () => void;
-  onReloadProject?: () => Promise<void>;
+  onReloadProject?: (projectId: string) => Promise<void>;
   isWorkflowRunning?: boolean;
 }
 
@@ -100,7 +100,7 @@ export function NetlistEditor({
         if (!result.render.ok) {
           throw new Error(result.render.error || 'netlistsvg could not render this code block.');
         }
-        await onReloadProject?.();
+        await onReloadProject?.(projectId);
       } else if (jobId) {
         await Promise.all([
           window.electronAPI.writeJobFile(jobId, 'design/netlist-notebook.md', value),
@@ -133,7 +133,7 @@ export function NetlistEditor({
     setSaveMessage('Building module notebook source...');
     try {
       await window.electronAPI.compileCircuitModule(projectId, moduleId);
-      await onReloadProject?.();
+      await onReloadProject?.(projectId);
       setSaveStatus('saved');
       setSaveMessage('Module built');
     } catch (error) {
