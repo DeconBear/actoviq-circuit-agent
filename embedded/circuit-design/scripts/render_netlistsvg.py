@@ -1735,9 +1735,9 @@ def apply_baseband_detail_placements(root: ET.Element, payload: dict[str, object
     groups = find_cell_groups(root)
     placements = {
         "Rdec": (70.0, 62.0),
-        "Cdec": (130.0, 315.0),
+        "Cdec": (108.0, 315.0),
         "Rin": (92.0, 210.0),
-        "Rbias1": (182.0, 300.0),
+        "Rbias1": (212.0, 300.0),
         "Q2": (245.0, 138.0),
         "Q3": (342.0, 138.0),
         "Re_tail": (285.0, 262.0),
@@ -1755,11 +1755,15 @@ def apply_baseband_detail_placements(root: ET.Element, payload: dict[str, object
         if group is not None:
             set_group_xy(group, xy[0], xy[1])
 
+    set_terminal_group_anchor(groups, ("IN",), (44.0, 215.0))
+    set_terminal_group_anchor(groups, ("VREF", "REF"), (104.0, 154.0))
+    set_terminal_group_anchor(groups, ("OUT",), (824.0, 160.0))
+
     for name, group in groups.items():
         if name.startswith("PORT_IN_"):
-            set_group_xy(group, 18.0, 220.0)
+            set_group_anchor(group, (44.0, 215.0))
         elif name.startswith("PORT_OUT_"):
-            set_group_xy(group, 865.0, 220.0)
+            set_group_anchor(group, (824.0, 160.0))
         elif name.startswith("vcc_") or name.startswith("vdd_"):
             if "bb_vdd" in name:
                 set_group_xy(group, 230.0, 26.0)
@@ -2341,6 +2345,111 @@ def add_rf_mixed_custom_net(
     if lower.endswith("_n") and len(raw_points) >= 2:
         output_candidates = [point[1] for point in raw_points if 180.0 <= point[1] <= 260.0]
         signal_y = max(output_candidates) if output_candidates else snap(sum(point[1] for point in raw_points) / len(raw_points))
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, signal_y)
+
+    return None
+
+
+def add_baseband_detail_custom_net(
+    root: ET.Element,
+    node: str,
+    net_class: str,
+    raw_points: list[tuple[float, float]],
+    junction_counts: dict[tuple[float, float, str], int],
+    *,
+    input_node: str,
+    output_node: str,
+) -> int | None:
+    lower = node.lower()
+    input_lower = input_node.lower()
+    output_lower = output_node.lower()
+    line_count = 0
+
+    def add_polyline(points: list[tuple[float, float]]) -> None:
+        nonlocal line_count
+        for start, end in zip(points, points[1:]):
+            line_count += append_counted_net_line(root, net_class, start, end)
+
+    def add_stub(point: tuple[float, float], direction: str, label: str) -> None:
+        nonlocal line_count
+        if direction == "left":
+            end = (point[0] - 28.0, point[1])
+            label_x = end[0] - max(22.0, min(54.0, len(label) * 6.0))
+        elif direction == "right":
+            end = (point[0] + 28.0, point[1])
+            label_x = end[0] + 4.0
+        elif direction == "up":
+            end = (point[0], point[1] - 24.0)
+            label_x = end[0] + 4.0
+        else:
+            end = (point[0], point[1] + 24.0)
+            label_x = end[0] + 4.0
+        line_count += append_counted_net_line(root, net_class, point, end)
+        append_net_label(root, net_class, label, label_x, end[1] - 4.0)
+
+    if lower == input_lower:
+        for point in sorted(raw_points):
+            add_stub(point, "right", node)
+        return line_count
+
+    if lower in {"base", "ref"}:
+        for point in sorted(raw_points):
+            if point[0] < 90.0 or (lower == "ref" and point[0] < 180.0):
+                add_stub(point, "right", node)
+            elif lower == "ref" or point[1] < 230.0:
+                add_stub(point, "left", node)
+            else:
+                add_stub(point, "right", node)
+        return line_count
+
+    if lower == "n1" and len(raw_points) == 2:
+        for point in sorted(raw_points):
+            add_stub(point, "up" if point[0] < 360.0 else "left", node)
+        return line_count
+
+    if lower == "tail" and len(raw_points) >= 3:
+        emitters = sorted((point for point in raw_points if point[1] < 220.0), key=lambda point: point[0])
+        tail_resistor = max(raw_points, key=lambda point: point[1])
+        if len(emitters) >= 2:
+            bus_y = snap(max(point[1] for point in emitters) + 35.0)
+            xs = sorted({point[0] for point in emitters} | {tail_resistor[0]})
+            for point in emitters:
+                add_polyline([point, (point[0], bus_y)])
+                junction_counts[(point[0], bus_y, net_class)] += 1
+            add_polyline([tail_resistor, (tail_resistor[0], bus_y)])
+            junction_counts[(tail_resistor[0], bus_y, net_class)] += 1
+            for start_x, end_x in zip(xs, xs[1:]):
+                line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
+            return line_count
+
+    if lower == "fb" and len(raw_points) >= 3:
+        q_collector = min((point for point in raw_points if point[1] > 100.0 and point[1] < 200.0), key=lambda point: point[0], default=None)
+        feedback_resistor = min(raw_points, key=lambda point: point[1])
+        shunt = max(raw_points, key=lambda point: point[1])
+        if q_collector is not None:
+            bus_y = snap((q_collector[1] + feedback_resistor[1]) / 2.0)
+            add_polyline([q_collector, (q_collector[0], bus_y), (feedback_resistor[0], bus_y), feedback_resistor])
+            junction_counts[(q_collector[0], bus_y, net_class)] += 1
+            junction_counts[(feedback_resistor[0], bus_y, net_class)] += 1
+            add_stub(shunt, "right", node)
+            return line_count
+
+    if lower == output_lower and len(raw_points) >= 3:
+        bus_y = 120.0
+        bus_xs: set[float] = set()
+        for point in raw_points:
+            bus_point = (point[0], bus_y)
+            if not nearly_equal(point[1], bus_y):
+                line_count += append_counted_net_line(root, net_class, point, bus_point)
+                junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            bus_xs.add(point[0])
+        for start_x, end_x in zip(sorted(bus_xs), sorted(bus_xs)[1:]):
+            line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
+        append_net_label(root, net_class, node, max(bus_xs) + 6.0, bus_y - 6.0)
+        return line_count
+
+    if lower in {"n2", "bb_drive"} and len(raw_points) >= 3:
+        signal_y = snap(min(point[1] for point in raw_points if point[1] > 180.0))
         return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, signal_y)
 
     return None
@@ -3178,6 +3287,19 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 continue
         if profile == "rf_mixed_signal":
             custom_line_count = add_rf_mixed_custom_net(root, node, net_class, raw_points, junction_counts)
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
+        if profile == "baseband_detail":
+            custom_line_count = add_baseband_detail_custom_net(
+                root,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                input_node=input_node,
+                output_node=output_node,
+            )
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
