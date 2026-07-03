@@ -763,6 +763,7 @@ def apply_blockwise_module_placements(root: ET.Element, payload: dict[str, objec
 def placement_for_signal_chain_component(component: dict[str, object], input_node: str, output_node: str) -> tuple[float, float] | None:
     name = str(component.get("name") or "").lower()
     hint = str(component.get("symbol_hint") or "").lower()
+    ctype = component_type(component)
     nodes = component_nodes(component)
     has_ground = any(rail_symbol_for_format(node) == "gnd" for node in nodes)
     has_power = any(rail_symbol_for_format(node) == "vcc" for node in nodes)
@@ -776,7 +777,7 @@ def placement_for_signal_chain_component(component: dict[str, object], input_nod
     if name.startswith("rfb_top") or (has_any_node(component, "op_out", "opout") and has_any_node(component, "vn", "inn", "vinn")):
         return 188.0, 105.0
     if name.startswith("rfb_bot") or (has_any_node(component, "vn", "inn", "vinn") and has_ground):
-        return 40.0, 250.0
+        return 70.0, 250.0
     if name.startswith("rop") or (has_any_node(component, "op_raw") and has_any_node(component, "op_out", "opout")):
         return 300.0, 185.0
     if name.startswith("cop") or (has_any_node(component, "op_out", "opout") and has_ground):
@@ -791,6 +792,10 @@ def placement_for_signal_chain_component(component: dict[str, object], input_nod
         # Align the divider midpoint exactly with Rth1's lower pin. A small
         # vertical mismatch here creates two visually parallel vth wires.
         return 570.0, 132.0
+    if name.startswith(("rpull", "rpu")) or (ctype == "resistor" and has_node(component, output_node) and has_power):
+        return 600.0, 140.0
+    if name.startswith(("cout", "cload")) or (ctype == "capacitor" and has_node(component, output_node) and has_ground):
+        return 640.0, 190.0
     if has_node(component, output_node):
         return 600.0, 185.0
     return None
@@ -1567,7 +1572,7 @@ def apply_signal_chain_placements(root: ET.Element, payload: dict[str, object]) 
             set_group_xy(group, placement[0], placement[1])
 
     if "IN" in groups:
-        set_group_xy(groups["IN"], 22.0, 190.0)
+        set_group_xy(groups["IN"], 10.0, 190.0)
     if "OUT" in groups:
         set_group_xy(groups["OUT"], 680.0, 180.0)
 
@@ -2474,8 +2479,10 @@ def add_linear_chain_custom_net(
     net_class: str,
     raw_points: list[tuple[float, float]],
     junction_counts: dict[tuple[float, float, str], int],
+    output_node: str = "",
 ) -> int | None:
     lower = node.lower()
+    output_lower = output_node.lower()
     line_count = 0
 
     if profile == "single_stage_amplifier" and lower in {"outp", "outn"} and len(raw_points) >= 3:
@@ -2546,25 +2553,16 @@ def add_linear_chain_custom_net(
 
     if profile == "signal_chain_comparator" and rail_symbol_for_format(lower) == "gnd":
         bus_y = max(point[1] for point in raw_points)
-        detour_x = max(point[0] for point in raw_points) + 145.0
         bus_xs: set[float] = set()
         for point in raw_points:
-            if point[0] > 540.0 and point[1] < bus_y - 120.0:
+            if point[0] > 540.0 and point[1] < bus_y - 80.0:
                 # The threshold divider lower pin sits next to the comparator
-                # output. Escape above the output terminal before dropping to
-                # the ground bus so GND never cuts through the OUT_N symbol.
-                shoulder_x = min(detour_x - 65.0, point[0] + 80.0)
-                escape_y = point[1] - 10.0
+                # output. Drop just left of the output-load area so GND never
+                # cuts through the pull-up/load symbols.
+                shoulder_x = min(point[0] - 10.0, 585.0)
                 shoulder = (shoulder_x, point[1])
-                raised = (shoulder_x, escape_y)
-                elbow = (detour_x, escape_y)
-                drop = (detour_x, bus_y)
                 line_count += append_counted_net_line(root, net_class, point, shoulder)
-                line_count += append_counted_net_line(root, net_class, shoulder, raised)
-                line_count += append_counted_net_line(root, net_class, raised, elbow)
-                line_count += append_counted_net_line(root, net_class, elbow, drop)
-                junction_counts[(drop[0], drop[1], net_class)] += 1
-                bus_xs.add(drop[0])
+                append_side_ground_symbol(root, net_class, shoulder)
             else:
                 bus_point = (point[0], bus_y)
                 if not nearly_equal(point[1], bus_y):
@@ -2576,11 +2574,11 @@ def add_linear_chain_custom_net(
             line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
         return line_count
 
-    if profile in {"signal_chain_comparator", "opamp_feedback", "opamp"} and lower in {"vn", "fb"} and len(raw_points) >= 3:
+    if profile in {"signal_chain_comparator", "opamp_feedback", "opamp"} and lower in {"vn", "fb", "amp_fb", "op_fb", "vfb"} and len(raw_points) >= 3:
         # Keep the inverting-input feedback ladder on a left-side bus. Routing
         # the divider straight down from the op-amp pin would cut through the
         # non-inverting input trace; routing it at x=45 cuts through the IN port.
-        bus_x = max(12.0, min(point[0] for point in raw_points) - 25.0)
+        bus_x = max(-20.0, min(point[0] for point in raw_points) - 75.0)
         bus_points: list[tuple[float, float]] = []
         for point in raw_points:
             bus_point = (bus_x, point[1])
@@ -2590,6 +2588,22 @@ def add_linear_chain_custom_net(
         ys = sorted(set(point[1] for point in bus_points))
         for start_y, end_y in zip(ys, ys[1:]):
             line_count += append_counted_net_line(root, net_class, (bus_x, start_y), (bus_x, end_y))
+        return line_count
+
+    if profile == "signal_chain_comparator" and output_lower and lower == output_lower and len(raw_points) >= 2:
+        # The comparator output often fans out to pull-up/load parts. Keep that
+        # as a clean horizontal bus so it does not pass through the shunt parts.
+        bus_y = snap(sorted(raw_points, key=lambda point: point[0])[0][1])
+        bus_points: list[tuple[float, float]] = []
+        for point in raw_points:
+            bus_point = (point[0], bus_y)
+            if not nearly_equal(point[1], bus_y):
+                line_count += append_counted_net_line(root, net_class, point, bus_point)
+            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            bus_points.append(bus_point)
+        xs = sorted(set(point[0] for point in bus_points))
+        for start_x, end_x in zip(xs, xs[1:]):
+            line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
         return line_count
 
     if lower in {"op_out", "vout"}:
@@ -2880,6 +2894,19 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
+        if profile == "signal_chain_comparator" and rail_symbol_for_format(node) == "gnd":
+            custom_line_count = add_linear_chain_custom_net(
+                root,
+                profile,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                output_node=output_node,
+            )
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
         if rail_symbol_for_format(node) == "gnd":
             line_count += add_local_ground_net(root, net_class, raw_points, junction_counts)
             continue
@@ -2941,7 +2968,15 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 line_count += custom_line_count
                 continue
         if profile in {"signal_chain_comparator", "opamp_feedback", "opamp"}:
-            custom_line_count = add_linear_chain_custom_net(root, profile, node, net_class, raw_points, junction_counts)
+            custom_line_count = add_linear_chain_custom_net(
+                root,
+                profile,
+                node,
+                net_class,
+                raw_points,
+                junction_counts,
+                output_node=output_node,
+            )
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
