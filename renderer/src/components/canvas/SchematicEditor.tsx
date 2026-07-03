@@ -302,7 +302,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         setInteractionCursor(nextComponentIds.includes(componentHit.id) ? 'grab' : 'default');
         return;
       }
-      const shouldDragGroup = Boolean(selectedFrameHit && currentComponentIds.includes(componentHit.id));
+      const shouldDragGroup = Boolean(selectedHandleHit && currentComponentIds.includes(componentHit.id));
       const componentIds = shouldDragGroup ? currentComponentIds : [componentHit.id];
       if (!shouldDragGroup || !currentComponentIds.includes(componentHit.id)) {
         setSelection(selectionForComponentIds(componentIds));
