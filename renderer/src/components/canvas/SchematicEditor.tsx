@@ -1222,7 +1222,7 @@ function hitSelectedComponentFrame(
 ): CircuitComponent | null {
   const selectedIds = new Set(componentIdsForSelection(selection));
   if (selectedIds.size === 0) return null;
-  const padding = 14;
+  const padding = 28;
   for (let index = document.module.components.length - 1; index >= 0; index -= 1) {
     const component = document.module.components[index];
     if (!component || !selectedIds.has(component.id)) continue;

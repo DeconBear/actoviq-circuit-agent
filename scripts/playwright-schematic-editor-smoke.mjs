@@ -12,6 +12,7 @@ const outputRoot = path.resolve(root, 'output', 'playwright');
 const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const projectPrefix = 'playwright-schematic-editor-';
+const runId = Date.now().toString(36);
 const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
 const legacyBjtResetPrefix = `${projectPrefix}legacy-bjt-reset-`;
 const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
@@ -29,6 +30,10 @@ function runSkill(args) {
     cwd: root,
     encoding: 'utf8',
   }));
+}
+
+function legacyProjectId(kind) {
+  return `${projectPrefix}${kind}-${runId}`;
 }
 
 async function allocatePort() {
@@ -92,13 +97,16 @@ async function removePrefixedProjects() {
 }
 
 async function createLegacyLdoProject() {
+  const expectedProjectId = legacyProjectId('ldo');
   const created = runSkill([
     'create',
     '--projects-root', projectsRoot,
     '--name', `${legacyLdoPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
   ]);
   const projectRoot = created.project_root;
   const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy LDO fixture project id should not be truncated or reused');
   const modulePorts = [
     { id: 'vin', name: 'VIN', direction: 'input', signal_type: 'power', net: 'vin' },
     { id: 'vout', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
@@ -160,13 +168,16 @@ async function createLegacyLdoProject() {
 }
 
 async function createLegacyBjtResetProject() {
+  const expectedProjectId = legacyProjectId('bjt-reset');
   const created = runSkill([
     'create',
     '--projects-root', projectsRoot,
     '--name', `${legacyBjtResetPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
   ]);
   const projectRoot = created.project_root;
   const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy BJT reset fixture project id should not be truncated or reused');
   const modulePorts = [
     { id: 'vdd', name: '+3.3V', direction: 'input', signal_type: 'power', net: 'vdd' },
     { id: 'rst', name: 'RST', direction: 'input', signal_type: 'digital', net: 'rst' },
@@ -226,13 +237,16 @@ async function createLegacyBjtResetProject() {
 }
 
 async function createLegacyVoltageDividerProject() {
+  const expectedProjectId = legacyProjectId('divider');
   const created = runSkill([
     'create',
     '--projects-root', projectsRoot,
     '--name', `${legacyVoltageDividerPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
   ]);
   const projectRoot = created.project_root;
   const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy divider fixture project id should not be truncated or reused');
   const modulePorts = [
     { id: 'vdd', name: '+5V', direction: 'input', signal_type: 'power', net: 'vdd' },
     { id: 'output', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
@@ -283,13 +297,16 @@ async function createLegacyVoltageDividerProject() {
 }
 
 async function createLegacyMosAmplifierProject() {
+  const expectedProjectId = legacyProjectId('mos-amp');
   const created = runSkill([
     'create',
     '--projects-root', projectsRoot,
     '--name', `${legacyMosAmplifierPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
   ]);
   const projectRoot = created.project_root;
   const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy MOS amplifier fixture project id should not be truncated or reused');
   const modulePorts = [
     { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
     { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
@@ -348,13 +365,16 @@ async function createLegacyMosAmplifierProject() {
 }
 
 async function createLegacyCmosInverterProject() {
+  const expectedProjectId = legacyProjectId('cmos-inv');
   const created = runSkill([
     'create',
     '--projects-root', projectsRoot,
     '--name', `${legacyCmosInverterPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
   ]);
   const projectRoot = created.project_root;
   const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy CMOS inverter fixture project id should not be truncated or reused');
   const modulePorts = [
     { id: 'input', name: 'IN', direction: 'input', signal_type: 'digital', net: 'in' },
     { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
@@ -408,13 +428,16 @@ async function createLegacyCmosInverterProject() {
 }
 
 async function createLegacyDifferentialPairProject() {
+  const expectedProjectId = legacyProjectId('diff-pair');
   const created = runSkill([
     'create',
     '--projects-root', projectsRoot,
     '--name', `${legacyDifferentialPairPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
   ]);
   const projectRoot = created.project_root;
   const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy differential pair fixture project id should not be truncated or reused');
   const modulePorts = [
     { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
     { id: 'inp', name: 'IN+', direction: 'input', signal_type: 'analog', net: 'inp' },
