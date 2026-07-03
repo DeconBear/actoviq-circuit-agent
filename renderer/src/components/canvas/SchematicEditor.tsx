@@ -98,6 +98,8 @@ interface MarqueeState {
   moved: boolean;
 }
 
+type DraftUpdate = (current: CircuitModule) => CircuitModule;
+
 export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBuild }: Props) {
   const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
@@ -122,6 +124,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const wirePointDragRef = useRef<WirePointDragState | null>(null);
   const marqueeRef = useRef<MarqueeState | null>(null);
   const panRef = useRef<PanState | null>(null);
+  const draftUpdateFrameRef = useRef<number | null>(null);
+  const pendingDraftUpdateRef = useRef<DraftUpdate | null>(null);
 
   const document = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
   const activeViewBox = viewport ?? document.viewBox;
@@ -165,6 +169,41 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setDraft(next);
     setDirty(true);
   }, [draft]);
+
+  function scheduleDraftUpdate(update: DraftUpdate) {
+    pendingDraftUpdateRef.current = update;
+    if (draftUpdateFrameRef.current !== null) return;
+    draftUpdateFrameRef.current = window.requestAnimationFrame(() => {
+      draftUpdateFrameRef.current = null;
+      const pending = pendingDraftUpdateRef.current;
+      pendingDraftUpdateRef.current = null;
+      if (pending) setDraft(pending);
+    });
+  }
+
+  function flushPendingDraftUpdate() {
+    const pending = pendingDraftUpdateRef.current;
+    pendingDraftUpdateRef.current = null;
+    if (draftUpdateFrameRef.current !== null) {
+      window.cancelAnimationFrame(draftUpdateFrameRef.current);
+      draftUpdateFrameRef.current = null;
+    }
+    if (pending) setDraft(pending);
+  }
+
+  function cancelPendingDraftUpdate() {
+    pendingDraftUpdateRef.current = null;
+    if (draftUpdateFrameRef.current !== null) {
+      window.cancelAnimationFrame(draftUpdateFrameRef.current);
+      draftUpdateFrameRef.current = null;
+    }
+  }
+
+  function markDirty() {
+    setDirty((current) => (current ? current : true));
+  }
+
+  useEffect(() => () => cancelPendingDraftUpdate(), []);
 
   function clientToWorld(svg: SVGSVGElement, clientX: number, clientY: number): CircuitPosition {
     svgRef.current = svg;
@@ -418,8 +457,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       nextPoints[wirePointDrag.pointIndex] = nextPoint;
       if (samePoints(nextPoints, wirePointDrag.originalPoints)) return;
       wirePointDrag.moved = true;
-      setDraft((current) => applyWirePointDrag(current, wirePointDrag, nextPoints));
-      setDirty(true);
+      scheduleDraftUpdate((current) => applyWirePointDrag(current, wirePointDrag, nextPoints));
+      markDirty();
       return;
     }
     const wireSegmentDrag = wireSegmentDragRef.current;
@@ -434,7 +473,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       if (samePoints(nextPoints, wireSegmentDrag.lastPoints)) return;
       wireSegmentDrag.lastPoints = clonePoints(nextPoints);
       wireSegmentDrag.moved = true;
-      setDraft((current) => {
+      scheduleDraftUpdate((current) => {
         const next = cloneModule(current);
         if (!next.wires) next.wires = [];
         let wire = next.wires.find((entry) => entry.id === wireSegmentDrag.wireId);
@@ -446,7 +485,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         if (wire) wire.points = clonePoints(nextPoints);
         return next;
       });
-      setDirty(true);
+      markDirty();
       return;
     }
     const marquee = marqueeRef.current;
@@ -482,7 +521,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     );
     if (samePositionMap(drag.lastPositions, nextPositions)) return;
     drag.lastPositions = clonePositionMap(nextPositions);
-    setDraft((current) => {
+    scheduleDraftUpdate((current) => {
       const next = cloneModule(current);
       let changed = false;
       for (const [componentId, nextPosition] of Object.entries(nextPositions)) {
@@ -495,7 +534,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       if (!changed) return current;
       return next;
     });
-    setDirty(true);
+    markDirty();
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>) {
@@ -504,6 +543,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    flushPendingDraftUpdate();
     if (panRef.current) {
       panRef.current = null;
       setInteractionCursor('default');
@@ -583,6 +623,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   }
 
   function cancelActiveDrag() {
+    cancelPendingDraftUpdate();
     const drag = dragRef.current;
     dragRef.current = null;
     wireDragRef.current = null;
