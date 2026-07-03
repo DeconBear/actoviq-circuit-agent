@@ -2203,6 +2203,46 @@ def add_linear_chain_custom_net(
     lower = node.lower()
     line_count = 0
 
+    if profile == "single_stage_amplifier" and lower in {"outp", "outn"} and len(raw_points) >= 3:
+        bus_y = snap(max(35.0, min(point[1] for point in raw_points) - 95.0))
+        bus_points: list[tuple[float, float]] = []
+        leftmost_x = min(point[0] for point in raw_points)
+        for point in raw_points:
+            if nearly_equal(point[0], leftmost_x):
+                entry_point = (point[0] + 25.0, point[1])
+                bus_point = (entry_point[0], bus_y)
+                line_count += append_counted_net_line(root, net_class, point, entry_point)
+                junction_counts[(entry_point[0], entry_point[1], net_class)] += 1
+                if not nearly_equal(entry_point[1], bus_y):
+                    line_count += append_counted_net_line(root, net_class, entry_point, bus_point)
+                    junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            else:
+                bus_point = (point[0], bus_y)
+                if not nearly_equal(point[1], bus_y):
+                    line_count += append_counted_net_line(root, net_class, point, bus_point)
+                    junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            bus_points.append(bus_point)
+        xs = sorted(set(point[0] for point in bus_points))
+        for start_x, end_x in zip(xs, xs[1:]):
+            line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
+        return line_count
+
+    if profile == "single_stage_amplifier" and lower == "dtr" and len(raw_points) == 2:
+        upper, lower_point = sorted(raw_points, key=lambda point: point[1])
+        detour_x = snap(max(20.0, min(point[0] for point in raw_points) - 130.0))
+        detour_y = snap(max(point[1] for point in raw_points) + 30.0)
+        upper_elbow = (detour_x, upper[1])
+        lower_elbow = (detour_x, detour_y)
+        lower_bus = (lower_point[0], detour_y)
+        line_count += append_counted_net_line(root, net_class, upper, upper_elbow)
+        line_count += append_counted_net_line(root, net_class, upper_elbow, lower_elbow)
+        line_count += append_counted_net_line(root, net_class, lower_elbow, lower_bus)
+        line_count += append_counted_net_line(root, net_class, lower_bus, lower_point)
+        junction_counts[(upper_elbow[0], upper_elbow[1], net_class)] += 1
+        junction_counts[(lower_elbow[0], lower_elbow[1], net_class)] += 1
+        junction_counts[(lower_bus[0], lower_bus[1], net_class)] += 1
+        return line_count
+
     if profile == "signal_chain_comparator" and rail_symbol_for_format(lower) == "gnd":
         bus_y = max(point[1] for point in raw_points)
         detour_x = max(point[0] for point in raw_points) + 145.0
@@ -2591,6 +2631,11 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 continue
         if profile == "ring_oscillator":
             custom_line_count = add_ring_oscillator_custom_net(root, node, net_class, raw_points)
+            if custom_line_count is not None:
+                line_count += custom_line_count
+                continue
+        if profile == "single_stage_amplifier" and node.lower() in {"outp", "outn", "dtr"}:
+            custom_line_count = add_linear_chain_custom_net(root, profile, node, net_class, raw_points, junction_counts)
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue

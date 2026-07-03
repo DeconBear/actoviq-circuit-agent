@@ -1053,6 +1053,44 @@ def manifest_modules(manifest: dict | None) -> list[dict]:
     return [module for module in modules if isinstance(module, dict)]
 
 
+def manifest_ports(manifest: dict | None) -> list[dict]:
+    if not isinstance(manifest, dict):
+        return []
+    ports: list[dict] = []
+    root_ports = manifest.get("ports")
+    if isinstance(root_ports, list):
+        ports.extend(port for port in root_ports if isinstance(port, dict))
+    for module in manifest_modules(manifest):
+        module_ports = module.get("ports")
+        if isinstance(module_ports, list):
+            ports.extend(port for port in module_ports if isinstance(port, dict))
+    return ports
+
+
+def manifest_terminal_ports(manifest: dict | None, node_to_bit: dict[str, int]) -> list[dict[str, str | int]]:
+    terminals: list[dict[str, str | int]] = []
+    seen_nets: set[str] = set()
+    for port in manifest_ports(manifest):
+        net = str(port.get("net") or port.get("node") or "").strip()
+        if not net or net not in node_to_bit or net in seen_nets:
+            continue
+        signal_type = str(port.get("signal_type") or port.get("type") or "").strip().lower()
+        if signal_type in {"power", "ground"} or rail_symbol_for_node(net) is not None:
+            continue
+        side_text = str(port.get("side") or port.get("schematic_side") or "").strip().lower()
+        direction_text = str(port.get("direction") or "").strip().lower()
+        if side_text in {"right", "east", "output"}:
+            direction = "output"
+        elif side_text in {"left", "west", "input"}:
+            direction = "input"
+        else:
+            direction = "output" if direction_text.startswith("out") else "input"
+        label = str(port.get("name") or port.get("id") or net).strip() or net
+        terminals.append({"label": label, "net": net, "bit": node_to_bit[net], "direction": direction})
+        seen_nets.add(net)
+    return terminals
+
+
 def manifest_module_order(module: dict, fallback: int) -> int:
     try:
         return int(module.get("order") or fallback)
@@ -1590,7 +1628,16 @@ def build_netlistsvg_payload(
     )
     add_rail_symbols(cells, node_to_bit)
 
-    important_nodes = {n for n in (inferred_input, inferred_output) if n}
+    manifest_terminals = manifest_terminal_ports(module_manifest, node_to_bit)
+    important_nodes = {
+        n
+        for n in (
+            inferred_input,
+            inferred_output,
+            *[str(port["net"]) for port in manifest_terminals],
+        )
+        if n
+    }
     netnames = {}
     for node, bit in sorted(node_to_bit.items(), key=lambda item: item[1]):
         hide_name = 0 if show_all_netnames else int(should_hide_netname(node, important_nodes))
@@ -1601,11 +1648,20 @@ def build_netlistsvg_payload(
         for comp in component_records
         if comp.get("type") in {"voltage_source", "current_source"} and comp.get("nodes")
     }
-    if inferred_input and inferred_input in node_to_bit:
-        if inferred_input not in visible_source_positive_nodes:
-            add_terminal_symbol(cells, "IN", node_to_bit[inferred_input], direction="input")
-    if inferred_output and inferred_output in node_to_bit:
-        add_terminal_symbol(cells, "OUT", node_to_bit[inferred_output], direction="output")
+    if manifest_terminals:
+        for port in manifest_terminals:
+            add_terminal_symbol(
+                cells,
+                str(port["label"]),
+                int(port["bit"]),
+                direction=str(port["direction"]),
+            )
+    else:
+        if inferred_input and inferred_input in node_to_bit:
+            if inferred_input not in visible_source_positive_nodes:
+                add_terminal_symbol(cells, "IN", node_to_bit[inferred_input], direction="input")
+        if inferred_output and inferred_output in node_to_bit:
+            add_terminal_symbol(cells, "OUT", node_to_bit[inferred_output], direction="output")
     hidden_terminal_nodes: list[tuple[str, str]] = []
     if view == "schematic":
         hidden_terminal_nodes = hidden_source_terminal_nodes(

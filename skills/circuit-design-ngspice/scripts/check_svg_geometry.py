@@ -491,6 +491,29 @@ def rail_name_kind(name: str) -> str | None:
     return None
 
 
+def rail_symbol_has_local_connection(
+    box: tuple[float, float, float, float],
+    segments: list[dict[str, Any]],
+    kind: str,
+    tolerance: float,
+) -> bool:
+    left, top, right, bottom = box
+    for segment in segments:
+        (x1, y1), (x2, y2) = segment["start"], segment["end"]
+        if abs(x1 - x2) > tolerance:
+            continue
+        x = x1
+        if x < left - tolerance or x > right + tolerance:
+            continue
+        seg_top = min(y1, y2)
+        seg_bottom = max(y1, y2)
+        if kind == "vcc" and seg_top <= bottom + tolerance and seg_bottom > bottom + tolerance:
+            return True
+        if kind == "vee" and seg_top < top - tolerance and seg_bottom >= top - tolerance:
+            return True
+    return False
+
+
 def readability_report(
     payload: dict[str, Any],
     boxes: dict[str, tuple[float, float, float, float]],
@@ -538,7 +561,11 @@ def readability_report(
 
         for name, box in boxes.items():
             kind = rail_name_kind(name)
-            if kind in {"vcc", "vee"} and box[1] > min_main_y + tolerance:
+            if (
+                kind in {"vcc", "vee"}
+                and box[1] > min_main_y + tolerance
+                and not rail_symbol_has_local_connection(box, segments, kind, tolerance)
+            ):
                 issues.append(
                     {
                         "kind": "rail_side",

@@ -160,6 +160,100 @@ const fixtures = [
       Rload: { x: 800, y: 304 },
     },
   },
+  {
+    id: 'cmos-inverter',
+    inputNode: 'in',
+    outputNode: 'out',
+    netlist: [
+      '* CMOS inverter fixture',
+      '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+      '.model PMOS1 PMOS (LEVEL=1 VTO=-0.7 KP=40u)',
+      'MP1 out in vdd vdd PMOS1 W=40u L=1u',
+      'MN1 out in 0 0 NMOS1 W=20u L=1u',
+      'Cload out 0 10p',
+      '.end',
+    ],
+    overrides: {
+      MP1: { x: 300, y: 110 },
+      MN1: { x: 300, y: 290 },
+      Cload: { x: 470, y: 255 },
+      OUT: { x: 610, y: 200 },
+    },
+  },
+  {
+    id: 'mos-differential-pair',
+    inputNode: 'inp',
+    outputNode: 'outp',
+    netlist: [
+      '* MOS differential pair fixture',
+      '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+      'M_INP outp inp tail 0 NMOS1 W=20u L=1u',
+      'M_INN outn inn tail 0 NMOS1 W=20u L=1u',
+      'RDP vdd outp 10k',
+      'RDN vdd outn 10k',
+      'Itail tail 0 DC 100u',
+      '.end',
+    ],
+    overrides: {
+      M_INP: { x: 230, y: 240 },
+      M_INN: { x: 430, y: 240 },
+      RDP: { x: 230, y: 85 },
+      RDN: { x: 430, y: 85 },
+      ITAIL: { x: 330, y: 420 },
+      OUT: { x: 610, y: 155 },
+    },
+  },
+  {
+    id: 'bjt-reset-handshake',
+    inputNode: 'dtr',
+    outputNode: 'boot0',
+    netlist: [
+      '* BJT reset/boot handshake fixture',
+      '.model S8050 NPN (IS=1e-14 BF=160)',
+      '.model D4148 D (IS=2.52n RS=0.568 N=1.906)',
+      'Q_BOOT vdd rts_drive boot_node S8050',
+      'Q_RST rst_pull dtr_drive rts S8050',
+      'D1 rst rst_pull D4148',
+      'R50 vdd rst_pull 10k',
+      'R51 dtr dtr_drive 1k',
+      'R49 rts_drive rts 1k',
+      'R52 boot_node boot0 1k',
+      '.end',
+    ],
+    moduleManifest: {
+      version: 1,
+      modules: [
+        {
+          name: 'reset_handshake',
+          label: 'RESET HANDSHAKE',
+          component_names: ['Q_BOOT', 'Q_RST', 'D1', 'R50', 'R51', 'R49', 'R52'],
+          input_nets: ['rst', 'dtr'],
+          output_nets: ['rts', 'boot0'],
+          shared_nets: ['vdd'],
+          ports: [
+            { id: 'vdd', name: '+3.3V', direction: 'input', signal_type: 'power', net: 'vdd', side: 'top' },
+            { id: 'rst', name: 'RST', direction: 'input', signal_type: 'digital', net: 'rst', side: 'left' },
+            { id: 'dtr', name: 'DTR', direction: 'input', signal_type: 'digital', net: 'dtr', side: 'right' },
+            { id: 'rts', name: 'RTS', direction: 'output', signal_type: 'digital', net: 'rts', side: 'right' },
+            { id: 'boot0', name: 'BOOT0', direction: 'output', signal_type: 'digital', net: 'boot0', side: 'right' },
+          ],
+        },
+      ],
+    },
+    overrides: {
+      Q_BOOT: { x: 150, y: 250 },
+      Q_RST: { x: 430, y: 165 },
+      D1: { x: 275, y: 165 },
+      R50: { x: 430, y: 55 },
+      R51: { x: 350, y: 165 },
+      R49: { x: 285, y: 320 },
+      R52: { x: 205, y: 277 },
+      RST: { x: 215, y: 165 },
+      DTR: { x: 330, y: 130 },
+      RTS: { x: 720, y: 320 },
+      BOOT0: { x: 280, y: 277 },
+    },
+  },
 ];
 
 function runJson(command, args) {
@@ -220,18 +314,26 @@ for (const fixture of fixtures) {
   const jsonPath = path.resolve(fixtureRoot, 'design.json');
   const svgPath = path.resolve(fixtureRoot, 'schematic.svg');
   const overridesPath = path.resolve(fixtureRoot, 'schematic.overrides.json');
+  const manifestPath = path.resolve(fixtureRoot, 'module-manifest.json');
 
   await writeFile(netlistPath, `${fixture.netlist.join('\n')}\n`, 'utf8');
   await writeFile(overridesPath, `${JSON.stringify(overrideDocument(fixture), null, 2)}\n`, 'utf8');
+  if (fixture.moduleManifest) {
+    await writeFile(manifestPath, `${JSON.stringify(fixture.moduleManifest, null, 2)}\n`, 'utf8');
+  }
 
-  const converted = runJson(python, [
+  const convertArgs = [
     netlistToJsonPath,
     '--netlist-path', netlistPath,
     '--json-path', jsonPath,
     '--view', 'schematic',
     '--input-node', fixture.inputNode,
     '--output-node', fixture.outputNode,
-  ]);
+  ];
+  if (fixture.moduleManifest) {
+    convertArgs.push('--module-manifest-path', manifestPath);
+  }
+  const converted = runJson(python, convertArgs);
   assert.equal(converted.ok, true, fixture.id);
 
   const rendered = runJson(python, [
