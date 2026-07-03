@@ -330,6 +330,7 @@ export function CircuitWorkbench({
   const [moduleEditorError, setModuleEditorError] = useState('');
   const [emptyProjectForm, setEmptyProjectForm] = useState<EmptyProjectFormState | null>(null);
   const canvasPanelRef = useRef<HTMLDivElement | null>(null);
+  const emptyProjectCreateRef = useRef(false);
   const [modulePreviewPositions, setModulePreviewPositions] = useState<
     Record<string, { x: number; y: number }>
   >({});
@@ -1017,7 +1018,8 @@ export function CircuitWorkbench({
   async function createProjectFromEmptyState() {
     if (!emptyProjectForm) return;
     const name = emptyProjectForm.name.trim();
-    if (!name || busy) return;
+    if (!name || busy || emptyProjectCreateRef.current) return;
+    emptyProjectCreateRef.current = true;
     setError('');
     setNotice('');
     try {
@@ -1025,6 +1027,8 @@ export function CircuitWorkbench({
       setEmptyProjectForm(null);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      emptyProjectCreateRef.current = false;
     }
   }
 

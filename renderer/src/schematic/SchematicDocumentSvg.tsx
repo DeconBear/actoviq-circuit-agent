@@ -110,7 +110,14 @@ export function SchematicDocumentSvg({
         </pattern>
       </defs>
       {showGrid ? (
-        <rect x={viewBox.minX} y={viewBox.minY} width={width} height={height} fill={`url(#${gridId})`} />
+        <rect
+          x={viewBox.minX}
+          y={viewBox.minY}
+          width={width}
+          height={height}
+          fill={`url(#${gridId})`}
+          data-testid="schematic-grid-background"
+        />
       ) : null}
       <g data-layer="wires">
         {document.wires.map((wire) => (

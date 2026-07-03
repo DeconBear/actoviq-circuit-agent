@@ -87,6 +87,7 @@ export function App() {
   const latestDiscoveredJobRef = useRef<string | null>(null);
   const circuitLoadRequestRef = useRef(0);
   const jobLoadRequestRef = useRef(0);
+  const circuitCreateRequestRef = useRef(false);
   const setJobId = useCallback((id: string | null) => {
     setCurrentJobId(id);
     currentJobIdRef.current = id;
@@ -377,6 +378,8 @@ export function App() {
   const handleCreateCircuitProject = useCallback(async (demo: boolean, name: string) => {
     if (!window.electronAPI) return;
     if (!name.trim()) return;
+    if (circuitCreateRequestRef.current) return;
+    circuitCreateRequestRef.current = true;
     const state = useAppStore.getState();
     state.setCircuitBusy(true);
     state.setCircuitError('');
@@ -391,6 +394,7 @@ export function App() {
       state.setCircuitError(error instanceof Error ? error.message : String(error));
       throw error;
     } finally {
+      circuitCreateRequestRef.current = false;
       state.setCircuitBusy(false);
     }
   }, [loadCircuitProject, refreshCircuitProjects]);
@@ -400,6 +404,8 @@ export function App() {
     defaultName: string,
   ) => {
     if (!window.electronAPI) return;
+    if (circuitCreateRequestRef.current) return;
+    circuitCreateRequestRef.current = true;
     const name = defaultName.trim() || 'Template project copy';
     const state = useAppStore.getState();
     state.setCircuitBusy(true);
@@ -419,6 +425,7 @@ export function App() {
       state.setCircuitError(error instanceof Error ? error.message : String(error));
       throw error;
     } finally {
+      circuitCreateRequestRef.current = false;
       state.setCircuitBusy(false);
     }
   }, [loadCircuitProject, refreshCircuitProjects, refreshReferences]);

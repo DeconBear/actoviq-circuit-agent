@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
 import type { ReferenceDocument, WorkspaceSummary } from '../../types';
 import type { CircuitProjectSummary } from '../../types';
@@ -55,6 +55,7 @@ export function Sidebar({
   const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [projectForm, setProjectForm] = useState<{ demo: boolean; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
   const conversations = useAppStore((s) => s.conversations);
   const conversationId = useAppStore((s) => s.conversationId);
   const setConversationId = useAppStore((s) => s.setConversationId);
@@ -159,7 +160,8 @@ export function Sidebar({
 
   const handleCreateWorkspace = useCallback(async () => {
     const name = workspaceName.trim();
-    if (!name || creating) return;
+    if (!name || creating || creatingRef.current) return;
+    creatingRef.current = true;
     setCreating(true);
     setNotice(null);
     try {
@@ -171,14 +173,16 @@ export function Sidebar({
     } catch (error) {
       setNotice({ type: 'error', text: `Workspace failed: ${error instanceof Error ? error.message : String(error)}` });
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   }, [creating, onCreateWorkspace, workspaceName, workspaceRoot]);
 
   const handleCreateProject = useCallback(async () => {
-    if (!projectForm || creating) return;
+    if (!projectForm || creating || creatingRef.current) return;
     const name = projectForm.name.trim();
     if (!name) return;
+    creatingRef.current = true;
     setCreating(true);
     setNotice(null);
     try {
@@ -188,6 +192,7 @@ export function Sidebar({
     } catch (error) {
       setNotice({ type: 'error', text: `Project failed: ${error instanceof Error ? error.message : String(error)}` });
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   }, [creating, onCreateProject, projectForm]);

@@ -201,6 +201,22 @@ async function findProjectByNameInRoot(searchProjectsRoot, name) {
   throw new Error(`Project not found by name: ${name}`);
 }
 
+async function countProjectsByNameInRoot(searchProjectsRoot, name) {
+  const entries = await readdir(searchProjectsRoot, { withFileTypes: true }).catch(() => []);
+  let count = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = path.resolve(searchProjectsRoot, entry.name, 'project.circuit.json');
+    try {
+      const project = JSON.parse(await readFile(manifestPath, 'utf8'));
+      if (project.name === name) count += 1;
+    } catch {
+      // Ignore folders that are not circuit projects.
+    }
+  }
+  return count;
+}
+
 async function waitForWorkbenchProject(page, projectId) {
   await page.waitForFunction((id) => {
     const node = document.querySelector('[data-testid="circuit-workbench"]');
@@ -342,7 +358,7 @@ try {
   await page.getByTestId('sidebar-new-workspace').click();
   await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('workspace-name-input').fill(workspaceName);
-  await page.getByTestId('workspace-create-submit').click();
+  await page.getByTestId('workspace-create-submit').dblclick();
   await page.getByTestId('sidebar-notice').getByText(`Workspace created: ${workspaceName}`, { exact: true }).waitFor({ timeout: 20_000 });
   await page.waitForFunction((name) => {
     const select = document.querySelector('[data-testid="workspace-select"]');
@@ -350,6 +366,11 @@ try {
     return [...select.options].some((option) => option.textContent === name) &&
       select.selectedOptions[0]?.textContent === name;
   }, workspaceName);
+  assert.equal(await page.getByTestId('workspace-select').evaluate((select, name) => (
+    select instanceof HTMLSelectElement
+      ? [...select.options].filter((option) => option.textContent === name).length
+      : 0
+  ), workspaceName), 1, 'double-clicking workspace create should create exactly one workspace option');
   createdWorkspaceRoot = String(await page.getByTestId('active-workspace-path').textContent());
   assert.ok(createdWorkspaceRoot.endsWith(workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')));
   const workspaceMarker = JSON.parse(await readFile(path.resolve(createdWorkspaceRoot, '.actoviq-workspace.json'), 'utf8'));
@@ -369,8 +390,13 @@ try {
   await page.getByTestId('create-blank-project').click();
   await page.getByTestId('empty-project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('empty-project-name-input').fill(emptyBlankProjectName);
-  await page.getByTestId('empty-project-name-input').press('Enter');
+  await page.getByTestId('empty-project-create-submit').dblclick();
   await page.getByTestId('circuit-workbench').getByText(emptyBlankProjectName, { exact: true }).waitFor({ timeout: 30_000 });
+  assert.equal(
+    await countProjectsByNameInRoot(path.resolve(createdWorkspaceRoot, 'projects'), emptyBlankProjectName),
+    1,
+    'double-clicking empty-state project create should create exactly one project',
+  );
   const emptyProjectManifest = await findProjectByNameInRoot(path.resolve(createdWorkspaceRoot, 'projects'), emptyBlankProjectName);
   assert.equal(emptyProjectManifest.project.modules.length, 0);
   await waitForWorkbenchProject(page, emptyProjectManifest.project.project_id);
@@ -427,8 +453,13 @@ try {
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByText('Demo project', { exact: true }).waitFor();
   await page.getByTestId('project-name-input').fill(sidebarDemoProjectName);
-  await page.getByTestId('project-create-submit').click();
+  await page.getByTestId('project-create-submit').dblclick();
   await page.getByTestId('sidebar-notice').getByText(`Project created: ${sidebarDemoProjectName}`, { exact: true }).waitFor({ timeout: 60_000 });
+  assert.equal(
+    await countProjectsByNameInRoot(projectsRoot, sidebarDemoProjectName),
+    1,
+    'double-clicking sidebar demo project create should create exactly one project',
+  );
   const sidebarDemoProjectManifest = await findProjectByName(sidebarDemoProjectName);
   await waitForWorkbenchProject(page, sidebarDemoProjectManifest.project.project_id);
   const sidebarDemoProject = page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarDemoProjectName }).first();

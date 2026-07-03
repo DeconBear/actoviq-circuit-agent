@@ -1027,6 +1027,22 @@ try {
     positionsBeforeSpacePan,
     'space-pan should not move any schematic component',
   );
+  const viewportAfterSpacePan = await editorViewport(page);
+  const gridAfterSpacePan = await page.getByTestId('schematic-grid-background').evaluate((node) => ({
+    x: Number(node.getAttribute('x')),
+    y: Number(node.getAttribute('y')),
+    width: Number(node.getAttribute('width')),
+    height: Number(node.getAttribute('height')),
+  }));
+  assert.ok(
+    viewportAfterSpacePan.minX < viewportBeforeSpacePan.minX || viewportAfterSpacePan.minY < viewportBeforeSpacePan.minY ||
+      viewportAfterSpacePan.maxX > viewportBeforeSpacePan.maxX || viewportAfterSpacePan.maxY > viewportBeforeSpacePan.maxY,
+    'space-pan did not move the schematic viewport beyond the fitted document bounds',
+  );
+  assert.equal(gridAfterSpacePan.x, viewportAfterSpacePan.minX, 'infinite grid background x should follow the panned viewport');
+  assert.equal(gridAfterSpacePan.y, viewportAfterSpacePan.minY, 'infinite grid background y should follow the panned viewport');
+  assert.equal(gridAfterSpacePan.width, viewportAfterSpacePan.maxX - viewportAfterSpacePan.minX, 'infinite grid background width should cover the panned viewport');
+  assert.equal(gridAfterSpacePan.height, viewportAfterSpacePan.maxY - viewportAfterSpacePan.minY, 'infinite grid background height should cover the panned viewport');
   const viewportBeforeMiddlePan = await editorViewport(page);
   const positionsBeforeMiddlePan = await componentPositions(page);
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
