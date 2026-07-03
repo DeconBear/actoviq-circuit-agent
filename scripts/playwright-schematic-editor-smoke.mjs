@@ -1530,6 +1530,7 @@ try {
   assert.equal(await componentSelectionFrame.evaluate((node) => node.tagName.toLowerCase()), 'rect', 'component selection should use a frame rectangle');
   assert.equal(await componentSelectionFrame.getAttribute('data-selection-kind'), 'component');
   assert.equal(await componentSelectionFrame.getAttribute('data-selection-shape'), 'frame');
+  assert.equal(await componentSelectionFrame.getAttribute('stroke-dasharray'), '8 6', 'component selection should use a dashed frame');
   const componentSelectionStroke = await componentSelectionFrame.getAttribute('stroke');
   assert.equal(await page.getByTestId('schematic-selected-component-corner').count(), 4, 'component selection should use square corner handles');
   assert.equal(
@@ -1764,6 +1765,8 @@ try {
   assert.equal(await wireSelectionHighlight.evaluate((node) => node.tagName.toLowerCase()), 'polyline', 'wire selection should follow the selected route');
   assert.equal(await wireSelectionHighlight.getAttribute('data-selection-kind'), 'wire');
   assert.equal(await wireSelectionHighlight.getAttribute('data-selection-shape'), 'route');
+  assert.equal(await wireSelectionHighlight.getAttribute('stroke-width'), '11', 'wire selection should use a broad route highlight');
+  assert.equal(await wireSelectionHighlight.getAttribute('stroke-dasharray'), null, 'wire selection should not use the component dashed frame style');
   assert.notEqual(
     await wireSelectionHighlight.getAttribute('stroke'),
     componentSelectionStroke,
