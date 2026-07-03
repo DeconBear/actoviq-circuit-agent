@@ -45,6 +45,22 @@ const differentialPairPorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const basebandPorts: CircuitPort[] = [
+  { id: 'det_out', name: 'DET_OUT', direction: 'input', signal_type: 'analog', net: 'det_out' },
+  { id: 'ref', name: 'VREF', direction: 'input', signal_type: 'analog', net: 'ref' },
+  { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'bb_vdd', name: 'BB_VDD', direction: 'input', signal_type: 'power', net: 'bb_vdd' },
+  { id: 'bb_out', name: 'BB_OUT', direction: 'output', signal_type: 'analog', net: 'bb_out' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
+const windowComparatorPorts: CircuitPort[] = [
+  { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+  { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'output', name: 'OUT_N', direction: 'output', signal_type: 'digital', net: 'out_n' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
 function component(
   id: string,
   type: CircuitComponent['type'],
@@ -212,6 +228,36 @@ const fixtures: CircuitModule[] = [
     component('rload', 'R', '330', 860, 420, [['a', '1', 'vout'], ['b', '2', '0']]),
     component('cout', 'C', '1u', 990, 420, [['a', '1', 'vout'], ['b', '2', '0']]),
   ], ldoPorts),
+  moduleFixture('baseband_conditioning', [
+    component('rdec', 'R', '10', 70, 60, [['a', '1', 'vdd'], ['b', '2', 'bb_vdd']]),
+    component('cdec', 'C', '100n', 120, 320, [['a', '1', 'bb_vdd'], ['b', '2', '0']]),
+    component('rin', 'R', '10k', 90, 210, [['a', '1', 'det_out'], ['b', '2', 'base']]),
+    component('rbias1', 'R', '100k', 210, 300, [['a', '1', 'bb_vdd'], ['b', '2', 'base']]),
+    component('q2', 'Q', 'QNPN', 250, 140, [['c', 'C', 'n1'], ['b', 'B', 'base'], ['e', 'E', 'tail']]),
+    component('q3', 'Q', 'QNPN', 350, 140, [['c', 'C', 'fb'], ['b', 'B', 'ref'], ['e', 'E', 'tail']]),
+    component('re_tail', 'R', '1k', 290, 260, [['a', '1', 'tail'], ['b', '2', '0']]),
+    component('rf', 'R', '100k', 380, 70, [['a', '1', 'fb'], ['b', '2', 'bb_out']]),
+    component('rg', 'R', '10k', 390, 310, [['a', '1', 'fb'], ['b', '2', '0']]),
+    component('rsk1', 'R', '10k', 470, 210, [['a', '1', 'n1'], ['b', '2', 'n2']]),
+    component('csk1', 'C', '1n', 520, 320, [['a', '1', 'n2'], ['b', '2', '0']]),
+    component('rsk2', 'R', '10k', 590, 210, [['a', '1', 'n2'], ['b', '2', 'bb_drive']]),
+    component('csk2', 'C', '1n', 640, 320, [['a', '1', 'bb_drive'], ['b', '2', '0']]),
+    component('q4', 'Q', 'QNPN', 710, 160, [['c', 'C', 'bb_out'], ['b', 'B', 'bb_drive'], ['e', 'E', '0']]),
+    component('rload_bb', 'R', '10k', 790, 310, [['a', '1', 'bb_vdd'], ['b', '2', 'bb_out']]),
+  ], basebandPorts),
+  moduleFixture('window_comparator', [
+    component('rdiv1', 'R', '100k', 170, 60, [['a', '1', 'vdd'], ['b', '2', 'vh']]),
+    component('rdiv2', 'R', '100k', 170, 140, [['a', '1', 'vh'], ['b', '2', 'vl']]),
+    component('rdiv3', 'R', '100k', 170, 320, [['a', '1', 'vl'], ['b', '2', '0']]),
+    component('q5', 'Q', 'QNPN', 310, 180, [['c', 'C', 'out_hi'], ['b', 'B', 'in'], ['e', 'E', 'tail_hi']]),
+    component('r1', 'R', '10k', 310, 60, [['a', '1', 'vdd'], ['b', '2', 'out_hi']]),
+    component('rref1', 'R', '2k', 310, 320, [['a', '1', 'tail_hi'], ['b', '2', '0']]),
+    component('q6', 'Q', 'QNPN', 480, 180, [['c', 'C', 'out_lo'], ['b', 'B', 'vl'], ['e', 'E', 'tail_lo']]),
+    component('r2', 'R', '10k', 480, 60, [['a', '1', 'vdd'], ['b', '2', 'out_lo']]),
+    component('d2', 'D', 'DFAST', 620, 170, [['a', 'A', 'out_hi'], ['b', 'K', 'out_n']]),
+    component('d3', 'D', 'DFAST', 620, 230, [['a', 'A', 'out_lo'], ['b', 'K', 'out_n']]),
+    component('rpull', 'R', '10k', 710, 60, [['a', '1', 'vdd'], ['b', '2', 'out_n']]),
+  ], windowComparatorPorts),
   moduleFixture('current_mirror', [
     component('m_ref', 'M', 'NMOS W=20u L=1u', 170, 180, [
       ['d', 'D', 'bias'],
