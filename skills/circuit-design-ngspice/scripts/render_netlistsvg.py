@@ -820,9 +820,9 @@ def placement_for_rf_mixed_component(component: dict[str, object], input_node: s
     if comp_type in {"mosfet", "bjt"}:
         return 340.0, 200.0
     if name.startswith(("rg_top", "rgtop", "rb_top")) or (has_any_node(component, "vgate", "vbias") and has_power):
-        return 70.0, 96.0
+        return 245.0, 96.0
     if name.startswith(("rg_bot", "rgbot", "rb_bot")) or (has_any_node(component, "vgate", "vbias") and has_ground):
-        return 70.0, 324.0
+        return 245.0, 324.0
     if name.startswith(("rgate", "riso", "rg_stop")):
         return 270.0, 170.0
     if name.startswith(("rs", "re")) and has_ground:
@@ -847,6 +847,10 @@ def placement_for_rf_mixed_component(component: dict[str, object], input_node: s
         return 930.0, 56.0
     if name.startswith(("rth2", "rref_bot")) or (has_any_node(component, "vth", "ref") and has_ground):
         return 930.0, 156.0
+    if name.startswith(("rpu", "rpull")) or (comp_type == "resistor" and has_node(component, output_node) and has_power):
+        return 1088.0, 180.0
+    if name.startswith(("cout", "cload")) or (comp_type == "capacitor" and has_node(component, output_node) and has_ground):
+        return 1110.0, 230.0
     if hint == "comparator":
         return 980.0, 210.0
     if has_node(component, output_node):
@@ -2282,16 +2286,18 @@ def add_rf_mixed_custom_net(
         return line_count
 
     if lower in {"vgate", "vbias"}:
-        # Keep the RF gate-bias ladder on a side bus so it does not cut through
-        # the input matching network or the gate signal path.
-        bus_x = max(12.0, min(point[0] for point in raw_points) - 60.0)
-        ys = sorted(set(point[1] for point in raw_points))
-        for point in raw_points:
-            bus_point = (bus_x, point[1])
-            line_count += append_counted_net_line(root, net_class, point, bus_point)
-            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
-        for start_y, end_y in zip(ys, ys[1:]):
-            line_count += append_counted_net_line(root, net_class, (bus_x, start_y), (bus_x, end_y))
+        # Bias rails often cross RF signal lanes if drawn as a physical bus.
+        # Use explicit same-net labels, which is the conventional compact
+        # representation for this kind of DC bias distribution.
+        for point in sorted(raw_points):
+            if 155.0 <= point[1] <= 205.0 and point[0] > 260.0:
+                end = (point[0] - 28.0, point[1])
+                label_x = end[0] - 38.0
+            else:
+                end = (point[0] + 28.0, point[1])
+                label_x = end[0] + 4.0
+            line_count += append_counted_net_line(root, net_class, point, end)
+            append_net_label(root, net_class, node, label_x, end[1] - 4.0)
         return line_count
 
     if lower in {"vth", "ref"} and len(raw_points) >= 3:
@@ -2330,6 +2336,11 @@ def add_rf_mixed_custom_net(
         # the comparator input. The shunt capacitor is only a vertical tap.
         signal_candidates = [point[1] for point in raw_points if point[1] < 300.0]
         signal_y = max(signal_candidates) if signal_candidates else min(point[1] for point in raw_points)
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, signal_y)
+
+    if lower.endswith("_n") and len(raw_points) >= 2:
+        output_candidates = [point[1] for point in raw_points if 180.0 <= point[1] <= 260.0]
+        signal_y = max(output_candidates) if output_candidates else snap(sum(point[1] for point in raw_points) / len(raw_points))
         return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, signal_y)
 
     return None
