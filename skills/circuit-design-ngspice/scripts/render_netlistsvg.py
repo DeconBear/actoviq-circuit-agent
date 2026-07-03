@@ -1464,7 +1464,7 @@ def apply_buck_converter_placements(root: ET.Element, payload: dict[str, object]
                 place_component_node_pin(groups, pin_nodes_by_cell, name, nonrails[0], (470.0, 200.0))
 
     if "IN" in groups:
-        set_group_anchor(groups["IN"], (80.0, 150.0))
+        set_group_anchor(groups["IN"], (80.0, 100.0))
     if "OUT" in groups:
         set_group_anchor(groups["OUT"], (580.0, 200.0))
     set_terminal_group_anchor(groups, ("GATE", "VGATE"), (92.0, 175.0))
@@ -2379,7 +2379,7 @@ def add_buck_custom_net(
     if rail_symbol_for_format(lower) == "gnd":
         return add_side_ground_symbols_net(root, net_class, raw_points)
     if lower in {input_node.lower(), "vin"}:
-        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 150.0)
+        return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 100.0)
     if lower in {"gate", "vgate"}:
         return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, 175.0)
     if lower in {output_node.lower(), "out", "vout", "sw"}:

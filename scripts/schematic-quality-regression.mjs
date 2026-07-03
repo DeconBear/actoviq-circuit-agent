@@ -274,6 +274,32 @@ const fixtures = [
       OUT: { x: 545, y: 170 },
     },
   },
+  {
+    id: 'buck-converter',
+    inputNode: 'vin',
+    outputNode: 'vout',
+    netlist: [
+      '* Buck converter fixture',
+      '.model PMOS1 PMOS (LEVEL=1 VTO=-0.8 KP=60u)',
+      '.model DFAST D(IS=1n RS=0.1 TT=10n)',
+      'Vin vin 0 DC 12',
+      'Vgate gate 0 PULSE(12 0 0 20n 20n 5u 10u)',
+      'Msw sw gate vin vin PMOS1 W=200u L=1u',
+      'Dfree 0 sw DFAST',
+      'L1 sw vout 22u',
+      'Cout vout 0 47u',
+      'Rload vout 0 10',
+      '.end',
+    ],
+    overrides: {
+      Msw: { x: 150, y: 100 },
+      Dfree: { x: 225, y: 150 },
+      L1: { x: 300, y: 195 },
+      Cout: { x: 395, y: 200 },
+      Rload: { x: 465, y: 200 },
+      OUT: { x: 505, y: 190 },
+    },
+  },
 ];
 
 function runJson(command, args) {
