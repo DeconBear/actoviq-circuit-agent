@@ -967,6 +967,220 @@ def placement_for_single_stage_component(component: dict[str, object], input_nod
     return placement_for_lna_component(component, input_node, output_node)
 
 
+def component_model_text(component: dict[str, object]) -> str:
+    values = [
+        component.get("model"),
+        component.get("value"),
+        component.get("value_spice"),
+        component.get("raw"),
+    ]
+    return " ".join(str(value or "") for value in values).lower()
+
+
+def is_pmos_component(component: dict[str, object]) -> bool:
+    text = component_model_text(component)
+    return "pmos" in text or "p_mos" in text
+
+
+def is_nmos_component(component: dict[str, object]) -> bool:
+    text = component_model_text(component)
+    return "nmos" in text or "n_mos" in text or (component_type(component) == "mosfet" and not is_pmos_component(component))
+
+
+def apply_cmos_inverter_placements(
+    groups: dict[str, ET.Element],
+    pin_nodes_by_cell: dict[str, dict[str, str]],
+    components: dict[str, dict[str, object]],
+    input_node: str,
+    output_node: str,
+) -> bool:
+    mosfets = [(name, comp) for name, comp in components.items() if component_type(comp) == "mosfet"]
+    if len(mosfets) != 2 or not input_node or not output_node:
+        return False
+    pmos = next(((name, comp) for name, comp in mosfets if is_pmos_component(comp)), None)
+    nmos = next(((name, comp) for name, comp in mosfets if is_nmos_component(comp)), None)
+    if pmos is None or nmos is None:
+        return False
+    if not all(has_node(comp, input_node) and has_node(comp, output_node) for _, comp in mosfets):
+        return False
+
+    updated = False
+    updated = place_component_node_pin(groups, pin_nodes_by_cell, pmos[0], output_node, (340.0, 150.0)) or updated
+    updated = place_component_node_pin(groups, pin_nodes_by_cell, nmos[0], output_node, (340.0, 300.0)) or updated
+    for name, comp in components.items():
+        if component_type(comp) == "capacitor" and has_node(comp, output_node):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, output_node, (510.0, 300.0)) or updated
+    if "IN" in groups:
+        set_group_anchor(groups["IN"], (110.0, 240.0))
+        updated = True
+    if "OUT" in groups:
+        set_group_anchor(groups["OUT"], (640.0, 225.0))
+        updated = True
+    for name, group in groups.items():
+        if name.startswith("vcc_"):
+            set_group_anchor(group, (340.0, 82.0))
+            updated = True
+        elif name.startswith("gnd_"):
+            set_group_anchor(group, (340.0, 384.0))
+            updated = True
+    return updated
+
+
+def apply_mos_differential_pair_placements(
+    groups: dict[str, ET.Element],
+    pin_nodes_by_cell: dict[str, dict[str, str]],
+    components: dict[str, dict[str, object]],
+) -> bool:
+    mosfets = [(name, comp) for name, comp in components.items() if component_type(comp) == "mosfet"]
+    nodes = {node.lower() for comp in components.values() for node in component_nodes(comp)}
+    if len(mosfets) < 2 or not {"inp", "inn", "tail"} <= nodes:
+        return False
+    left = next(((name, comp) for name, comp in mosfets if has_node(comp, "inp")), None)
+    right = next(((name, comp) for name, comp in mosfets if has_node(comp, "inn")), None)
+    if left is None or right is None:
+        return False
+
+    updated = False
+    updated = place_component_node_pin(groups, pin_nodes_by_cell, left[0], "tail", (260.0, 340.0)) or updated
+    updated = place_component_node_pin(groups, pin_nodes_by_cell, right[0], "tail", (460.0, 340.0)) or updated
+    for name, comp in components.items():
+        lower = name.lower()
+        if component_type(comp) == "resistor" and has_node(comp, "outp"):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, "outp", (260.0, 135.0)) or updated
+        elif component_type(comp) == "resistor" and has_node(comp, "outn"):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, "outn", (460.0, 135.0)) or updated
+        elif component_type(comp) == "current_source" or lower.startswith(("itail", "i_tail")):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, "tail", (360.0, 430.0)) or updated
+    if "IN" in groups:
+        set_group_anchor(groups["IN"], (80.0, 265.0))
+        updated = True
+    if "OUT" in groups:
+        set_group_anchor(groups["OUT"], (640.0, 170.0))
+        updated = True
+    set_terminal_group_anchor(groups, ("ITAIL", "TAIL"), (360.0, 430.0))
+    for name, group in groups.items():
+        if name.startswith("vcc_"):
+            set_group_anchor(group, (360.0, 55.0))
+            updated = True
+        elif name.startswith("gnd_"):
+            set_group_anchor(group, (360.0, 510.0))
+            updated = True
+    return updated
+
+
+def apply_mos_common_source_placements(
+    groups: dict[str, ET.Element],
+    pin_nodes_by_cell: dict[str, dict[str, str]],
+    components: dict[str, dict[str, object]],
+    input_node: str,
+    output_node: str,
+) -> bool:
+    mosfets = [(name, comp) for name, comp in components.items() if component_type(comp) == "mosfet"]
+    if len(mosfets) != 1:
+        return False
+    transistor_name, transistor = mosfets[0]
+    nodes = component_nodes(transistor)
+    if len(nodes) < 3:
+        return False
+    drain, gate, source = nodes[:3]
+
+    updated = False
+    updated = place_component_node_pin(groups, pin_nodes_by_cell, transistor_name, drain, (320.0, 185.0)) or updated
+    for name, comp in components.items():
+        ctype = component_type(comp)
+        lower = name.lower()
+        if name == transistor_name:
+            continue
+        if ctype == "resistor" and has_node(comp, gate):
+            if any(rail_symbol_for_format(node) == "vcc" for node in component_nodes(comp)):
+                updated = place_component_node_pin(groups, pin_nodes_by_cell, name, gate, (220.0, 140.0)) or updated
+            elif any(rail_symbol_for_format(node) == "gnd" for node in component_nodes(comp)):
+                updated = place_component_node_pin(groups, pin_nodes_by_cell, name, gate, (220.0, 305.0)) or updated
+            else:
+                updated = place_component_node_pin(groups, pin_nodes_by_cell, name, gate, (205.0, 210.0)) or updated
+        elif ctype == "resistor" and has_node(comp, drain):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, drain, (320.0, 135.0)) or updated
+        elif ctype == "resistor" and has_node(comp, source):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, source, (350.0, 315.0)) or updated
+        elif ctype == "capacitor" and has_node(comp, source):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, source, (430.0, 315.0)) or updated
+        elif ctype == "capacitor" and has_node(comp, drain):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, drain, (470.0, 210.0)) or updated
+        elif lower.startswith(("rload", "rl")) or (output_node and has_node(comp, output_node)):
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, output_node, (610.0, 315.0)) or updated
+    if "IN" in groups:
+        set_group_anchor(groups["IN"], (80.0, 210.0))
+        updated = True
+    if "OUT" in groups:
+        set_group_anchor(groups["OUT"], (690.0, 210.0))
+        updated = True
+    for name, group in groups.items():
+        if name.startswith("vcc_"):
+            set_group_anchor(group, (320.0, 60.0))
+            updated = True
+        elif name.startswith("gnd_"):
+            if name == "gnd_0":
+                set_group_anchor(group, (430.0, 300.0))
+            else:
+                set_group_anchor(group, (360.0, 405.0))
+            updated = True
+    return updated
+
+
+def apply_bjt_reset_handshake_placements(
+    groups: dict[str, ET.Element],
+    pin_nodes_by_cell: dict[str, dict[str, str]],
+    components: dict[str, dict[str, object]],
+) -> bool:
+    nodes = {node.lower() for comp in components.values() for node in component_nodes(comp)}
+    if not {"rst", "dtr", "rts", "boot0"} <= nodes:
+        return False
+    updated = False
+    placements = {
+        "Q_BOOT": ("boot_node", (173.0, 282.0)),
+        "Q_RST": ("rst_pull", (452.0, 165.0)),
+        "D1": ("rst_pull", (325.0, 175.0)),
+        "R50": ("rst_pull", (435.0, 105.0)),
+        "R51": ("dtr_drive", (400.0, 170.0)),
+        "R49": ("rts_drive", (285.0, 325.0)),
+        "R52": ("boot_node", (205.0, 282.0)),
+    }
+    for name, (node, point) in placements.items():
+        if name in components:
+            updated = place_component_node_pin(groups, pin_nodes_by_cell, name, node, point) or updated
+    terminal_anchors = {
+        "RST": (245.0, 175.0),
+        "DTR": (330.0, 140.0),
+        "RTS": (720.0, 330.0),
+        "BOOT0": (280.0, 287.0),
+    }
+    for name, point in terminal_anchors.items():
+        group = groups.get(name)
+        if group is not None:
+            set_group_anchor(group, point)
+            updated = True
+    for name, group in groups.items():
+        if name.startswith("vcc_"):
+            target = (435.0, 25.0) if "local" in name else (172.0, 220.0)
+            set_group_anchor(group, target)
+            updated = True
+    return updated
+
+
+def apply_single_stage_topology_placements(root: ET.Element, payload: dict[str, object], input_node: str, output_node: str) -> bool:
+    groups = find_cell_groups(root)
+    pin_nodes_by_cell = cell_pin_node_map(payload)
+    components = component_by_name(payload)
+    if not components:
+        return False
+    return (
+        apply_cmos_inverter_placements(groups, pin_nodes_by_cell, components, input_node, output_node)
+        or apply_mos_differential_pair_placements(groups, pin_nodes_by_cell, components)
+        or apply_bjt_reset_handshake_placements(groups, pin_nodes_by_cell, components)
+        or apply_mos_common_source_placements(groups, pin_nodes_by_cell, components, input_node, output_node)
+    )
+
+
 def rail_symbol_for_format(node: str) -> str | None:
     lower = node.strip().lower()
     if lower in {"0", "gnd", "agnd", "dgnd", "pgnd"} or lower.endswith("gnd"):
@@ -1380,6 +1594,9 @@ def apply_lna_placements(root: ET.Element, payload: dict[str, object]) -> None:
     io = payload.get("io_inference", {}) if isinstance(payload.get("io_inference"), dict) else {}
     input_node = str(interfaces.get("input_node") or io.get("input_node") or "")
     output_node = str(interfaces.get("output_node") or io.get("output_node") or "")
+
+    if apply_single_stage_topology_placements(root, payload, input_node, output_node):
+        return
 
     for component in components if isinstance(components, list) else []:
         if not isinstance(component, dict):
@@ -2243,6 +2460,19 @@ def add_linear_chain_custom_net(
         junction_counts[(lower_bus[0], lower_bus[1], net_class)] += 1
         return line_count
 
+    if profile in {"lna_common_emitter", "single_stage_amplifier"} and lower == "source" and len(raw_points) >= 2:
+        bus_x = snap(min(point[0] for point in raw_points) - 12.0)
+        bus_points: list[tuple[float, float]] = []
+        for point in raw_points:
+            bus_point = (bus_x, point[1])
+            line_count += append_counted_net_line(root, net_class, point, bus_point)
+            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            bus_points.append(bus_point)
+        ys = sorted(set(point[1] for point in bus_points))
+        for start_y, end_y in zip(ys, ys[1:]):
+            line_count += append_counted_net_line(root, net_class, (bus_x, start_y), (bus_x, end_y))
+        return line_count
+
     if profile == "signal_chain_comparator" and rail_symbol_for_format(lower) == "gnd":
         bus_y = max(point[1] for point in raw_points)
         detour_x = max(point[0] for point in raw_points) + 145.0
@@ -2634,7 +2864,7 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
             if custom_line_count is not None:
                 line_count += custom_line_count
                 continue
-        if profile == "single_stage_amplifier" and node.lower() in {"outp", "outn", "dtr"}:
+        if profile in {"lna_common_emitter", "single_stage_amplifier"} and node.lower() in {"outp", "outn", "dtr", "source"}:
             custom_line_count = add_linear_chain_custom_net(root, profile, node, net_class, raw_points, junction_counts)
             if custom_line_count is not None:
                 line_count += custom_line_count

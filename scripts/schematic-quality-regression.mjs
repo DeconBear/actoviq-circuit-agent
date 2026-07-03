@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -122,12 +122,12 @@ const fixtures = [
       '.end',
     ],
     overrides: {
-      Rgate: { x: 115, y: 210 },
-      M1: { x: 285, y: 190 },
-      RD: { x: 300, y: 70 },
-      RS: { x: 300, y: 315 },
-      COUT: { x: 445, y: 210 },
-      RLOAD: { x: 585, y: 265 },
+      Rgate: { x: 155, y: 205 },
+      M1: { x: 290, y: 185 },
+      RD: { x: 315, y: 85 },
+      RS: { x: 345, y: 315 },
+      COUT: { x: 420, y: 195 },
+      RLOAD: { x: 605, y: 315 },
     },
   },
   {
@@ -301,6 +301,65 @@ function hardGeometryOk(summary) {
     && summary.wire_body_intrusions === 0;
 }
 
+function assertRenderedQuality(fixture, caseLabel, rendered, geometry) {
+  const summary = geometry.summary ?? {};
+  assert.equal(geometry.ok, true, `${fixture.id} ${caseLabel} geometry failed: ${JSON.stringify(summary)}`);
+  assert.equal(hardGeometryOk(summary), true, `${fixture.id} ${caseLabel} hard geometry issues: ${JSON.stringify(summary)}`);
+  assert.ok((rendered.layout_report?.readability_score ?? 0) >= 85, `${fixture.id} ${caseLabel} readability below 85`);
+  assert.deepEqual(
+    geometry.readability?.issues ?? [],
+    [],
+    `${fixture.id} ${caseLabel} readability issues: ${JSON.stringify(geometry.readability?.issues ?? [])}`,
+  );
+}
+
+async function renderCase({
+  fixture,
+  caseLabel,
+  sourceJsonPath,
+  caseRoot,
+  overridesPath,
+}) {
+  await mkdir(caseRoot, { recursive: true });
+  const jsonPath = path.resolve(caseRoot, 'design.json');
+  const svgPath = path.resolve(caseRoot, 'schematic.svg');
+  await copyFile(sourceJsonPath, jsonPath);
+
+  const args = [
+    renderPath,
+    '--json-path', jsonPath,
+    '--svg-path', svgPath,
+    '--netlistsvg-bin', netlistsvgBin,
+    '--skin-profile', 'analog',
+    '--timeout-sec', '45',
+  ];
+  if (overridesPath) {
+    args.push('--overrides-path', overridesPath);
+  }
+
+  const rendered = runJson(python, args);
+  assert.equal(rendered.ok, true, `${fixture.id} ${caseLabel}`);
+
+  const geometryPath = svgPath.replace(/\.svg$/, '.geometry.json');
+  const layoutPath = svgPath.replace(/\.svg$/, '.layout.json');
+  const geometry = JSON.parse(await readFile(geometryPath, 'utf8'));
+  assertRenderedQuality(fixture, caseLabel, rendered, geometry);
+
+  return {
+    id: fixture.id,
+    case: caseLabel,
+    profile: rendered.planner?.profile ?? rendered.formatted_layout?.profile ?? 'unknown',
+    svgPath,
+    jsonPath,
+    geometryPath,
+    layoutPath,
+    rendered,
+    geometry,
+    geometrySummary: geometry.summary ?? {},
+    readabilityScore: rendered.layout_report?.readability_score ?? null,
+  };
+}
+
 await mkdir(path.dirname(outputRoot), { recursive: true });
 assert.equal(path.dirname(outputRoot), path.resolve(root, 'output'));
 await rm(outputRoot, { recursive: true, force: true });
@@ -312,7 +371,6 @@ for (const fixture of fixtures) {
   await mkdir(fixtureRoot, { recursive: true });
   const netlistPath = path.resolve(fixtureRoot, 'design.cir');
   const jsonPath = path.resolve(fixtureRoot, 'design.json');
-  const svgPath = path.resolve(fixtureRoot, 'schematic.svg');
   const overridesPath = path.resolve(fixtureRoot, 'schematic.overrides.json');
   const manifestPath = path.resolve(fixtureRoot, 'module-manifest.json');
 
@@ -336,42 +394,47 @@ for (const fixture of fixtures) {
   const converted = runJson(python, convertArgs);
   assert.equal(converted.ok, true, fixture.id);
 
-  const rendered = runJson(python, [
-    renderPath,
-    '--json-path', jsonPath,
-    '--svg-path', svgPath,
-    '--netlistsvg-bin', netlistsvgBin,
-    '--skin-profile', 'analog',
-    '--overrides-path', overridesPath,
-    '--timeout-sec', '45',
-  ]);
-  assert.equal(rendered.ok, true, fixture.id);
+  const autoResult = await renderCase({
+    fixture,
+    caseLabel: 'auto',
+    sourceJsonPath: jsonPath,
+    caseRoot: path.resolve(fixtureRoot, 'auto'),
+  });
+  const adjustedResult = await renderCase({
+    fixture,
+    caseLabel: 'adjusted',
+    sourceJsonPath: jsonPath,
+    caseRoot: path.resolve(fixtureRoot, 'adjusted'),
+    overridesPath,
+  });
 
-  const geometryPath = svgPath.replace(/\.svg$/, '.geometry.json');
-  const layoutPath = svgPath.replace(/\.svg$/, '.layout.json');
-  const geometry = JSON.parse(await readFile(geometryPath, 'utf8'));
-  const moved = rendered.formatted_layout?.schematic_overrides?.moved ?? [];
-  const skipped = rendered.formatted_layout?.schematic_overrides?.skipped ?? [];
+  const moved = adjustedResult.rendered.formatted_layout?.schematic_overrides?.moved ?? [];
+  const skipped = adjustedResult.rendered.formatted_layout?.schematic_overrides?.skipped ?? [];
   const missingMoves = Object.keys(fixture.overrides).filter((id) => !moved.includes(id));
-  const summary = geometry.summary ?? {};
 
   assert.deepEqual(skipped, [], `${fixture.id} skipped schematic overrides`);
   assert.deepEqual(missingMoves, [], `${fixture.id} missing schematic override moves`);
-  assert.equal(geometry.ok, true, `${fixture.id} geometry failed: ${JSON.stringify(summary)}`);
-  assert.equal(hardGeometryOk(summary), true, `${fixture.id} hard geometry issues: ${JSON.stringify(summary)}`);
-  assert.ok((rendered.layout_report?.readability_score ?? 0) >= 85, `${fixture.id} readability below 85`);
-  assert.deepEqual(geometry.readability?.issues ?? [], [], `${fixture.id} readability issues: ${JSON.stringify(geometry.readability?.issues ?? [])}`);
 
   results.push({
     id: fixture.id,
-    profile: rendered.planner?.profile ?? rendered.formatted_layout?.profile ?? 'unknown',
-    svgPath,
-    jsonPath,
-    geometryPath,
-    layoutPath,
+    profile: adjustedResult.profile,
+    auto: {
+      svgPath: autoResult.svgPath,
+      jsonPath: autoResult.jsonPath,
+      geometryPath: autoResult.geometryPath,
+      layoutPath: autoResult.layoutPath,
+      geometry: autoResult.geometrySummary,
+      readabilityScore: autoResult.readabilityScore,
+    },
+    adjusted: {
+      svgPath: adjustedResult.svgPath,
+      jsonPath: adjustedResult.jsonPath,
+      geometryPath: adjustedResult.geometryPath,
+      layoutPath: adjustedResult.layoutPath,
+      geometry: adjustedResult.geometrySummary,
+      readabilityScore: adjustedResult.readabilityScore,
+    },
     overrideMoves: moved,
-    geometry: summary,
-    readabilityScore: rendered.layout_report?.readability_score ?? null,
   });
 }
 
@@ -396,7 +459,8 @@ console.log(JSON.stringify({
   fixtures: results.map((result) => ({
     id: result.id,
     profile: result.profile,
-    readabilityScore: result.readabilityScore,
+    autoReadabilityScore: result.auto.readabilityScore,
+    adjustedReadabilityScore: result.adjusted.readabilityScore,
     overrideMoves: result.overrideMoves.length,
   })),
 }, null, 2));
