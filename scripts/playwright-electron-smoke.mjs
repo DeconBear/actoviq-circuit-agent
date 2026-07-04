@@ -15,6 +15,7 @@ const designMemoryRoot = path.resolve(workspaceRoot, 'references', 'design-memor
 const e2eWorkspacePrefix = 'playwright-workspace-';
 const e2eProjectPrefix = 'playwright-module-hub-';
 const e2eUiProjectPrefix = 'playwright-ui-project-';
+const e2eInlineProjectPrefix = 'playwright-inline-project-';
 const e2eJobPrefix = 'playwright-job-action-';
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
@@ -125,6 +126,7 @@ async function cleanE2eArtifacts() {
     removePrefixedDirectories(workspacesRoot, e2eWorkspacePrefix),
     removePrefixedDirectories(projectsRoot, e2eProjectPrefix),
     removePrefixedDirectories(projectsRoot, e2eUiProjectPrefix),
+    removePrefixedDirectories(projectsRoot, e2eInlineProjectPrefix),
     removePrefixedDirectories(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
     removePrefixedFiles(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
     cleanE2eDesignMemory(),
