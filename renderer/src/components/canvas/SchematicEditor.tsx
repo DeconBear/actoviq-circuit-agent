@@ -842,6 +842,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (key === 'f') {
+      event.preventDefault();
+      fitViewport();
+      return;
+    }
     if (key === 'r' && selectedComponentIds.length > 0) {
       event.preventDefault();
       setTool('select');

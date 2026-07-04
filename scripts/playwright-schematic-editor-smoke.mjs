@@ -1000,6 +1000,14 @@ try {
   await page.waitForFunction(() => (
     Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
   ));
+  await page.keyboard.press('Equal');
+  await page.waitForFunction(() => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') > 1
+  ));
+  await page.keyboard.press('KeyF');
+  await page.waitForFunction(() => (
+    Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
+  ));
   const viewportBeforeSpacePan = await editorViewport(page);
   const positionsBeforeSpacePan = await componentPositions(page);
   await editor.focus();
