@@ -8,9 +8,11 @@ import { _electron as electron } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputRoot = path.resolve(root, 'output', 'playwright');
+const workspacesRoot = path.resolve(root, 'workspace', 'workspaces');
 const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const designMemoryRoot = path.resolve(workspaceRoot, 'references', 'design-memory');
+const e2eWorkspacePrefix = 'playwright-workspace-';
 const e2eProjectPrefix = 'playwright-module-hub-';
 const e2eUiProjectPrefix = 'playwright-ui-project-';
 const e2eJobPrefix = 'playwright-job-action-';
@@ -115,6 +117,17 @@ async function cleanE2eDesignMemory() {
   await Promise.all([
     removePrefixedDirectories(path.resolve(designMemoryRoot, 'templates'), e2eProjectPrefix),
     removePrefixedDirectories(path.resolve(designMemoryRoot, 'flows'), e2eProjectPrefix),
+  ]);
+}
+
+async function cleanE2eArtifacts() {
+  await Promise.all([
+    removePrefixedDirectories(workspacesRoot, e2eWorkspacePrefix),
+    removePrefixedDirectories(projectsRoot, e2eProjectPrefix),
+    removePrefixedDirectories(projectsRoot, e2eUiProjectPrefix),
+    removePrefixedDirectories(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
+    removePrefixedFiles(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
+    cleanE2eDesignMemory(),
   ]);
 }
 
@@ -248,13 +261,7 @@ async function clickApplicationMenuPath(electronApp, labels) {
     selected.click(undefined, BrowserWindow.getAllWindows()[0] ?? undefined, undefined);
   }, labels);
 }
-await Promise.all([
-  removePrefixedDirectories(projectsRoot, e2eProjectPrefix),
-  removePrefixedDirectories(projectsRoot, e2eUiProjectPrefix),
-  removePrefixedDirectories(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
-  removePrefixedFiles(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
-]);
-await cleanE2eDesignMemory();
+await cleanE2eArtifacts();
 const fixtureJob = await createFixtureJob();
 
 const created = runSkill([
@@ -308,6 +315,7 @@ const electronApp = await electron.launch({
 });
 
 let page;
+let testSucceeded = false;
 try {
   page = await electronApp.firstWindow();
   page.setDefaultTimeout(30_000);
@@ -1114,6 +1122,7 @@ try {
       'output/playwright/minimum-window.png',
     ],
   }, null, 2));
+  testSucceeded = true;
 } catch (error) {
   if (page) {
     await page.screenshot({ path: path.resolve(outputRoot, 'failure.png') }).catch(() => {});
@@ -1128,6 +1137,7 @@ try {
   throw error;
 } finally {
   await electronApp.close();
+  if (testSucceeded) await cleanE2eArtifacts();
   if (viteProcess) {
     viteProcess.kill();
   }
