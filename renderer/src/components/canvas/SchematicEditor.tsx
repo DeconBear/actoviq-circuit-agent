@@ -1573,17 +1573,50 @@ function compactEditorRoute(points: CircuitPosition[]): CircuitPosition[] {
     if (previous && previous.x === point.x && previous.y === point.y) continue;
     deduped.push(point);
   }
-  if (deduped.length <= 2) return deduped;
-  return deduped.filter((point, index) => {
-    if (index === 0 || index === deduped.length - 1) return true;
-    const previous = deduped[index - 1];
-    const next = deduped[index + 1];
+  const orthogonal = orthogonalizeEditorRoute(deduped);
+  if (orthogonal.length <= 2) return orthogonal;
+  return orthogonal.filter((point, index) => {
+    if (index === 0 || index === orthogonal.length - 1) return true;
+    const previous = orthogonal[index - 1];
+    const next = orthogonal[index + 1];
     if (!previous || !next) return true;
     return !(
       previous.x === point.x && point.x === next.x ||
       previous.y === point.y && point.y === next.y
     );
   });
+}
+
+function orthogonalizeEditorRoute(points: CircuitPosition[]): CircuitPosition[] {
+  const routed: CircuitPosition[] = [];
+  for (const point of points) {
+    const previous = routed.at(-1);
+    if (!previous) {
+      routed.push(point);
+      continue;
+    }
+    if (previous.x === point.x || previous.y === point.y) {
+      routed.push(point);
+      continue;
+    }
+    const beforePrevious = routed.length > 1 ? routed[routed.length - 2] : undefined;
+    const elbow = chooseEditorRouteElbow(beforePrevious, previous, point);
+    if (elbow.x !== previous.x || elbow.y !== previous.y) routed.push(elbow);
+    routed.push(point);
+  }
+  return routed;
+}
+
+function chooseEditorRouteElbow(
+  beforeStart: CircuitPosition | undefined,
+  start: CircuitPosition,
+  end: CircuitPosition,
+): CircuitPosition {
+  if (beforeStart?.y === start.y) return { x: end.x, y: start.y };
+  if (beforeStart?.x === start.x) return { x: start.x, y: end.y };
+  return Math.abs(end.x - start.x) >= Math.abs(end.y - start.y)
+    ? { x: end.x, y: start.y }
+    : { x: start.x, y: end.y };
 }
 
 function clonePoints(points: CircuitPosition[]): CircuitPosition[] {

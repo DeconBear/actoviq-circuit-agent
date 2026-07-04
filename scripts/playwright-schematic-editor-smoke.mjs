@@ -710,6 +710,20 @@ function assertPositionChanged(actual, expected, label) {
   );
 }
 
+function assertWireOrthogonal(wire, label) {
+  assert.ok(wire, `${label}: wire is missing`);
+  assert.ok(Array.isArray(wire.points) && wire.points.length >= 2, `${label}: wire has too few points`);
+  for (let index = 1; index < wire.points.length; index += 1) {
+    const start = wire.points[index - 1];
+    const end = wire.points[index];
+    assert.ok(start && end, `${label}: segment ${index} is missing endpoints`);
+    assert.ok(
+      Number(start.x) === Number(end.x) || Number(start.y) === Number(end.y),
+      `${label}: segment ${index} is not orthogonal`,
+    );
+  }
+}
+
 async function wireScreenPointAwayFromComponents(page, wireId) {
   return page.getByTestId('schematic-editor-svg').evaluate((svg, id) => {
     if (!(svg instanceof SVGSVGElement)) throw new Error('schematic editor svg is not an SVG element');
@@ -1819,6 +1833,7 @@ try {
   const wiresAfterSegmentDrag = await editorWires(page);
   const wireAfterSegmentDrag = wiresAfterSegmentDrag.find((wire) => wire.id === drawnWire.id);
   assert.ok(wireAfterSegmentDrag, 'dragged wire disappeared before cancel-drag regression');
+  assertWireOrthogonal(wireAfterSegmentDrag, 'stored wire segment drag should keep wire orthogonal');
   const wireCancelDragPoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
   await page.mouse.move(wireCancelDragPoint.x, wireCancelDragPoint.y);
   await page.waitForFunction(() => (
@@ -1919,6 +1934,7 @@ try {
   const wiresAfterPointDrag = await editorWires(page);
   const wireAfterPointDrag = wiresAfterPointDrag.find((wire) => wire.id === drawnWire.id);
   assert.ok(wireAfterPointDrag?.points?.[1], 'wire point drag result is missing an interior point handle');
+  assertWireOrthogonal(wireAfterPointDrag, 'stored wire point drag should keep wire orthogonal');
   const wirePointCancelHandle = await wireHandleScreenPoint(page, drawnWire.id, 1);
   await page.mouse.move(wirePointCancelHandle.x, wirePointCancelHandle.y);
   await page.waitForFunction(() => (
