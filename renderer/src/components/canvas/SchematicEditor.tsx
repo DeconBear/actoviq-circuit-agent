@@ -39,6 +39,9 @@ import {
 type ToolMode = 'select' | 'wire' | 'place';
 type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
+const AUTOPAN_MARGIN_PX = 44;
+const AUTOPAN_STEP_RATIO = 0.055;
+
 interface Props {
   module: CircuitModule;
   busy: boolean;
@@ -291,6 +294,29 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setViewport({ minX, minY, maxX: minX + nextWidth, maxY: minY + nextHeight });
   }
 
+  function autoPanViewport(svg: SVGSVGElement, clientX: number, clientY: number) {
+    const box = svg.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) return;
+    const xDirection = clientX <= box.left + AUTOPAN_MARGIN_PX
+      ? -1
+      : clientX >= box.right - AUTOPAN_MARGIN_PX ? 1 : 0;
+    const yDirection = clientY <= box.top + AUTOPAN_MARGIN_PX
+      ? -1
+      : clientY >= box.bottom - AUTOPAN_MARGIN_PX ? 1 : 0;
+    if (xDirection === 0 && yDirection === 0) return;
+    const current = pendingViewportRef.current ?? activeViewBox;
+    const width = current.maxX - current.minX;
+    const height = current.maxY - current.minY;
+    const dx = xDirection * width * AUTOPAN_STEP_RATIO;
+    const dy = yDirection * height * AUTOPAN_STEP_RATIO;
+    scheduleViewportUpdate({
+      minX: current.minX + dx,
+      minY: current.minY + dy,
+      maxX: current.maxX + dx,
+      maxY: current.maxY + dy,
+    });
+  }
+
   function zoomAtViewCenter(factor: number) {
     const current = activeViewBox;
     zoomAtWorldPoint({
@@ -482,6 +508,10 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (wireDrag && !wireDrag.moved) {
       wireDrag.moved = Math.abs(event.clientX - wireDrag.startClient.x) + Math.abs(event.clientY - wireDrag.startClient.y) > 8;
     }
+    if (wireDrag) {
+      if (wireDrag.moved) autoPanViewport(event.currentTarget, event.clientX, event.clientY);
+      return;
+    }
     const wirePointDrag = wirePointDragRef.current;
     if (wirePointDrag) {
       setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
@@ -495,6 +525,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       wirePointDrag.moved = true;
       scheduleDraftUpdate((current) => applyWirePointDrag(current, wirePointDrag, nextPoints));
       markDirty();
+      autoPanViewport(event.currentTarget, event.clientX, event.clientY);
       return;
     }
     const wireSegmentDrag = wireSegmentDragRef.current;
@@ -522,6 +553,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         return next;
       });
       markDirty();
+      autoPanViewport(event.currentTarget, event.clientX, event.clientY);
       return;
     }
     const marquee = marqueeRef.current;
@@ -532,6 +564,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       }
       setMarqueeBounds(marquee.moved ? normalizedBounds(marquee.startWorld, world) : null);
       setInteractionCursor('default');
+      if (marquee.moved) autoPanViewport(event.currentTarget, event.clientX, event.clientY);
       return;
     }
     const drag = dragRef.current;
@@ -571,6 +604,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return next;
     });
     markDirty();
+    autoPanViewport(event.currentTarget, event.clientX, event.clientY);
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>) {

@@ -1083,6 +1083,47 @@ try {
     Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
   ));
   console.log('[e2e] viewport zoom alt-pan space-pan middle-pan keyboard fit verified');
+  const viewportBeforeAutoPanDrag = await editorViewport(page);
+  const positionsBeforeAutoPanDrag = await componentPositions(page);
+  const autoPanBox = await canvas.boundingBox();
+  assert.ok(autoPanBox);
+  const autoPanStart = await componentScreenPoint(page, 'c_filter');
+  await page.mouse.move(autoPanStart.x, autoPanStart.y);
+  await page.mouse.down();
+  await page.mouse.move(autoPanBox.x + autoPanBox.width - 8, autoPanStart.y, { steps: 18 });
+  await page.waitForFunction(({ before, positionsBefore }) => {
+    const editorNode = document.querySelector('[data-testid="schematic-editor"]');
+    const viewport = JSON.parse(editorNode?.getAttribute('data-viewport') ?? '{}');
+    const positions = JSON.parse(editorNode?.getAttribute('data-component-positions') ?? '{}');
+    return Number(viewport.maxX) > Number(before.maxX) &&
+      Number(positions.r_filter?.x) === Number(positionsBefore.r_filter.x) &&
+      Number(positions.r_filter?.y) === Number(positionsBefore.r_filter.y) &&
+      (
+        Number(positions.c_filter?.x) !== Number(positionsBefore.c_filter.x) ||
+        Number(positions.c_filter?.y) !== Number(positionsBefore.c_filter.y)
+      );
+  }, { before: viewportBeforeAutoPanDrag, positionsBefore: positionsBeforeAutoPanDrag });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction((positionsBefore) => {
+    const editorNode = document.querySelector('[data-testid="schematic-editor"]');
+    const positions = JSON.parse(editorNode?.getAttribute('data-component-positions') ?? '{}');
+    return editorNode?.getAttribute('data-selected') === '' &&
+      Object.entries(positionsBefore).every(([id, point]) => (
+        Number(positions[id]?.x) === Number(point.x) &&
+        Number(positions[id]?.y) === Number(point.y)
+      ));
+  }, positionsBeforeAutoPanDrag);
+  assert.deepEqual(
+    await componentPositions(page),
+    positionsBeforeAutoPanDrag,
+    'Escape-canceling an edge auto-pan component drag should restore schematic components',
+  );
+  await page.getByTestId('schematic-editor-fit').click();
+  await page.waitForFunction(() => (
+    Math.abs(Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-zoom') ?? '0') - 1) < 0.01
+  ));
+  console.log('[e2e] edge auto-pan drag verified');
   const initialWireCount = Number(await editor.getAttribute('data-wire-count'));
   const filterPositionsInitial = await componentPositions(page);
   const filterViewBoxInitial = await editorViewBox(page);
