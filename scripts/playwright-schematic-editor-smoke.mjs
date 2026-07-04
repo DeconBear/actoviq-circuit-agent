@@ -529,6 +529,14 @@ async function editorWires(page) {
   return JSON.parse(raw || '[]');
 }
 
+async function waitForEditorIdle(page) {
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return node?.getAttribute('data-busy') === 'false' &&
+      node?.getAttribute('data-preview-busy') === 'false';
+  });
+}
+
 async function focusEditorByClickingCanvas(page) {
   const box = await page.getByTestId('schematic-editor-svg').boundingBox();
   assert.ok(box, 'schematic editor canvas has no bounding box');
@@ -2011,6 +2019,7 @@ try {
     assert.ok(ldoPositions.cout.x >= ldoPositions.mp.x, 'LDO output capacitor should be placed on the output side');
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
+  await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
   console.log('[e2e] legacy ldo loaded');
   await page.waitForFunction(() => (
@@ -2116,6 +2125,7 @@ try {
     'BJT reset RTS resistor should bridge the two transistor stages in GUI',
   );
   assert.ok(bjtResetPositions.r52.y > bjtResetPositions.q_boot.y, 'BJT reset BOOT resistor should sit below boot transistor in GUI');
+  await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-bjt-reset.png') });
   console.log('[e2e] legacy bjt reset loaded');
 
@@ -2154,6 +2164,7 @@ try {
     0,
     'voltage divider ground rail should render as a local label instead of a duplicate floating port',
   );
+  await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-voltage-divider.png') });
   console.log('[e2e] legacy voltage divider loaded');
 
@@ -2194,6 +2205,7 @@ try {
     'right',
     'MOS amplifier output should render on the right edge',
   );
+  await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier.png') });
   console.log('[e2e] legacy mos amplifier loaded');
   await focusEditorByClickingCanvas(page);
@@ -2272,6 +2284,7 @@ try {
     'right',
     'CMOS inverter output should render on the right edge',
   );
+  await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-inverter.png') });
   console.log('[e2e] legacy cmos inverter loaded');
 
@@ -2336,6 +2349,7 @@ try {
     differentialOutputPorts.centerGapY >= schematicGrid * 2,
     'differential pair output ports should be visibly separated on the right edge',
   );
+  await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-differential-pair.png') });
   console.log('[e2e] legacy differential pair loaded');
 
