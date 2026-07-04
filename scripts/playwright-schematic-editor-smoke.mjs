@@ -2022,6 +2022,45 @@ try {
   await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
   console.log('[e2e] legacy ldo loaded');
+  await focusEditorByClickingCanvas(page);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  await page.waitForFunction(() => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') ?? '0') >= 12
+  ));
+  const mpBodyPoint = await componentScreenPoint(page, 'mp');
+  await page.mouse.move(mpBodyPoint.x, mpBodyPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(mpBodyPoint.x - 90, mpBodyPoint.y - 45, { steps: 10 });
+  await page.waitForFunction((previous) => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    const raw = node?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    const unchangedIds = ['m1', 'm2', 'm3', 'm4', 'rtop', 'rbot', 'rload', 'cout', 'vin', 'vref', 'itail'];
+    return node?.getAttribute('data-selected') === 'component:mp' &&
+      (Number(positions.mp?.x) !== Number(previous.mp.x) || Number(positions.mp?.y) !== Number(previous.mp.y)) &&
+      unchangedIds.every((id) => (
+        Number(positions[id]?.x) === Number(previous[id]?.x) &&
+        Number(positions[id]?.y) === Number(previous[id]?.y)
+      ));
+  }, ldoPositions);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    const raw = node?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return node?.getAttribute('data-selected') === '' &&
+      Object.entries(previous).every(([id, point]) => (
+        Number(positions[id]?.x) === Number(point.x) &&
+        Number(positions[id]?.y) === Number(point.y)
+      ));
+  }, ldoPositions);
+  assert.deepEqual(
+    await componentPositions(page),
+    ldoPositions,
+    'cancelled direct body drag from a full LDO selection should restore schematic components',
+  );
+  console.log('[e2e] legacy ldo direct body drag isolated');
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false' &&
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'

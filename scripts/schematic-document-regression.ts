@@ -484,6 +484,9 @@ function assertReadableLayout(module: CircuitModule) {
     assert.ok(topDivider.position.x > pass.position.x, 'LDO feedback divider should sit on the output side');
     assert.ok(outputLoad.position.x > pass.position.x, 'LDO output load should sit on the output side');
     assert.ok(outputCap.position.x > pass.position.x, 'LDO output capacitor should sit on the output side');
+    assert.ok(outputCap.position.x - mustComponent(module, 'vin').position.x <= 1180, 'LDO layout should remain compact enough for fit-view readability');
+    assert.ok(pass.position.x - rightInput.position.x <= 280, 'LDO pass MOSFET should stay near the error amplifier output');
+    assert.ok(outputCap.position.x - pass.position.x <= 520, 'LDO output network should stay near the pass MOSFET');
     assert.ok(Math.abs(topDivider.position.x - bottomDivider.position.x) <= 1, 'LDO feedback divider resistors should align vertically');
     assert.ok(topDivider.position.y < bottomDivider.position.y, 'LDO top feedback resistor should sit above bottom feedback resistor');
     assertPinAbove(topDivider, 'vout', 'fb', module.module_id);
