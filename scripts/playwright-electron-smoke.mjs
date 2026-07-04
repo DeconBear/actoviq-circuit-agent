@@ -319,13 +319,16 @@ try {
 
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 20_000 });
   assert.equal(await page.getByTestId('sidebar-refresh-jobs').getAttribute('aria-label'), 'Refresh jobs and projects');
+  assert.equal((await page.getByTestId('sidebar-refresh-jobs').textContent())?.trim(), 'Refresh');
   assert.equal(await page.getByTestId('sidebar-collapse').getAttribute('aria-label'), 'Collapse sidebar');
+  assert.equal((await page.getByTestId('sidebar-collapse').textContent())?.trim(), '<');
   assert.equal(await page.getByTestId('topbar-settings').getAttribute('aria-label'), 'Settings');
   assert.equal((await page.getByTestId('topbar-settings').textContent())?.trim(), 'Settings');
   await page.getByTestId('sidebar-refresh-jobs').click();
   await page.getByTestId('sidebar-collapse').click();
   await page.getByTestId('sidebar-expand').waitFor({ timeout: 10_000 });
   assert.equal(await page.getByTestId('sidebar-expand').getAttribute('aria-label'), 'Expand sidebar');
+  assert.equal((await page.getByTestId('sidebar-expand').textContent())?.trim(), '>');
   await page.getByTestId('sidebar-expand').click();
   await page.getByTestId('sidebar-new-workspace').waitFor({ timeout: 10_000 });
   await clickApplicationMenuPath(electronApp, ['File', 'Settings']);

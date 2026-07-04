@@ -234,7 +234,7 @@ export function Sidebar({
           aria-label="Expand sidebar"
           data-testid="sidebar-expand"
         >
-          →
+          &gt;
         </button>
       </div>
     );
@@ -252,7 +252,7 @@ export function Sidebar({
             aria-label="Refresh jobs and projects"
             data-testid="sidebar-refresh-jobs"
           >
-            ↻
+            Refresh
           </button>
           <button
             onClick={onToggle}
@@ -261,7 +261,7 @@ export function Sidebar({
             aria-label="Collapse sidebar"
             data-testid="sidebar-collapse"
           >
-            ←
+            &lt;
           </button>
         </div>
       </div>
@@ -640,20 +640,22 @@ const styles: Record<string, React.CSSProperties> = {
     wordBreak: 'break-all',
   },
   refreshBtn: {
-    background: 'transparent',
-    border: 'none',
+    background: '#ffffff',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
     color: '#69727d',
     cursor: 'pointer',
-    fontSize: 14,
-    padding: '2px 6px',
+    fontSize: 11,
+    padding: '3px 6px',
   },
   toggleBtn: {
-    background: 'transparent',
-    border: 'none',
+    background: '#ffffff',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
     color: '#69727d',
     cursor: 'pointer',
-    fontSize: 14,
-    padding: '2px 6px',
+    fontSize: 11,
+    padding: '3px 6px',
   },
   projectActions: { display: 'grid', gridTemplateColumns: '1fr 62px', gap: 6, margin: '10px 12px' },
   newBtn: {
