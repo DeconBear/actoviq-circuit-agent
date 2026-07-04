@@ -2160,10 +2160,10 @@ function ModuleSchematic({
             Reset all
           </button>
           <div style={styles.layoutNudgeGroup} data-testid="schematic-nudge-controls">
-            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(0, -10)} disabled={busy || !selectedItem} title="Nudge up" data-testid="schematic-nudge-up">↑</button>
-            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(-10, 0)} disabled={busy || !selectedItem} title="Nudge left" data-testid="schematic-nudge-left">←</button>
-            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(10, 0)} disabled={busy || !selectedItem} title="Nudge right" data-testid="schematic-nudge-right">→</button>
-            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(0, 10)} disabled={busy || !selectedItem} title="Nudge down" data-testid="schematic-nudge-down">↓</button>
+            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(0, -10)} disabled={busy || !selectedItem} title="Nudge up" data-testid="schematic-nudge-up">Up</button>
+            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(-10, 0)} disabled={busy || !selectedItem} title="Nudge left" data-testid="schematic-nudge-left">Left</button>
+            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(10, 0)} disabled={busy || !selectedItem} title="Nudge right" data-testid="schematic-nudge-right">Right</button>
+            <button style={styles.nudgeButton} onClick={() => void moveSelectedItem(0, 10)} disabled={busy || !selectedItem} title="Nudge down" data-testid="schematic-nudge-down">Down</button>
           </div>
           <span style={styles.layoutSelectedText} data-testid="schematic-selected-item">
             {selectedItem ? `${selectedItem}${selectedOverride ? ` @ ${selectedOverride.x}, ${selectedOverride.y}` : ''}` : 'Select a symbol'}

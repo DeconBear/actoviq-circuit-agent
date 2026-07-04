@@ -126,6 +126,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const panRef = useRef<PanState | null>(null);
   const draftUpdateFrameRef = useRef<number | null>(null);
   const pendingDraftUpdateRef = useRef<DraftUpdate | null>(null);
+  const viewportUpdateFrameRef = useRef<number | null>(null);
+  const pendingViewportRef = useRef<SchematicBounds | null>(null);
 
   const document = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
   const activeViewBox = viewport ?? document.viewBox;
@@ -149,6 +151,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   })();
 
   useEffect(() => {
+    cancelPendingViewportUpdate();
     setDraft(createSchematicDocument(module).module);
     setDirty(false);
     setSelection(null);
@@ -199,11 +202,43 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
   }
 
+  function scheduleViewportUpdate(next: SchematicBounds) {
+    pendingViewportRef.current = next;
+    if (viewportUpdateFrameRef.current !== null) return;
+    viewportUpdateFrameRef.current = window.requestAnimationFrame(() => {
+      viewportUpdateFrameRef.current = null;
+      const pending = pendingViewportRef.current;
+      pendingViewportRef.current = null;
+      if (pending) setViewport(pending);
+    });
+  }
+
+  function flushPendingViewportUpdate() {
+    const pending = pendingViewportRef.current;
+    pendingViewportRef.current = null;
+    if (viewportUpdateFrameRef.current !== null) {
+      window.cancelAnimationFrame(viewportUpdateFrameRef.current);
+      viewportUpdateFrameRef.current = null;
+    }
+    if (pending) setViewport(pending);
+  }
+
+  function cancelPendingViewportUpdate() {
+    pendingViewportRef.current = null;
+    if (viewportUpdateFrameRef.current !== null) {
+      window.cancelAnimationFrame(viewportUpdateFrameRef.current);
+      viewportUpdateFrameRef.current = null;
+    }
+  }
+
   function markDirty() {
     setDirty((current) => (current ? current : true));
   }
 
-  useEffect(() => () => cancelPendingDraftUpdate(), []);
+  useEffect(() => () => {
+    cancelPendingDraftUpdate();
+    cancelPendingViewportUpdate();
+  }, []);
 
   function clientToWorld(svg: SVGSVGElement, clientX: number, clientY: number): CircuitPosition {
     svgRef.current = svg;
@@ -265,6 +300,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   }
 
   function fitViewport() {
+    cancelPendingViewportUpdate();
     panRef.current = null;
     setViewport(null);
     setInteractionCursor('default');
@@ -425,7 +461,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       const height = pan.originalViewBox.maxY - pan.originalViewBox.minY;
       const dx = (event.clientX - pan.startClient.x) * (width / Math.max(1, svgBox.width));
       const dy = (event.clientY - pan.startClient.y) * (height / Math.max(1, svgBox.height));
-      setViewport({
+      scheduleViewportUpdate({
         minX: pan.originalViewBox.minX - dx,
         minY: pan.originalViewBox.minY - dy,
         maxX: pan.originalViewBox.maxX - dx,
@@ -544,6 +580,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     flushPendingDraftUpdate();
+    flushPendingViewportUpdate();
     if (panRef.current) {
       panRef.current = null;
       setInteractionCursor('default');
@@ -624,6 +661,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
 
   function cancelActiveDrag() {
     cancelPendingDraftUpdate();
+    cancelPendingViewportUpdate();
     const drag = dragRef.current;
     dragRef.current = null;
     wireDragRef.current = null;
