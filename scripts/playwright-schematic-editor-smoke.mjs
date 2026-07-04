@@ -864,6 +864,7 @@ async function waitForWorkbenchProject(page, targetProjectId) {
 }
 
 let page;
+let testSucceeded = false;
 try {
   page = electronApp.windows()[0] ?? await electronApp.firstWindow({ timeout: 20_000 });
   observeWindow(page);
@@ -2394,6 +2395,7 @@ try {
     screenshot: 'output/playwright/schematic-editor-smoke.png',
     wireScreenshot: 'output/playwright/schematic-editor-wire-visible.png',
   }, null, 2));
+  testSucceeded = true;
 } catch (error) {
   if (page) {
     await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-failure.png') }).catch(() => {});
@@ -2407,5 +2409,6 @@ try {
   throw error;
 } finally {
   await electronApp.close();
+  if (testSucceeded) await removePrefixedProjects();
   if (viteProcess) viteProcess.kill();
 }
