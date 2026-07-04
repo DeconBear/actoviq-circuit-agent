@@ -10,6 +10,7 @@ import type {
 
 export const SCHEMATIC_GRID = 20;
 export const PIN_REACH = 12;
+const ROUTE_OBSTACLE_PADDING = SCHEMATIC_GRID + 4;
 
 export type ToolComponentType = CircuitComponent['type'];
 
@@ -400,12 +401,13 @@ function differentialInputRank(module: CircuitModule, net: string): number {
 
 function autoLayoutDifferentialPairModule(module: CircuitModule, layout: DifferentialPairLayout): CircuitModule {
   const placed = new Set<string>();
-  layout.left.position = snapPoint({ x: 360, y: 330 });
+  layout.left.position = snapPoint({ x: 320, y: 340 });
   layout.left.rotation = 0;
   placed.add(layout.left.id);
-  layout.right.position = snapPoint({ x: 620, y: 330 });
+  layout.right.position = snapPoint({ x: 700, y: 340 });
   layout.right.rotation = 0;
   placed.add(layout.right.id);
+  const pairMidX = snap((layout.left.position.x + layout.right.position.x) / 2);
 
   const activeLoads = module.components.filter((component) => (
     !placed.has(component.id) &&
@@ -441,11 +443,13 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
 
   const tail = findTwoPinWithNets(module.components, placed, /tail|bias|i(ref)?|source/i, layout.tailNet, layout.groundNet);
   if (tail) {
-    placeVertical(tail, layout.tailNet, layout.groundNet, { x: 490, y: 525 });
+    placeVertical(tail, layout.tailNet, layout.groundNet, { x: pairMidX, y: 525 });
     placed.add(tail.id);
   }
 
   let fallbackIndex = 0;
+  const inputSeriesCounts = new Map<string, number>();
+  const inputRailCounts = new Map<string, number>();
   for (const component of module.components) {
     if (placed.has(component.id)) continue;
     const [first, second] = component.pins;
@@ -464,8 +468,28 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
       if (nets.has(layout.leftInputNet) || nets.has(layout.rightInputNet)) {
         const inputNet = nets.has(layout.leftInputNet) ? layout.leftInputNet : layout.rightInputNet;
         const otherNet = first.net === inputNet ? second.net : first.net;
-        const x = inputNet === layout.leftInputNet ? 185 : 705;
-        placeHorizontal(component, otherNet, inputNet, { x, y: 330 });
+        const pair = inputNet === layout.leftInputNet ? layout.left : layout.right;
+        const inputAnchor = pinPointForComponentNet(pair, inputNet) ?? {
+          x: pair.position.x - 58,
+          y: pair.position.y,
+        };
+        if (isRailNet(otherNet, module)) {
+          const index = inputRailCounts.get(inputNet) ?? 0;
+          inputRailCounts.set(inputNet, index + 1);
+          const topNet = isGroundNet(otherNet, module) ? inputNet : otherNet;
+          const bottomNet = isGroundNet(otherNet, module) ? otherNet : inputNet;
+          placeVertical(component, topNet, bottomNet, {
+            x: inputAnchor.x - 110 - index * 110,
+            y: inputAnchor.y + (isGroundNet(otherNet, module) ? 135 : -135),
+          });
+        } else {
+          const index = inputSeriesCounts.get(inputNet) ?? 0;
+          inputSeriesCounts.set(inputNet, index + 1);
+          placeHorizontal(component, otherNet, inputNet, {
+            x: inputAnchor.x - 120 - index * 120,
+            y: inputAnchor.y + index * 80,
+          });
+        }
         placed.add(component.id);
         fallbackIndex += 1;
         continue;
@@ -582,6 +606,8 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
   const lowerCounts = new Map<string, number>();
   const outputCounts = new Map<string, number>();
   const nodeAnchors = new Map<string, CircuitPosition>();
+  const activeDrainNets = new Set(sortedActive.map((component) => activeNetMap(component).drain).filter(Boolean) as string[]);
+  const activeRightEdge = Math.max(...sortedActive.map((component) => componentBounds(component).maxX));
   sortedActive.forEach((component) => rememberComponentPinAnchors(nodeAnchors, component));
 
   for (const component of module.components) {
@@ -620,16 +646,17 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
       continue;
     }
 
-    const primaryOutputNet = primaryNets.drain;
-    if (primaryOutputNet && (first.net === primaryOutputNet || second.net === primaryOutputNet)) {
-      const anchor = nearestPinPointForNet(sortedActive, primaryOutputNet) ?? nodeAnchors.get(primaryOutputNet);
+    const outputNet = [first.net, second.net].find((net) => activeDrainNets.has(net));
+    if (outputNet) {
+      const anchor = nearestPinPointForNet(sortedActive, outputNet) ?? nodeAnchors.get(outputNet);
       if (anchor) {
-        const index = outputCounts.get(primaryOutputNet) ?? 0;
-        outputCounts.set(primaryOutputNet, index + 1);
-        const otherNet = first.net === primaryOutputNet ? second.net : first.net;
-        placeHorizontal(component, primaryOutputNet, otherNet, {
-          x: anchor.x + 170 + index * 150,
-          y: anchor.y,
+        const index = outputCounts.get(outputNet) ?? 0;
+        outputCounts.set(outputNet, index + 1);
+        const ownerIndex = Math.max(0, sortedActive.findIndex((active) => activeNetMap(active).drain === outputNet));
+        const otherNet = first.net === outputNet ? second.net : first.net;
+        placeHorizontal(component, outputNet, otherNet, {
+          x: Math.max(anchor.x + 170, activeRightEdge + 140) + index * 150,
+          y: anchor.y + (sortedActive.length > 1 ? (ownerIndex % 2 === 0 ? -40 : 80) : 0),
         });
         rememberComponentPinAnchors(nodeAnchors, component);
         continue;
@@ -1320,13 +1347,14 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
     };
     const base = anchor ?? fallback;
     const sideGroup = port.direction === 'output' ? 'output' : 'input';
-    const y = avoidPortY(base.y + index * 16, signalSideYs[side][sideGroup]);
-    signalSideYs[side][sideGroup].push(y);
     const useGlobalRightEdge = side === 'right' && shouldUseGlobalRightPortEdge(module, port);
+    const x = side === 'right'
+      ? (useGlobalRightEdge ? Math.max(base.x, bounds.maxX) : base.x) + 110
+      : base.x - 110;
+    const y = avoidSignalPortY(module, port, snap(x), base.y + index * 16, signalSideYs[side][sideGroup]);
+    signalSideYs[side][sideGroup].push(y);
     map.set(port.id, snapPoint({
-      x: side === 'right'
-        ? (useGlobalRightEdge ? Math.max(base.x, bounds.maxX) : base.x) + 110
-        : base.x - 110,
+      x,
       y,
     }));
   });
@@ -1371,6 +1399,31 @@ function avoidPortY(preferredY: number, usedYs: number[]): number {
     y += minGap;
   }
   return y;
+}
+
+function avoidSignalPortY(
+  module: CircuitModule,
+  port: CircuitPort,
+  x: number,
+  preferredY: number,
+  usedYs: number[],
+): number {
+  const baseY = avoidPortY(preferredY, usedYs);
+  const offsets = [0, 3, -3, 5, -5, 7, -7, 9, -9, 12, -12].map((step) => step * SCHEMATIC_GRID);
+  for (const offset of offsets) {
+    const y = snap(baseY + offset);
+    if (usedYs.some((usedY) => Math.abs(usedY - y) < SCHEMATIC_GRID * 3)) continue;
+    if (!signalPortPointBlocked(module, port, { x, y })) return y;
+  }
+  return snap(baseY);
+}
+
+function signalPortPointBlocked(module: CircuitModule, port: CircuitPort, point: CircuitPosition): boolean {
+  return module.components.some((component) => {
+    if (component.pins.some((pin) => pin.net === port.net)) return false;
+    const bounds = padBounds(componentBounds(component), ROUTE_OBSTACLE_PADDING);
+    return point.x >= bounds.minX && point.x <= bounds.maxX && point.y >= bounds.minY && point.y <= bounds.maxY;
+  });
 }
 
 export function moduleBounds(
@@ -1489,7 +1542,7 @@ export function addWire(module: CircuitModule, start: EndpointHit, end: Endpoint
     ...(module.wires ?? []),
     {
       id,
-      points: routePointsForModule(module, startPoint, endPoint, start, end),
+      points: routePointsForModule(module, startPoint, endPoint, start, end, mergedNet),
       from: stripEndpoint(startPoint, start),
       to: stripEndpoint(endPoint, end),
       net: mergedNet,
@@ -1524,8 +1577,9 @@ function routePointsForModule(
   endPoint: CircuitPosition,
   startEndpoint?: CircuitWireEndpoint,
   endEndpoint?: CircuitWireEndpoint,
+  net?: string,
 ): CircuitPosition[] {
-  const obstacles = obstaclesForEndpoints(module, startEndpoint, endEndpoint);
+  const obstacles = obstaclesForEndpoints(module, startEndpoint, endEndpoint, net);
   const candidates = orthogonalRouteCandidates(startPoint, endPoint, obstacles);
   return candidates
     .filter((points) => routeIsClear(points, obstacles))
@@ -1536,13 +1590,15 @@ function obstaclesForEndpoints(
   module: CircuitModule,
   startEndpoint?: CircuitWireEndpoint,
   endEndpoint?: CircuitWireEndpoint,
+  net?: string,
 ): SchematicBounds[] {
   const excludedComponentIds = new Set(
     [startEndpoint?.component_id, endEndpoint?.component_id].filter(Boolean) as string[],
   );
   return module.components
     .filter((component) => !excludedComponentIds.has(component.id))
-    .map((component) => padBounds(componentBounds(component), 14));
+    .filter((component) => !net || !component.pins.some((pin) => pin.net === net))
+    .map((component) => padBounds(componentBounds(component), ROUTE_OBSTACLE_PADDING));
 }
 
 function orthogonalRouteCandidates(
@@ -1741,7 +1797,7 @@ export function rerouteWire(
     ...wire,
     from: wire.from ? { ...wire.from, x: start.x, y: start.y } : wire.from,
     to: wire.to ? { ...wire.to, x: end.x, y: end.y } : wire.to,
-    points: routePointsForModule(module, start, end, wire.from, wire.to),
+    points: routePointsForModule(module, start, end, wire.from, wire.to, wire.net),
   };
 }
 
@@ -2046,7 +2102,7 @@ function materializeNetWires(
       const endPoint = endpointDrawPoint(endpoint);
       wires.push({
         id,
-        points: routePointsForModule(module, startPoint, endPoint, anchor, endpoint),
+        points: routePointsForModule(module, startPoint, endPoint, anchor, endpoint, net),
         from: stripEndpoint(startPoint, anchor),
         to: stripEndpoint(endPoint, endpoint),
         net,
@@ -2078,7 +2134,7 @@ function materializeEndpointSpineWires(
   if (Math.max(spanX, spanY) < SCHEMATIC_GRID * 6) return [];
 
   const root = chooseSpineRoot(uniqueEndpoints, orientation);
-  const routeSpecs = chooseSpineRouteSpecs(module, uniqueEndpoints, root, orientation, usedPairs);
+  const routeSpecs = chooseSpineRouteSpecs(module, net, uniqueEndpoints, root, orientation, usedPairs);
   if (!routeSpecs || routeSpecs.length < uniqueEndpoints.length - 1) return [];
 
   const localExistingIds = new Set(existingIds);
@@ -2123,6 +2179,7 @@ interface SpineRouteSpec {
 
 function chooseSpineRouteSpecs(
   module: CircuitModule,
+  net: string,
   endpoints: EndpointHit[],
   root: EndpointHit,
   orientation: 'horizontal' | 'vertical',
@@ -2134,9 +2191,15 @@ function chooseSpineRouteSpecs(
   const rootCoordinate = orientation === 'horizontal' ? root.y : root.x;
   const min = coordinates[0] ?? rootCoordinate;
   const max = coordinates.at(-1) ?? rootCoordinate;
+  const obstacleCoordinates = obstaclesForEndpoints(module, root, undefined, net).flatMap((obstacle) => (
+    orientation === 'horizontal'
+      ? [obstacle.minY - SCHEMATIC_GRID, obstacle.maxY + SCHEMATIC_GRID]
+      : [obstacle.minX - SCHEMATIC_GRID, obstacle.maxX + SCHEMATIC_GRID]
+  ));
   const candidates = [...new Set([
     rootCoordinate,
     ...coordinates,
+    ...obstacleCoordinates,
     (min + max) / 2,
     min - SCHEMATIC_GRID * 2,
     max + SCHEMATIC_GRID * 2,
@@ -2159,7 +2222,7 @@ function chooseSpineRouteSpecs(
         break;
       }
       const points = compactRoute(spineRoutePoints(startPoint, endPoint, orientation, coordinate));
-      if (!routeIsClear(points, obstaclesForEndpoints(module, root, endpoint))) {
+      if (!routeIsClear(points, obstaclesForEndpoints(module, root, endpoint, net))) {
         failed = true;
         break;
       }
@@ -2232,6 +2295,7 @@ function materializeEndpointTreeWires(
           endpointDrawPoint(target),
           source,
           target,
+          net,
         );
         const cost = routeCost(points);
         if (!best || cost < best.cost) {

@@ -386,6 +386,23 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return;
     }
 
+    const wirePointHit = hitSelectedStoredWirePoint(document.wires, draft, selection, world);
+    if (wirePointHit) {
+      setSelection({ kind: 'wire', id: wirePointHit.wire.id });
+      setInteractionCursor('grabbing');
+      wirePointDragRef.current = {
+        wireId: wirePointHit.wire.id,
+        pointIndex: wirePointHit.pointIndex,
+        startWorld: world,
+        originalPoint: { ...wirePointHit.point },
+        originalPoints: clonePoints(wirePointHit.wire.points),
+        originalModule: cloneModule(draft),
+        originalDirty: dirty,
+        moved: false,
+      };
+      return;
+    }
+
     const selectedHandleHit = selectedComponentHandleFromPointerTarget(document, event.target);
     const directComponentHit = componentFromPointerTarget(document, event.target) ?? hitComponent(document, world);
     const selectedFrameHit = selectedHandleHit ?? (!directComponentHit ? hitSelectedComponentFrame(document, selection, world) : null);
@@ -414,23 +431,6 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         startWorld: world,
         originalPositions: componentPositionsById(draft, componentIds),
         lastPositions: componentPositionsById(draft, componentIds),
-        originalModule: cloneModule(draft),
-        originalDirty: dirty,
-        moved: false,
-      };
-      return;
-    }
-
-    const wirePointHit = hitSelectedStoredWirePoint(document.wires, draft, selection, world);
-    if (wirePointHit) {
-      setSelection({ kind: 'wire', id: wirePointHit.wire.id });
-      setInteractionCursor('grabbing');
-      wirePointDragRef.current = {
-        wireId: wirePointHit.wire.id,
-        pointIndex: wirePointHit.pointIndex,
-        startWorld: world,
-        originalPoint: { ...wirePointHit.point },
-        originalPoints: clonePoints(wirePointHit.wire.points),
         originalModule: cloneModule(draft),
         originalDirty: dirty,
         moved: false,
@@ -1327,9 +1327,9 @@ function cursorForWorld(
   selection: SchematicSelection,
   world: CircuitPosition,
 ): EditorCursor {
+  if (hitSelectedStoredWirePoint(document.wires, module, selection, world)) return 'move';
   if (hitComponent(document, world)) return 'grab';
   if (hitSelectedComponentFrame(document, selection, world)) return 'grab';
-  if (hitSelectedStoredWirePoint(document.wires, module, selection, world)) return 'move';
   return hitEditableWireSegment(document.wires, module, world) ? 'move' : 'default';
 }
 

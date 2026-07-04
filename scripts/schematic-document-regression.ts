@@ -311,6 +311,7 @@ for (const fixture of fixtures) {
   assertNoMosBodyRailLabels(document.module, document.netLabels);
   assertLdoInternalLabels(document);
   assertMultiEndpointSpine(document);
+  assertGeneratedWireClearance(document);
 }
 
 console.log(JSON.stringify({
@@ -502,6 +503,9 @@ function assertReadableLayout(module: CircuitModule) {
     assertActivePins(output, module.module_id);
     assert.ok(reference.position.x < output.position.x, 'current mirror reference device should be left of output device');
   }
+  if (module.module_id === 'baseband_conditioning') {
+    assertNoComponentOverlap(module, ['rin', 'rbias1']);
+  }
 }
 
 function assertReadablePortPlacement(document: ReturnType<typeof createSchematicDocument>) {
@@ -621,6 +625,29 @@ function assertMultiEndpointSpine(document: ReturnType<typeof createSchematicDoc
   );
 }
 
+function assertGeneratedWireClearance(document: ReturnType<typeof createSchematicDocument>) {
+  const clearance = 20;
+  for (const wire of document.wires) {
+    if (wire.source === 'stored') continue;
+    const endpointComponents = new Set([wire.from?.component_id, wire.to?.component_id].filter(Boolean));
+    for (const component of document.module.components) {
+      if (endpointComponents.has(component.id)) continue;
+      if (component.pins.some((pin) => pin.net === wire.net)) continue;
+      const bounds = padLocalBounds(boundsForComponent(component), clearance);
+      for (let index = 1; index < wire.points.length; index += 1) {
+        const start = wire.points[index - 1];
+        const end = wire.points[index];
+        assert.ok(start && end, `${document.module.module_id}.${wire.id} segment ${index} missing endpoints`);
+        assert.equal(
+          segmentIntersectsLocalBounds(start, end, bounds),
+          false,
+          `${document.module.module_id}.${wire.id} routes too close to ${component.id}`,
+        );
+      }
+    }
+  }
+}
+
 function mustComponent(module: CircuitModule, id: string): CircuitComponent {
   const component = module.components.find((entry) => entry.id === id);
   assert.ok(component, `${module.module_id}.${id} missing`);
@@ -688,6 +715,34 @@ function boundsForComponent(component: CircuitComponent) {
     maxX: Math.max(...xs),
     maxY: Math.max(...ys),
   };
+}
+
+function padLocalBounds(bounds: ReturnType<typeof boundsForComponent>, padding: number) {
+  return {
+    minX: bounds.minX - padding,
+    minY: bounds.minY - padding,
+    maxX: bounds.maxX + padding,
+    maxY: bounds.maxY + padding,
+  };
+}
+
+function segmentIntersectsLocalBounds(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  bounds: ReturnType<typeof boundsForComponent>,
+): boolean {
+  if (start.x === end.x) {
+    const minY = Math.min(start.y, end.y);
+    const maxY = Math.max(start.y, end.y);
+    return start.x >= bounds.minX && start.x <= bounds.maxX && maxY >= bounds.minY && minY <= bounds.maxY;
+  }
+  if (start.y === end.y) {
+    const minX = Math.min(start.x, end.x);
+    const maxX = Math.max(start.x, end.x);
+    return start.y >= bounds.minY && start.y <= bounds.maxY && maxX >= bounds.minX && minX <= bounds.maxX;
+  }
+  return segmentIntersectsLocalBounds(start, { x: end.x, y: start.y }, bounds) ||
+    segmentIntersectsLocalBounds({ x: end.x, y: start.y }, end, bounds);
 }
 
 function pinPointForNet(component: CircuitComponent, net: string) {
