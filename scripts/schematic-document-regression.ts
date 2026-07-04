@@ -521,6 +521,7 @@ function assertReadablePortPlacement(document: ReturnType<typeof createSchematic
 
   const resetDiode = mustComponent(module, 'd_rst');
   const dtrResistor = mustComponent(module, 'r51');
+  const boot0Resistor = mustComponent(module, 'r52');
   const rstPort = mustPortPosition(portPositions, 'rst');
   const dtrPort = mustPortPosition(portPositions, 'dtr');
   const rtsPort = mustPortPosition(portPositions, 'rts');
@@ -529,7 +530,9 @@ function assertReadablePortPlacement(document: ReturnType<typeof createSchematic
   assert.ok(rstPort.x < pinPointForNet(resetDiode, 'rst').x, 'BJT reset RST input should stay outside the left edge');
   assert.ok(dtrPort.x > pinPointForNet(dtrResistor, 'dtr').x, 'BJT reset DTR input should sit outside R51 on the right edge');
   assert.ok(rtsPort.x > pinPointForNet(mustComponent(module, 'q_rst'), 'rts').x, 'BJT reset RTS output should sit on the right edge');
-  assert.ok(boot0Port.x > pinPointForNet(mustComponent(module, 'r52'), 'boot0').x, 'BJT reset BOOT0 output should sit outside R52');
+  const boot0Pin = pinPointForNet(boot0Resistor, 'boot0');
+  assert.ok(boot0Port.x > boot0Pin.x, 'BJT reset BOOT0 output should sit outside R52');
+  assert.ok(boot0Port.x - boot0Pin.x <= 140, 'BJT reset BOOT0 output should stay near the local BOOT0 branch');
 }
 
 function assertRailLabels(module: CircuitModule, netLabels: ReturnType<typeof createSchematicDocument>['netLabels'], wires: ReturnType<typeof createSchematicDocument>['wires']) {

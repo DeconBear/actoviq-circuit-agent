@@ -1322,10 +1322,11 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
     const sideGroup = port.direction === 'output' ? 'output' : 'input';
     const y = avoidPortY(base.y + index * 16, signalSideYs[side][sideGroup]);
     signalSideYs[side][sideGroup].push(y);
+    const useGlobalRightEdge = side === 'right' && shouldUseGlobalRightPortEdge(module, port);
     map.set(port.id, snapPoint({
       x: side === 'right'
-        ? Math.max(base.x, bounds.maxX) + 110
-        : Math.min(base.x, bounds.minX) - 110,
+        ? (useGlobalRightEdge ? Math.max(base.x, bounds.maxX) : base.x) + 110
+        : base.x - 110,
       y,
     }));
   });
@@ -1353,6 +1354,14 @@ function signalPortSide(port: CircuitPort, points: CircuitPosition[], bounds: Sc
   const anchor = leftmost(points);
   if (!anchor) return 'left';
   return anchor.x > centerX + SCHEMATIC_GRID ? 'right' : 'left';
+}
+
+function shouldUseGlobalRightPortEdge(module: CircuitModule, port: CircuitPort): boolean {
+  if (port.direction !== 'output') return false;
+  const activeCount = module.components.filter((component) => component.type === 'M' || component.type === 'Q').length;
+  if (activeCount < 2) return false;
+  const text = `${port.id} ${port.name} ${port.net}`.toLowerCase();
+  return /\bout[+-]?\b|outp|outn|output[+-]?/.test(text) && /[+-]|outp|outn/.test(text);
 }
 
 function avoidPortY(preferredY: number, usedYs: number[]): number {
