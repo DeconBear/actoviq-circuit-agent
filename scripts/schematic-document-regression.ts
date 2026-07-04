@@ -310,6 +310,7 @@ for (const fixture of fixtures) {
   assertRailLabels(document.module, document.netLabels, document.wires);
   assertNoMosBodyRailLabels(document.module, document.netLabels);
   assertLdoInternalLabels(document);
+  assertMultiEndpointSpine(document);
 }
 
 console.log(JSON.stringify({
@@ -592,6 +593,29 @@ function assertLdoInternalLabels(document: ReturnType<typeof createSchematicDocu
       `mos_ldo should not render ${net} as a generated long wire`,
     );
   }
+}
+
+function assertMultiEndpointSpine(document: ReturnType<typeof createSchematicDocument>) {
+  if (document.module.module_id !== 'voltage_divider') return;
+  const voutWires = document.wires.filter((wire) => wire.net === 'vout');
+  const segmentCounts = new Map<string, number>();
+  for (const wire of voutWires) {
+    const points = wire.points ?? [];
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      if (!start || !end) continue;
+      if (start.x !== end.x && start.y !== end.y) continue;
+      const left = `${start.x},${start.y}`;
+      const right = `${end.x},${end.y}`;
+      const key = [left, right].sort().join('<->');
+      segmentCounts.set(key, (segmentCounts.get(key) ?? 0) + 1);
+    }
+  }
+  assert.ok(
+    [...segmentCounts.values()].some((count) => count >= 2),
+    'voltage_divider.vout should use a shared spine segment for the multi-endpoint node',
+  );
 }
 
 function mustComponent(module: CircuitModule, id: string): CircuitComponent {

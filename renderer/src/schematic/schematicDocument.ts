@@ -1525,16 +1525,24 @@ function routePointsForModule(
   startEndpoint?: CircuitWireEndpoint,
   endEndpoint?: CircuitWireEndpoint,
 ): CircuitPosition[] {
-  const excludedComponentIds = new Set(
-    [startEndpoint?.component_id, endEndpoint?.component_id].filter(Boolean) as string[],
-  );
-  const obstacles = module.components
-    .filter((component) => !excludedComponentIds.has(component.id))
-    .map((component) => padBounds(componentBounds(component), 14));
+  const obstacles = obstaclesForEndpoints(module, startEndpoint, endEndpoint);
   const candidates = orthogonalRouteCandidates(startPoint, endPoint, obstacles);
   return candidates
     .filter((points) => routeIsClear(points, obstacles))
     .sort((left, right) => routeCost(left) - routeCost(right))[0] ?? routePoints(startPoint, endPoint);
+}
+
+function obstaclesForEndpoints(
+  module: CircuitModule,
+  startEndpoint?: CircuitWireEndpoint,
+  endEndpoint?: CircuitWireEndpoint,
+): SchematicBounds[] {
+  const excludedComponentIds = new Set(
+    [startEndpoint?.component_id, endEndpoint?.component_id].filter(Boolean) as string[],
+  );
+  return module.components
+    .filter((component) => !excludedComponentIds.has(component.id))
+    .map((component) => padBounds(componentBounds(component), 14));
 }
 
 function orthogonalRouteCandidates(
@@ -2014,6 +2022,11 @@ function materializeNetWires(
     if (shouldRepresentNetWithLocalLabel(module, net)) continue;
     if (shouldRepresentSignalNetWithLocalLabel(module, net, endpoints)) continue;
     if (endpoints.length >= 4) {
+      const spineWires = materializeEndpointSpineWires(module, net, endpoints, existingIds, usedPairs);
+      if (spineWires.length > 0) {
+        wires.push(...spineWires);
+        continue;
+      }
       const treeWires = materializeEndpointTreeWires(module, net, endpoints, existingIds, usedPairs);
       if (treeWires.length > 0) {
         wires.push(...treeWires);
@@ -2042,6 +2055,146 @@ function materializeNetWires(
     }
   }
   return wires;
+}
+
+function materializeEndpointSpineWires(
+  module: CircuitModule,
+  net: string,
+  endpoints: EndpointHit[],
+  existingIds: Set<string>,
+  usedPairs: Set<string>,
+): CircuitWire[] {
+  const uniqueEndpoints = endpoints.filter((endpoint, index) => (
+    endpoints.findIndex((candidate) => distance(endpointDrawPoint(endpoint), endpointDrawPoint(candidate)) < 1) === index
+  ));
+  if (uniqueEndpoints.length < 4) return [];
+
+  const points = uniqueEndpoints.map(endpointDrawPoint);
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const spanX = Math.max(...xs) - Math.min(...xs);
+  const spanY = Math.max(...ys) - Math.min(...ys);
+  const orientation: 'horizontal' | 'vertical' = spanX >= spanY ? 'horizontal' : 'vertical';
+  if (Math.max(spanX, spanY) < SCHEMATIC_GRID * 6) return [];
+
+  const root = chooseSpineRoot(uniqueEndpoints, orientation);
+  const routeSpecs = chooseSpineRouteSpecs(module, uniqueEndpoints, root, orientation, usedPairs);
+  if (!routeSpecs || routeSpecs.length < uniqueEndpoints.length - 1) return [];
+
+  const localExistingIds = new Set(existingIds);
+  const createdIds: string[] = [];
+  const wires = routeSpecs.map((spec) => {
+    const id = makeId(`net_${wireIdToken(net)}_`, localExistingIds);
+    localExistingIds.add(id);
+    createdIds.push(id);
+    return {
+      id,
+      points: spec.points,
+      from: stripEndpoint(spec.startPoint, root),
+      to: stripEndpoint(spec.endPoint, spec.endpoint),
+      net,
+      source: 'net',
+    } satisfies CircuitWire;
+  });
+
+  for (const id of createdIds) existingIds.add(id);
+  for (const spec of routeSpecs) usedPairs.add(spec.pairKey);
+  return wires;
+}
+
+function chooseSpineRoot(endpoints: EndpointHit[], orientation: 'horizontal' | 'vertical'): EndpointHit {
+  const candidates = endpoints.filter((endpoint) => endpoint.kind === 'pin');
+  const available = candidates.length > 0 ? candidates : endpoints;
+  return [...available].sort((left, right) => (
+    orientation === 'horizontal'
+      ? (left.x - right.x) || (left.y - right.y)
+      : (left.y - right.y) || (left.x - right.x)
+  ))[0] ?? endpoints[0]!;
+}
+
+interface SpineRouteSpec {
+  endpoint: EndpointHit;
+  pairKey: string;
+  startPoint: CircuitPosition;
+  endPoint: CircuitPosition;
+  points: CircuitPosition[];
+  cost: number;
+}
+
+function chooseSpineRouteSpecs(
+  module: CircuitModule,
+  endpoints: EndpointHit[],
+  root: EndpointHit,
+  orientation: 'horizontal' | 'vertical',
+  usedPairs: Set<string>,
+): SpineRouteSpec[] | null {
+  const coordinates = endpoints
+    .map((endpoint) => orientation === 'horizontal' ? endpoint.y : endpoint.x)
+    .sort((left, right) => left - right);
+  const rootCoordinate = orientation === 'horizontal' ? root.y : root.x;
+  const min = coordinates[0] ?? rootCoordinate;
+  const max = coordinates.at(-1) ?? rootCoordinate;
+  const candidates = [...new Set([
+    rootCoordinate,
+    ...coordinates,
+    (min + max) / 2,
+    min - SCHEMATIC_GRID * 2,
+    max + SCHEMATIC_GRID * 2,
+  ].map(snap))];
+
+  let best: SpineRouteSpec[] | null = null;
+  let bestCost = Number.POSITIVE_INFINITY;
+  for (const coordinate of candidates) {
+    const specs: SpineRouteSpec[] = [];
+    let totalCost = 0;
+    let failed = false;
+    for (const endpoint of endpoints) {
+      if (endpoint === root) continue;
+      const startPoint = endpointDrawPoint(root);
+      const endPoint = endpointDrawPoint(endpoint);
+      if (distance(startPoint, endPoint) < 1) continue;
+      const pairKey = endpointPairKey(root, endpoint);
+      if (usedPairs.has(pairKey)) {
+        failed = true;
+        break;
+      }
+      const points = compactRoute(spineRoutePoints(startPoint, endPoint, orientation, coordinate));
+      if (!routeIsClear(points, obstaclesForEndpoints(module, root, endpoint))) {
+        failed = true;
+        break;
+      }
+      const cost = routeCost(points);
+      specs.push({ endpoint, pairKey, startPoint, endPoint, points, cost });
+      totalCost += cost;
+    }
+    if (!failed && specs.length >= endpoints.length - 1 && totalCost < bestCost) {
+      best = specs;
+      bestCost = totalCost;
+    }
+  }
+  return best;
+}
+
+function spineRoutePoints(
+  startPoint: CircuitPosition,
+  endPoint: CircuitPosition,
+  orientation: 'horizontal' | 'vertical',
+  spineCoordinate: number,
+): CircuitPosition[] {
+  if (orientation === 'horizontal') {
+    return [
+      startPoint,
+      { x: startPoint.x, y: spineCoordinate },
+      { x: endPoint.x, y: spineCoordinate },
+      endPoint,
+    ];
+  }
+  return [
+    startPoint,
+    { x: spineCoordinate, y: startPoint.y },
+    { x: spineCoordinate, y: endPoint.y },
+    endPoint,
+  ];
 }
 
 function materializeEndpointTreeWires(
