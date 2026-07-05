@@ -328,7 +328,9 @@ export function Sidebar({
                 onClick={handleChooseWorkspaceRoot}
                 style={styles.iconBtn}
                 title="Choose folder"
+                aria-label="Choose workspace folder"
                 disabled={creating}
+                data-testid="workspace-root-choose"
               >
                 ...
               </button>

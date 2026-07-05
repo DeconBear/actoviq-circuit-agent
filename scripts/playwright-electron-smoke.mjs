@@ -364,6 +364,7 @@ try {
   await page.getByTestId('sidebar-new-workspace').click();
   await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
   assert.equal(await page.getByTestId('workspace-create-submit').isDisabled(), true);
+  assert.equal(await page.getByTestId('workspace-root-choose').getAttribute('aria-label'), 'Choose workspace folder');
   await page.keyboard.press('Escape');
   await page.getByTestId('workspace-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   await page.getByTestId('sidebar-new-workspace').click();
@@ -449,8 +450,13 @@ try {
   await page.getByTestId('sidebar-new-blank-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('project-name-input').fill(sidebarProjectName);
-  await page.getByTestId('project-name-input').press('Enter');
+  await page.getByTestId('project-create-submit').dblclick();
   await page.getByTestId('sidebar-notice').getByText(`Project created: ${sidebarProjectName}`, { exact: true }).waitFor({ timeout: 60_000 });
+  assert.equal(
+    await countProjectsByNameInRoot(projectsRoot, sidebarProjectName),
+    1,
+    'double-clicking sidebar blank project create should create exactly one project',
+  );
   const sidebarBlankProjectManifest = await findProjectByName(sidebarProjectName);
   await waitForWorkbenchProject(page, sidebarBlankProjectManifest.project.project_id);
   const sidebarBlankProject = page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarProjectName }).first();
