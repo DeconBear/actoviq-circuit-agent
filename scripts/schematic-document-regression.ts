@@ -312,6 +312,7 @@ for (const fixture of fixtures) {
   assertLdoInternalLabels(document);
   assertMultiEndpointSpine(document);
   assertGeneratedWireClearance(document);
+  assertGeneratedWireSimplicity(document);
 }
 
 console.log(JSON.stringify({
@@ -644,6 +645,38 @@ function assertGeneratedWireClearance(document: ReturnType<typeof createSchemati
           `${document.module.module_id}.${wire.id} routes too close to ${component.id}`,
         );
       }
+    }
+  }
+}
+
+function assertGeneratedWireSimplicity(document: ReturnType<typeof createSchematicDocument>) {
+  for (const wire of document.wires) {
+    if (wire.source === 'stored') continue;
+    const points = wire.points ?? [];
+    assert.ok(
+      points.length <= 4,
+      `${document.module.module_id}.${wire.id} should be routed as a direct, one-bend, or single-detour path`,
+    );
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      assert.ok(start && end, `${document.module.module_id}.${wire.id} segment ${index} missing endpoints`);
+      assert.ok(
+        start.x === end.x || start.y === end.y,
+        `${document.module.module_id}.${wire.id} segment ${index} is not orthogonal`,
+      );
+    }
+    for (let index = 1; index < points.length - 1; index += 1) {
+      const previous = points[index - 1];
+      const current = points[index];
+      const next = points[index + 1];
+      assert.ok(previous && current && next, `${document.module.module_id}.${wire.id} point ${index} missing`);
+      assert.equal(
+        previous.x === current.x && current.x === next.x ||
+          previous.y === current.y && current.y === next.y,
+        false,
+        `${document.module.module_id}.${wire.id} keeps a redundant collinear bend`,
+      );
     }
   }
 }
