@@ -1317,6 +1317,55 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
   ));
+  const cFilterCommittedDragPoint = await componentScreenPoint(page, 'c_filter');
+  await page.mouse.move(cFilterCommittedDragPoint.x, cFilterCommittedDragPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(cFilterCommittedDragPoint.x + 90, cFilterCommittedDragPoint.y + 30, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter' &&
+      Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
+      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+      (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
+  }, filterPositionsInitial);
+  const filterPositionsAfterCommittedDirectDrag = await componentPositions(page);
+  assertPositionEqual(
+    filterPositionsAfterCommittedDirectDrag.r_filter,
+    filterPositionsInitial.r_filter,
+    'committed direct drag from a multi-selection moved r_filter',
+  );
+  assertPositionChanged(
+    filterPositionsAfterCommittedDirectDrag.c_filter,
+    filterPositionsInitial.c_filter,
+    'committed direct drag from a multi-selection did not move c_filter',
+  );
+  await assertWireEndpointsMatchComponentPins(page, 'c_filter', 'committed direct drag from a multi-selection should keep wire endpoints on moving pins');
+  await editor.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+    const positions = JSON.parse(raw);
+    return Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
+      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+      Number(positions.c_filter?.x) === Number(previous.c_filter.x) &&
+      Number(positions.c_filter?.y) === Number(previous.c_filter.y);
+  }, filterPositionsInitial);
+  assert.deepEqual(
+    await componentPositions(page),
+    filterPositionsInitial,
+    'undoing committed direct drag from a multi-selection should restore schematic components',
+  );
+  await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(multiMarqueeEnd.x, multiMarqueeEnd.y, { steps: 10 });
+  await page.getByTestId('schematic-selection-marquee').waitFor();
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
+  ));
   const cFilterGroupHandlePoint = await selectedComponentCornerScreenPoint(page, 'c_filter', 0);
   await page.mouse.move(cFilterGroupHandlePoint.x, cFilterGroupHandlePoint.y);
   await page.mouse.down();
