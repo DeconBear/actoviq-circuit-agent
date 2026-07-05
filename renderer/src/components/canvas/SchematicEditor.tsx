@@ -361,7 +361,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
 
     const world = screenToWorld(event);
-    setHoverWorld(world);
+    setHoverWorld(snapPoint(world));
     setHoverEndpoint(tool === 'wire' || tool === 'place' || wireStart ? hitEndpoint(document, world) : null);
 
     if (tool === 'place') {
@@ -513,7 +513,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setHoverEndpoint((current) => (
         endpointIdentity(current) === endpointIdentity(hit) ? current : hit
       ));
-      setHoverWorld(world);
+      const nextHoverWorld = snapPoint(world);
+      setHoverWorld((current) => (samePosition(current, nextHoverWorld) ? current : nextHoverWorld));
     }
     const wireDrag = wireDragRef.current;
     if (wireDrag && !wireDrag.moved) {
@@ -1487,6 +1488,10 @@ function clonePositionMap(positions: Record<string, CircuitPosition>): Record<st
   return Object.fromEntries(
     Object.entries(positions).map(([componentId, position]) => [componentId, { ...position }]),
   );
+}
+
+function samePosition(left: CircuitPosition | null, right: CircuitPosition | null): boolean {
+  return left?.x === right?.x && left?.y === right?.y;
 }
 
 function samePositionMap(left: Record<string, CircuitPosition>, right: Record<string, CircuitPosition>): boolean {
