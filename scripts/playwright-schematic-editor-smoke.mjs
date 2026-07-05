@@ -1586,6 +1586,42 @@ try {
     const rotations = JSON.parse(raw);
     return Number(rotations.r1 ?? 0) === 0;
   });
+  const toolbarPlacementBaseCount = Number(await editor.getAttribute('data-component-count'));
+  const toolbarPlacementTools = ['C', 'L', 'D', 'M', 'Q', 'V', 'I'];
+  for (let index = 0; index < toolbarPlacementTools.length; index += 1) {
+    const type = toolbarPlacementTools[index];
+    const typeCountBefore = await page.locator(`g[data-component-type="${type}"]`).count();
+    const target = {
+      x: placePoint.x + 30 + index * 18,
+      y: placePoint.y + 80 + index * 10,
+    };
+    await page.getByTestId(`schematic-editor-place-${type}`).click();
+    assert.equal(await editor.getAttribute('data-tool'), 'place', `${type} toolbar button did not activate place mode`);
+    await page.mouse.click(target.x, target.y);
+    await page.waitForFunction(({ expectedCount, prefix }) => {
+      const node = document.querySelector('[data-testid="schematic-editor"]');
+      return node?.getAttribute('data-component-count') === String(expectedCount) &&
+        node?.getAttribute('data-selected')?.startsWith(`component:${prefix}`);
+    }, { expectedCount: toolbarPlacementBaseCount + index + 1, prefix: type.toLowerCase() });
+    assert.equal(
+      await page.locator(`g[data-component-type="${type}"]`).count(),
+      typeCountBefore + 1,
+      `${type} toolbar placement did not render a component`,
+    );
+  }
+  for (let index = toolbarPlacementTools.length - 1; index >= 0; index -= 1) {
+    const expectedCount = toolbarPlacementBaseCount + index;
+    await editor.focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+    await page.waitForFunction((count) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count)
+    ), expectedCount);
+  }
+  const rtrimPointAfterToolbarPlacement = await componentScreenPoint(page, 'r1');
+  await page.mouse.click(rtrimPointAfterToolbarPlacement.x, rtrimPointAfterToolbarPlacement.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
+  ));
   const filterPositionsAfterPlace = await componentPositions(page);
   const r1NetsBeforeDuplicate = await componentPinNets(page, 'r1');
   await editor.focus();
