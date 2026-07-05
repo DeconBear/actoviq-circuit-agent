@@ -2069,6 +2069,16 @@ try {
   await page.getByTestId('module-netlistsvg').locator('svg').waitFor({ timeout: 20_000 });
   assert.equal(await page.getByTestId('module-netlistsvg').getAttribute('data-schematic-source'), 'document');
   assert.equal(await page.getByTestId('module-document-svg').getAttribute('data-schematic-source'), 'document');
+  assert.equal(
+    await page.getByTestId('module-document-svg').locator('g[data-component-id="r1"]').count(),
+    1,
+    'document SVG did not render the applied Rtrim component',
+  );
+  assert.equal(
+    await page.getByTestId('module-document-svg').locator(`g[data-wire-id="${drawnWire.id}"]`).count(),
+    1,
+    'document SVG did not render the applied manually drawn wire',
+  );
   console.log('[e2e] svg tab verified');
   await page.getByTestId('back-to-board').click();
   await page.getByTestId('module-card-filter').dblclick();
@@ -2077,6 +2087,24 @@ try {
     Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') >= 3
   ));
   assert.equal(await page.getByTestId('schematic-editor').getAttribute('data-schematic-source'), 'document');
+  const reopenedFilterPositions = await componentPositions(page);
+  const reopenedFilterWires = await editorWires(page);
+  assertPositionEqual(
+    reopenedFilterPositions.r1,
+    savedR1?.position,
+    'reopened editor did not preserve the applied Rtrim position',
+  );
+  assert.ok(
+    reopenedFilterWires.some((wire) => wire.id === drawnWire.id && wire.source === 'stored'),
+    'reopened editor did not preserve the applied manually drawn wire as editable data',
+  );
+  const reopenedRtrimPoint = await componentScreenPoint(page, 'r1');
+  await page.mouse.click(reopenedRtrimPoint.x, reopenedRtrimPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
+  ));
+  assert.equal(await page.getByTestId('schematic-editor-component-name').inputValue(), 'Rtrim');
+  assert.equal(await page.getByTestId('schematic-editor-component-value').inputValue(), '2k');
   await page.getByTestId('back-to-board').click();
 
   await page.getByTestId(`sidebar-project-${legacyLdoProject.projectId}`).click();
