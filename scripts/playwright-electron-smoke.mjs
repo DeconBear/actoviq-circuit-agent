@@ -341,6 +341,11 @@ try {
   assert.equal((await page.getByTestId('sidebar-expand').textContent())?.trim(), '>');
   await page.getByTestId('sidebar-expand').click();
   await page.getByTestId('sidebar-new-workspace').waitFor({ timeout: 10_000 });
+  assert.equal(await page.getByTestId('sidebar-new-workspace').getAttribute('aria-label'), 'Create workspace');
+  assert.equal(await page.getByTestId('sidebar-new-workspace').getAttribute('title'), 'Create workspace');
+  assert.equal(await page.getByTestId('sidebar-open-workspace-root').getAttribute('aria-label'), 'Open active workspace folder');
+  assert.equal(await page.getByTestId('sidebar-new-demo-project').getAttribute('aria-label'), 'Create demo project');
+  assert.equal(await page.getByTestId('sidebar-new-blank-project').getAttribute('aria-label'), 'Create blank project');
   await clickApplicationMenuPath(electronApp, ['File', 'Settings']);
   await page.getByTestId('settings-dialog').waitFor({ timeout: 10_000 });
   await page.getByTestId('settings-dialog-close').click();
@@ -365,6 +370,8 @@ try {
   await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
   assert.equal(await page.getByTestId('workspace-create-submit').isDisabled(), true);
   assert.equal(await page.getByTestId('workspace-root-choose').getAttribute('aria-label'), 'Choose workspace folder');
+  assert.equal(await page.getByTestId('workspace-create-cancel').getAttribute('aria-label'), 'Cancel workspace creation');
+  assert.equal(await page.getByTestId('workspace-create-submit').getAttribute('aria-label'), 'Create workspace');
   await page.keyboard.press('Escape');
   await page.getByTestId('workspace-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   await page.getByTestId('sidebar-new-workspace').click();
@@ -439,6 +446,8 @@ try {
   const sidebarProjectName = `Playwright Inline Project ${Date.now()}`;
   await page.getByTestId('sidebar-new-blank-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
+  assert.equal(await page.getByTestId('project-create-cancel').getAttribute('aria-label'), 'Cancel project creation');
+  assert.equal(await page.getByTestId('project-create-submit').getAttribute('aria-label'), 'Create project');
   await page.keyboard.press('Escape');
   await page.getByTestId('project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   await page.getByTestId('sidebar-new-blank-project').click();
@@ -463,8 +472,12 @@ try {
   await sidebarBlankProject.waitFor({ timeout: 30_000 });
   assert.equal(await sidebarBlankProject.getAttribute('data-active'), 'true');
   assert.equal(await sidebarBlankProject.getAttribute('aria-current'), 'true');
+  assert.equal(await sidebarBlankProject.getAttribute('aria-label'), `Open project ${sidebarProjectName}`);
   assert.equal(await page.getByTestId('project-title').textContent(), sidebarProjectName);
-  await page.getByTestId(`sidebar-project-${projectId}`).click();
+  const originalProjectButton = page.getByTestId(`sidebar-project-${projectId}`);
+  assert.equal(await originalProjectButton.getAttribute('aria-label'), `Open project ${projectName}`);
+  await originalProjectButton.focus();
+  await page.keyboard.press('Enter');
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
   await waitForWorkbenchProject(page, projectId);
   assert.equal(await page.getByTestId(`sidebar-project-${projectId}`).getAttribute('data-active'), 'true');

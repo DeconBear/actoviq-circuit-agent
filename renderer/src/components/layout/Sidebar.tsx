@@ -246,6 +246,7 @@ export function Sidebar({
         <span style={styles.title}>Workspace</span>
         <div style={styles.headerActions}>
           <button
+            type="button"
             onClick={refreshJobs}
             style={styles.refreshBtn}
             title="Refresh"
@@ -255,6 +256,7 @@ export function Sidebar({
             Refresh
           </button>
           <button
+            type="button"
             onClick={onToggle}
             style={styles.toggleBtn}
             title="Collapse sidebar"
@@ -278,6 +280,7 @@ export function Sidebar({
         </select>
         <div style={styles.workspaceActions}>
           <button
+            type="button"
             onClick={() => {
               if (creating) return;
               setWorkspaceFormOpen((open) => !open);
@@ -286,14 +289,19 @@ export function Sidebar({
             }}
             style={styles.smallBtn}
             disabled={creating}
+            title="Create workspace"
+            aria-label="Create workspace"
             data-testid="sidebar-new-workspace"
           >
             + Workspace
           </button>
           <button
+            type="button"
             onClick={() => { void handleOpenWorkspaceRoot(); }}
             style={styles.smallBtn}
             disabled={creating}
+            title="Open active workspace folder"
+            aria-label="Open active workspace folder"
             data-testid="sidebar-open-workspace-root"
           >
             Open Root
@@ -341,6 +349,8 @@ export function Sidebar({
                 onClick={closeWorkspaceForm}
                 style={styles.formBtn}
                 disabled={creating}
+                title="Cancel workspace creation"
+                aria-label="Cancel workspace creation"
                 data-testid="workspace-create-cancel"
               >
                 Cancel
@@ -350,6 +360,8 @@ export function Sidebar({
                 onClick={() => void handleCreateWorkspace()}
                 style={styles.formPrimaryBtn}
                 disabled={creating || !workspaceName.trim()}
+                title="Create workspace"
+                aria-label="Create workspace"
                 data-testid="workspace-create-submit"
               >
                 {creating ? 'Creating...' : 'Create'}
@@ -369,6 +381,7 @@ export function Sidebar({
       </div>
       <div style={styles.projectActions}>
         <button
+          type="button"
           onClick={() => {
             if (creating) return;
             setProjectForm({ demo: true, name: 'Modular analog chain' });
@@ -377,11 +390,14 @@ export function Sidebar({
           }}
           style={styles.newBtn}
           disabled={creating}
+          title="Create demo project"
+          aria-label="Create demo project"
           data-testid="sidebar-new-demo-project"
         >
           + Demo Project
         </button>
         <button
+          type="button"
           onClick={() => {
             if (creating) return;
             setProjectForm({ demo: false, name: 'New circuit project' });
@@ -390,6 +406,8 @@ export function Sidebar({
           }}
           style={styles.blankProjectBtn}
           disabled={creating}
+          title="Create blank project"
+          aria-label="Create blank project"
           data-testid="sidebar-new-blank-project"
         >
           Blank
@@ -420,6 +438,8 @@ export function Sidebar({
               }}
               style={styles.formBtn}
               disabled={creating}
+              title="Cancel project creation"
+              aria-label="Cancel project creation"
               data-testid="project-create-cancel"
             >
               Cancel
@@ -429,6 +449,8 @@ export function Sidebar({
               onClick={() => void handleCreateProject()}
               style={styles.formPrimaryBtn}
               disabled={creating || !projectForm.name.trim()}
+              title="Create project"
+              aria-label="Create project"
               data-testid="project-create-submit"
             >
               {creating ? 'Creating...' : 'Create'}
@@ -450,15 +472,17 @@ export function Sidebar({
           <div style={styles.empty}>No circuit projects yet</div>
         )}
         {circuitProjects.map((project) => (
-          <div
+          <button
             key={project.projectId}
+            type="button"
             onClick={() => onSelectProject(project.projectId)}
             style={{
-              ...styles.item,
+              ...styles.projectItemButton,
               ...(activeProjectId === project.projectId ? styles.itemActive : {}),
             }}
             data-testid={`sidebar-project-${project.projectId}`}
             data-active={activeProjectId === project.projectId ? 'true' : 'false'}
+            aria-label={`Open project ${project.name}`}
             aria-current={activeProjectId === project.projectId ? 'true' : undefined}
           >
             <div style={styles.itemName}>{project.name}</div>
@@ -466,9 +490,17 @@ export function Sidebar({
               <span>{project.moduleCount} modules</span>
               <span>rev {project.revision}</span>
             </div>
-          </div>
+          </button>
         ))}
-        <button onClick={onNewDesign} style={styles.legacyDesignBtn}>Legacy chat design</button>
+        <button
+          type="button"
+          onClick={onNewDesign}
+          style={styles.legacyDesignBtn}
+          title="Start legacy chat design"
+          aria-label="Start legacy chat design"
+        >
+          Legacy chat design
+        </button>
         {conversations.length > 0 && (
           <>
             <div style={styles.sectionHeader}>Conversations</div>
@@ -777,6 +809,19 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 14px',
     cursor: 'pointer',
     borderBottom: '1px solid #eef0f2',
+    transition: 'background 0.1s',
+  },
+  projectItemButton: {
+    width: '100%',
+    display: 'block',
+    padding: '10px 14px',
+    cursor: 'pointer',
+    border: 'none',
+    borderBottom: '1px solid #eef0f2',
+    backgroundColor: '#ffffff',
+    color: '#28313b',
+    textAlign: 'left',
+    font: 'inherit',
     transition: 'background 0.1s',
   },
   itemActive: { backgroundColor: '#eaf2ff', boxShadow: 'inset 3px 0 #2563eb' },
