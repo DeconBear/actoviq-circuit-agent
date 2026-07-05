@@ -24,6 +24,16 @@ const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const skillScript = path.resolve(root, 'skills', 'circuit-design-ngspice', 'scripts', 'circuit_project.py');
 const schematicGrid = 20;
+const componentToolLabels = {
+  R: 'Place resistor (R)',
+  C: 'Place capacitor (C)',
+  L: 'Place inductor (L)',
+  D: 'Place diode (D)',
+  M: 'Place MOSFET (M)',
+  Q: 'Place BJT (Q)',
+  V: 'Place voltage source (V)',
+  I: 'Place current source (I)',
+};
 
 function runSkill(args) {
   return JSON.parse(execFileSync('python', [skillScript, ...args], {
@@ -957,6 +967,26 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
   ));
+  const expectedToolbarLabels = {
+    'schematic-editor-select': 'Select tool (S)',
+    'schematic-editor-wire': 'Wire tool (W)',
+    'schematic-editor-undo': 'Undo (Ctrl+Z)',
+    'schematic-editor-redo': 'Redo (Ctrl+Y)',
+    'schematic-editor-delete': 'Delete selected item (Delete/Backspace)',
+    'schematic-editor-save': 'Apply schematic and rebuild SVG (Ctrl+S)',
+    'schematic-editor-fit': 'Fit schematic view (F)',
+    'schematic-editor-rebuild-svg': 'Build netlistsvg preview',
+  };
+  for (const [testId, label] of Object.entries(expectedToolbarLabels)) {
+    const button = page.getByTestId(testId);
+    assert.equal(await button.getAttribute('aria-label'), label, `${testId} should expose a stable aria-label`);
+    assert.equal(await button.getAttribute('title'), label, `${testId} should expose a matching tooltip`);
+  }
+  for (const [type, label] of Object.entries(componentToolLabels)) {
+    const button = page.getByTestId(`schematic-editor-place-${type}`);
+    assert.equal(await button.getAttribute('aria-label'), label, `${type} placement tool should expose a stable aria-label`);
+    assert.equal(await button.getAttribute('title'), label, `${type} placement tool should expose a matching tooltip`);
+  }
   assert.equal(await page.getByTestId('schematic-editor-undo').isDisabled(), true, 'Undo should be disabled before the first edit');
   assert.equal(await page.getByTestId('schematic-editor-redo').isDisabled(), true, 'Redo should be disabled before the first edit');
   assert.equal(await page.getByTestId('schematic-editor-delete').isDisabled(), true, 'Delete should be disabled without a selection');

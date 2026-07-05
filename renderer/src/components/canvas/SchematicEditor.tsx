@@ -39,6 +39,17 @@ import {
 type ToolMode = 'select' | 'wire' | 'place';
 type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
+const COMPONENT_TOOL_LABELS: Record<ToolComponentType, string> = {
+  R: 'Place resistor (R)',
+  C: 'Place capacitor (C)',
+  L: 'Place inductor (L)',
+  D: 'Place diode (D)',
+  M: 'Place MOSFET (M)',
+  Q: 'Place BJT (Q)',
+  V: 'Place voltage source (V)',
+  I: 'Place current source (I)',
+};
+
 const AUTOPAN_MARGIN_PX = 44;
 const AUTOPAN_STEP_RATIO = 0.055;
 
@@ -1091,6 +1102,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           style={tool === 'select' ? styles.activeToolButton : styles.toolButton}
           onClick={() => { setTool('select'); setWireStart(null); setHoverEndpoint(null); }}
           disabled={busy}
+          aria-label="Select tool (S)"
+          title="Select tool (S)"
           data-testid="schematic-editor-select"
         >
           Select
@@ -1099,6 +1112,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           style={tool === 'wire' ? styles.activeToolButton : styles.toolButton}
           onClick={() => { setTool('wire'); setWireStart(null); setHoverEndpoint(null); }}
           disabled={busy}
+          aria-label="Wire tool (W)"
+          title="Wire tool (W)"
           data-testid="schematic-editor-wire"
         >
           Wire
@@ -1109,33 +1124,72 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             style={tool === 'place' && placeType === type ? styles.activeToolButton : styles.toolButton}
             onClick={() => { setTool('place'); setPlaceType(type); setWireStart(null); setHoverEndpoint(null); }}
             disabled={busy}
+            aria-label={COMPONENT_TOOL_LABELS[type]}
+            title={COMPONENT_TOOL_LABELS[type]}
             data-testid={`schematic-editor-place-${type}`}
           >
             {type}
           </button>
         ))}
         <span style={styles.toolbarDivider} />
-        <button style={styles.toolButton} onClick={undo} disabled={busy || history.length === 0} data-testid="schematic-editor-undo">
+        <button
+          style={styles.toolButton}
+          onClick={undo}
+          disabled={busy || history.length === 0}
+          aria-label="Undo (Ctrl+Z)"
+          title="Undo (Ctrl+Z)"
+          data-testid="schematic-editor-undo"
+        >
           Undo
         </button>
-        <button style={styles.toolButton} onClick={redo} disabled={busy || future.length === 0} data-testid="schematic-editor-redo">
+        <button
+          style={styles.toolButton}
+          onClick={redo}
+          disabled={busy || future.length === 0}
+          aria-label="Redo (Ctrl+Y)"
+          title="Redo (Ctrl+Y)"
+          data-testid="schematic-editor-redo"
+        >
           Redo
         </button>
-        <button style={styles.toolButton} onClick={deleteSelection} disabled={busy || !selection} data-testid="schematic-editor-delete">
+        <button
+          style={styles.toolButton}
+          onClick={deleteSelection}
+          disabled={busy || !selection}
+          aria-label="Delete selected item (Delete/Backspace)"
+          title="Delete selected item (Delete/Backspace)"
+          data-testid="schematic-editor-delete"
+        >
           Delete
         </button>
-        <button style={styles.primaryButton} onClick={() => void saveAndRebuild()} disabled={busy || !dirty} data-testid="schematic-editor-save">
+        <button
+          style={styles.primaryButton}
+          onClick={() => void saveAndRebuild()}
+          disabled={busy || !dirty}
+          aria-label="Apply schematic and rebuild SVG (Ctrl+S)"
+          title="Apply schematic and rebuild SVG (Ctrl+S)"
+          data-testid="schematic-editor-save"
+        >
           Apply
         </button>
         <button
           style={styles.toolButton}
           onClick={fitViewport}
           disabled={busy}
+          aria-label="Fit schematic view (F)"
+          title="Fit schematic view (F)"
           data-testid="schematic-editor-fit"
         >
           Fit
         </button>
-        <button style={styles.toolButton} onClick={onBuild} disabled={busy || buildBusy} data-testid="schematic-editor-rebuild-svg">
+        <button
+          style={styles.toolButton}
+          onClick={onBuild}
+          disabled={busy || buildBusy}
+          aria-label="Build netlistsvg preview"
+          title="Build netlistsvg preview"
+          data-testid="schematic-editor-rebuild-svg"
+        >
           {buildBusy ? 'Building...' : 'Build netlistsvg'}
         </button>
         <span style={styles.statusText} data-testid="schematic-editor-status">
