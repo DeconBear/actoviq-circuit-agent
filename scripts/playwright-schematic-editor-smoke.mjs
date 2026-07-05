@@ -1549,6 +1549,10 @@ try {
   ));
   await page.keyboard.press('w');
   assert.equal(await editor.getAttribute('data-tool'), 'wire', 'W hotkey did not activate wire tool');
+  await page.keyboard.press('s');
+  assert.equal(await editor.getAttribute('data-tool'), 'select', 'S hotkey did not return to select tool');
+  await page.keyboard.press('w');
+  assert.equal(await editor.getAttribute('data-tool'), 'wire', 'W hotkey did not reactivate wire tool after select');
   await page.keyboard.press('r');
   assert.equal(await editor.getAttribute('data-tool'), 'place', 'R hotkey did not activate placement tool');
   await page.mouse.click(placePoint.x, placePoint.y);
@@ -1607,6 +1611,41 @@ try {
       await page.locator(`g[data-component-type="${type}"]`).count(),
       typeCountBefore + 1,
       `${type} toolbar placement did not render a component`,
+    );
+  }
+  for (let index = toolbarPlacementTools.length - 1; index >= 0; index -= 1) {
+    const expectedCount = toolbarPlacementBaseCount + index;
+    await editor.focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+    await page.waitForFunction((count) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count)
+    ), expectedCount);
+  }
+  await editor.focus();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  ));
+  for (let index = 0; index < toolbarPlacementTools.length; index += 1) {
+    const type = toolbarPlacementTools[index];
+    const typeCountBefore = await page.locator(`g[data-component-type="${type}"]`).count();
+    const target = {
+      x: placePoint.x + 170 + index * 14,
+      y: placePoint.y + 68 + index * 9,
+    };
+    await editor.focus();
+    await page.keyboard.press(type.toLowerCase());
+    assert.equal(await editor.getAttribute('data-tool'), 'place', `${type} hotkey did not activate place mode`);
+    await page.mouse.click(target.x, target.y);
+    await page.waitForFunction(({ expectedCount, prefix }) => {
+      const node = document.querySelector('[data-testid="schematic-editor"]');
+      return node?.getAttribute('data-component-count') === String(expectedCount) &&
+        node?.getAttribute('data-selected')?.startsWith(`component:${prefix}`);
+    }, { expectedCount: toolbarPlacementBaseCount + index + 1, prefix: type.toLowerCase() });
+    assert.equal(
+      await page.locator(`g[data-component-type="${type}"]`).count(),
+      typeCountBefore + 1,
+      `${type} hotkey placement did not render a component`,
     );
   }
   for (let index = toolbarPlacementTools.length - 1; index >= 0; index -= 1) {
