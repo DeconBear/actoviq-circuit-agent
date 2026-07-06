@@ -2601,6 +2601,34 @@ try {
   await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-inverter.png') });
   console.log('[e2e] legacy cmos inverter loaded');
+  await selectComponentForDrag(page, 'mp1', [
+    { x: 0, y: 0 },
+    { x: -20, y: 0 },
+    { x: 12, y: 18 },
+    { x: 24, y: -18 },
+  ]);
+  const cmosMpDragPoint = await selectedComponentFrameScreenPoint(page, 'mp1');
+  await page.mouse.move(cmosMpDragPoint.x, cmosMpDragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.mouse.move(cmosMpDragPoint.x - 25, cmosMpDragPoint.y - 15, { steps: 4 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(cmosMpDragPoint.x - 90, cmosMpDragPoint.y - 60, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const cmosPositionsAfterMpDrag = await componentPositions(page);
+  assertPositionChanged(cmosPositionsAfterMpDrag.mp1, cmosInverterPositions.mp1, 'dragging CMOS inverter MP1 did not move MP1');
+  for (const id of ['mn1', 'cload']) {
+    assertPositionEqual(cmosPositionsAfterMpDrag[id], cmosInverterPositions[id], `dragging CMOS inverter MP1 moved ${id}`);
+  }
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-inverter-drag.png') });
+  console.log('[e2e] legacy cmos inverter drag isolated');
 
   await page.getByTestId(`sidebar-project-${legacyDifferentialPairProject.projectId}`).click();
   await waitForWorkbenchProject(page, legacyDifferentialPairProject.projectId);
@@ -2666,6 +2694,34 @@ try {
   await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-differential-pair.png') });
   console.log('[e2e] legacy differential pair loaded');
+  await selectComponentForDrag(page, 'm_inp', [
+    { x: 0, y: 0 },
+    { x: -20, y: 0 },
+    { x: 12, y: 18 },
+    { x: 24, y: -18 },
+  ]);
+  const diffPairMInpDragPoint = await selectedComponentFrameScreenPoint(page, 'm_inp');
+  await page.mouse.move(diffPairMInpDragPoint.x, diffPairMInpDragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.mouse.move(diffPairMInpDragPoint.x - 20, diffPairMInpDragPoint.y + 15, { steps: 4 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(diffPairMInpDragPoint.x - 100, diffPairMInpDragPoint.y + 55, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const diffPairPositionsAfterMInpDrag = await componentPositions(page);
+  assertPositionChanged(diffPairPositionsAfterMInpDrag.m_inp, diffPairPositions.m_inp, 'dragging differential pair M_INP did not move M_INP');
+  for (const id of ['m_inn', 'rdp', 'rdn', 'itail']) {
+    assertPositionEqual(diffPairPositionsAfterMInpDrag[id], diffPairPositions[id], `dragging differential pair M_INP moved ${id}`);
+  }
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-differential-pair-drag.png') });
+  console.log('[e2e] legacy differential pair drag isolated');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await waitForWorkbenchProject(page, projectId);
