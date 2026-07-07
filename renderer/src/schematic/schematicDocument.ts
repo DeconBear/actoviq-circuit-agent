@@ -401,12 +401,21 @@ function differentialInputRank(module: CircuitModule, net: string): number {
 
 function autoLayoutDifferentialPairModule(module: CircuitModule, layout: DifferentialPairLayout): CircuitModule {
   const placed = new Set<string>();
+  const nodeAnchors = new Map<string, CircuitPosition>();
+  const activeDrainNets = new Set(
+    module.components
+      .filter((entry) => entry.type === 'M' || entry.type === 'Q')
+      .map((entry) => activeNetMap(entry).drain)
+      .filter(Boolean) as string[],
+  );
   layout.left.position = snapPoint({ x: 320, y: 340 });
   layout.left.rotation = 0;
   placed.add(layout.left.id);
+  rememberComponentPinAnchors(nodeAnchors, layout.left);
   layout.right.position = snapPoint({ x: 700, y: 340 });
   layout.right.rotation = 0;
   placed.add(layout.right.id);
+  rememberComponentPinAnchors(nodeAnchors, layout.right);
   const pairMidX = snap((layout.left.position.x + layout.right.position.x) / 2);
 
   const activeLoads = module.components.filter((component) => (
@@ -426,6 +435,7 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
     component.position = snapPoint({ x: anchor?.x ?? component.position.x, y: 130 });
     component.rotation = 0;
     placed.add(component.id);
+    rememberComponentPinAnchors(nodeAnchors, component);
   }
 
   const drainLoads = [
@@ -438,6 +448,7 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
     if (load && anchor) {
       placeVertical(load, layout.powerNet, outputNet, { x: anchor.x, y: 165 });
       placed.add(load.id);
+      rememberComponentPinAnchors(nodeAnchors, load);
     }
   }
 
@@ -445,11 +456,28 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
   if (tail) {
     placeVertical(tail, layout.tailNet, layout.groundNet, { x: pairMidX, y: 525 });
     placed.add(tail.id);
+    rememberComponentPinAnchors(nodeAnchors, tail);
+  }
+
+  let auxiliaryActiveIndex = 0;
+  for (const component of module.components.filter((entry) => entry.type === 'M' || entry.type === 'Q')) {
+    if (placed.has(component.id)) continue;
+    component.position = snapPoint({
+      x: layout.right.position.x + 520 + auxiliaryActiveIndex * 220,
+      y: layout.right.position.y,
+    });
+    component.rotation = 0;
+    placed.add(component.id);
+    rememberComponentPinAnchors(nodeAnchors, component);
+    auxiliaryActiveIndex += 1;
   }
 
   let fallbackIndex = 0;
   const inputSeriesCounts = new Map<string, number>();
   const inputRailCounts = new Map<string, number>();
+  const continuationCounts = new Map<string, number>();
+  const railBranchCounts = new Map<string, number>();
+  let railOnlyIndex = 0;
   for (const component of module.components) {
     if (placed.has(component.id)) continue;
     const [first, second] = component.pins;
@@ -460,7 +488,10 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
       if (leftOutputBranch || rightOutputBranch) {
         const outputNet = leftOutputBranch ? layout.leftOutputNet : layout.rightOutputNet;
         const x = leftOutputBranch ? 220 : 760;
+        const preservedAnchor = nodeAnchors.get(outputNet);
         placeVertical(component, outputNet, layout.groundNet, { x, y: 470 + fallbackIndex * 12 });
+        rememberComponentPinAnchors(nodeAnchors, component);
+        if (preservedAnchor) nodeAnchors.set(outputNet, preservedAnchor);
         placed.add(component.id);
         fallbackIndex += 1;
         continue;
@@ -478,10 +509,13 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
           inputRailCounts.set(inputNet, index + 1);
           const topNet = isGroundNet(otherNet, module) ? inputNet : otherNet;
           const bottomNet = isGroundNet(otherNet, module) ? otherNet : inputNet;
+          const preservedAnchor = nodeAnchors.get(inputNet);
           placeVertical(component, topNet, bottomNet, {
             x: inputAnchor.x - 110 - index * 110,
             y: inputAnchor.y + (isGroundNet(otherNet, module) ? 135 : -135),
           });
+          rememberComponentPinAnchors(nodeAnchors, component);
+          if (preservedAnchor) nodeAnchors.set(inputNet, preservedAnchor);
         } else {
           const index = inputSeriesCounts.get(inputNet) ?? 0;
           inputSeriesCounts.set(inputNet, index + 1);
@@ -489,6 +523,74 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
             x: inputAnchor.x - 120 - index * 120,
             y: inputAnchor.y + index * 80,
           });
+          rememberComponentPinAnchors(nodeAnchors, component);
+        }
+        placed.add(component.id);
+        fallbackIndex += 1;
+        continue;
+      }
+
+      const firstRail = isRailNet(first.net, module);
+      const secondRail = isRailNet(second.net, module);
+      if (firstRail && secondRail) {
+        const topNet = isGroundNet(first.net, module) ? second.net : first.net;
+        const bottomNet = topNet === first.net ? second.net : first.net;
+        placeVertical(component, topNet, bottomNet, {
+          x: 120 + railOnlyIndex * 125,
+          y: isGroundNet(bottomNet, module) ? 165 : 120,
+        });
+        placed.add(component.id);
+        railOnlyIndex += 1;
+        fallbackIndex += 1;
+        continue;
+      }
+      const signalNet = firstRail ? second.net : secondRail ? first.net : '';
+      const railNet = firstRail ? first.net : secondRail ? second.net : '';
+      const signalAnchor = signalNet ? nodeAnchors.get(signalNet) : undefined;
+      if (railNet && signalAnchor) {
+        const index = railBranchCounts.get(signalNet) ?? 0;
+        railBranchCounts.set(signalNet, index + 1);
+        const topNet = isGroundNet(railNet, module) ? signalNet : railNet;
+        const bottomNet = isGroundNet(railNet, module) ? railNet : signalNet;
+        placeVertical(component, topNet, bottomNet, {
+          x: signalAnchor.x + index * 110,
+          y: signalAnchor.y + (isGroundNet(railNet, module) ? 135 : -135),
+        });
+        rememberComponentPinAnchors(nodeAnchors, component);
+        nodeAnchors.set(signalNet, signalAnchor);
+        placed.add(component.id);
+        fallbackIndex += 1;
+        continue;
+      }
+
+      const firstAnchor = firstRail ? undefined : nodeAnchors.get(first.net);
+      const secondAnchor = secondRail ? undefined : nodeAnchors.get(second.net);
+      const anchorNet = firstAnchor ? first.net : secondAnchor ? second.net : '';
+      const anchor = firstAnchor ?? secondAnchor;
+      if (anchorNet && anchor) {
+        const otherNet = anchorNet === first.net ? second.net : first.net;
+        const otherAnchor = anchorNet === first.net ? secondAnchor : firstAnchor;
+        const index = continuationCounts.get(anchorNet) ?? 0;
+        continuationCounts.set(anchorNet, index + 1);
+        const bridgesActiveDrains = Boolean(
+          firstAnchor &&
+          secondAnchor &&
+          activeDrainNets.has(first.net) &&
+          activeDrainNets.has(second.net),
+        );
+        const center = otherAnchor
+          ? {
+              x: snap((anchor.x + otherAnchor.x) / 2),
+              y: bridgesActiveDrains
+                ? snap(Math.min(anchor.y, otherAnchor.y) - 95)
+                : snap((anchor.y + otherAnchor.y) / 2),
+            }
+          : { x: anchor.x + 135 + index * 150, y: anchor.y + index * 80 };
+        placeHorizontal(component, anchorNet, otherNet, center);
+        rememberComponentPinAnchors(nodeAnchors, component);
+        if (bridgesActiveDrains) {
+          if (firstAnchor) nodeAnchors.set(first.net, firstAnchor);
+          if (secondAnchor) nodeAnchors.set(second.net, secondAnchor);
         }
         placed.add(component.id);
         fallbackIndex += 1;
@@ -1348,9 +1450,13 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
     const base = anchor ?? fallback;
     const sideGroup = port.direction === 'output' ? 'output' : 'input';
     const useGlobalRightEdge = side === 'right' && shouldUseGlobalRightPortEdge(module, port);
+    const sideGroupIndex = signalSideYs[side][sideGroup].length;
+    const portLaneOffset = useGlobalRightEdge ? sideGroupIndex * SCHEMATIC_GRID * 2 : 0;
     const x = side === 'right'
       ? (useGlobalRightEdge ? Math.max(base.x, bounds.maxX) : base.x) + 110
-      : base.x - 110;
+        + portLaneOffset
+      : base.x - 110
+        - portLaneOffset;
     const y = avoidSignalPortY(module, port, snap(x), base.y + index * 16, signalSideYs[side][sideGroup]);
     signalSideYs[side][sideGroup].push(y);
     map.set(port.id, snapPoint({
@@ -1595,10 +1701,50 @@ function obstaclesForEndpoints(
   const excludedComponentIds = new Set(
     [startEndpoint?.component_id, endEndpoint?.component_id].filter(Boolean) as string[],
   );
-  return module.components
+  return [
+    ...module.components
     .filter((component) => !excludedComponentIds.has(component.id))
-    .filter((component) => !net || !component.pins.some((pin) => pin.net === net))
-    .map((component) => padBounds(componentBounds(component), ROUTE_OBSTACLE_PADDING));
+    .map((component) => {
+      const padding = net && component.pins.some((pin) => pin.net === net) ? 0 : ROUTE_OBSTACLE_PADDING;
+      return padBounds(componentBounds(component), padding);
+    }),
+    ...(net ? otherNetCorridorObstacles(module, net) : []),
+  ];
+}
+
+function otherNetCorridorObstacles(module: CircuitModule, currentNet: string): SchematicBounds[] {
+  const pointsByNet = new Map<string, CircuitPosition[]>();
+  const portNets = new Set(module.ports.map((port) => port.net));
+  for (const component of module.components) {
+    component.pins.forEach((pin, index) => {
+      if (!pin.net || pin.net === currentNet || isRailNet(pin.net, module)) return;
+      if (!portNets.has(pin.net)) return;
+      const point = pinWorld(component, pin, index);
+      pointsByNet.set(pin.net, [...(pointsByNet.get(pin.net) ?? []), point]);
+    });
+  }
+
+  const obstacles: SchematicBounds[] = [];
+  const alignmentTolerance = SCHEMATIC_GRID * 2;
+  for (const points of pointsByNet.values()) {
+    for (let leftIndex = 0; leftIndex < points.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < points.length; rightIndex += 1) {
+        const left = points[leftIndex];
+        const right = points[rightIndex];
+        if (!left || !right) continue;
+        const nearlyVertical = Math.abs(left.x - right.x) <= alignmentTolerance;
+        const nearlyHorizontal = Math.abs(left.y - right.y) <= alignmentTolerance;
+        if (!nearlyVertical && !nearlyHorizontal) continue;
+        obstacles.push(padBounds({
+          minX: Math.min(left.x, right.x),
+          minY: Math.min(left.y, right.y),
+          maxX: Math.max(left.x, right.x),
+          maxY: Math.max(left.y, right.y),
+        }, ROUTE_OBSTACLE_PADDING));
+      }
+    }
+  }
+  return obstacles;
 }
 
 function orthogonalRouteCandidates(
@@ -1614,16 +1760,36 @@ function orthogonalRouteCandidates(
   const detourXs = new Set<number>();
   const detourYs = new Set<number>();
   for (const obstacle of obstacles) {
-    detourXs.add(snap(obstacle.minX - SCHEMATIC_GRID));
-    detourXs.add(snap(obstacle.maxX + SCHEMATIC_GRID));
-    detourYs.add(snap(obstacle.minY - SCHEMATIC_GRID));
-    detourYs.add(snap(obstacle.maxY + SCHEMATIC_GRID));
+    for (const margin of [1, 2, 3]) {
+      detourXs.add(snap(obstacle.minX - SCHEMATIC_GRID * margin));
+      detourXs.add(snap(obstacle.maxX + SCHEMATIC_GRID * margin));
+      detourYs.add(snap(obstacle.minY - SCHEMATIC_GRID * margin));
+      detourYs.add(snap(obstacle.maxY + SCHEMATIC_GRID * margin));
+    }
   }
   for (const x of detourXs) {
     candidates.push([startPoint, { x, y: startPoint.y }, { x, y: endPoint.y }, endPoint]);
   }
   for (const y of detourYs) {
     candidates.push([startPoint, { x: startPoint.x, y }, { x: endPoint.x, y }, endPoint]);
+  }
+  for (const x of detourXs) {
+    for (const y of detourYs) {
+      candidates.push([
+        startPoint,
+        { x, y: startPoint.y },
+        { x, y },
+        { x: endPoint.x, y },
+        endPoint,
+      ]);
+      candidates.push([
+        startPoint,
+        { x: startPoint.x, y },
+        { x, y },
+        { x, y: endPoint.y },
+        endPoint,
+      ]);
+    }
   }
   return candidates.map(compactRoute);
 }

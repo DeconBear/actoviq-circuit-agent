@@ -313,6 +313,7 @@ for (const fixture of fixtures) {
   assertMultiEndpointSpine(document);
   assertGeneratedWireClearance(document);
   assertGeneratedWireSimplicity(document);
+  assertGeneratedWireCrossings(document);
 }
 
 console.log(JSON.stringify({
@@ -633,8 +634,8 @@ function assertGeneratedWireClearance(document: ReturnType<typeof createSchemati
     const endpointComponents = new Set([wire.from?.component_id, wire.to?.component_id].filter(Boolean));
     for (const component of document.module.components) {
       if (endpointComponents.has(component.id)) continue;
-      if (component.pins.some((pin) => pin.net === wire.net)) continue;
-      const bounds = padLocalBounds(boundsForComponent(component), clearance);
+      const padding = component.pins.some((pin) => pin.net === wire.net) ? 0 : clearance;
+      const bounds = padLocalBounds(boundsForComponent(component), padding);
       for (let index = 1; index < wire.points.length; index += 1) {
         const start = wire.points[index - 1];
         const end = wire.points[index];
@@ -654,8 +655,8 @@ function assertGeneratedWireSimplicity(document: ReturnType<typeof createSchemat
     if (wire.source === 'stored') continue;
     const points = wire.points ?? [];
     assert.ok(
-      points.length <= 4,
-      `${document.module.module_id}.${wire.id} should be routed as a direct, one-bend, or single-detour path`,
+      points.length <= 5,
+      `${document.module.module_id}.${wire.id} should be routed as a direct, one-bend, single-detour, or compact double-detour path`,
     );
     for (let index = 1; index < points.length; index += 1) {
       const start = points[index - 1];
@@ -677,6 +678,34 @@ function assertGeneratedWireSimplicity(document: ReturnType<typeof createSchemat
         false,
         `${document.module.module_id}.${wire.id} keeps a redundant collinear bend`,
       );
+    }
+  }
+}
+
+function assertGeneratedWireCrossings(document: ReturnType<typeof createSchematicDocument>) {
+  const wires = document.wires.filter((wire) => wire.source !== 'stored');
+  for (let leftIndex = 0; leftIndex < wires.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < wires.length; rightIndex += 1) {
+      const left = wires[leftIndex];
+      const right = wires[rightIndex];
+      assert.ok(left && right);
+      if (left.net && left.net === right.net) continue;
+      for (let leftPointIndex = 1; leftPointIndex < left.points.length; leftPointIndex += 1) {
+        const leftStart = left.points[leftPointIndex - 1];
+        const leftEnd = left.points[leftPointIndex];
+        assert.ok(leftStart && leftEnd);
+        for (let rightPointIndex = 1; rightPointIndex < right.points.length; rightPointIndex += 1) {
+          const rightStart = right.points[rightPointIndex - 1];
+          const rightEnd = right.points[rightPointIndex];
+          assert.ok(rightStart && rightEnd);
+          const crossing = segmentConflictPoint(leftStart, leftEnd, rightStart, rightEnd);
+          assert.equal(
+            crossing,
+            null,
+            `${document.module.module_id}.${left.id} (${left.net ?? '-'}) crosses ${right.id} (${right.net ?? '-'}) at ${crossing?.x},${crossing?.y}`,
+          );
+        }
+      }
     }
   }
 }
@@ -776,6 +805,46 @@ function segmentIntersectsLocalBounds(
   }
   return segmentIntersectsLocalBounds(start, { x: end.x, y: start.y }, bounds) ||
     segmentIntersectsLocalBounds({ x: end.x, y: start.y }, end, bounds);
+}
+
+function segmentConflictPoint(
+  leftStart: { x: number; y: number },
+  leftEnd: { x: number; y: number },
+  rightStart: { x: number; y: number },
+  rightEnd: { x: number; y: number },
+): { x: number; y: number } | null {
+  const leftVertical = leftStart.x === leftEnd.x;
+  const rightVertical = rightStart.x === rightEnd.x;
+  const leftHorizontal = leftStart.y === leftEnd.y;
+  const rightHorizontal = rightStart.y === rightEnd.y;
+
+  if (leftVertical && rightVertical) {
+    if (leftStart.x !== rightStart.x) return null;
+    const minY = Math.max(Math.min(leftStart.y, leftEnd.y), Math.min(rightStart.y, rightEnd.y));
+    const maxY = Math.min(Math.max(leftStart.y, leftEnd.y), Math.max(rightStart.y, rightEnd.y));
+    return maxY > minY ? { x: leftStart.x, y: (minY + maxY) / 2 } : null;
+  }
+  if (leftHorizontal && rightHorizontal) {
+    if (leftStart.y !== rightStart.y) return null;
+    const minX = Math.max(Math.min(leftStart.x, leftEnd.x), Math.min(rightStart.x, rightEnd.x));
+    const maxX = Math.min(Math.max(leftStart.x, leftEnd.x), Math.max(rightStart.x, rightEnd.x));
+    return maxX > minX ? { x: (minX + maxX) / 2, y: leftStart.y } : null;
+  }
+
+  const verticalStart = leftVertical ? leftStart : rightStart;
+  const verticalEnd = leftVertical ? leftEnd : rightEnd;
+  const horizontalStart = leftHorizontal ? leftStart : rightStart;
+  const horizontalEnd = leftHorizontal ? leftEnd : rightEnd;
+  if (!verticalStart || !verticalEnd || !horizontalStart || !horizontalEnd) return null;
+  const x = verticalStart.x;
+  const y = horizontalStart.y;
+  const withinVertical = betweenInclusive(y, verticalStart.y, verticalEnd.y);
+  const withinHorizontal = betweenInclusive(x, horizontalStart.x, horizontalEnd.x);
+  return withinVertical && withinHorizontal ? { x, y } : null;
+}
+
+function betweenInclusive(value: number, start: number, end: number): boolean {
+  return value >= Math.min(start, end) && value <= Math.max(start, end);
 }
 
 function pinPointForNet(component: CircuitComponent, net: string) {
