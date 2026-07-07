@@ -2463,6 +2463,10 @@ try {
     '16',
     'editable schematic net labels should remain prominent like an EDA editor',
   );
+  const bjtEditorSvg = page.getByTestId('schematic-editor-svg');
+  const bjtEditorComponentCount = await bjtEditorSvg.locator('g[data-component-id]').count();
+  const bjtEditorWireCount = await bjtEditorSvg.locator('g[data-wire-id]').count();
+  const bjtEditorNetLabelCount = await bjtEditorSvg.locator('[data-testid="schematic-net-label"]').count();
   assert.ok(bjtResetPositions.q_boot.x < bjtResetPositions.q_rst.x, 'BJT reset boot transistor should be left of reset transistor in GUI');
   assert.ok(bjtResetPositions.d1.x < bjtResetPositions.q_rst.x, 'BJT reset diode should feed reset transistor from the left in GUI');
   assert.ok(bjtResetPositions.r50.y < bjtResetPositions.q_rst.y, 'BJT reset pull-up should sit above reset transistor in GUI');
@@ -2474,6 +2478,27 @@ try {
   assert.ok(bjtResetPositions.r52.y > bjtResetPositions.q_boot.y, 'BJT reset BOOT resistor should sit below boot transistor in GUI');
   await waitForEditorIdle(page);
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-bjt-reset.png') });
+  await page.getByTestId('schematic-svg-tab').click();
+  await page.getByTestId('module-document-svg').waitFor({ timeout: 20_000 });
+  assert.equal(await page.getByTestId('module-netlistsvg').getAttribute('data-schematic-source'), 'document');
+  const bjtDocumentSvg = page.getByTestId('module-document-svg');
+  assert.equal(
+    await bjtDocumentSvg.locator('g[data-component-id]').count(),
+    bjtEditorComponentCount,
+    'BJT reset SVG preview should use the same component document as the editable schematic',
+  );
+  assert.equal(
+    await bjtDocumentSvg.locator('g[data-wire-id]').count(),
+    bjtEditorWireCount,
+    'BJT reset SVG preview should use the same wire document as the editable schematic',
+  );
+  assert.equal(
+    await bjtDocumentSvg.locator('[data-testid="schematic-net-label"]').count(),
+    bjtEditorNetLabelCount,
+    'BJT reset SVG preview should use the same net-label document as the editable schematic',
+  );
+  await page.getByTestId('schematic-editor-tab').click();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   console.log('[e2e] legacy bjt reset loaded');
 
   await page.getByTestId(`sidebar-project-${legacyVoltageDividerProject.projectId}`).click();
