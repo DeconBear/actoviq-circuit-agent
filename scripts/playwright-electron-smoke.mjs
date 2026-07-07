@@ -441,6 +441,24 @@ try {
   await page.getByTestId('sidebar-refresh-references').scrollIntoViewIfNeeded();
   assert.equal(await page.getByTestId('sidebar-refresh-references').getAttribute('aria-label'), 'Refresh references');
   await page.getByTestId('sidebar-refresh-references').click();
+  const keyboardWorkspaceName = `Playwright Workspace Keyboard ${Date.now()}`;
+  await page.getByTestId('sidebar-new-workspace').scrollIntoViewIfNeeded();
+  await page.getByTestId('sidebar-new-workspace').click();
+  await page.getByTestId('workspace-create-panel').waitFor({ timeout: 10_000 });
+  await page.getByTestId('workspace-name-input').fill(keyboardWorkspaceName);
+  await page.keyboard.press('Enter');
+  await page.getByTestId('sidebar-notice').getByText(`Workspace created: ${keyboardWorkspaceName}`, { exact: true }).waitFor({ timeout: 20_000 });
+  await page.waitForFunction((name) => {
+    const select = document.querySelector('[data-testid="workspace-select"]');
+    if (!(select instanceof HTMLSelectElement)) return false;
+    return [...select.options].some((option) => option.textContent === name) &&
+      select.selectedOptions[0]?.textContent === name;
+  }, keyboardWorkspaceName);
+  assert.equal(await page.getByTestId('workspace-select').evaluate((select, name) => (
+    select instanceof HTMLSelectElement
+      ? [...select.options].filter((option) => option.textContent === name).length
+      : 0
+  ), keyboardWorkspaceName), 1, 'pressing Enter in workspace create should create exactly one workspace option');
   await page.getByTestId('workspace-select').selectOption('default');
   await page.getByTestId(`sidebar-project-${projectId}`).waitFor({ timeout: 20_000 });
 
@@ -486,6 +504,25 @@ try {
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
   await waitForWorkbenchProject(page, projectId);
   assert.equal(await page.getByTestId(`sidebar-project-${projectId}`).getAttribute('data-active'), 'true');
+
+  const sidebarKeyboardProjectName = `Playwright Keyboard Project ${Date.now()}`;
+  await page.getByTestId('sidebar-new-blank-project').click();
+  await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
+  await page.getByTestId('project-name-input').fill(sidebarKeyboardProjectName);
+  await page.keyboard.press('Enter');
+  await page.getByTestId('sidebar-notice').getByText(`Project created: ${sidebarKeyboardProjectName}`, { exact: true }).waitFor({ timeout: 60_000 });
+  assert.equal(
+    await countProjectsByNameInRoot(projectsRoot, sidebarKeyboardProjectName),
+    1,
+    'pressing Enter in sidebar project create should create exactly one project',
+  );
+  const sidebarKeyboardProjectManifest = await findProjectByName(sidebarKeyboardProjectName);
+  await waitForWorkbenchProject(page, sidebarKeyboardProjectManifest.project.project_id);
+  const sidebarKeyboardProject = page.locator('[data-testid^="sidebar-project-"]').filter({ hasText: sidebarKeyboardProjectName }).first();
+  await sidebarKeyboardProject.waitFor({ timeout: 30_000 });
+  assert.equal(await sidebarKeyboardProject.getAttribute('data-active'), 'true');
+  assert.equal(await sidebarKeyboardProject.getAttribute('aria-current'), 'true');
+  assert.equal(await page.getByTestId('project-title').textContent(), sidebarKeyboardProjectName);
 
   const sidebarDemoProjectName = `${e2eUiProjectPrefix}${Date.now()}`;
   await page.getByTestId('sidebar-new-demo-project').click();
