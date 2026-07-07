@@ -31,6 +31,11 @@ const COMPONENT_SELECTION_COLOR = '#f59e0b';
 
 type PortSide = 'left' | 'right' | 'top' | 'bottom';
 
+export interface RenderedJunction {
+  point: CircuitPosition;
+  net: string;
+}
+
 interface Props {
   document: SchematicDocument;
   selection?: SchematicSelection;
@@ -229,8 +234,18 @@ export function SchematicDocumentSvg({
         ))}
       </g>
       <g data-layer="junctions" pointerEvents="none">
-        {junctions(document).map((point) => (
-          <circle key={`${point.x},${point.y}`} cx={point.x} cy={point.y} r="4.6" fill="#cc0000" stroke="#ffffff" strokeWidth="1.2" />
+        {junctions(document).map(({ point, net }) => (
+          <circle
+            key={`${net}:${point.x},${point.y}`}
+            cx={point.x}
+            cy={point.y}
+            r="4.6"
+            fill="#cc0000"
+            stroke="#ffffff"
+            strokeWidth="1.2"
+            data-testid="schematic-junction"
+            data-net={net}
+          />
         ))}
       </g>
       {wireStart ? (
@@ -914,14 +929,16 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function junctions(document: SchematicDocument): CircuitPosition[] {
-  const counts = new Map<string, { point: CircuitPosition; count: number }>();
+export function junctions(document: SchematicDocument): RenderedJunction[] {
+  const counts = new Map<string, { point: CircuitPosition; net: string; count: number }>();
   for (const wire of document.wires) {
+    const net = wire.net ?? '';
+    if (!net) continue;
     for (const point of wire.points ?? []) {
-      const key = `${round(point.x)},${round(point.y)}`;
+      const key = `${net}:${round(point.x)},${round(point.y)}`;
       const current = counts.get(key);
-      counts.set(key, { point, count: (current?.count ?? 0) + 1 });
+      counts.set(key, { point, net, count: (current?.count ?? 0) + 1 });
     }
   }
-  return [...counts.values()].filter((entry) => entry.count > 2).map((entry) => entry.point);
+  return [...counts.values()].filter((entry) => entry.count > 2).map(({ point, net }) => ({ point, net }));
 }

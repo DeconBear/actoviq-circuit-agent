@@ -7,6 +7,7 @@ import {
   isPmosComponent,
   pinWorld,
 } from '../renderer/src/schematic/schematicDocument';
+import { junctions } from '../renderer/src/schematic/SchematicDocumentSvg';
 
 const defaultPorts: CircuitPort[] = [
   { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
@@ -275,6 +276,8 @@ const fixtures: CircuitModule[] = [
   ]),
 ];
 
+assertJunctionNetIsolation();
+
 for (const fixture of fixtures) {
   const document = createSchematicDocument(fixture);
   assert.equal(document.schema, 'actoviq.schematic-document.v1');
@@ -321,6 +324,30 @@ console.log(JSON.stringify({
   fixtureCount: fixtures.length,
   fixtures: fixtures.map((fixture) => fixture.module_id),
 }, null, 2));
+
+function assertJunctionNetIsolation() {
+  const crossNetOnly = {
+    wires: [
+      { id: 'a1', net: 'a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }] },
+      { id: 'a2', net: 'a', source: 'net', points: [{ x: 40, y: 40 }, { x: 80, y: 40 }] },
+      { id: 'b1', net: 'b', source: 'net', points: [{ x: 40, y: 0 }, { x: 40, y: 40 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(junctions(crossNetOnly), [], 'cross-net wire endpoints should not create a junction dot');
+
+  const sameNetBranch = {
+    wires: [
+      { id: 'a1', net: 'a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }] },
+      { id: 'a2', net: 'a', source: 'net', points: [{ x: 40, y: 40 }, { x: 80, y: 40 }] },
+      { id: 'a3', net: 'a', source: 'net', points: [{ x: 40, y: 0 }, { x: 40, y: 40 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(
+    junctions(sameNetBranch).map((junction) => ({ net: junction.net, x: junction.point.x, y: junction.point.y })),
+    [{ net: 'a', x: 40, y: 40 }],
+    'same-net three-way branch should create one junction dot',
+  );
+}
 
 function assertReadableLayout(module: CircuitModule) {
   if (module.module_id === 'rc_low_pass') {
