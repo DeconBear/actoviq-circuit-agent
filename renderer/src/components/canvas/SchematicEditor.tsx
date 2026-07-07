@@ -1471,17 +1471,27 @@ function hitSelectedComponentFrame(
 ): CircuitComponent | null {
   const selectedIds = new Set(componentIdsForSelection(selection));
   if (selectedIds.size === 0) return null;
-  const padding = 28;
+  const frameInset = 6;
+  const hitBand = 10;
   for (let index = document.module.components.length - 1; index >= 0; index -= 1) {
     const component = document.module.components[index];
     if (!component || !selectedIds.has(component.id)) continue;
     const bounds = componentBounds(component);
-    if (
-      world.x >= bounds.minX - padding &&
-      world.x <= bounds.maxX + padding &&
-      world.y >= bounds.minY - padding &&
-      world.y <= bounds.maxY + padding
-    ) {
+    const outer = {
+      minX: bounds.minX - frameInset - hitBand,
+      minY: bounds.minY - frameInset - hitBand,
+      maxX: bounds.maxX + frameInset + hitBand,
+      maxY: bounds.maxY + frameInset + hitBand,
+    };
+    const inner = {
+      minX: bounds.minX - frameInset + hitBand,
+      minY: bounds.minY - frameInset + hitBand,
+      maxX: bounds.maxX + frameInset - hitBand,
+      maxY: bounds.maxY + frameInset - hitBand,
+    };
+    const insideOuter = world.x >= outer.minX && world.x <= outer.maxX && world.y >= outer.minY && world.y <= outer.maxY;
+    const insideInner = world.x >= inner.minX && world.x <= inner.maxX && world.y >= inner.minY && world.y <= inner.maxY;
+    if (insideOuter && !insideInner) {
       return component;
     }
   }

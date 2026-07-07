@@ -1821,6 +1821,19 @@ try {
     'square',
     'component selection handles should be square',
   );
+  const r1FramePaddingPoint = await componentScreenPoint(page, 'r1', { x: 0, y: -75 });
+  await page.mouse.move(r1FramePaddingPoint.x, r1FramePaddingPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(r1FramePaddingPoint.x + 70, r1FramePaddingPoint.y + 35, { steps: 8 });
+  await page.mouse.up();
+  const filterPositionsAfterFramePaddingDrag = await componentPositions(page);
+  assertPositionEqual(filterPositionsAfterFramePaddingDrag.r_filter, filterPositionsAfterNudge.r_filter, 'dragging selected-frame padding moved r_filter');
+  assertPositionEqual(filterPositionsAfterFramePaddingDrag.c_filter, filterPositionsAfterNudge.c_filter, 'dragging selected-frame padding moved c_filter');
+  assertPositionEqual(filterPositionsAfterFramePaddingDrag.r1, filterPositionsAfterNudge.r1, 'dragging selected-frame padding moved r1');
+  await page.mouse.click(r1PlacePoint.x, r1PlacePoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
+  ));
   const r1FrameDragPoint = await selectedComponentCornerScreenPoint(page, 'r1', 2);
   await page.mouse.move(r1FrameDragPoint.x, r1FrameDragPoint.y);
   await page.waitForFunction(() => (
