@@ -128,6 +128,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [editorFocused, setEditorFocused] = useState(false);
   const [marqueeBounds, setMarqueeBounds] = useState<SchematicBounds | null>(null);
   const [spacePanActive, setSpacePanActive] = useState(false);
+  const [dragPreviewPositions, setDragPreviewPositions] = useState<Record<string, CircuitPosition> | null>(null);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const editorShellRef = useRef<HTMLDivElement | null>(null);
@@ -143,7 +144,16 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const viewportUpdateFrameRef = useRef<number | null>(null);
   const pendingViewportRef = useRef<SchematicBounds | null>(null);
 
-  const document = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
+  const previewDraft = useMemo(() => {
+    if (!dragPreviewPositions) return draft;
+    const next = cloneModule(draft);
+    applyComponentPositions(next, dragPreviewPositions);
+    return next;
+  }, [draft, dragPreviewPositions]);
+  const document = useMemo(() => createSchematicDocument(previewDraft, { autoLayout: false }), [previewDraft]);
+  const displayedComponentPositions = useMemo(() => {
+    return componentPositionsById(previewDraft, previewDraft.components.map((component) => component.id));
+  }, [previewDraft]);
   const activeViewBox = viewport ?? document.viewBox;
   const zoom = Math.max(
     0.05,
@@ -179,6 +189,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setViewport(null);
     setMarqueeBounds(null);
     setSpacePanActive(false);
+    setDragPreviewPositions(null);
     setHistory([]);
     setFuture([]);
   }, [module.module_id, module.revision]);
@@ -605,20 +616,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     );
     if (samePositionMap(drag.lastPositions, nextPositions)) return;
     drag.lastPositions = clonePositionMap(nextPositions);
-    scheduleDraftUpdate((current) => {
-      const next = cloneModule(current);
-      let changed = false;
-      for (const [componentId, nextPosition] of Object.entries(nextPositions)) {
-        const component = next.components.find((entry) => entry.id === componentId);
-        if (!component) continue;
-        if (component.position.x === nextPosition.x && component.position.y === nextPosition.y) continue;
-        component.position = nextPosition;
-        changed = true;
-      }
-      if (!changed) return current;
-      return next;
-    });
-    markDirty();
+    setDragPreviewPositions(nextPositions);
     autoPanViewport(event.currentTarget, event.clientX, event.clientY);
   }
 
@@ -659,6 +657,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     wireSegmentDragRef.current = null;
     marqueeRef.current = null;
     setMarqueeBounds(null);
+    setDragPreviewPositions(null);
     const world = screenToWorld(event);
     setInteractionCursor(cursorForWorld(document, draft, selection, world));
     if (marquee) {
@@ -683,9 +682,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setFuture([]);
     setDraft((current) => {
       const next = cloneModule(current);
+      applyComponentPositions(next, drag.lastPositions);
       next.wires = rerouteStoredWires(next);
       return next;
     });
+    setDirty(true);
   }
 
   function handlePointerCancel(event: ReactPointerEvent<SVGSVGElement>) {
@@ -721,6 +722,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     marqueeRef.current = null;
     panRef.current = null;
     setMarqueeBounds(null);
+    setDragPreviewPositions(null);
     setInteractionCursor('default');
     if (wirePointDrag?.moved) {
       setDraft(wirePointDrag.originalModule);
@@ -1077,9 +1079,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-component-count={draft.components.length}
       data-wire-count={document.wires.length}
       data-net-label-count={document.netLabels.length}
-      data-component-positions={JSON.stringify(Object.fromEntries(
-        draft.components.map((component) => [component.id, component.position]),
-      ))}
+      data-drag-preview={dragPreviewPositions ? 'true' : 'false'}
+      data-component-positions={JSON.stringify(displayedComponentPositions)}
       data-component-rotations={JSON.stringify(Object.fromEntries(
         draft.components.map((component) => [component.id, normalizeRotation(component.rotation)]),
       ))}
@@ -1502,6 +1503,13 @@ function componentPositionsById(module: CircuitModule, componentIds: string[]): 
       })
       .filter((entry): entry is [string, CircuitPosition] => Boolean(entry)),
   );
+}
+
+function applyComponentPositions(module: CircuitModule, positions: Record<string, CircuitPosition>) {
+  for (const [componentId, position] of Object.entries(positions)) {
+    const component = module.components.find((entry) => entry.id === componentId);
+    if (component) component.position = { ...position };
+  }
 }
 
 function clonePositionMap(positions: Record<string, CircuitPosition>): Record<string, CircuitPosition> {
