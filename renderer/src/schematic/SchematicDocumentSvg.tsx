@@ -21,6 +21,9 @@ const MUTED_LABEL_COLOR = '#334155';
 const LABEL_HALO_COLOR = '#ffffff';
 const LABEL_FONT = 'Arial, Helvetica, sans-serif';
 const MONO_FONT = 'Consolas, monospace';
+const NET_LABEL_FONT_SIZE = 16;
+const COMPONENT_NAME_FONT_SIZE = 17;
+const COMPONENT_VALUE_FONT_SIZE = 15;
 const WIRE_STROKE = 3;
 const SYMBOL_STROKE = 2.4;
 const WIRE_SELECTION_COLOR = '#0ea5e9';
@@ -268,13 +271,14 @@ function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
         x={position.x}
         y={nameY}
         textAnchor="middle"
-        fontSize="14"
+        fontSize={NET_LABEL_FONT_SIZE}
         fontFamily={LABEL_FONT}
         fontWeight="700"
         fill={LABEL_COLOR}
         stroke={LABEL_HALO_COLOR}
         strokeWidth="3"
         paintOrder="stroke"
+        data-testid="schematic-net-label-text"
       >
         {label.name}
       </text>
@@ -312,13 +316,14 @@ function SignalNetLabelSymbol({ label }: { label: SchematicNetLabel }) {
         x={text.x}
         y={text.y}
         textAnchor={text.anchor}
-        fontSize="14"
+        fontSize={NET_LABEL_FONT_SIZE}
         fontFamily={LABEL_FONT}
         fontWeight="700"
         fill={LABEL_COLOR}
         stroke={LABEL_HALO_COLOR}
         strokeWidth="3"
         paintOrder="stroke"
+        data-testid="schematic-net-label-text"
       >
         {label.name}
       </text>
@@ -432,7 +437,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         x={labels.name.x}
         y={labels.name.y}
         textAnchor={labels.name.anchor}
-        fontSize="15"
+        fontSize={COMPONENT_NAME_FONT_SIZE}
         fontFamily={LABEL_FONT}
         fontWeight="700"
         fill={LABEL_COLOR}
@@ -440,6 +445,7 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         strokeWidth="3"
         paintOrder="stroke"
         pointerEvents="none"
+        data-testid="schematic-component-name-label"
       >
         {component.name}
       </text>
@@ -447,13 +453,14 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         x={labels.value.x}
         y={labels.value.y}
         textAnchor={labels.value.anchor}
-        fontSize="14"
+        fontSize={COMPONENT_VALUE_FONT_SIZE}
         fontFamily={LABEL_FONT}
         fill={LABEL_COLOR}
         stroke={LABEL_HALO_COLOR}
         strokeWidth="3"
         paintOrder="stroke"
         pointerEvents="none"
+        data-testid="schematic-component-value-label"
       >
         {component.value}
       </text>

@@ -2448,6 +2448,21 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 7, 'hydrated BJT reset components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 4, 'hydrated BJT reset signal wires are not visibly drawn');
+  assert.equal(
+    await page.getByTestId('schematic-component-name-label').first().getAttribute('font-size'),
+    '17',
+    'editable schematic component names should remain large enough to read after fit',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-component-value-label').first().getAttribute('font-size'),
+    '15',
+    'editable schematic component values should remain large enough to read after fit',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-net-label-text').first().getAttribute('font-size'),
+    '16',
+    'editable schematic net labels should remain prominent like an EDA editor',
+  );
   assert.ok(bjtResetPositions.q_boot.x < bjtResetPositions.q_rst.x, 'BJT reset boot transistor should be left of reset transistor in GUI');
   assert.ok(bjtResetPositions.d1.x < bjtResetPositions.q_rst.x, 'BJT reset diode should feed reset transistor from the left in GUI');
   assert.ok(bjtResetPositions.r50.y < bjtResetPositions.q_rst.y, 'BJT reset pull-up should sit above reset transistor in GUI');
