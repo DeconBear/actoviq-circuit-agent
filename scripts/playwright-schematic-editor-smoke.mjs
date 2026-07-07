@@ -1911,9 +1911,13 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
   await page.mouse.move(r1PlacePoint.x + 60, r1PlacePoint.y + 30, { steps: 8 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
   await page.mouse.up();
   await page.waitForFunction(() => (
-    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') !== 'grabbing'
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') !== 'grabbing' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'false'
   ));
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'

@@ -16,21 +16,26 @@ import {
   cloneModule,
   COMPONENT_TYPES,
   componentBounds,
+  computePortPositions,
   createSchematicDocument,
   hitComponent,
   hitEndpoint,
   hitWire,
   makeId,
   makePlacedComponent,
+  moduleBounds,
   normalizeConnectivity,
   normalizeRotation,
+  padBounds,
   pointToSegmentDistance,
   pointEndpoint,
   removeWireAndUpdateConnectivity,
+  rerouteWire,
   rerouteStoredWires,
   SCHEMATIC_GRID,
   snapPoint,
   type EndpointHit,
+  type SchematicDocument,
   type SchematicBounds,
   type SchematicSelection,
   type ToolComponentType,
@@ -144,13 +149,18 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const viewportUpdateFrameRef = useRef<number | null>(null);
   const pendingViewportRef = useRef<SchematicBounds | null>(null);
 
+  const baseDocument = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
   const previewDraft = useMemo(() => {
     if (!dragPreviewPositions) return draft;
     const next = cloneModule(draft);
     applyComponentPositions(next, dragPreviewPositions);
     return next;
   }, [draft, dragPreviewPositions]);
-  const document = useMemo(() => createSchematicDocument(previewDraft, { autoLayout: false }), [previewDraft]);
+  const document = useMemo(() => (
+    dragPreviewPositions
+      ? createDragPreviewDocument(baseDocument, previewDraft, Object.keys(dragPreviewPositions))
+      : baseDocument
+  ), [baseDocument, dragPreviewPositions, previewDraft]);
   const displayedComponentPositions = useMemo(() => {
     return componentPositionsById(previewDraft, previewDraft.components.map((component) => component.id));
   }, [previewDraft]);
@@ -1341,6 +1351,40 @@ function materializeEditableWire(wire: CircuitWire): CircuitWire {
     ...cloneWire(wire),
     source: 'stored',
   };
+}
+
+function createDragPreviewDocument(
+  baseDocument: SchematicDocument,
+  previewModule: CircuitModule,
+  draggedComponentIds: string[],
+): SchematicDocument {
+  const draggedIds = new Set(draggedComponentIds);
+  const portPositions = computePortPositions(previewModule);
+  const wires = baseDocument.wires.map((wire) => (
+    wireTouchesPreviewComponent(wire, draggedIds) || wireTouchesPort(wire)
+      ? rerouteWire(previewModule, wire, portPositions)
+      : wire
+  ));
+  const bounds = moduleBounds(previewModule, portPositions, wires, baseDocument.netLabels);
+  return {
+    ...baseDocument,
+    module: previewModule,
+    portPositions,
+    wires,
+    bounds,
+    viewBox: padBounds(bounds, 70),
+  };
+}
+
+function wireTouchesPreviewComponent(wire: CircuitWire, componentIds: Set<string>): boolean {
+  return Boolean(
+    wire.from?.component_id && componentIds.has(wire.from.component_id) ||
+    wire.to?.component_id && componentIds.has(wire.to.component_id),
+  );
+}
+
+function wireTouchesPort(wire: CircuitWire): boolean {
+  return Boolean(wire.from?.port_id || wire.to?.port_id);
 }
 
 function hitEditableWireSegment(
