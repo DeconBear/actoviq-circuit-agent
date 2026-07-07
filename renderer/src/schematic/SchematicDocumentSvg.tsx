@@ -620,14 +620,14 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   const rotation = component.rotation ?? 0;
   if (component.type === 'R') {
     return (
-      <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none">
+      <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none" data-testid="schematic-symbol-body" data-symbol-kind="resistor">
         <rect x={x - 29} y={y - 10} width="58" height="20" rx="2" fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2.4" />
       </g>
     );
   }
   if (component.type === 'C') {
     return (
-      <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none">
+      <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none" data-testid="schematic-symbol-body" data-symbol-kind="capacitor">
         <line x1={x - 8} y1={y - 30} x2={x - 8} y2={y + 30} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
         <line x1={x + 8} y1={y - 30} x2={x + 8} y2={y + 30} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
       </g>
@@ -635,14 +635,14 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
   }
   if (component.type === 'L') {
     return (
-      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none">
+      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none" data-testid="schematic-symbol-body" data-symbol-kind="inductor">
         <path d={`M ${x - 32} ${y} A 8 8 0 0 1 ${x - 16} ${y} A 8 8 0 0 1 ${x} ${y} A 8 8 0 0 1 ${x + 16} ${y} A 8 8 0 0 1 ${x + 32} ${y}`} />
       </g>
     );
   }
   if (component.type === 'D') {
     return (
-      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none">
+      <g transform={`rotate(${rotation} ${x} ${y})`} fill="none" stroke={SYMBOL_COLOR} strokeWidth="2.4" pointerEvents="none" data-testid="schematic-symbol-body" data-symbol-kind="diode">
         <path d={`M ${x - 22} ${y - 24} L ${x - 22} ${y + 24} L ${x + 20} ${y} Z`} />
         <line x1={x + 22} y1={y - 25} x2={x + 22} y2={y + 25} />
       </g>
@@ -661,14 +661,20 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
         strokeLinecap="square"
         strokeLinejoin="miter"
         pointerEvents="none"
+        data-testid="schematic-symbol-body"
+        data-symbol-kind="mosfet"
+        data-symbol-polarity={pmos ? 'pmos' : 'nmos'}
       >
         <line x1={gateX} y1={y - 34} x2={gateX} y2={y + 34} />
-        <line x1={channelX} y1={y - 38} x2={channelX} y2={y + 38} />
+        <line x1={channelX} y1={y - 38} x2={channelX} y2={y - 13} />
+        <line x1={channelX} y1={y - 5} x2={channelX} y2={y + 5} />
+        <line x1={channelX} y1={y + 13} x2={channelX} y2={y + 38} />
         <line x1={x - 58} y1={y} x2={pmos ? x - 31 : gateX} y2={y} />
         {pmos ? <circle cx={x - 26} cy={y} r="5" fill="#fff" /> : null}
         <line x1={channelX} y1={y - 30} x2={x + 26} y2={y - 52} />
         <line x1={channelX} y1={y + 30} x2={x + 26} y2={y + 52} />
-        <line x1={channelX} y1={y} x2={x + 58} y2={y} />
+        <line x1={x + 29} y1={y} x2={x + 58} y2={y} />
+        <line x1={x + 26} y1={y - 16} x2={x + 26} y2={y + 16} />
         <path
           d={pmos
             ? `M ${x + 21} ${y - 19} l 10 -5 l -3 10 z`
@@ -690,6 +696,9 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
         strokeLinecap="square"
         strokeLinejoin="miter"
         pointerEvents="none"
+        data-testid="schematic-symbol-body"
+        data-symbol-kind="bjt"
+        data-symbol-polarity={pnp ? 'pnp' : 'npn'}
       >
         <line x1={x - 18} y1={y - 34} x2={x - 18} y2={y + 34} />
         <line x1={x - 58} y1={y} x2={x - 18} y2={y} />
@@ -706,7 +715,7 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
     );
   }
   return (
-    <g pointerEvents="none">
+    <g pointerEvents="none" data-testid="schematic-symbol-body" data-symbol-kind={component.type === 'V' ? 'voltage-source' : component.type === 'I' ? 'current-source' : 'generic'}>
       <circle cx={x} cy={y} r="28" fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2.4" />
       {component.type === 'V' ? (
         <>

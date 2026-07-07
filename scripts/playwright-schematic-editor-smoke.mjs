@@ -2462,6 +2462,16 @@ try {
   assert.ok(await countVisibleSchematicComponents(page) >= 7, 'hydrated BJT reset components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 4, 'hydrated BJT reset signal wires are not visibly drawn');
   assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="q_boot"] [data-symbol-kind="bjt"]').count(),
+    1,
+    'BJT reset transistor should use the refined BJT symbol body',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="d1"] [data-symbol-kind="diode"]').count(),
+    1,
+    'BJT reset diode should use the refined diode symbol body',
+  );
+  assert.equal(
     await page.getByTestId('schematic-component-name-label').first().getAttribute('font-size'),
     '17',
     'editable schematic component names should remain large enough to read after fit',
@@ -2572,6 +2582,16 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 9, 'hydrated MOS amplifier components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 7, 'hydrated MOS amplifier wires are not visibly drawn');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="m1"] [data-symbol-kind="mosfet"]').count(),
+    1,
+    'MOS amplifier transistor should use the refined MOSFET symbol body',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="m1"] [data-symbol-polarity="nmos"]').count(),
+    1,
+    'MOS amplifier transistor should expose NMOS polarity for symbol rendering',
+  );
   assert.ok(mosAmpPositions.cin.x < mosAmpPositions.m1.x, 'MOS amplifier input capacitor should sit left of M1 in GUI');
   assert.ok(mosAmpPositions.rg1.y < mosAmpPositions.m1.y, 'MOS amplifier gate pull-up should sit above M1 in GUI');
   assert.ok(mosAmpPositions.rg2.y > mosAmpPositions.m1.y, 'MOS amplifier gate pull-down should sit below M1 in GUI');
