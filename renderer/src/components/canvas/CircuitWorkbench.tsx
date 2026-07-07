@@ -1128,6 +1128,7 @@ export function CircuitWorkbench({
         </p>
         <div style={styles.actionRow}>
           <button
+            type="button"
             style={styles.primaryButton}
             onClick={() => {
               setError('');
@@ -1135,11 +1136,14 @@ export function CircuitWorkbench({
               setEmptyProjectForm({ demo: true, name: 'Modular analog chain' });
             }}
             disabled={busy}
+            title="Create three-module demo project"
+            aria-label="Create three-module demo project"
             data-testid="create-demo-project"
           >
             Create three-module demo
           </button>
           <button
+            type="button"
             style={styles.secondaryButton}
             onClick={() => {
               setError('');
@@ -1147,6 +1151,8 @@ export function CircuitWorkbench({
               setEmptyProjectForm({ demo: false, name: 'New circuit project' });
             }}
             disabled={busy}
+            title="Create blank project"
+            aria-label="Create blank project"
             data-testid="create-blank-project"
           >
             Create blank project
@@ -1176,6 +1182,8 @@ export function CircuitWorkbench({
                 style={styles.secondaryButton}
                 onClick={() => setEmptyProjectForm(null)}
                 disabled={busy}
+                title="Cancel project creation"
+                aria-label="Cancel project creation"
                 data-testid="empty-project-cancel"
               >
                 Cancel
@@ -1185,6 +1193,8 @@ export function CircuitWorkbench({
                 style={styles.primaryButton}
                 onClick={() => void createProjectFromEmptyState()}
                 disabled={busy || !emptyProjectForm.name.trim()}
+                title="Create project"
+                aria-label="Create project"
                 data-testid="empty-project-create-submit"
               >
                 Create

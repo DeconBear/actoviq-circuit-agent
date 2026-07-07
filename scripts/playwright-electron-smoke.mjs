@@ -402,10 +402,15 @@ try {
     assert.equal((await stat(path.resolve(createdWorkspaceRoot, relative))).isDirectory(), true);
   }
   await page.getByTestId('create-demo-project').waitFor({ timeout: 20_000 });
+  assert.equal(await page.getByTestId('create-demo-project').getAttribute('aria-label'), 'Create three-module demo project');
+  assert.equal(await page.getByTestId('create-demo-project').getAttribute('title'), 'Create three-module demo project');
+  assert.equal(await page.getByTestId('create-blank-project').getAttribute('aria-label'), 'Create blank project');
   await page.getByTestId('create-demo-project').click();
   await page.getByTestId('empty-project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByText('Demo project', { exact: true }).waitFor();
   assert.equal(await page.getByTestId('empty-project-create-submit').isDisabled(), false);
+  assert.equal(await page.getByTestId('empty-project-cancel').getAttribute('aria-label'), 'Cancel project creation');
+  assert.equal(await page.getByTestId('empty-project-create-submit').getAttribute('aria-label'), 'Create project');
   await page.getByTestId('empty-project-cancel').click();
   await page.getByTestId('empty-project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   const emptyBlankProjectName = `Playwright Empty Blank ${Date.now()}`;
