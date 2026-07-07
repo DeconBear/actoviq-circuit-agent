@@ -153,6 +153,9 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const selectedComponent = selection?.kind === 'component'
     ? draft.components.find((component) => component.id === selection.id) ?? null
     : null;
+  const selectedWire = selection?.kind === 'wire'
+    ? document.wires.find((wire) => wire.id === selection.id) ?? null
+    : null;
   const wirePreview = hoverWorld
     ? hoverEndpoint ?? pointEndpoint(snapPoint(hoverWorld))
     : null;
@@ -1276,8 +1279,25 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             </>
           ) : selection?.kind === 'components' ? (
             <div style={styles.emptyText}>{selection.ids.length} components selected</div>
-          ) : selection?.kind === 'wire' ? (
-            <div style={styles.emptyText}>Wire {selection.id}</div>
+          ) : selectedWire ? (
+            <div style={styles.pinList} data-testid="schematic-editor-wire-panel">
+              <div style={styles.pinRow}>
+                <span>Wire</span>
+                <code>{selectedWire.id}</code>
+              </div>
+              <div style={styles.pinRow}>
+                <span>Net</span>
+                <code data-testid="schematic-editor-wire-net">{selectedWire.net ?? '-'}</code>
+              </div>
+              <div style={styles.pinRow}>
+                <span>Source</span>
+                <code data-testid="schematic-editor-wire-source">{selectedWire.source ?? 'net'}</code>
+              </div>
+              <div style={styles.pinRow}>
+                <span>Points</span>
+                <code data-testid="schematic-editor-wire-point-count">{selectedWire.points.length}</code>
+              </div>
+            </div>
           ) : (
             <div style={styles.emptyText}>No item selected</div>
           )}

@@ -2070,6 +2070,24 @@ try {
   );
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 0, 'wire selection should not show component selection frame');
   assert.equal(await page.getByTestId('schematic-selected-component-corner').count(), 0, 'wire selection should not show component corner handles');
+  await page.getByTestId('schematic-editor-wire-panel').waitFor();
+  const selectedPanelWire = (await editorWires(page)).find((wire) => wire.id === drawnWire.id);
+  assert.ok(selectedPanelWire, 'wire selection panel should describe the selected stored wire');
+  assert.equal(
+    (await page.getByTestId('schematic-editor-wire-net').textContent())?.trim(),
+    selectedPanelWire.net ?? '-',
+    'wire selection panel should show the selected wire net',
+  );
+  assert.equal(
+    (await page.getByTestId('schematic-editor-wire-source').textContent())?.trim(),
+    selectedPanelWire.source ?? 'net',
+    'wire selection panel should show whether the wire is stored or generated',
+  );
+  assert.equal(
+    Number((await page.getByTestId('schematic-editor-wire-point-count').textContent())?.trim()),
+    selectedPanelWire.points.length,
+    'wire selection panel should show the current route point count',
+  );
   assert.ok(
     await page.getByTestId('schematic-wire-point-handle').count() >= 4,
     'selected stored wire should expose visible point handles after segment drag',
