@@ -36,6 +36,22 @@ export interface RenderedJunction {
   net: string;
 }
 
+type WireDirection = 'left' | 'right' | 'up' | 'down';
+
+interface JunctionAccumulator {
+  point: CircuitPosition;
+  net: string;
+  directions: Set<WireDirection>;
+}
+
+interface JunctionSegment {
+  net: string;
+  start: CircuitPosition;
+  end: CircuitPosition;
+  horizontal: boolean;
+  vertical: boolean;
+}
+
 interface Props {
   document: SchematicDocument;
   selection?: SchematicSelection;
@@ -930,15 +946,121 @@ function round(value: number): number {
 }
 
 export function junctions(document: SchematicDocument): RenderedJunction[] {
-  const counts = new Map<string, { point: CircuitPosition; net: string; count: number }>();
+  const junctionMap = new Map<string, JunctionAccumulator>();
+  const segments: JunctionSegment[] = [];
   for (const wire of document.wires) {
     const net = wire.net ?? '';
     if (!net) continue;
-    for (const point of wire.points ?? []) {
-      const key = `${net}:${round(point.x)},${round(point.y)}`;
-      const current = counts.get(key);
-      counts.set(key, { point, net, count: (current?.count ?? 0) + 1 });
+    const points = wire.points ?? [];
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      if (!start || !end || samePoint(start, end)) continue;
+      const segment: JunctionSegment = {
+        net,
+        start,
+        end,
+        horizontal: round(start.y) === round(end.y),
+        vertical: round(start.x) === round(end.x),
+      };
+      segments.push(segment);
+      addSegmentDirectionsAtPoint(junctionMap, net, segment, start);
+      addSegmentDirectionsAtPoint(junctionMap, net, segment, end);
     }
   }
-  return [...counts.values()].filter((entry) => entry.count > 2).map(({ point, net }) => ({ point, net }));
+  for (let leftIndex = 0; leftIndex < segments.length; leftIndex += 1) {
+    const left = segments[leftIndex];
+    if (!left) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < segments.length; rightIndex += 1) {
+      const right = segments[rightIndex];
+      if (!right || left.net !== right.net) continue;
+      const point = orthogonalSegmentIntersection(left, right);
+      if (!point) continue;
+      addSegmentDirectionsAtPoint(junctionMap, left.net, left, point);
+      addSegmentDirectionsAtPoint(junctionMap, right.net, right, point);
+    }
+  }
+  for (const component of document.module?.components ?? []) {
+    component.pins.forEach((pin, index) => {
+      const net = pin.net ?? '';
+      if (!net) return;
+      const point = pinWorld(component, pin, index);
+      if (samePoint(point, component.position)) return;
+      addJunctionDirection(junctionMap, net, point, directionBetween(point, component.position));
+    });
+  }
+  return [...junctionMap.values()]
+    .filter((entry) => entry.directions.size > 2)
+    .map(({ point, net }) => ({ point, net }));
+}
+
+function addSegmentDirectionsAtPoint(
+  junctionMap: Map<string, JunctionAccumulator>,
+  net: string,
+  segment: JunctionSegment,
+  point: CircuitPosition,
+) {
+  if (!pointOnSegment(point, segment)) return;
+  if (!samePoint(point, segment.start)) {
+    addJunctionDirection(junctionMap, net, point, directionBetween(point, segment.start));
+  }
+  if (!samePoint(point, segment.end)) {
+    addJunctionDirection(junctionMap, net, point, directionBetween(point, segment.end));
+  }
+}
+
+function addJunctionDirection(
+  junctionMap: Map<string, JunctionAccumulator>,
+  net: string,
+  point: CircuitPosition,
+  direction: WireDirection,
+) {
+  const roundedPoint = { x: round(point.x), y: round(point.y) };
+  const key = `${net}:${roundedPoint.x},${roundedPoint.y}`;
+  const current = junctionMap.get(key) ?? { point: roundedPoint, net, directions: new Set<WireDirection>() };
+  current.directions.add(direction);
+  junctionMap.set(key, current);
+}
+
+function directionBetween(from: CircuitPosition, to: CircuitPosition): WireDirection {
+  const dx = round(to.x) - round(from.x);
+  const dy = round(to.y) - round(from.y);
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
+  return dy >= 0 ? 'down' : 'up';
+}
+
+function orthogonalSegmentIntersection(left: JunctionSegment, right: JunctionSegment): CircuitPosition | null {
+  if (left.horizontal && right.vertical) {
+    return pointWithinSegments({ x: right.start.x, y: left.start.y }, left, right);
+  }
+  if (left.vertical && right.horizontal) {
+    return pointWithinSegments({ x: left.start.x, y: right.start.y }, left, right);
+  }
+  return null;
+}
+
+function pointWithinSegments(
+  point: CircuitPosition,
+  left: JunctionSegment,
+  right: JunctionSegment,
+): CircuitPosition | null {
+  return pointOnSegment(point, left) && pointOnSegment(point, right)
+    ? { x: round(point.x), y: round(point.y) }
+    : null;
+}
+
+function pointOnSegment(point: CircuitPosition, segment: JunctionSegment): boolean {
+  const px = round(point.x);
+  const py = round(point.y);
+  const minX = Math.min(round(segment.start.x), round(segment.end.x));
+  const maxX = Math.max(round(segment.start.x), round(segment.end.x));
+  const minY = Math.min(round(segment.start.y), round(segment.end.y));
+  const maxY = Math.max(round(segment.start.y), round(segment.end.y));
+  if (segment.horizontal && py !== round(segment.start.y)) return false;
+  if (segment.vertical && px !== round(segment.start.x)) return false;
+  return px >= minX && px <= maxX && py >= minY && py <= maxY;
+}
+
+function samePoint(left: CircuitPosition, right: CircuitPosition): boolean {
+  return round(left.x) === round(right.x) && round(left.y) === round(right.y);
 }

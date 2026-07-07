@@ -347,6 +347,54 @@ function assertJunctionNetIsolation() {
     [{ net: 'a', x: 40, y: 40 }],
     'same-net three-way branch should create one junction dot',
   );
+
+  const simpleBend = {
+    wires: [
+      { id: 'a1', net: 'a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }, { x: 40, y: 80 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(junctions(simpleBend), [], 'same-net wire bends should not create junction dots');
+
+  const passThroughBranch = {
+    wires: [
+      { id: 'a1', net: 'a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }, { x: 80, y: 40 }] },
+      { id: 'a2', net: 'a', source: 'net', points: [{ x: 40, y: 40 }, { x: 40, y: 80 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(
+    junctions(passThroughBranch).map((junction) => ({ net: junction.net, x: junction.point.x, y: junction.point.y })),
+    [{ net: 'a', x: 40, y: 40 }],
+    'same-net pass-through plus branch should create one junction dot',
+  );
+
+  const singleWireToPin = {
+    module: {
+      components: [
+        { id: 'r1', type: 'R', name: 'R1', value: '1k', position: { x: 92, y: 40 }, pins: [{ id: 'a', name: '1', net: 'a' }] },
+      ],
+    },
+    wires: [
+      { id: 'a1', net: 'a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(junctions(singleWireToPin), [], 'single wire into a component pin should not create a junction dot');
+
+  const branchedComponentPin = {
+    module: {
+      components: [
+        { id: 'r1', type: 'R', name: 'R1', value: '1k', position: { x: 92, y: 40 }, pins: [{ id: 'a', name: '1', net: 'a' }] },
+      ],
+    },
+    wires: [
+      { id: 'a1', net: 'a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }] },
+      { id: 'a2', net: 'a', source: 'net', points: [{ x: 40, y: 0 }, { x: 40, y: 40 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(
+    junctions(branchedComponentPin).map((junction) => ({ net: junction.net, x: junction.point.x, y: junction.point.y })),
+    [{ net: 'a', x: 40, y: 40 }],
+    'branched same-net wires into a component pin should create one junction dot',
+  );
 }
 
 function assertReadableLayout(module: CircuitModule) {
