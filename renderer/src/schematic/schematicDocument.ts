@@ -1801,11 +1801,38 @@ function compactRoute(points: CircuitPosition[]): CircuitPosition[] {
     if (previous && previous.x === point.x && previous.y === point.y) continue;
     deduped.push(point);
   }
-  if (deduped.length <= 2) return deduped;
-  return deduped.filter((point, index) => {
-    if (index === 0 || index === deduped.length - 1) return true;
-    const previous = deduped[index - 1];
-    const next = deduped[index + 1];
+  return removeCollinearRoutePoints(orthogonalizeRoute(deduped));
+}
+
+function orthogonalizeRoute(points: CircuitPosition[]): CircuitPosition[] {
+  const routed: CircuitPosition[] = [];
+  for (const point of points) {
+    const previous = routed.at(-1);
+    if (!previous) {
+      routed.push(point);
+      continue;
+    }
+    if (previous.x === point.x || previous.y === point.y) {
+      routed.push(point);
+      continue;
+    }
+    routed.push(chooseRouteElbow(previous, point), point);
+  }
+  return routed;
+}
+
+function chooseRouteElbow(start: CircuitPosition, end: CircuitPosition): CircuitPosition {
+  return Math.abs(end.x - start.x) >= Math.abs(end.y - start.y)
+    ? { x: end.x, y: start.y }
+    : { x: start.x, y: end.y };
+}
+
+function removeCollinearRoutePoints(points: CircuitPosition[]): CircuitPosition[] {
+  if (points.length <= 2) return points;
+  return points.filter((point, index) => {
+    if (index === 0 || index === points.length - 1) return true;
+    const previous = points[index - 1];
+    const next = points[index + 1];
     if (!previous || !next) return true;
     return !(
       previous.x === point.x && point.x === next.x ||

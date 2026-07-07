@@ -734,6 +734,37 @@ function assertWireOrthogonal(wire, label) {
   }
 }
 
+function assertWiresOrthogonal(wires, label) {
+  for (const wire of wires) {
+    assertWireOrthogonal(wire, `${label}.${wire.id}`);
+  }
+}
+
+async function assertRenderedWirePolylinesOrthogonal(page, label) {
+  const badSegments = await page.getByTestId('schematic-editor-svg').locator('g[data-wire-id] polyline').evaluateAll((nodes) => (
+    nodes.flatMap((node) => {
+      if (!(node instanceof SVGPolylineElement)) return [];
+      if (node.getAttribute('stroke') === 'transparent') return [];
+      const wireId = node.closest('g[data-wire-id]')?.getAttribute('data-wire-id') ?? 'unknown';
+      const points = (node.getAttribute('points') ?? '').trim().split(/\s+/).filter(Boolean).map((pair) => {
+        const [x, y] = pair.split(',').map(Number);
+        return { x, y };
+      });
+      const bad = [];
+      for (let index = 1; index < points.length; index += 1) {
+        const start = points[index - 1];
+        const end = points[index];
+        if (!start || !end) continue;
+        if (Number(start.x) !== Number(end.x) && Number(start.y) !== Number(end.y)) {
+          bad.push({ wireId, index, start, end });
+        }
+      }
+      return bad;
+    })
+  ));
+  assert.deepEqual(badSegments, [], `${label}: rendered schematic wire polylines contain diagonal segments`);
+}
+
 async function wireScreenPointAwayFromComponents(page, wireId) {
   return page.getByTestId('schematic-editor-svg').evaluate((svg, id) => {
     if (!(svg instanceof SVGSVGElement)) throw new Error('schematic editor svg is not an SVG element');
@@ -1976,7 +2007,9 @@ try {
   const drawnWire = storedWiresAfterDraw.at(-1);
   assert.ok(drawnWire, 'drawn stored wire was not exposed to the editor');
   assert.ok(Array.isArray(drawnWire.points) && drawnWire.points.length >= 2, 'drawn wire points were not exposed to the editor');
+  assertWireOrthogonal(drawnWire, 'drawn stored wire should be orthogonal');
   assert.ok(await isWireVisible(page, drawnWire.id), 'drawn wire is not visibly drawn');
+  await assertRenderedWirePolylinesOrthogonal(page, 'after drawing a stored wire');
   assert.notEqual(
     await editor.getAttribute('data-wire-start'),
     '',
@@ -2003,7 +2036,9 @@ try {
   const wiresAfterChain = await editorWires(page);
   const chainedWire = wiresAfterChain.filter((wire) => wire.source === 'stored').at(-1);
   assert.ok(chainedWire && chainedWire.id !== drawnWire.id, 'continuous wire drawing did not create a second stored wire');
+  assertWireOrthogonal(chainedWire, 'continuous wire segment should be orthogonal');
   assert.ok(await isWireVisible(page, chainedWire.id), 'continuous wire segment is not visibly drawn');
+  await assertRenderedWirePolylinesOrthogonal(page, 'after continuous wire drawing');
   const positionsBeforeWireDrag = await componentPositions(page);
   const wirePointsBeforeDrag = drawnWire.points;
   const wireDragPoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
@@ -2035,6 +2070,7 @@ try {
   const wireAfterSegmentDrag = wiresAfterSegmentDrag.find((wire) => wire.id === drawnWire.id);
   assert.ok(wireAfterSegmentDrag, 'dragged wire disappeared before cancel-drag regression');
   assertWireOrthogonal(wireAfterSegmentDrag, 'stored wire segment drag should keep wire orthogonal');
+  await assertRenderedWirePolylinesOrthogonal(page, 'after stored wire segment drag');
   const wireCancelDragPoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
   await page.mouse.move(wireCancelDragPoint.x, wireCancelDragPoint.y);
   await page.waitForFunction(() => (
@@ -2062,6 +2098,7 @@ try {
     positionsBeforeWireDrag,
     'Escape-canceling a stored wire segment drag moved schematic components',
   );
+  await assertRenderedWirePolylinesOrthogonal(page, 'after canceling stored wire segment drag');
   console.log('[e2e] stored wire segment cancel isolated');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-wire-visible.png') });
   console.log('[e2e] wire drawn');
@@ -2240,6 +2277,7 @@ try {
   const moduleData = JSON.parse(await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'));
   assert.equal(moduleData.components.length, 3);
   assert.ok((moduleData.wires ?? []).length >= 3, 'saved schematic document did not persist visible wires');
+  assertWiresOrthogonal(moduleData.wires ?? [], 'saved schematic document wires should remain orthogonal');
   assert.ok(moduleData.components.some((component) => component.id === 'r1' && component.type === 'R'));
   const savedR1 = moduleData.components.find((component) => component.id === 'r1');
   assert.equal(savedR1?.name, 'Rtrim');
@@ -2274,6 +2312,8 @@ try {
   assert.equal(await page.getByTestId('schematic-editor').getAttribute('data-schematic-source'), 'document');
   const reopenedFilterPositions = await componentPositions(page);
   const reopenedFilterWires = await editorWires(page);
+  assertWiresOrthogonal(reopenedFilterWires, 'reopened editor wires should remain orthogonal');
+  await assertRenderedWirePolylinesOrthogonal(page, 'after reopening editor');
   assertPositionEqual(
     reopenedFilterPositions.r1,
     savedR1?.position,
