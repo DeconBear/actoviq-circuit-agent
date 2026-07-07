@@ -72,6 +72,7 @@ export function SchematicDocumentSvg({
   const width = Math.max(1, viewBox.maxX - viewBox.minX);
   const height = Math.max(1, viewBox.maxY - viewBox.minY);
   const gridId = `grid-${document.moduleId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+  const majorGridId = `major-grid-${document.moduleId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
   const previewPoints = wireStart && wirePreview ? routePoints(wireStart, wirePreview) : [];
   return (
     <svg
@@ -106,21 +107,35 @@ export function SchematicDocumentSvg({
           <path
             d={`M ${SCHEMATIC_GRID / 2} 0 L ${SCHEMATIC_GRID / 2} ${SCHEMATIC_GRID} M 0 ${SCHEMATIC_GRID / 2} L ${SCHEMATIC_GRID} ${SCHEMATIC_GRID / 2}`}
             fill="none"
-            stroke="#f2f5f8"
+            stroke="#f3f6fa"
             strokeWidth="1"
           />
-          <path d={`M ${SCHEMATIC_GRID} 0 L 0 0 0 ${SCHEMATIC_GRID}`} fill="none" stroke="#e4ebf2" strokeWidth="1" />
+          <path d={`M ${SCHEMATIC_GRID} 0 L 0 0 0 ${SCHEMATIC_GRID}`} fill="none" stroke="#e8eef5" strokeWidth="1" />
+        </pattern>
+        <pattern id={majorGridId} width={SCHEMATIC_GRID * 5} height={SCHEMATIC_GRID * 5} patternUnits="userSpaceOnUse">
+          <path d={`M ${SCHEMATIC_GRID * 5} 0 L 0 0 0 ${SCHEMATIC_GRID * 5}`} fill="none" stroke="#d9e3ee" strokeWidth="1.25" />
         </pattern>
       </defs>
       {showGrid ? (
-        <rect
-          x={viewBox.minX}
-          y={viewBox.minY}
-          width={width}
-          height={height}
-          fill={`url(#${gridId})`}
-          data-testid="schematic-grid-background"
-        />
+        <>
+          <rect
+            x={viewBox.minX}
+            y={viewBox.minY}
+            width={width}
+            height={height}
+            fill={`url(#${gridId})`}
+            data-testid="schematic-grid-background"
+          />
+          <rect
+            x={viewBox.minX}
+            y={viewBox.minY}
+            width={width}
+            height={height}
+            fill={`url(#${majorGridId})`}
+            pointerEvents="none"
+            data-testid="schematic-major-grid-background"
+          />
+        </>
       ) : null}
       <g data-layer="wires">
         {document.wires.map((wire) => (
@@ -522,7 +537,7 @@ function portNamePosition(position: CircuitPosition, side: PortSide): CircuitPos
     return { x: position.x + 50, y: position.y - 4, anchor: 'start' };
   }
   if (side === 'left') {
-    return { x: position.x - 50, y: position.y - 4, anchor: 'start' };
+    return { x: position.x - 50, y: position.y - 4, anchor: 'end' };
   }
   if (side === 'top') {
     return { x: position.x, y: position.y - 54, anchor: 'middle' };
