@@ -161,6 +161,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       ? createDragPreviewDocument(baseDocument, previewDraft, Object.keys(dragPreviewPositions))
       : baseDocument
   ), [baseDocument, dragPreviewPositions, previewDraft]);
+  const rubberBandWireIds = useMemo(() => (
+    dragPreviewPositions
+      ? previewWireIdsForComponents(baseDocument.wires, Object.keys(dragPreviewPositions))
+      : undefined
+  ), [baseDocument.wires, dragPreviewPositions]);
   const displayedComponentPositions = useMemo(() => {
     return componentPositionsById(previewDraft, previewDraft.components.map((component) => component.id));
   }, [previewDraft]);
@@ -1231,6 +1236,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             showGrid
             cursor={editorCursor}
             viewBoxOverride={activeViewBox}
+            rubberBandWireIds={rubberBandWireIds}
             testId="schematic-editor-svg"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -1385,6 +1391,11 @@ function wireTouchesPreviewComponent(wire: CircuitWire, componentIds: Set<string
 
 function wireTouchesPort(wire: CircuitWire): boolean {
   return Boolean(wire.from?.port_id || wire.to?.port_id);
+}
+
+function previewWireIdsForComponents(wires: CircuitWire[], componentIds: string[]): Set<string> {
+  const ids = new Set(componentIds);
+  return new Set(wires.filter((wire) => wireTouchesPreviewComponent(wire, ids)).map((wire) => wire.id));
 }
 
 function hitEditableWireSegment(

@@ -41,6 +41,7 @@ interface Props {
   showGrid?: boolean;
   cursor?: CSSCursor;
   viewBoxOverride?: SchematicBounds;
+  rubberBandWireIds?: Set<string>;
   testId?: string;
   onPointerDown?: PointerEventHandler<SVGSVGElement>;
   onPointerMove?: PointerEventHandler<SVGSVGElement>;
@@ -60,6 +61,7 @@ export function SchematicDocumentSvg({
   showGrid = false,
   cursor = 'default',
   viewBoxOverride,
+  rubberBandWireIds,
   testId = 'schematic-document-svg',
   onPointerDown,
   onPointerMove,
@@ -139,7 +141,12 @@ export function SchematicDocumentSvg({
       ) : null}
       <g data-layer="wires">
         {document.wires.map((wire) => (
-          <WirePath key={wire.id} wire={wire} selected={selection?.kind === 'wire' && selection.id === wire.id} />
+          <WirePath
+            key={wire.id}
+            wire={wire}
+            selected={selection?.kind === 'wire' && selection.id === wire.id}
+            rubberBand={rubberBandWireIds?.has(wire.id) ?? false}
+          />
         ))}
         {previewPoints.length >= 2 ? (
           <polyline
@@ -358,11 +365,11 @@ function signalLabelTextPosition(
 
 type CSSCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
-function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) {
+function WirePath({ wire, selected, rubberBand }: { wire: CircuitWire; selected: boolean; rubberBand: boolean }) {
   const points = pointsAttribute(wire.points ?? []);
   if (!points) return null;
   return (
-    <g data-wire-id={wire.id} data-wire-source={wire.source ?? ''} data-net={wire.net ?? ''}>
+    <g data-wire-id={wire.id} data-wire-source={wire.source ?? ''} data-net={wire.net ?? ''} data-rubber-band={rubberBand ? 'true' : 'false'}>
       <polyline
         points={points}
         fill="none"
@@ -372,6 +379,20 @@ function WirePath({ wire, selected }: { wire: CircuitWire; selected: boolean }) 
         strokeLinejoin="round"
         data-wire-hitbox="true"
       />
+      {rubberBand ? (
+        <polyline
+          points={points}
+          fill="none"
+          stroke="#22c55e"
+          strokeWidth="12"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray="14 9"
+          opacity="0.28"
+          pointerEvents="none"
+          data-testid="schematic-rubber-band-wire"
+        />
+      ) : null}
       <polyline
         points={points}
         fill="none"

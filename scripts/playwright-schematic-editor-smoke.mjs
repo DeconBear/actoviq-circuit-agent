@@ -1238,6 +1238,10 @@ try {
       Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
       (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
   }, filterPositionsInitial);
+  assert.ok(
+    await page.getByTestId('schematic-rubber-band-wire').count() > 0,
+    'dragging connected component should show rubber-band wire feedback',
+  );
   await assertWireEndpointsMatchComponentPins(page, 'c_filter', 'dragging Cfilter should keep wire endpoints on moving pins');
   await page.keyboard.press('Escape');
   await page.mouse.up();
@@ -1256,6 +1260,11 @@ try {
     await componentPositions(page),
     filterPositionsInitial,
     'cancelled direct drag from a Shift-click multi-selection should restore schematic components',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-rubber-band-wire').count(),
+    0,
+    'rubber-band wire feedback should disappear after cancelling a drag',
   );
   const multiMarqueeStart = {
     x: Math.min(rFilterScreenPoint.x, cFilterScreenPoint.x) - 90,
