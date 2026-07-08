@@ -128,6 +128,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [wireStart, setWireStart] = useState<EndpointHit | null>(null);
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
+  const [hoverSelection, setHoverSelection] = useState<SchematicSelection>(null);
   const [interactionCursor, setInteractionCursor] = useState<EditorCursor>('default');
   const [viewport, setViewport] = useState<SchematicBounds | null>(null);
   const [editorFocused, setEditorFocused] = useState(false);
@@ -200,6 +201,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setWireStart(null);
     setHoverWorld(null);
     setHoverEndpoint(null);
+    setHoverSelection(null);
     setInteractionCursor('default');
     setViewport(null);
     setMarqueeBounds(null);
@@ -379,6 +381,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     svgRef.current = event.currentTarget;
     editorShellRef.current?.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
+    setHoverSelection(null);
 
     if (event.button === 1 || (event.button === 0 && (event.altKey || spacePanActive))) {
       panRef.current = {
@@ -522,6 +525,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     event.stopPropagation();
     const pan = panRef.current;
     if (pan) {
+      setHoverSelection(null);
       const svgBox = event.currentTarget.getBoundingClientRect();
       const width = pan.originalViewBox.maxX - pan.originalViewBox.minX;
       const height = pan.originalViewBox.maxY - pan.originalViewBox.minY;
@@ -538,6 +542,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
     const world = screenToWorld(event);
     if (tool === 'wire' || tool === 'place' || wireStart) {
+      setHoverSelection(null);
       const hit = hitEndpoint(document, world);
       setHoverEndpoint((current) => (
         endpointIdentity(current) === endpointIdentity(hit) ? current : hit
@@ -550,11 +555,13 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       wireDrag.moved = Math.abs(event.clientX - wireDrag.startClient.x) + Math.abs(event.clientY - wireDrag.startClient.y) > 8;
     }
     if (wireDrag) {
+      setHoverSelection(null);
       if (wireDrag.moved) autoPanViewport(event.currentTarget, event.clientX, event.clientY);
       return;
     }
     const wirePointDrag = wirePointDragRef.current;
     if (wirePointDrag) {
+      setHoverSelection(null);
       setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
       const nextPoint = snapPoint({
         x: wirePointDrag.originalPoint.x + world.x - wirePointDrag.startWorld.x,
@@ -571,6 +578,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
     const wireSegmentDrag = wireSegmentDragRef.current;
     if (wireSegmentDrag) {
+      setHoverSelection(null);
       setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
       const nextPoints = dragWireSegmentPoints(
         wireSegmentDrag.originalPoints,
@@ -599,6 +607,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
     const marquee = marqueeRef.current;
     if (marquee) {
+      setHoverSelection(null);
       marquee.currentWorld = world;
       if (!marquee.moved) {
         marquee.moved = Math.abs(event.clientX - marquee.startClient.x) + Math.abs(event.clientY - marquee.startClient.y) > 6;
@@ -611,13 +620,20 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     const drag = dragRef.current;
     if (!drag) {
       if (tool === 'select') {
+        const nextHoverSelection = hoverSelectionForWorld(document, draft, selection, world);
+        setHoverSelection((current) => (
+          selectionAttribute(current) === selectionAttribute(nextHoverSelection) ? current : nextHoverSelection
+        ));
         setInteractionCursor((current) => {
           const next = cursorForWorld(document, draft, selection, world);
           return current === next ? current : next;
         });
+      } else {
+        setHoverSelection(null);
       }
       return;
     }
+    setHoverSelection(null);
     setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
     const dx = world.x - drag.startWorld.x;
     const dy = world.y - drag.startWorld.y;
@@ -708,7 +724,17 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     event.stopPropagation();
     cancelActiveDrag();
     setHoverEndpoint(null);
+    setHoverSelection(null);
     setInteractionCursor('default');
+  }
+
+  function handlePointerLeave(event: ReactPointerEvent<SVGSVGElement>) {
+    event.stopPropagation();
+    setHoverSelection(null);
+    if (!wireStart) {
+      setHoverEndpoint(null);
+      setHoverWorld(null);
+    }
   }
 
   function handleContextMenu(event: ReactMouseEvent<SVGSVGElement>) {
@@ -718,6 +744,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setWireStart(null);
     setHoverWorld(null);
     setHoverEndpoint(null);
+    setHoverSelection(null);
     setMarqueeBounds(null);
     setSpacePanActive(false);
     setTool('select');
@@ -738,6 +765,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     panRef.current = null;
     setMarqueeBounds(null);
     setDragPreviewPositions(null);
+    setHoverSelection(null);
     setInteractionCursor('default');
     if (wirePointDrag?.moved) {
       setDraft(wirePointDrag.originalModule);
@@ -836,6 +864,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setSelection(null);
       setTool('select');
       setSpacePanActive(false);
+      setHoverSelection(null);
       setInteractionCursor('default');
       return;
     }
@@ -855,6 +884,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setTool('select');
       setWireStart(null);
       setHoverEndpoint(null);
+      setHoverSelection(null);
       setSelection(selectionForComponentIds(draft.components.map((component) => component.id)));
       setInteractionCursor('default');
       return;
@@ -918,6 +948,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setTool('select');
       setWireStart(null);
       setHoverEndpoint(null);
+      setHoverSelection(null);
       setInteractionCursor('default');
       rotateSelectedComponents();
       return;
@@ -927,6 +958,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setTool('wire');
       setWireStart(null);
       setHoverEndpoint(null);
+      setHoverSelection(null);
       setInteractionCursor('default');
       return;
     }
@@ -935,6 +967,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setTool('select');
       setWireStart(null);
       setHoverEndpoint(null);
+      setHoverSelection(null);
       setInteractionCursor('default');
       return;
     }
@@ -945,6 +978,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setPlaceType(componentType);
       setWireStart(null);
       setHoverEndpoint(null);
+      setHoverSelection(null);
       setInteractionCursor('default');
     }
   }
@@ -1004,6 +1038,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setSelection(null);
     setWireStart(null);
     setHoverEndpoint(null);
+    setHoverSelection(null);
     setMarqueeBounds(null);
     setInteractionCursor('default');
   }
@@ -1018,6 +1053,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setSelection(null);
     setWireStart(null);
     setHoverEndpoint(null);
+    setHoverSelection(null);
     setMarqueeBounds(null);
     setInteractionCursor('default');
   }
@@ -1050,6 +1086,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
     commitDraft(next);
     setSelection(null);
+    setHoverSelection(null);
     setInteractionCursor('default');
   }
 
@@ -1085,6 +1122,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-dirty={dirty ? 'true' : 'false'}
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}
+      data-hover-target={selectionAttribute(hoverSelection)}
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
       data-wire-start={endpointIdentity(wireStart)}
       data-cursor-mode={editorCursor}
@@ -1120,7 +1158,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       <div style={styles.toolbar}>
         <button
           style={tool === 'select' ? styles.activeToolButton : styles.toolButton}
-          onClick={() => { setTool('select'); setWireStart(null); setHoverEndpoint(null); }}
+          onClick={() => { setTool('select'); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
           disabled={busy}
           aria-label="Select tool (S)"
           title="Select tool (S)"
@@ -1130,7 +1168,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         </button>
         <button
           style={tool === 'wire' ? styles.activeToolButton : styles.toolButton}
-          onClick={() => { setTool('wire'); setWireStart(null); setHoverEndpoint(null); }}
+          onClick={() => { setTool('wire'); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
           disabled={busy}
           aria-label="Wire tool (W)"
           title="Wire tool (W)"
@@ -1142,7 +1180,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           <button
             key={type}
             style={tool === 'place' && placeType === type ? styles.activeToolButton : styles.toolButton}
-            onClick={() => { setTool('place'); setPlaceType(type); setWireStart(null); setHoverEndpoint(null); }}
+            onClick={() => { setTool('place'); setPlaceType(type); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
             disabled={busy}
             aria-label={COMPONENT_TOOL_LABELS[type]}
             title={COMPONENT_TOOL_LABELS[type]}
@@ -1229,6 +1267,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           <SchematicDocumentSvg
             document={document}
             selection={selection}
+            hoverSelection={hoverSelection}
             wireStart={wireStart}
             wirePreview={wirePreview}
             hoverEndpoint={hoverEndpoint}
@@ -1242,6 +1281,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerCancel}
+            onPointerLeave={handlePointerLeave}
             onContextMenu={handleContextMenu}
             svgRef={svgRef}
           />
@@ -1458,6 +1498,23 @@ function cursorForWorld(
   if (hitComponent(document, world)) return 'grab';
   if (hitSelectedComponentFrame(document, selection, world)) return 'grab';
   return hitEditableWireSegment(document.wires, module, world) ? 'move' : 'default';
+}
+
+function hoverSelectionForWorld(
+  document: ReturnType<typeof createSchematicDocument>,
+  module: CircuitModule,
+  selection: SchematicSelection,
+  world: CircuitPosition,
+): SchematicSelection {
+  const component = hitComponent(document, world);
+  if (component && !componentIdsForSelection(selection).includes(component.id)) {
+    return { kind: 'component', id: component.id };
+  }
+  const wire = hitEditableWireSegment(document.wires, module, world)?.wire ?? hitWire(document, world);
+  if (wire && !(selection?.kind === 'wire' && selection.id === wire.id)) {
+    return { kind: 'wire', id: wire.id };
+  }
+  return null;
 }
 
 function hitSelectedComponentFrame(

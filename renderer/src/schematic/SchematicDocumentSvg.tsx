@@ -55,6 +55,7 @@ interface JunctionSegment {
 interface Props {
   document: SchematicDocument;
   selection?: SchematicSelection;
+  hoverSelection?: SchematicSelection;
   wireStart?: EndpointHit | null;
   wirePreview?: EndpointHit | null;
   hoverEndpoint?: EndpointHit | null;
@@ -68,6 +69,7 @@ interface Props {
   onPointerMove?: PointerEventHandler<SVGSVGElement>;
   onPointerUp?: PointerEventHandler<SVGSVGElement>;
   onPointerCancel?: PointerEventHandler<SVGSVGElement>;
+  onPointerLeave?: PointerEventHandler<SVGSVGElement>;
   onContextMenu?: MouseEventHandler<SVGSVGElement>;
   svgRef?: Ref<SVGSVGElement>;
 }
@@ -75,6 +77,7 @@ interface Props {
 export function SchematicDocumentSvg({
   document,
   selection = null,
+  hoverSelection = null,
   wireStart = null,
   wirePreview = null,
   hoverEndpoint = null,
@@ -88,6 +91,7 @@ export function SchematicDocumentSvg({
   onPointerMove,
   onPointerUp,
   onPointerCancel,
+  onPointerLeave,
   onContextMenu,
   svgRef,
 }: Props) {
@@ -113,6 +117,7 @@ export function SchematicDocumentSvg({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      onPointerLeave={onPointerLeave}
       onContextMenu={onContextMenu}
     >
       <defs>
@@ -166,6 +171,7 @@ export function SchematicDocumentSvg({
             key={wire.id}
             wire={wire}
             selected={selection?.kind === 'wire' && selection.id === wire.id}
+            hovered={hoverSelection?.kind === 'wire' && hoverSelection.id === wire.id && !(selection?.kind === 'wire' && selection.id === wire.id)}
             rubberBand={rubberBandWireIds?.has(wire.id) ?? false}
           />
         ))}
@@ -246,6 +252,7 @@ export function SchematicDocumentSvg({
             key={component.id}
             component={component}
             selected={selectionHasComponent(selection, component.id)}
+            hovered={selectionHasComponent(hoverSelection, component.id) && !selectionHasComponent(selection, component.id)}
           />
         ))}
       </g>
@@ -396,11 +403,11 @@ function signalLabelTextPosition(
 
 type CSSCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
-function WirePath({ wire, selected, rubberBand }: { wire: CircuitWire; selected: boolean; rubberBand: boolean }) {
+function WirePath({ wire, selected, hovered, rubberBand }: { wire: CircuitWire; selected: boolean; hovered: boolean; rubberBand: boolean }) {
   const points = pointsAttribute(wire.points ?? []);
   if (!points) return null;
   return (
-    <g data-wire-id={wire.id} data-wire-source={wire.source ?? ''} data-net={wire.net ?? ''} data-rubber-band={rubberBand ? 'true' : 'false'}>
+    <g data-wire-id={wire.id} data-wire-source={wire.source ?? ''} data-net={wire.net ?? ''} data-rubber-band={rubberBand ? 'true' : 'false'} data-hovered={hovered ? 'true' : undefined}>
       <polyline
         points={points}
         fill="none"
@@ -424,6 +431,19 @@ function WirePath({ wire, selected, rubberBand }: { wire: CircuitWire; selected:
           data-testid="schematic-rubber-band-wire"
         />
       ) : null}
+      <polyline
+        points={points}
+        fill="none"
+        stroke={hovered ? '#2563eb' : 'transparent'}
+        strokeWidth="8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={hovered ? 0.28 : 0}
+        pointerEvents="none"
+        data-testid={hovered ? 'schematic-hover-wire-highlight' : undefined}
+        data-hover-kind={hovered ? 'wire' : undefined}
+        data-hover-shape={hovered ? 'route' : undefined}
+      />
       <polyline
         points={points}
         fill="none"
@@ -478,12 +498,13 @@ function WirePointHandles({ wire }: { wire: CircuitWire }) {
   );
 }
 
-function ComponentSymbol({ component, selected }: { component: CircuitComponent; selected: boolean }) {
+function ComponentSymbol({ component, selected, hovered }: { component: CircuitComponent; selected: boolean; hovered: boolean }) {
   const bounds = componentBounds(component);
   const pins = component.pins.map((pin, index) => ({ pin, point: pinWorld(component, pin, index) }));
   const labels = componentLabelPositions(component);
   return (
-    <g data-component-id={component.id} data-component-type={component.type}>
+    <g data-component-id={component.id} data-component-type={component.type} data-hovered={hovered ? 'true' : undefined}>
+      {hovered ? <ComponentHoverFrame bounds={bounds} /> : null}
       {selected ? <ComponentSelectionHandles bounds={bounds} /> : null}
       <LeadLines component={component} />
       <SymbolBody component={component} />
@@ -532,6 +553,26 @@ function ComponentSymbol({ component, selected }: { component: CircuitComponent;
         {component.value}
       </text>
     </g>
+  );
+}
+
+function ComponentHoverFrame({ bounds }: { bounds: ReturnType<typeof componentBounds> }) {
+  const inset = 4;
+  return (
+    <rect
+      x={bounds.minX - inset}
+      y={bounds.minY - inset}
+      width={bounds.maxX - bounds.minX + inset * 2}
+      height={bounds.maxY - bounds.minY + inset * 2}
+      fill="#d97706"
+      fillOpacity="0.045"
+      stroke="#d97706"
+      strokeWidth="1.5"
+      pointerEvents="none"
+      data-testid="schematic-hover-component-frame"
+      data-hover-kind="component"
+      data-hover-shape="frame"
+    />
   );
 }
 

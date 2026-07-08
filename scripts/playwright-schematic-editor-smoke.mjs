@@ -1043,6 +1043,41 @@ try {
   const canvas = page.getByTestId('schematic-editor-svg');
   const box = await canvas.boundingBox();
   assert.ok(box);
+  const rFilterHoverPoint = await componentScreenPoint(page, 'r_filter');
+  await page.mouse.move(rFilterHoverPoint.x, rFilterHoverPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-hover-target') === 'component:r_filter'
+  ));
+  assert.equal(await page.getByTestId('schematic-hover-component-frame').count(), 1, 'component hover frame is missing');
+  const componentHoverFrame = page.getByTestId('schematic-hover-component-frame').first();
+  assert.equal(await componentHoverFrame.evaluate((node) => node.tagName.toLowerCase()), 'rect', 'component hover should use a frame rectangle');
+  assert.equal(await componentHoverFrame.getAttribute('data-hover-kind'), 'component');
+  assert.equal(await componentHoverFrame.getAttribute('data-hover-shape'), 'frame');
+  assert.equal(await componentHoverFrame.getAttribute('stroke-dasharray'), null, 'component hover should not use the selected dashed frame style');
+  const componentHoverStroke = await componentHoverFrame.getAttribute('stroke');
+  const hoverWire = (await editorWires(page)).find((wire) => Array.isArray(wire.points) && wire.points.length >= 2);
+  assert.ok(hoverWire, 'filter schematic did not expose a wire to hover');
+  const hoverWirePoint = await wireScreenPointAwayFromComponents(page, hoverWire.id);
+  await page.mouse.move(hoverWirePoint.x, hoverWirePoint.y);
+  await page.waitForFunction((wireId) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-hover-target') === `wire:${wireId}`
+  ), hoverWire.id);
+  assert.equal(await page.getByTestId('schematic-hover-wire-highlight').count(), 1, 'wire hover highlight is missing');
+  const wireHoverHighlight = page.getByTestId('schematic-hover-wire-highlight').first();
+  assert.equal(await wireHoverHighlight.evaluate((node) => node.tagName.toLowerCase()), 'polyline', 'wire hover should follow the route');
+  assert.equal(await wireHoverHighlight.getAttribute('data-hover-kind'), 'wire');
+  assert.equal(await wireHoverHighlight.getAttribute('data-hover-shape'), 'route');
+  assert.equal(await wireHoverHighlight.getAttribute('stroke-width'), '8', 'wire hover should use a broad route highlight');
+  assert.notEqual(
+    await wireHoverHighlight.getAttribute('stroke'),
+    componentHoverStroke,
+    'wire hover and component hover should use visually different targets',
+  );
+  assert.equal(await page.getByTestId('schematic-hover-component-frame').count(), 0, 'wire hover should not show a component hover frame');
+  await page.mouse.move(box.x + box.width + 24, box.y + 12);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-hover-target') === ''
+  ));
   const zoomBefore = await editorZoom(page);
   const viewportBeforeZoom = await editorViewport(page);
   const pageScrollBeforeZoom = await page.evaluate(() => ({
