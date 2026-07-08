@@ -631,6 +631,11 @@ try {
     await page.keyboard.press('Control+A');
     await page.keyboard.insertText(notebookText);
   } else {
+    assert.equal(
+      await page.getByTestId('netlist-notebook-editor').getAttribute('data-editor-kind'),
+      'e2e-plain-text',
+      'Electron e2e should use the local textarea editor to avoid Monaco network loader flakiness',
+    );
     await page.getByTestId('netlist-notebook-editor').fill(notebookText);
   }
   await page.getByTestId('save-netlist-notebook').click();

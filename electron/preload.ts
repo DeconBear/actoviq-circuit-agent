@@ -72,6 +72,10 @@ export interface AppSettings {
 }
 
 const electronAPI = {
+  isE2E(): boolean {
+    return process.env.ACTOVIQ_E2E === '1';
+  },
+
   startWorkflow(params: WorkflowParams): void {
     ipcRenderer.send('workflow:start', params);
   },

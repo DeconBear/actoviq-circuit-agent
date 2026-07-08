@@ -39,6 +39,7 @@ export function NetlistEditor({
   const [editorFallback, setEditorFallback] = useState(false);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const loadedSourceKeyRef = useRef('');
+  const forcePlainEditor = Boolean(window.electronAPI?.isE2E?.());
 
   useEffect(() => {
     let cancelled = false;
@@ -152,13 +153,18 @@ export function NetlistEditor({
       setEditorFallback(false);
       return undefined;
     }
+    if (forcePlainEditor) {
+      editorRef.current = null;
+      setEditorFallback(false);
+      return undefined;
+    }
     editorRef.current = null;
     setEditorFallback(false);
     const timer = window.setTimeout(() => {
       if (!editorRef.current) setEditorFallback(true);
     }, 3000);
     return () => window.clearTimeout(timer);
-  }, [mode]);
+  }, [forcePlainEditor, mode]);
 
   const handleDraftChange = useCallback((value: string) => {
     setDraft(value);
@@ -257,9 +263,10 @@ export function NetlistEditor({
         </div>
       </div>
       {mode === 'edit' ? (
-        editorFallback ? (
+        forcePlainEditor || editorFallback ? (
           <textarea
             data-testid="netlist-notebook-editor"
+            data-editor-kind={forcePlainEditor ? 'e2e-plain-text' : 'fallback'}
             value={draft}
             onChange={(event) => handleDraftChange(event.target.value)}
             spellCheck={false}

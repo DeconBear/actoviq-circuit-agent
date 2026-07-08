@@ -18,6 +18,7 @@ export {};
 declare global {
   interface Window {
     electronAPI: {
+      isE2E(): boolean;
       startWorkflow(params: {
         requirement?: string;
         approvalPolicy: 'manual' | 'execution' | 'all';
