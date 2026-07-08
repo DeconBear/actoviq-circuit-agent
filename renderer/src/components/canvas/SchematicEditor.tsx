@@ -117,6 +117,12 @@ interface MarqueeState {
   moved: boolean;
 }
 
+interface ContextMenuState {
+  x: number;
+  y: number;
+  selection: NonNullable<SchematicSelection>;
+}
+
 type DraftUpdate = (current: CircuitModule) => CircuitModule;
 
 export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBuild }: Props) {
@@ -129,6 +135,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
   const [hoverSelection, setHoverSelection] = useState<SchematicSelection>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [interactionCursor, setInteractionCursor] = useState<EditorCursor>('default');
   const [viewport, setViewport] = useState<SchematicBounds | null>(null);
   const [editorFocused, setEditorFocused] = useState(false);
@@ -202,6 +209,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setHoverWorld(null);
     setHoverEndpoint(null);
     setHoverSelection(null);
+    setContextMenu(null);
     setInteractionCursor('default');
     setViewport(null);
     setMarqueeBounds(null);
@@ -382,6 +390,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     editorShellRef.current?.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
     setHoverSelection(null);
+    setContextMenu(null);
 
     if (event.button === 1 || (event.button === 0 && (event.altKey || spacePanActive))) {
       panRef.current = {
@@ -740,6 +749,13 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   function handleContextMenu(event: ReactMouseEvent<SVGSVGElement>) {
     event.preventDefault();
     event.stopPropagation();
+    const activeGesture = Boolean(
+      wireStart || tool !== 'select' || dragRef.current || wireDragRef.current || wirePointDragRef.current || wireSegmentDragRef.current || marqueeRef.current || panRef.current,
+    );
+    const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
+    const menuSelection = activeGesture
+      ? null
+      : contextMenuSelectionForTarget(document, draft, event.target, world);
     cancelActiveDrag();
     setWireStart(null);
     setHoverWorld(null);
@@ -749,6 +765,13 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setSpacePanActive(false);
     setTool('select');
     setInteractionCursor('default');
+    if (menuSelection) {
+      setSelection(menuSelection);
+      setContextMenu({ x: event.clientX, y: event.clientY, selection: menuSelection });
+    } else {
+      setSelection(null);
+      setContextMenu(null);
+    }
   }
 
   function cancelActiveDrag() {
@@ -766,6 +789,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setMarqueeBounds(null);
     setDragPreviewPositions(null);
     setHoverSelection(null);
+    setContextMenu(null);
     setInteractionCursor('default');
     if (wirePointDrag?.moved) {
       setDraft(wirePointDrag.originalModule);
@@ -802,13 +826,15 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (!changed) return;
     next.wires = rerouteStoredWires(next);
     commitDraft(next);
+    setContextMenu(null);
   }
 
-  function rotateSelectedComponents() {
-    if (selectedComponentIds.length === 0 || busy) return;
+  function rotateSelectedComponents(targetSelection: SchematicSelection = selection) {
+    const componentIds = componentIdsForSelection(targetSelection);
+    if (componentIds.length === 0 || busy) return;
     const next = cloneModule(draft);
     let changed = false;
-    for (const componentId of selectedComponentIds) {
+    for (const componentId of componentIds) {
       const component = next.components.find((entry) => entry.id === componentId);
       if (!component) continue;
       component.rotation = normalizeRotation((component.rotation ?? 0) + 90);
@@ -817,12 +843,14 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (!changed) return;
     next.wires = rerouteStoredWires(next);
     commitDraft(next);
+    setContextMenu(null);
   }
 
-  function duplicateSelectedComponents() {
-    if (selectedComponentIds.length === 0 || busy) return;
+  function duplicateSelectedComponents(targetSelection: SchematicSelection = selection) {
+    const componentIds = componentIdsForSelection(targetSelection);
+    if (componentIds.length === 0 || busy) return;
     const next = cloneModule(draft);
-    const selectedIds = new Set(selectedComponentIds);
+    const selectedIds = new Set(componentIds);
     const existingIds = new Set(next.components.map((component) => component.id));
     const selectedComponents = draft.components.filter((component) => selectedIds.has(component.id));
     const duplicatedIds: string[] = [];
@@ -850,6 +878,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setTool('select');
     setWireStart(null);
     setHoverEndpoint(null);
+    setContextMenu(null);
     setInteractionCursor('grab');
   }
 
@@ -862,6 +891,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setWireStart(null);
       setHoverEndpoint(null);
       setSelection(null);
+      setContextMenu(null);
       setTool('select');
       setSpacePanActive(false);
       setHoverSelection(null);
@@ -885,6 +915,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setWireStart(null);
       setHoverEndpoint(null);
       setHoverSelection(null);
+      setContextMenu(null);
       setSelection(selectionForComponentIds(draft.components.map((component) => component.id)));
       setInteractionCursor('default');
       return;
@@ -1039,6 +1070,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setWireStart(null);
     setHoverEndpoint(null);
     setHoverSelection(null);
+    setContextMenu(null);
     setMarqueeBounds(null);
     setInteractionCursor('default');
   }
@@ -1054,14 +1086,15 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setWireStart(null);
     setHoverEndpoint(null);
     setHoverSelection(null);
+    setContextMenu(null);
     setMarqueeBounds(null);
     setInteractionCursor('default');
   }
 
-  function deleteSelection() {
-    if (!selection || busy) return;
+  function deleteSelection(targetSelection: SchematicSelection = selection) {
+    if (!targetSelection || busy) return;
     const next = cloneModule(draft);
-    const componentIds = componentIdsForSelection(selection);
+    const componentIds = componentIdsForSelection(targetSelection);
     if (componentIds.length > 0) {
       const selectedIds = new Set(componentIds);
       next.components = next.components.filter((component) => !selectedIds.has(component.id));
@@ -1069,8 +1102,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         !selectedIds.has(wire.from?.component_id ?? '') &&
         !selectedIds.has(wire.to?.component_id ?? '')
       ));
-    } else if (selection.kind === 'wire') {
-      const selectedWire = document.wires.find((wire) => wire.id === selection.id);
+    } else if (targetSelection.kind === 'wire') {
+      const selectedWire = document.wires.find((wire) => wire.id === targetSelection.id);
       if (selectedWire && !isStoredWire(selectedWire, next)) {
         next.wires = [
           ...(next.wires ?? []),
@@ -1079,7 +1112,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             .map(materializeEditableWire),
         ];
       }
-      const updated = removeWireAndUpdateConnectivity(next, selectedWire ?? selection.id);
+      const updated = removeWireAndUpdateConnectivity(next, selectedWire ?? targetSelection.id);
       next.components = updated.components;
       next.ports = updated.ports;
       next.wires = updated.wires;
@@ -1087,6 +1120,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     commitDraft(next);
     setSelection(null);
     setHoverSelection(null);
+    setContextMenu(null);
     setInteractionCursor('default');
   }
 
@@ -1212,7 +1246,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         </button>
         <button
           style={styles.toolButton}
-          onClick={deleteSelection}
+          onClick={() => deleteSelection()}
           disabled={busy || !selection}
           aria-label="Delete selected item (Delete/Backspace)"
           title="Delete selected item (Delete/Backspace)"
@@ -1360,6 +1394,45 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           )}
         </aside>
       </div>
+      {contextMenu ? (
+        <div
+          style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}
+          data-testid="schematic-context-menu"
+          data-menu-target={selectionAttribute(contextMenu.selection)}
+          data-menu-kind={contextMenu.selection.kind === 'wire' ? 'wire' : 'component'}
+          onPointerDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          {contextMenu.selection.kind !== 'wire' ? (
+            <>
+              <button
+                type="button"
+                style={styles.contextMenuItem}
+                onClick={() => rotateSelectedComponents(contextMenu.selection)}
+                data-testid="schematic-context-menu-rotate"
+              >
+                Rotate
+              </button>
+              <button
+                type="button"
+                style={styles.contextMenuItem}
+                onClick={() => duplicateSelectedComponents(contextMenu.selection)}
+                data-testid="schematic-context-menu-duplicate"
+              >
+                Duplicate
+              </button>
+            </>
+          ) : null}
+          <button
+            type="button"
+            style={styles.contextMenuItemDanger}
+            onClick={() => deleteSelection(contextMenu.selection)}
+            data-testid="schematic-context-menu-delete"
+          >
+            Delete
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1515,6 +1588,18 @@ function hoverSelectionForWorld(
     return { kind: 'wire', id: wire.id };
   }
   return null;
+}
+
+function contextMenuSelectionForTarget(
+  document: ReturnType<typeof createSchematicDocument>,
+  module: CircuitModule,
+  target: EventTarget | null,
+  world: CircuitPosition,
+): SchematicSelection {
+  const component = componentFromPointerTarget(document, target) ?? hitComponent(document, world);
+  if (component) return { kind: 'component', id: component.id };
+  const wire = hitEditableWireSegment(document.wires, module, world)?.wire ?? hitWire(document, world);
+  return wire ? { kind: 'wire', id: wire.id } : null;
 }
 
 function hitSelectedComponentFrame(
@@ -1858,6 +1943,7 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 0,
     minHeight: 0,
     height: '100%',
+    position: 'relative',
     border: '1px solid #d8dee8',
     background: '#ffffff',
     outline: 'none',
@@ -1962,4 +2048,38 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
   },
   emptyText: { color: '#748094', fontSize: 12, lineHeight: 1.5 },
+  contextMenu: {
+    position: 'fixed',
+    zIndex: 1000,
+    display: 'grid',
+    gap: 2,
+    minWidth: 132,
+    padding: 5,
+    border: '1px solid #c7ced6',
+    borderRadius: 5,
+    background: '#ffffff',
+    boxShadow: '0 12px 28px rgba(15, 23, 42, 0.16)',
+  },
+  contextMenuItem: {
+    height: 30,
+    padding: '0 10px',
+    border: 'none',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#253041',
+    textAlign: 'left',
+    fontWeight: 650,
+    cursor: 'pointer',
+  },
+  contextMenuItemDanger: {
+    height: 30,
+    padding: '0 10px',
+    border: 'none',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#b42318',
+    textAlign: 'left',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
 };

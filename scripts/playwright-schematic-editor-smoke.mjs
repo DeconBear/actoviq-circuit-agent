@@ -1659,6 +1659,7 @@ try {
       node?.getAttribute('data-tool') === 'select';
   });
   assert.equal(await page.getByTestId('schematic-wire-preview').count(), 0, 'right-click should cancel the active wire preview');
+  assert.equal(await page.getByTestId('schematic-context-menu').count(), 0, 'right-click canceling an active wire preview should not open a context menu');
   await page.getByTestId('schematic-editor-select').click();
   const placePoint = { x: box.x + Math.min(430, box.width * 0.62), y: box.y + Math.min(280, box.height * 0.48) };
 
@@ -1902,6 +1903,44 @@ try {
     'square',
     'component selection handles should be square',
   );
+  const filterRotationsBeforeContextMenu = await componentRotations(page);
+  const componentCountBeforeContextMenu = Number(await editor.getAttribute('data-component-count'));
+  await page.mouse.click(r1PlacePoint.x, r1PlacePoint.y, { button: 'right' });
+  await page.getByTestId('schematic-context-menu').waitFor();
+  assert.equal(await page.getByTestId('schematic-context-menu').getAttribute('data-menu-target'), 'component:r1');
+  assert.equal(await page.getByTestId('schematic-context-menu').getAttribute('data-menu-kind'), 'component');
+  assert.equal(await page.getByTestId('schematic-context-menu-rotate').count(), 1, 'component context menu should expose Rotate');
+  assert.equal(await page.getByTestId('schematic-context-menu-duplicate').count(), 1, 'component context menu should expose Duplicate');
+  await page.getByTestId('schematic-context-menu-rotate').click();
+  await page.waitForFunction(({ componentId, previousRotation }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
+    const rotations = JSON.parse(raw);
+    return Number(rotations[componentId]) === (Number(previousRotation) + 90) % 360;
+  }, { componentId: 'r1', previousRotation: filterRotationsBeforeContextMenu.r1 ?? 0 });
+  assert.equal(await page.getByTestId('schematic-context-menu').count(), 0, 'component context menu should close after Rotate');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction(({ componentId, previousRotation }) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
+    const rotations = JSON.parse(raw);
+    return Number(rotations[componentId]) === Number(previousRotation);
+  }, { componentId: 'r1', previousRotation: filterRotationsBeforeContextMenu.r1 ?? 0 });
+  await page.mouse.click(r1PlacePoint.x, r1PlacePoint.y, { button: 'right' });
+  await page.getByTestId('schematic-context-menu').waitFor();
+  await page.getByTestId('schematic-context-menu-duplicate').click();
+  await page.waitForFunction((previousCount) => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') ?? '0') === Number(previousCount) + 1
+  ), componentCountBeforeContextMenu);
+  const duplicatedSelection = await editor.getAttribute('data-selected');
+  assert.match(duplicatedSelection ?? '', /^component:r/, 'component context Duplicate should select the duplicated resistor');
+  assert.notEqual(duplicatedSelection, 'component:r1', 'component context Duplicate should not keep the original resistor selected');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((previousCount) => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') ?? '0') === Number(previousCount)
+  ), componentCountBeforeContextMenu);
+  await page.mouse.click(r1PlacePoint.x, r1PlacePoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
+  ));
   const r1FramePaddingPoint = await componentScreenPoint(page, 'r1', { x: 0, y: -75 });
   await page.mouse.move(r1FramePaddingPoint.x, r1FramePaddingPoint.y);
   await page.mouse.down();
@@ -2210,6 +2249,31 @@ try {
     'circle',
     'wire selection handles should be circular',
   );
+  const wireCountBeforeContextDelete = Number(await editor.getAttribute('data-wire-count'));
+  await page.mouse.click(wireSelectPoint.x, wireSelectPoint.y, { button: 'right' });
+  await page.getByTestId('schematic-context-menu').waitFor();
+  assert.equal(await page.getByTestId('schematic-context-menu').getAttribute('data-menu-target'), `wire:${drawnWire.id}`);
+  assert.equal(await page.getByTestId('schematic-context-menu').getAttribute('data-menu-kind'), 'wire');
+  assert.equal(await page.getByTestId('schematic-context-menu-rotate').count(), 0, 'wire context menu should not expose Rotate');
+  assert.equal(await page.getByTestId('schematic-context-menu-duplicate').count(), 0, 'wire context menu should not expose Duplicate');
+  await page.getByTestId('schematic-context-menu-delete').click();
+  await page.waitForFunction((wireId) => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return !wires.some((wire) => wire.id === wireId);
+  }, drawnWire.id);
+  assert.ok(
+    Number(await editor.getAttribute('data-wire-count')) < wireCountBeforeContextDelete,
+    'wire context Delete did not reduce the visible wire count',
+  );
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((wireId) => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return wires.some((wire) => wire.id === wireId);
+  }, drawnWire.id);
+  await page.mouse.click(wireSelectPoint.x, wireSelectPoint.y);
+  await page.waitForFunction((wireId) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `wire:${wireId}`
+  ), drawnWire.id);
   const positionsBeforeWirePointDrag = await componentPositions(page);
   const wiresBeforePointDrag = await editorWires(page);
   const wireBeforePointDrag = wiresBeforePointDrag.find((wire) => wire.id === drawnWire.id);
