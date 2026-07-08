@@ -1367,7 +1367,7 @@ function createDragPreviewDocument(
   const draggedIds = new Set(draggedComponentIds);
   const portPositions = computePortPositions(previewModule);
   const wires = baseDocument.wires.map((wire) => (
-    wireTouchesPreviewComponent(wire, draggedIds) || wireTouchesPort(wire)
+    wireTouchesPreviewComponent(wire, draggedIds)
       ? rerouteWire(previewModule, wire, portPositions)
       : wire
   ));
@@ -1387,10 +1387,6 @@ function wireTouchesPreviewComponent(wire: CircuitWire, componentIds: Set<string
     wire.from?.component_id && componentIds.has(wire.from.component_id) ||
     wire.to?.component_id && componentIds.has(wire.to.component_id),
   );
-}
-
-function wireTouchesPort(wire: CircuitWire): boolean {
-  return Boolean(wire.from?.port_id || wire.to?.port_id);
 }
 
 function previewWireIdsForComponents(wires: CircuitWire[], componentIds: string[]): Set<string> {

@@ -740,6 +740,21 @@ function assertWiresOrthogonal(wires, label) {
   }
 }
 
+function assertUnrelatedWireRoutesStable(beforeWires, duringWires, draggedComponentIds, label) {
+  const draggedIds = new Set(draggedComponentIds);
+  const duringById = new Map(duringWires.map((wire) => [wire.id, wire]));
+  const changed = [];
+  for (const wire of beforeWires) {
+    if (wire.from?.component_id && draggedIds.has(wire.from.component_id)) continue;
+    if (wire.to?.component_id && draggedIds.has(wire.to.component_id)) continue;
+    const during = duringById.get(wire.id);
+    if (!during || JSON.stringify(during.points) !== JSON.stringify(wire.points)) {
+      changed.push({ id: wire.id, before: wire.points, during: during?.points ?? null });
+    }
+  }
+  assert.deepEqual(changed, [], `${label}: unrelated wire routes changed during component drag preview`);
+}
+
 async function assertRenderedWirePolylinesOrthogonal(page, label) {
   const badSegments = await page.getByTestId('schematic-editor-svg').locator('g[data-wire-id] polyline').evaluateAll((nodes) => (
     nodes.flatMap((node) => {
@@ -2404,6 +2419,12 @@ try {
         Number(positions[id]?.y) === Number(previous[id]?.y)
       ));
   }, ldoPositions);
+  assertUnrelatedWireRoutesStable(
+    ldoWires,
+    await editorWires(page),
+    ['mp'],
+    'direct body dragging LDO MP from a full selection',
+  );
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await page.waitForFunction((previous) => {
@@ -2445,6 +2466,7 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
   ));
+  const ldoWiresBeforeMpFrameDrag = await editorWires(page);
   await selectComponentForDrag(page, 'mp', [
     { x: 0, y: 0 },
     { x: -20, y: 0 },
@@ -2465,6 +2487,15 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
   await page.mouse.move(mpPoint.x - 130, mpPoint.y - 70, { steps: 14 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    ldoWiresBeforeMpFrameDrag,
+    await editorWires(page),
+    ['mp'],
+    'frame dragging LDO MP',
+  );
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
@@ -2641,7 +2672,8 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 9, 'hydrated MOS amplifier components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 7, 'hydrated MOS amplifier wires are not visibly drawn');
-  assertWiresOrthogonal(await editorWires(page), 'legacy MOS amplifier editor wires should remain orthogonal');
+  const mosAmpWires = await editorWires(page);
+  assertWiresOrthogonal(mosAmpWires, 'legacy MOS amplifier editor wires should remain orthogonal');
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="m1"] [data-symbol-kind="mosfet"]').count(),
     1,
@@ -2700,6 +2732,15 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
   await page.mouse.move(mosAmpM1DragPoint.x + 110, mosAmpM1DragPoint.y - 40, { steps: 12 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    mosAmpWires,
+    await editorWires(page),
+    ['m1'],
+    'dragging MOS amplifier M1',
+  );
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
@@ -2734,7 +2775,8 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 3, 'hydrated CMOS inverter components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 3, 'hydrated CMOS inverter wires are not visibly drawn');
-  assertWiresOrthogonal(await editorWires(page), 'legacy CMOS inverter editor wires should remain orthogonal');
+  const cmosInverterWires = await editorWires(page);
+  assertWiresOrthogonal(cmosInverterWires, 'legacy CMOS inverter editor wires should remain orthogonal');
   assert.ok(cmosInverterPositions.mp1.y < cmosInverterPositions.mn1.y, 'CMOS inverter PMOS should sit above NMOS in GUI');
   assert.ok(
     Math.abs(cmosInverterPositions.mp1.x - cmosInverterPositions.mn1.x) <= schematicGrid,
@@ -2772,6 +2814,15 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
   await page.mouse.move(cmosMpDragPoint.x - 90, cmosMpDragPoint.y - 60, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    cmosInverterWires,
+    await editorWires(page),
+    ['mp1'],
+    'dragging CMOS inverter MP1',
+  );
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
@@ -2806,7 +2857,8 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 5, 'hydrated differential pair components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 5, 'hydrated differential pair wires are not visibly drawn');
-  assertWiresOrthogonal(await editorWires(page), 'legacy differential pair editor wires should remain orthogonal');
+  const diffPairWires = await editorWires(page);
+  assertWiresOrthogonal(diffPairWires, 'legacy differential pair editor wires should remain orthogonal');
   assert.ok(diffPairPositions.m_inp.x < diffPairPositions.m_inn.x, 'differential pair IN+ device should sit left of IN- device in GUI');
   assert.ok(
     Math.abs(diffPairPositions.m_inp.y - diffPairPositions.m_inn.y) <= schematicGrid,
@@ -2867,6 +2919,15 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
   ));
   await page.mouse.move(diffPairMInpDragPoint.x - 100, diffPairMInpDragPoint.y + 55, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    diffPairWires,
+    await editorWires(page),
+    ['m_inp'],
+    'dragging differential pair M_INP',
+  );
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
@@ -2904,11 +2965,21 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3'
   ));
   const powerPositionsAfterPlace = await componentPositions(page);
+  const powerWiresBeforeR1Drag = await editorWires(page);
   await selectComponentForDrag(page, 'r1', [{ x: 0, y: -10 }, { x: 0, y: 0 }, { x: 10, y: 0 }]);
   const powerR1PlacePoint = await selectedComponentFrameScreenPoint(page, 'r1');
   await page.mouse.move(powerR1PlacePoint.x, powerR1PlacePoint.y);
   await page.mouse.down();
   await page.mouse.move(powerR1PlacePoint.x + 70, powerR1PlacePoint.y + 40, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    powerWiresBeforeR1Drag,
+    await editorWires(page),
+    ['r1'],
+    'dragging newly placed power-module resistor',
+  );
   await page.mouse.up();
   await page.waitForFunction((previous) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
