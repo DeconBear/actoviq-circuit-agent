@@ -2360,6 +2360,7 @@ try {
     'hydrated LDO should render long named internal nets as local signal labels',
   );
   const ldoWires = await editorWires(page);
+  assertWiresOrthogonal(ldoWires, 'legacy LDO editor wires should remain orthogonal');
   assert.equal(ldoWires.some((wire) => wire.net === 'vin' || wire.net === '0'), false, 'LDO rail nets should not be rendered as long generated wires');
   assert.equal(
     ldoWires.some((wire) => ['fb', 'tail', 'eaout', 'vref'].includes(wire.net)),
@@ -2379,6 +2380,7 @@ try {
     assert.ok(ldoPositions.rload.x >= ldoPositions.mp.x, 'LDO load should be placed on the output side');
   }
   await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy LDO rendered wires');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-ldo.png') });
   console.log('[e2e] legacy ldo loaded');
   await focusEditorByClickingCanvas(page);
@@ -2514,6 +2516,7 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 7, 'hydrated BJT reset components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 4, 'hydrated BJT reset signal wires are not visibly drawn');
+  assertWiresOrthogonal(await editorWires(page), 'legacy BJT reset editor wires should remain orthogonal');
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="q_boot"] [data-symbol-kind="bjt"]').count(),
     1,
@@ -2553,6 +2556,7 @@ try {
   );
   assert.ok(bjtResetPositions.r52.y > bjtResetPositions.q_boot.y, 'BJT reset BOOT resistor should sit below boot transistor in GUI');
   await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy BJT reset rendered wires');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-bjt-reset.png') });
   await page.getByTestId('schematic-svg-tab').click();
   await page.getByTestId('module-document-svg').waitFor({ timeout: 20_000 });
@@ -2596,6 +2600,7 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 3, 'hydrated voltage divider components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 3, 'hydrated voltage divider wires are not visibly drawn');
+  assertWiresOrthogonal(await editorWires(page), 'legacy voltage divider editor wires should remain orthogonal');
   assert.ok(
     Math.abs(dividerPositions.rtop.x - dividerPositions.rbot.x) <= schematicGrid,
     'voltage divider resistors should align vertically in GUI',
@@ -2613,6 +2618,7 @@ try {
     'voltage divider ground rail should render as a local label instead of a duplicate floating port',
   );
   await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy voltage divider rendered wires');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-voltage-divider.png') });
   console.log('[e2e] legacy voltage divider loaded');
 
@@ -2635,6 +2641,7 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 9, 'hydrated MOS amplifier components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 7, 'hydrated MOS amplifier wires are not visibly drawn');
+  assertWiresOrthogonal(await editorWires(page), 'legacy MOS amplifier editor wires should remain orthogonal');
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="m1"] [data-symbol-kind="mosfet"]').count(),
     1,
@@ -2664,6 +2671,7 @@ try {
     'MOS amplifier output should render on the right edge',
   );
   await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy MOS amplifier rendered wires');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier.png') });
   console.log('[e2e] legacy mos amplifier loaded');
   await focusEditorByClickingCanvas(page);
@@ -2726,6 +2734,7 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 3, 'hydrated CMOS inverter components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 3, 'hydrated CMOS inverter wires are not visibly drawn');
+  assertWiresOrthogonal(await editorWires(page), 'legacy CMOS inverter editor wires should remain orthogonal');
   assert.ok(cmosInverterPositions.mp1.y < cmosInverterPositions.mn1.y, 'CMOS inverter PMOS should sit above NMOS in GUI');
   assert.ok(
     Math.abs(cmosInverterPositions.mp1.x - cmosInverterPositions.mn1.x) <= schematicGrid,
@@ -2743,6 +2752,7 @@ try {
     'CMOS inverter output should render on the right edge',
   );
   await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy CMOS inverter rendered wires');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-inverter.png') });
   console.log('[e2e] legacy cmos inverter loaded');
   await selectComponentForDrag(page, 'mp1', [
@@ -2796,6 +2806,7 @@ try {
   }
   assert.ok(await countVisibleSchematicComponents(page) >= 5, 'hydrated differential pair components are not visibly drawn');
   assert.ok(await countVisibleSchematicWires(page) >= 5, 'hydrated differential pair wires are not visibly drawn');
+  assertWiresOrthogonal(await editorWires(page), 'legacy differential pair editor wires should remain orthogonal');
   assert.ok(diffPairPositions.m_inp.x < diffPairPositions.m_inn.x, 'differential pair IN+ device should sit left of IN- device in GUI');
   assert.ok(
     Math.abs(diffPairPositions.m_inp.y - diffPairPositions.m_inn.y) <= schematicGrid,
@@ -2836,6 +2847,7 @@ try {
     'differential pair output ports should be visibly separated on the right edge',
   );
   await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy differential pair rendered wires');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-differential-pair.png') });
   console.log('[e2e] legacy differential pair loaded');
   await selectComponentForDrag(page, 'm_inp', [
