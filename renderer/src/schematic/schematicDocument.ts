@@ -174,6 +174,8 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
   if (differentialPairLayout) return autoLayoutDifferentialPairModule(module, differentialPairLayout);
   const cmosInverterLayout = findCmosInverterLayout(module, activeComponents);
   if (cmosInverterLayout) return autoLayoutCmosInverterModule(module, cmosInverterLayout);
+  const buckConverterLayout = findBuckConverterLayout(module, activeComponents);
+  if (buckConverterLayout) return autoLayoutBuckConverterModule(module, buckConverterLayout);
   if (activeComponents.length === 1 && isSingleTransistorStageLikeModule(activeComponents[0])) {
     return autoLayoutSingleTransistorStageModule(module, activeComponents[0]);
   }
@@ -260,6 +262,21 @@ interface DifferentialPairLayout {
   rightOutputNet: string;
   tailNet: string;
   powerNet: string;
+  groundNet: string;
+}
+
+interface BuckConverterLayout {
+  switchDevice: CircuitComponent;
+  inductor: CircuitComponent;
+  diode: CircuitComponent;
+  outputCapacitor?: CircuitComponent;
+  outputLoad?: CircuitComponent;
+  inputSource?: CircuitComponent;
+  gateSource?: CircuitComponent;
+  inputNet: string;
+  outputNet: string;
+  switchNet: string;
+  gateNet?: string;
   groundNet: string;
 }
 
@@ -600,6 +617,149 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
     component.position = snapPoint({
       x: 850 + (fallbackIndex % 3) * 150,
       y: 170 + Math.floor(fallbackIndex / 3) * 140,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+    placed.add(component.id);
+    fallbackIndex += 1;
+  }
+  return module;
+}
+
+function findBuckConverterLayout(module: CircuitModule, activeComponents: CircuitComponent[]): BuckConverterLayout | null {
+  const outputNet = preferredPortNet(module, 'output');
+  const groundNet = module.ports.find(isGroundPort)?.net ?? '0';
+  const inputNet = module.ports.find((port) => (
+    port.direction === 'input' &&
+    !isGroundPort(port)
+  ))?.net ?? module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net;
+  if (!inputNet || !outputNet) return null;
+
+  const twoPinComponents = module.components.filter((component) => component.pins.length === 2);
+  for (const switchDevice of activeComponents.filter((component) => component.type === 'M')) {
+    const nets = activeNetMap(switchDevice);
+    if (!nets.gate || !nets.drain || !nets.source) continue;
+    const gateNet = nets.gate;
+    const switchNet = nets.source === inputNet ? nets.drain : nets.drain === inputNet ? nets.source : null;
+    if (!switchNet || switchNet === outputNet || isRailNet(switchNet, module)) continue;
+
+    const inductor = twoPinComponents.find((component) => (
+      component.type === 'L' && componentHasNets(component, switchNet, outputNet)
+    ));
+    const diode = twoPinComponents.find((component) => (
+      component.type === 'D' && componentHasNets(component, switchNet, groundNet)
+    ));
+    if (!inductor || !diode) continue;
+
+    return {
+      switchDevice,
+      inductor,
+      diode,
+      outputCapacitor: twoPinComponents.find((component) => (
+        component.type === 'C' && componentHasNets(component, outputNet, groundNet)
+      )),
+      outputLoad: twoPinComponents.find((component) => (
+        component.type === 'R' && componentHasNets(component, outputNet, groundNet)
+      )),
+      inputSource: twoPinComponents.find((component) => (
+        component.type === 'V' && componentHasNets(component, inputNet, groundNet)
+      )),
+      gateSource: twoPinComponents.find((component) => (
+        component.type === 'V' && componentHasNets(component, gateNet, groundNet)
+      )),
+      inputNet,
+      outputNet,
+      switchNet,
+      gateNet,
+      groundNet,
+    };
+  }
+  return null;
+}
+
+function autoLayoutBuckConverterModule(module: CircuitModule, layout: BuckConverterLayout): CircuitModule {
+  const placed = new Set<string>();
+  const busY = 280;
+
+  layout.switchDevice.position = snapPoint({ x: 320, y: 228 });
+  layout.switchDevice.rotation = 0;
+  placed.add(layout.switchDevice.id);
+  const switchPin = pinPointForComponentNet(layout.switchDevice, layout.switchNet) ?? { x: 346, y: busY };
+
+  placeHorizontal(layout.inductor, layout.switchNet, layout.outputNet, {
+    x: switchPin.x + 175,
+    y: switchPin.y,
+  });
+  placed.add(layout.inductor.id);
+
+  placeVertical(layout.diode, layout.switchNet, layout.groundNet, {
+    x: switchPin.x,
+    y: switchPin.y + 62,
+  });
+  placed.add(layout.diode.id);
+
+  const inductorOutput = pinPointForComponentNet(layout.inductor, layout.outputNet) ?? {
+    x: switchPin.x + 230,
+    y: switchPin.y,
+  };
+  if (layout.outputCapacitor) {
+    placeVertical(layout.outputCapacitor, layout.outputNet, layout.groundNet, {
+      x: inductorOutput.x + 115,
+      y: inductorOutput.y + 62,
+    });
+    placed.add(layout.outputCapacitor.id);
+  }
+  if (layout.outputLoad) {
+    placeVertical(layout.outputLoad, layout.outputNet, layout.groundNet, {
+      x: inductorOutput.x + 255,
+      y: inductorOutput.y + 62,
+    });
+    placed.add(layout.outputLoad.id);
+  }
+
+  const gatePin = layout.gateNet ? pinPointForComponentNet(layout.switchDevice, layout.gateNet) : null;
+  if (layout.gateSource && layout.gateNet) {
+    placeVertical(layout.gateSource, layout.gateNet, layout.groundNet, {
+      x: (gatePin?.x ?? layout.switchDevice.position.x - 58) - 120,
+      y: gatePin?.y ?? layout.switchDevice.position.y,
+    });
+    placed.add(layout.gateSource.id);
+  }
+  if (layout.inputSource) {
+    placeVertical(layout.inputSource, layout.inputNet, layout.groundNet, {
+      x: layout.switchDevice.position.x - 150,
+      y: switchPin.y + 190,
+    });
+    placed.add(layout.inputSource.id);
+  }
+
+  let outputShuntIndex = 0;
+  let fallbackIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    const [first, second] = component.pins;
+    if (first && second && component.pins.length === 2) {
+      if (componentHasNets(component, layout.outputNet, layout.groundNet)) {
+        placeVertical(component, layout.outputNet, layout.groundNet, {
+          x: inductorOutput.x + 390 + outputShuntIndex * 135,
+          y: inductorOutput.y + 62,
+        });
+        outputShuntIndex += 1;
+        placed.add(component.id);
+        continue;
+      }
+      if (layout.gateNet && componentHasNets(component, layout.gateNet, layout.groundNet)) {
+        placeVertical(component, layout.gateNet, layout.groundNet, {
+          x: (gatePin?.x ?? layout.switchDevice.position.x - 58) - 250 - fallbackIndex * 100,
+          y: gatePin?.y ?? layout.switchDevice.position.y,
+        });
+        placed.add(component.id);
+        fallbackIndex += 1;
+        continue;
+      }
+    }
+    component.position = snapPoint({
+      x: inductorOutput.x + 390 + (fallbackIndex % 3) * 145,
+      y: inductorOutput.y + 190 + Math.floor(fallbackIndex / 3) * 125,
     });
     component.rotation = normalizeRotation(component.rotation);
     placed.add(component.id);

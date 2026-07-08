@@ -19,6 +19,7 @@ const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
 const legacyMosAmplifierPrefix = `${projectPrefix}legacy-mos-amp-`;
 const legacyCmosInverterPrefix = `${projectPrefix}legacy-cmos-inverter-`;
 const legacyDifferentialPairPrefix = `${projectPrefix}legacy-diff-pair-`;
+const legacyBuckConverterPrefix = `${projectPrefix}legacy-buck-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -503,6 +504,72 @@ async function createLegacyDifferentialPairProject() {
   return { projectId: project.project_id, projectName: project.name };
 }
 
+async function createLegacyBuckConverterProject() {
+  const expectedProjectId = legacyProjectId('buck');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyBuckConverterPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy buck fixture project id should not be truncated or reused');
+  const modulePorts = [
+    { id: 'vin', name: 'VIN', direction: 'input', signal_type: 'power', net: 'vin' },
+    { id: 'vout', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'buck',
+    name: 'PMOS buck converter',
+    kind: 'regulator',
+    function: 'Legacy notebook-only buck converter used to verify power-stage schematic hydration.',
+    parameters: { Vin: '12 V', Vout: 'switched' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/buck/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 480, height: 300 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'buck',
+    name: 'PMOS buck converter',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'buck');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# PMOS buck converter',
+    '',
+    '```spice',
+    '* Legacy notebook-only buck converter fixture',
+    '.model PMOS1 PMOS (LEVEL=1 VTO=-0.8 KP=60u)',
+    '.model DFAST D(IS=1n RS=0.1 TT=10n)',
+    'Vin vin 0 DC 12',
+    'Vgate gate 0 PULSE(12 0 0 20n 20n 5u 10u)',
+    'Msw sw gate vin vin PMOS1 W=200u L=1u',
+    'Dfree 0 sw DFAST',
+    'L1 sw vout 22u',
+    'Cout vout 0 47u',
+    'Rload vout 0 10',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
 async function componentPositions(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-positions');
   return JSON.parse(raw || '{}');
@@ -870,6 +937,40 @@ async function countVisibleSchematicComponents(page) {
   ));
 }
 
+async function renderedComponentCenters(page, componentIds) {
+  return page.getByTestId('schematic-editor-svg').locator('g[data-component-id]').evaluateAll((nodes, ids) => {
+    const wanted = new Set(ids);
+    const centers = {};
+    for (const node of nodes) {
+      if (!(node instanceof SVGGraphicsElement)) continue;
+      const id = node.getAttribute('data-component-id') ?? '';
+      if (!wanted.has(id)) continue;
+      const svg = node.ownerSVGElement;
+      const matrix = node.getScreenCTM();
+      if (!svg || !matrix) continue;
+      const box = node.getBBox();
+      const corners = [
+        [box.x, box.y],
+        [box.x + box.width, box.y],
+        [box.x, box.y + box.height],
+        [box.x + box.width, box.y + box.height],
+      ].map(([x, y]) => {
+        const point = svg.createSVGPoint();
+        point.x = x;
+        point.y = y;
+        return point.matrixTransform(matrix);
+      });
+      const xs = corners.map((point) => point.x);
+      const ys = corners.map((point) => point.y);
+      centers[id] = {
+        x: (Math.min(...xs) + Math.max(...xs)) / 2,
+        y: (Math.min(...ys) + Math.max(...ys)) / 2,
+      };
+    }
+    return centers;
+  }, componentIds);
+}
+
 await mkdir(outputRoot, { recursive: true });
 await removePrefixedProjects();
 
@@ -891,6 +992,7 @@ const legacyVoltageDividerProject = await createLegacyVoltageDividerProject();
 const legacyMosAmplifierProject = await createLegacyMosAmplifierProject();
 const legacyCmosInverterProject = await createLegacyCmosInverterProject();
 const legacyDifferentialPairProject = await createLegacyDifferentialPairProject();
+const legacyBuckConverterProject = await createLegacyBuckConverterProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -3038,6 +3140,105 @@ try {
   }
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-differential-pair-drag.png') });
   console.log('[e2e] legacy differential pair drag isolated');
+
+  await page.getByTestId(`sidebar-project-${legacyBuckConverterProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyBuckConverterProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(legacyBuckConverterProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-buck').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 7 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 4;
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
+  const buckPositions = await componentPositions(page);
+  for (const id of ['msw', 'dfree', 'l1', 'cout', 'rload']) {
+    assert.ok(buckPositions[id], `hydrated buck converter component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 7, 'hydrated buck converter components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 4, 'hydrated buck converter wires are not visibly drawn');
+  const buckWires = await editorWires(page);
+  assertWiresOrthogonal(buckWires, 'legacy buck converter editor wires should remain orthogonal');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="msw"] [data-symbol-kind="mosfet"]').count(),
+    1,
+    'buck switch should use the refined MOSFET symbol body',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="msw"] [data-symbol-polarity="pmos"]').count(),
+    1,
+    'buck switch should expose PMOS polarity for symbol rendering',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="dfree"] [data-symbol-kind="diode"]').count(),
+    1,
+    'buck freewheel diode should use the refined diode symbol body',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="l1"] [data-symbol-kind="inductor"]').count(),
+    1,
+    'buck output stage should render L1 as an inductor',
+  );
+  const buckRenderedCenters = await renderedComponentCenters(page, ['msw', 'dfree', 'l1', 'cout', 'rload']);
+  for (const id of ['msw', 'dfree', 'l1', 'cout', 'rload']) {
+    assert.ok(buckRenderedCenters[id], `hydrated buck converter component ${id} is not rendered in the SVG viewport`);
+  }
+  assert.ok(buckRenderedCenters.msw.x < buckRenderedCenters.l1.x, 'buck switch node should feed the inductor to the right in GUI');
+  assert.ok(buckRenderedCenters.dfree.x >= buckRenderedCenters.msw.x - 40, 'buck freewheel diode should sit near the switch node, not before the switch');
+  assert.ok(buckRenderedCenters.cout.x > buckRenderedCenters.l1.x, 'buck output capacitor should sit on the output side of the inductor');
+  assert.ok(buckRenderedCenters.rload.x >= buckRenderedCenters.cout.x, 'buck load should sit at or beyond the output capacitor');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="vout"]').getAttribute('data-port-side'),
+    'right',
+    'buck VOUT should render on the right edge',
+  );
+  await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy buck converter rendered wires');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-buck-converter.png') });
+  console.log('[e2e] legacy buck converter loaded');
+  await selectComponentForDrag(page, 'msw', [
+    { x: 0, y: 0 },
+    { x: -20, y: 0 },
+    { x: 12, y: 18 },
+    { x: 24, y: -18 },
+  ]);
+  const buckMswDragPoint = await selectedComponentFrameScreenPoint(page, 'msw');
+  await page.mouse.move(buckMswDragPoint.x, buckMswDragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.mouse.move(buckMswDragPoint.x - 20, buckMswDragPoint.y + 15, { steps: 4 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(buckMswDragPoint.x - 95, buckMswDragPoint.y + 45, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    buckWires,
+    await editorWires(page),
+    ['msw'],
+    'dragging buck switch Msw',
+  );
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const buckPositionsAfterMswDrag = await componentPositions(page);
+  assertPositionChanged(buckPositionsAfterMswDrag.msw, buckPositions.msw, 'dragging buck Msw did not move Msw');
+  for (const id of ['dfree', 'l1', 'cout', 'rload']) {
+    assertPositionEqual(buckPositionsAfterMswDrag[id], buckPositions[id], `dragging buck Msw moved ${id}`);
+  }
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-buck-converter-drag.png') });
+  console.log('[e2e] legacy buck converter drag isolated');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await waitForWorkbenchProject(page, projectId);
