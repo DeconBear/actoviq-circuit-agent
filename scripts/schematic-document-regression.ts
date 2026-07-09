@@ -702,12 +702,17 @@ function assertReadablePortPlacement(document: ReturnType<typeof createSchematic
   if (module.module_id === 'mos_differential_pair') {
     const leftDevice = mustComponent(module, 'm_inp');
     const rightDevice = mustComponent(module, 'm_inn');
+    const inpPort = mustPortPosition(portPositions, 'inp');
     const innPort = mustPortPosition(portPositions, 'inn');
     const outpPort = mustPortPosition(portPositions, 'outp');
     const outnPort = mustPortPosition(portPositions, 'outn');
+    const inpGate = pinPointForNet(leftDevice, 'inp');
+    const innGate = pinPointForNet(rightDevice, 'inn');
     const leftBounds = boundsForComponent(leftDevice);
     const rightEdge = boundsForComponent(rightDevice).maxX;
 
+    assert.ok(inpPort.x < inpGate.x, 'differential pair IN+ should sit outside the left gate pin');
+    assert.ok(innPort.x < innGate.x, 'differential pair IN- should sit outside the right gate pin, not across the MOS body');
     assert.ok(outpPort.x > leftBounds.maxX, 'differential pair OUT+ should sit outside the positive-input device');
     assert.ok(outpPort.x < rightDevice.position.x, 'differential pair OUT+ should stay local to the positive-output branch');
     assert.ok(outnPort.x > rightEdge, 'differential pair OUT- should sit outside the right edge');

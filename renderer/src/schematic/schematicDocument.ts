@@ -2160,14 +2160,15 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
   const pinPointsByNet = pinPointsByNetName(module);
   const map = new Map<string, CircuitPosition>();
   const signalSideCounts: Record<SignalPortSide, number> = { left: 0, right: 0 };
-  const signalSideYs: Record<SignalPortSide, Record<'input' | 'output', number[]>> = {
+  const signalSidePositions: Record<SignalPortSide, Record<'input' | 'output', CircuitPosition[]>> = {
     left: { input: [], output: [] },
     right: { input: [], output: [] },
   };
 
   signalPorts.forEach((port) => {
     const points = pinPointsByNet.get(port.net) ?? [];
-    const side = signalPortSide(port, points, bounds);
+    const activeControlSide = activeControlInputPortSide(module, port);
+    const side = activeControlSide ?? signalPortSide(port, points, bounds);
     const index = signalSideCounts[side];
     signalSideCounts[side] += 1;
     const anchor = side === 'right' ? rightmost(points) : leftmost(points);
@@ -2178,15 +2179,16 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
     const base = anchor ?? fallback;
     const sideGroup = port.direction === 'output' ? 'output' : 'input';
     const differentialOutput = isDifferentialOutputPort(module, port);
-    const sideGroupIndex = signalSideYs[side][sideGroup].length;
+    const sideGroupIndex = signalSidePositions[side][sideGroup].length;
     const x = side === 'right'
       ? base.x + 110
       : base.x - 110;
     const preferredY = differentialOutput
       ? differentialOutputPortPreferredY(port, points, base.y, sideGroupIndex)
-      : base.y + index * 16;
-    const y = avoidSignalPortY(module, port, snap(x), preferredY, signalSideYs[side][sideGroup]);
-    signalSideYs[side][sideGroup].push(y);
+      : activeControlSide ? base.y : base.y + index * 16;
+    const snappedX = snap(x);
+    const y = avoidSignalPortY(module, port, snappedX, preferredY, signalSidePositions[side][sideGroup]);
+    signalSidePositions[side][sideGroup].push({ x: snappedX, y });
     map.set(port.id, snapPoint({
       x,
       y,
@@ -2218,6 +2220,24 @@ function signalPortSide(port: CircuitPort, points: CircuitPosition[], bounds: Sc
   return anchor.x > centerX + SCHEMATIC_GRID ? 'right' : 'left';
 }
 
+function activeControlInputPortSide(module: CircuitModule, port: CircuitPort): SignalPortSide | null {
+  if (port.direction !== 'input') return null;
+  const sides = module.components
+    .filter((component) => component.type === 'M' || component.type === 'Q')
+    .flatMap((component) => component.pins.map((pin, index) => ({ component, pin, index })))
+    .filter(({ pin }) => pin.net === port.net && activeControlPinName(pin))
+    .map(({ component, pin, index }): SignalPortSide => (
+      pinWorld(component, pin, index).x <= component.position.x ? 'left' : 'right'
+    ));
+  if (sides.length === 0) return null;
+  return sides.every((side) => side === sides[0]) ? sides[0]! : null;
+}
+
+function activeControlPinName(pin: CircuitPin): boolean {
+  const key = `${pin.id} ${pin.name}`.toLowerCase();
+  return /gate|\bg\b|base|\bb\b/.test(key);
+}
+
 function isDifferentialOutputPort(module: CircuitModule, port: CircuitPort): boolean {
   if (port.direction !== 'output') return false;
   const activeCount = module.components.filter((component) => component.type === 'M' || component.type === 'Q').length;
@@ -2239,13 +2259,21 @@ function differentialOutputPortPreferredY(
   return top + fallbackIndex * SCHEMATIC_GRID * 3;
 }
 
-function avoidPortY(preferredY: number, usedYs: number[]): number {
+function avoidPortY(preferredY: number, x: number, usedPositions: CircuitPosition[]): number {
   let y = preferredY;
   const minGap = SCHEMATIC_GRID * 3;
-  for (let guard = 0; guard < 20 && usedYs.some((usedY) => Math.abs(usedY - y) < minGap); guard += 1) {
+  for (
+    let guard = 0;
+    guard < 20 && usedPositions.some((used) => portPositionConflicts({ x, y }, used, minGap));
+    guard += 1
+  ) {
     y += minGap;
   }
   return y;
+}
+
+function portPositionConflicts(left: CircuitPosition, right: CircuitPosition, minYGap: number): boolean {
+  return Math.abs(left.x - right.x) < SCHEMATIC_GRID * 7 && Math.abs(left.y - right.y) < minYGap;
 }
 
 function avoidSignalPortY(
@@ -2253,13 +2281,13 @@ function avoidSignalPortY(
   port: CircuitPort,
   x: number,
   preferredY: number,
-  usedYs: number[],
+  usedPositions: CircuitPosition[],
 ): number {
-  const baseY = avoidPortY(preferredY, usedYs);
+  const baseY = avoidPortY(preferredY, x, usedPositions);
   const offsets = [0, 3, -3, 5, -5, 7, -7, 9, -9, 12, -12].map((step) => step * SCHEMATIC_GRID);
   for (const offset of offsets) {
     const y = snap(baseY + offset);
-    if (usedYs.some((usedY) => Math.abs(usedY - y) < SCHEMATIC_GRID * 3)) continue;
+    if (usedPositions.some((used) => portPositionConflicts({ x, y }, used, SCHEMATIC_GRID * 3))) continue;
     if (!signalPortPointBlocked(module, port, { x, y })) return y;
   }
   return snap(baseY);

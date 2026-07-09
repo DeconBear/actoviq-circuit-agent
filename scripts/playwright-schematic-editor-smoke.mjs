@@ -3319,6 +3319,16 @@ try {
   assert.ok(diffPairPositions.rdn.y < diffPairPositions.m_inn.y, 'differential pair right load should sit above M_INN in GUI');
   assert.ok(diffPairPositions.itail.y > diffPairPositions.m_inp.y, 'differential pair tail current source should sit below the pair in GUI');
   assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="inp"]').getAttribute('data-port-side'),
+    'left',
+    'differential pair IN+ should render on the gate side of M_INP',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="inn"]').getAttribute('data-port-side'),
+    'left',
+    'differential pair IN- should render on the gate side of M_INN, not across the MOS body',
+  );
+  assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="outp"]').getAttribute('data-port-side'),
     'right',
     'differential pair OUT+ should render on the right side of its local branch',
@@ -3331,14 +3341,23 @@ try {
   const differentialOutputPorts = await page.getByTestId('schematic-editor-svg').evaluate(() => {
     const outp = document.querySelector('g[data-port-id="outp"]');
     const outn = document.querySelector('g[data-port-id="outn"]');
+    const inp = document.querySelector('g[data-port-id="inp"]');
     const inn = document.querySelector('g[data-port-id="inn"]');
-    if (!(outp instanceof SVGGraphicsElement) || !(outn instanceof SVGGraphicsElement) || !(inn instanceof SVGGraphicsElement)) {
-      throw new Error('differential pair output port SVG groups are missing');
+    if (
+      !(outp instanceof SVGGraphicsElement) ||
+      !(outn instanceof SVGGraphicsElement) ||
+      !(inp instanceof SVGGraphicsElement) ||
+      !(inn instanceof SVGGraphicsElement)
+    ) {
+      throw new Error('differential pair port SVG groups are missing');
     }
     const outpBox = outp.getBBox();
     const outnBox = outn.getBBox();
+    const inpBox = inp.getBBox();
     const innBox = inn.getBBox();
     return {
+      inpCenterX: inpBox.x + inpBox.width / 2,
+      innCenterX: innBox.x + innBox.width / 2,
       outpCenterX: outpBox.x + outpBox.width / 2,
       outnCenterX: outnBox.x + outnBox.width / 2,
       centerGapY: Math.abs((outpBox.y + outpBox.height / 2) - (outnBox.y + outnBox.height / 2)),
@@ -3346,6 +3365,14 @@ try {
       innCenterY: innBox.y + innBox.height / 2,
     };
   });
+  assert.ok(
+    differentialOutputPorts.inpCenterX < diffPairPositions.m_inp.x - 52,
+    'differential pair IN+ should sit outside the left input gate in GUI',
+  );
+  assert.ok(
+    differentialOutputPorts.innCenterX < diffPairPositions.m_inn.x - 52,
+    'differential pair IN- should sit outside the right input gate in GUI',
+  );
   assert.ok(
     differentialOutputPorts.outpCenterX > diffPairPositions.m_inp.x + 52 &&
       differentialOutputPorts.outpCenterX < diffPairPositions.m_inn.x - 52,
