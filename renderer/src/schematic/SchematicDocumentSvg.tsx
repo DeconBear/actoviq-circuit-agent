@@ -651,11 +651,17 @@ function componentLabelPositions(component: CircuitComponent): {
       value: { x: x + 46, y: y + 24, anchor: 'start' },
     };
   }
-  const isActive = component.type === 'M' || component.type === 'Q';
+  const isActive = component.type === 'M' || component.type === 'Q' || component.type === 'E';
   if (component.type === 'Q') {
     return {
       name: { x: x + 52, y: y - 52, anchor: 'start' },
       value: { x: x + 52, y: y + 58, anchor: 'start' },
+    };
+  }
+  if (component.type === 'E') {
+    return {
+      name: { x: x + 8, y: y - 70, anchor: 'middle' },
+      value: { x: x + 8, y: y + 78, anchor: 'middle' },
     };
   }
   return {
@@ -783,6 +789,29 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
           fill={SYMBOL_COLOR}
           stroke="none"
         />
+      </g>
+    );
+  }
+  if (component.type === 'E') {
+    return (
+      <g
+        transform={`rotate(${rotation} ${x} ${y})`}
+        fill="none"
+        stroke={SYMBOL_COLOR}
+        strokeWidth={SYMBOL_STROKE}
+        strokeLinecap="square"
+        strokeLinejoin="miter"
+        pointerEvents="none"
+        data-testid="schematic-symbol-body"
+        data-symbol-kind="opamp"
+      >
+        <path d={`M ${x - 42} ${y - 52} L ${x - 42} ${y + 52} L ${x + 52} ${y} Z`} fill="#fff" />
+        <line x1={x - 58} y1={y - 24} x2={x - 42} y2={y - 24} />
+        <line x1={x - 58} y1={y + 24} x2={x - 42} y2={y + 24} />
+        <line x1={x + 52} y1={y} x2={x + 64} y2={y} />
+        <line x1={x} y1={y + 42} x2={x} y2={y + 58} />
+        <text x={x - 31} y={y - 16} fontSize="15" fontFamily={LABEL_FONT} fontWeight="700" fill={SYMBOL_COLOR} stroke="none">-</text>
+        <text x={x - 33} y={y + 31} fontSize="15" fontFamily={LABEL_FONT} fontWeight="700" fill={SYMBOL_COLOR} stroke="none">+</text>
       </g>
     );
   }

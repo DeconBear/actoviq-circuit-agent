@@ -21,7 +21,7 @@ PROJECT_SCHEMA = "actoviq.project.v1"
 MODULE_SCHEMA = "actoviq.module.v1"
 COMMAND_SCHEMA = "actoviq.command.v1"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
-ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I"}
+ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I", "E"}
 EDITABLE_PIN_NAMES = {
     "R": [("a", "1"), ("b", "2")],
     "C": [("a", "1"), ("b", "2")],
@@ -29,6 +29,7 @@ EDITABLE_PIN_NAMES = {
     "D": [("a", "A"), ("b", "K")],
     "V": [("p", "+"), ("n", "-")],
     "I": [("p", "+"), ("n", "-")],
+    "E": [("p", "OUT+"), ("n", "OUT-"), ("cp", "+"), ("cn", "-")],
     "Q": [("c", "C"), ("b", "B"), ("e", "E")],
     "M": [("d", "D"), ("g", "G"), ("s", "S"), ("b", "B")],
 }
@@ -39,6 +40,7 @@ EDITABLE_NODE_COUNTS = {
     "D": 2,
     "V": 2,
     "I": 2,
+    "E": 4,
     "Q": 3,
     "M": 4,
 }

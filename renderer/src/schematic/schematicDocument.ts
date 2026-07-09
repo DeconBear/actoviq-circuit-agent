@@ -12,7 +12,7 @@ export const SCHEMATIC_GRID = 20;
 export const PIN_REACH = 12;
 const ROUTE_OBSTACLE_PADDING = SCHEMATIC_GRID + 4;
 
-export type ToolComponentType = CircuitComponent['type'];
+export type ToolComponentType = Exclude<CircuitComponent['type'], 'E'>;
 
 export type SchematicSelection =
   | { kind: 'component'; id: string }
@@ -178,6 +178,8 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
   if (currentMirrorLayout) return autoLayoutCurrentMirrorModule(module, currentMirrorLayout);
   const buckConverterLayout = findBuckConverterLayout(module, activeComponents);
   if (buckConverterLayout) return autoLayoutBuckConverterModule(module, buckConverterLayout);
+  const opampFeedbackLayout = findOpampFeedbackLayout(module);
+  if (opampFeedbackLayout) return autoLayoutOpampFeedbackModule(module, opampFeedbackLayout);
   if (activeComponents.length === 1 && isSingleTransistorStageLikeModule(activeComponents[0])) {
     return autoLayoutSingleTransistorStageModule(module, activeComponents[0]);
   }
@@ -291,6 +293,16 @@ interface BuckConverterLayout {
   switchNet: string;
   gateNet?: string;
   groundNet: string;
+}
+
+interface OpampFeedbackLayout {
+  amplifier: CircuitComponent;
+  outputNet: string;
+  outputRefNet: string;
+  nonInvertingNet: string;
+  invertingNet: string;
+  groundNet: string;
+  powerNet?: string;
 }
 
 function isVoltageDividerLikeModule(module: CircuitModule): boolean {
@@ -976,6 +988,140 @@ function autoLayoutBuckConverterModule(module: CircuitModule, layout: BuckConver
   return module;
 }
 
+function findOpampFeedbackLayout(module: CircuitModule): OpampFeedbackLayout | null {
+  const amplifier = module.components.find((component) => component.type === 'E');
+  if (!amplifier) return null;
+  const nets = controlledSourceNetMap(amplifier);
+  if (!nets.output || !nets.outputRef || !nets.plus || !nets.minus) return null;
+  const preferredOutputNet = preferredPortNet(module, 'output');
+  if (preferredOutputNet && nets.output !== preferredOutputNet) return null;
+  const groundNet = module.ports.find(isGroundPort)?.net ?? '0';
+  const powerNet = module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net;
+  return {
+    amplifier,
+    outputNet: nets.output,
+    outputRefNet: nets.outputRef,
+    nonInvertingNet: nets.plus,
+    invertingNet: nets.minus,
+    groundNet,
+    powerNet,
+  };
+}
+
+function autoLayoutOpampFeedbackModule(module: CircuitModule, layout: OpampFeedbackLayout): CircuitModule {
+  const placed = new Set<string>();
+  layout.amplifier.position = snapPoint({ x: 380, y: 245 });
+  layout.amplifier.rotation = 0;
+  placed.add(layout.amplifier.id);
+
+  const opampOutput = pinPointForComponentNet(layout.amplifier, layout.outputNet) ?? { x: 438, y: 245 };
+  const opampMinus = pinPointForComponentNet(layout.amplifier, layout.invertingNet) ?? { x: 322, y: 220 };
+  const opampPlus = pinPointForComponentNet(layout.amplifier, layout.nonInvertingNet) ?? { x: 322, y: 270 };
+
+  const twoPinComponents = module.components.filter((component) => component.pins.length === 2);
+  const feedback = findTwoPinWithNets(
+    twoPinComponents,
+    placed,
+    /r(2f|f|fb)|feedback|gain/i,
+    layout.outputNet,
+    layout.invertingNet,
+  );
+  if (feedback) {
+    placeHorizontal(feedback, layout.invertingNet, layout.outputNet, {
+      x: opampMinus.x + 52,
+      y: opampMinus.y - 110,
+    });
+    placed.add(feedback.id);
+  }
+
+  const feedbackCap = findTwoPinWithNets(
+    twoPinComponents,
+    placed,
+    /c(f|comp|feedback)/i,
+    layout.outputNet,
+    layout.invertingNet,
+  );
+  if (feedbackCap) {
+    placeHorizontal(feedbackCap, layout.invertingNet, layout.outputNet, {
+      x: opampMinus.x + 52,
+      y: opampMinus.y - 175,
+    });
+    placed.add(feedbackCap.id);
+  }
+
+  const lowerFeedback = findTwoPinWithNets(
+    twoPinComponents,
+    placed,
+    /r(1f|in|g|bias)|feedback.*lower/i,
+    layout.invertingNet,
+    layout.groundNet,
+  );
+  if (lowerFeedback) {
+    placeVertical(lowerFeedback, layout.invertingNet, layout.groundNet, {
+      x: opampMinus.x,
+      y: opampMinus.y + 190,
+    });
+    placed.add(lowerFeedback.id);
+  }
+
+  let inputIndex = 0;
+  let outputShuntIndex = 0;
+  let railIndex = 0;
+  let fallbackIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    const [first, second] = component.pins;
+    if (first && second && component.pins.length === 2) {
+      const nets = new Set([first.net, second.net]);
+      if (nets.has(layout.nonInvertingNet) && nets.has(layout.groundNet)) {
+        placeVertical(component, layout.nonInvertingNet, layout.groundNet, {
+          x: opampPlus.x - 260 - inputIndex * 110,
+          y: opampPlus.y + 52,
+        });
+        placed.add(component.id);
+        inputIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.outputNet) && nets.has(layout.groundNet)) {
+        placeVertical(component, layout.outputNet, layout.groundNet, {
+          x: opampOutput.x + 150 + outputShuntIndex * 130,
+          y: opampOutput.y + 125,
+        });
+        placed.add(component.id);
+        outputShuntIndex += 1;
+        continue;
+      }
+      if (layout.powerNet && nets.has(layout.powerNet) && nets.has(layout.groundNet)) {
+        placeVertical(component, layout.powerNet, layout.groundNet, {
+          x: opampPlus.x - 190 - railIndex * 115,
+          y: opampPlus.y - 150,
+        });
+        placed.add(component.id);
+        railIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.invertingNet)) {
+        const otherNet = first.net === layout.invertingNet ? second.net : first.net;
+        placeHorizontal(component, otherNet, layout.invertingNet, {
+          x: opampMinus.x - 145 - inputIndex * 110,
+          y: opampMinus.y - 20 - inputIndex * 60,
+        });
+        placed.add(component.id);
+        inputIndex += 1;
+        continue;
+      }
+    }
+    component.position = snapPoint({
+      x: opampOutput.x + 300 + (fallbackIndex % 3) * 150,
+      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+    placed.add(component.id);
+    fallbackIndex += 1;
+  }
+  return module;
+}
+
 function autoLayoutCmosInverterModule(module: CircuitModule, layout: CmosInverterLayout): CircuitModule {
   const placed = new Set<string>();
   layout.pmos.position = snapPoint({ x: 420, y: 150 });
@@ -1562,6 +1708,25 @@ function activeNetMap(component: CircuitComponent): { gate?: string; drain?: str
     if (/base|\bb\b/.test(key)) result.gate = pin.net;
     if (/collector|\bc\b/.test(key)) result.drain = pin.net;
     if (/emitter|\be\b/.test(key)) result.source = pin.net;
+  }
+  return result;
+}
+
+function controlledSourceNetMap(component: CircuitComponent): { output?: string; outputRef?: string; plus?: string; minus?: string } {
+  const result: { output?: string; outputRef?: string; plus?: string; minus?: string } = {};
+  for (let index = 0; index < component.pins.length; index += 1) {
+    const pin = component.pins[index];
+    if (!pin) continue;
+    const key = `${pin.id} ${pin.name}`.toLowerCase();
+    if (/out\+|\bp\b/.test(key) || index === 0) {
+      result.output = pin.net;
+    } else if (/out-|\bn\b|ref/.test(key) || index === 1) {
+      result.outputRef = pin.net;
+    } else if (/\+|non|cp|in\+/.test(key) || index === 2) {
+      result.plus = pin.net;
+    } else if (/-|inv|cn|in-/.test(key) || index === 3) {
+      result.minus = pin.net;
+    }
   }
   return result;
 }
@@ -2474,6 +2639,7 @@ function pointHitsComponentGraphic(component: CircuitComponent, world: CircuitPo
 
   if (component.type === 'M') return pointNearMosGraphic(component, world);
   if (component.type === 'Q') return pointNearBjtGraphic(component, world);
+  if (component.type === 'E') return pointNearOpampGraphic(component, world);
 
   const local = componentLocalPoint(component, world);
   if (component.type === 'R') return Math.abs(local.x) <= 32 && Math.abs(local.y) <= 14;
@@ -2549,6 +2715,18 @@ function pointNearBjtGraphic(component: CircuitComponent, world: CircuitPosition
   return segments.some(([start, end]) => pointToSegmentDistance(local, start, end) <= 8);
 }
 
+function pointNearOpampGraphic(component: CircuitComponent, world: CircuitPosition): boolean {
+  const local = componentLocalPoint(component, world);
+  if (local.x >= -46 && local.x <= 58 && local.y >= -58 && local.y <= 58) return true;
+  const segments: Array<[CircuitPosition, CircuitPosition]> = [
+    [{ x: -58, y: -24 }, { x: -42, y: -24 }],
+    [{ x: -58, y: 24 }, { x: -42, y: 24 }],
+    [{ x: 52, y: 0 }, { x: 64, y: 0 }],
+    [{ x: 0, y: 42 }, { x: 0, y: 58 }],
+  ];
+  return segments.some(([start, end]) => pointToSegmentDistance(local, start, end) <= 8);
+}
+
 export function pointToSegmentDistance(point: CircuitPosition, start: CircuitPosition, end: CircuitPosition): number {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -2575,6 +2753,12 @@ function pinOffset(component: CircuitComponent, pin: CircuitPin, index: number):
     if (/base|\bb\b/.test(key)) offset = { x: -58, y: 0 };
     else if (/collector|\bc\b/.test(key)) offset = { x: 30, y: -52 };
     else offset = { x: 30, y: 52 };
+  } else if (component.type === 'E') {
+    if (/out\+|\bp\b/.test(key)) offset = { x: 64, y: 0 };
+    else if (/out-|\bn\b|ref/.test(key)) offset = { x: 0, y: 58 };
+    else if (/\+|non|cp|in\+/.test(key)) offset = { x: -58, y: 24 };
+    else if (/-|inv|cn|in-/.test(key)) offset = { x: -58, y: -24 };
+    else offset = { x: 0, y: 58 };
   } else {
     const sign = index === 0 ? -1 : 1;
     offset = { x: sign * 52, y: 0 };

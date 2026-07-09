@@ -20,6 +20,7 @@ const legacyMosAmplifierPrefix = `${projectPrefix}legacy-mos-amp-`;
 const legacyCmosInverterPrefix = `${projectPrefix}legacy-cmos-inverter-`;
 const legacyDifferentialPairPrefix = `${projectPrefix}legacy-diff-pair-`;
 const legacyCurrentMirrorPrefix = `${projectPrefix}legacy-current-mirror-`;
+const legacyOpampFeedbackPrefix = `${projectPrefix}legacy-opamp-feedback-`;
 const legacyBuckConverterPrefix = `${projectPrefix}legacy-buck-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
@@ -567,6 +568,71 @@ async function createLegacyCurrentMirrorProject() {
   return { projectId: project.project_id, projectName: project.name };
 }
 
+async function createLegacyOpampFeedbackProject() {
+  const expectedProjectId = legacyProjectId('opamp');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyOpampFeedbackPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy opamp feedback fixture project id should not be truncated or reused');
+  const modulePorts = [
+    { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+    { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'opamp',
+    name: 'Opamp feedback amplifier',
+    kind: 'amplifier',
+    function: 'Legacy notebook-only VCVS opamp feedback stage used to verify editable opamp hydration.',
+    parameters: { Gain: '10x', Load: '10 kohm' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/opamp/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 460, height: 300 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'opamp',
+    name: 'Opamp feedback amplifier',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'opamp');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# Opamp feedback amplifier',
+    '',
+    '```spice',
+    '* Legacy notebook-only VCVS opamp feedback fixture',
+    'Vsupply vdd 0 DC 5',
+    'Vin in 0 DC 1 AC 1',
+    'EOPAMP vout 0 in fb 100k',
+    'R2F vout fb 90k',
+    'R1F fb 0 10k',
+    'Cload vout 0 10p',
+    'Rload vout 0 10k',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
 async function createLegacyBuckConverterProject() {
   const expectedProjectId = legacyProjectId('buck');
   const created = runSkill([
@@ -1056,6 +1122,7 @@ const legacyMosAmplifierProject = await createLegacyMosAmplifierProject();
 const legacyCmosInverterProject = await createLegacyCmosInverterProject();
 const legacyDifferentialPairProject = await createLegacyDifferentialPairProject();
 const legacyCurrentMirrorProject = await createLegacyCurrentMirrorProject();
+const legacyOpampFeedbackProject = await createLegacyOpampFeedbackProject();
 const legacyBuckConverterProject = await createLegacyBuckConverterProject();
 
 const viteProcess = await startViteIfNeeded();
@@ -3336,6 +3403,91 @@ try {
   await assertWireEndpointsMatchComponentPins(page, 'mref', 'committed current mirror MREF drag should keep endpoints on moving pins');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-current-mirror-drag.png') });
   console.log('[e2e] legacy current mirror drag isolated');
+
+  await page.getByTestId(`sidebar-project-${legacyOpampFeedbackProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyOpampFeedbackProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(legacyOpampFeedbackProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-opamp').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 7 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 4;
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
+  const opampPositions = await componentPositions(page);
+  for (const id of ['eopamp', 'vin', 'vsupply', 'r2f', 'r1f', 'cload', 'rload']) {
+    assert.ok(opampPositions[id], `hydrated opamp feedback component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 7, 'hydrated opamp feedback components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 4, 'hydrated opamp feedback wires are not visibly drawn');
+  const opampWires = await editorWires(page);
+  assertWiresOrthogonal(opampWires, 'legacy opamp feedback editor wires should remain orthogonal');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="eopamp"] [data-symbol-kind="opamp"]').count(),
+    1,
+    'opamp feedback amplifier should use the opamp triangle symbol body',
+  );
+  assert.ok(opampPositions.r2f.y < opampPositions.eopamp.y, 'opamp feedback resistor should sit above the amplifier in GUI');
+  assert.ok(opampPositions.r1f.x < opampPositions.eopamp.x, 'opamp lower feedback resistor should sit beside the inverting input in GUI');
+  assert.ok(opampPositions.cload.x > opampPositions.eopamp.x, 'opamp output capacitor should sit on the output side in GUI');
+  assert.ok(opampPositions.rload.x > opampPositions.eopamp.x, 'opamp output load should sit on the output side in GUI');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="input"]').getAttribute('data-port-side'),
+    'left',
+    'opamp feedback input should render on the left edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="output"]').getAttribute('data-port-side'),
+    'right',
+    'opamp feedback output should render on the right edge',
+  );
+  await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy opamp feedback rendered wires');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-opamp-feedback.png') });
+  console.log('[e2e] legacy opamp feedback loaded');
+  await selectComponentForDrag(page, 'eopamp', [
+    { x: 0, y: 0 },
+    { x: -18, y: 0 },
+    { x: 20, y: 0 },
+  ]);
+  const opampDragPoint = await selectedComponentFrameScreenPoint(page, 'eopamp');
+  await page.mouse.move(opampDragPoint.x, opampDragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.mouse.move(opampDragPoint.x + 25, opampDragPoint.y - 15, { steps: 4 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(opampDragPoint.x + 95, opampDragPoint.y - 45, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    opampWires,
+    await editorWires(page),
+    ['eopamp'],
+    'dragging opamp feedback EOPAMP',
+  );
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const opampPositionsAfterDrag = await componentPositions(page);
+  assertPositionChanged(opampPositionsAfterDrag.eopamp, opampPositions.eopamp, 'dragging opamp EOPAMP did not move EOPAMP');
+  for (const id of ['vin', 'vsupply', 'r2f', 'r1f', 'cload', 'rload']) {
+    assertPositionEqual(opampPositionsAfterDrag[id], opampPositions[id], `dragging opamp EOPAMP moved ${id}`);
+  }
+  await assertWireEndpointsMatchComponentPins(page, 'eopamp', 'committed opamp EOPAMP drag should keep endpoints on moving pins');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-opamp-feedback-drag.png') });
+  console.log('[e2e] legacy opamp feedback drag isolated');
 
   await page.getByTestId(`sidebar-project-${legacyBuckConverterProject.projectId}`).click();
   await waitForWorkbenchProject(page, legacyBuckConverterProject.projectId);

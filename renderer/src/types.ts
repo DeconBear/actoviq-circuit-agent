@@ -170,7 +170,7 @@ export interface CircuitWire {
 
 export interface CircuitComponent {
   id: string;
-  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I';
+  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E';
   name: string;
   value: string;
   position: CircuitPosition;

@@ -62,6 +62,13 @@ const windowComparatorPorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const opampFeedbackPorts: CircuitPort[] = [
+  { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+  { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
 function component(
   id: string,
   type: CircuitComponent['type'],
@@ -275,6 +282,20 @@ const fixtures: CircuitModule[] = [
     component('i_ref', 'I', 'DC 100u', 170, 50, [['p', '+', 'vdd'], ['n', '-', 'bias']]),
     component('rload', 'R', '10k', 340, 50, [['a', '1', 'vdd'], ['b', '2', 'out']]),
   ]),
+  moduleFixture('opamp_feedback', [
+    component('eopamp', 'E', '100k', 240, 180, [
+      ['p', 'OUT+', 'vout'],
+      ['n', 'OUT-', '0'],
+      ['cp', '+', 'in'],
+      ['cn', '-', 'fb'],
+    ]),
+    component('vin', 'V', 'DC 1 AC 1', 80, 240, [['p', '+', 'in'], ['n', '-', '0']]),
+    component('vsupply', 'V', 'DC 5', 80, 80, [['p', '+', 'vdd'], ['n', '-', '0']]),
+    component('r2f', 'R', '90k', 240, 80, [['a', '1', 'vout'], ['b', '2', 'fb']]),
+    component('r1f', 'R', '10k', 120, 300, [['a', '1', 'fb'], ['b', '2', '0']]),
+    component('cload', 'C', '10p', 390, 300, [['a', '1', 'vout'], ['b', '2', '0']]),
+    component('rload', 'R', '10k', 520, 300, [['a', '1', 'vout'], ['b', '2', '0']]),
+  ], opampFeedbackPorts),
 ];
 
 assertJunctionNetIsolation();
@@ -587,6 +608,22 @@ function assertReadableLayout(module: CircuitModule) {
     assertPinAbove(referenceFeed, 'vdd', 'bias', module.module_id);
     assertPinAbove(outputLoad, 'vdd', 'out', module.module_id);
     assertNoComponentOverlap(module, ['m_ref', 'm_out', 'i_ref', 'rload']);
+  }
+  if (module.module_id === 'opamp_feedback') {
+    const amplifier = mustComponent(module, 'eopamp');
+    const feedback = mustComponent(module, 'r2f');
+    const lowerFeedback = mustComponent(module, 'r1f');
+    const loadCap = mustComponent(module, 'cload');
+    const loadResistor = mustComponent(module, 'rload');
+    assert.ok(feedback.position.y < amplifier.position.y, 'opamp feedback resistor should sit above the amplifier');
+    assert.ok(lowerFeedback.position.x < amplifier.position.x, 'opamp lower feedback resistor should sit beside the inverting input');
+    assert.ok(loadCap.position.x > amplifier.position.x, 'opamp output capacitor should sit on the output side');
+    assert.ok(loadResistor.position.x > amplifier.position.x, 'opamp output load should sit on the output side');
+    assertPinLeftOf(amplifier, 'fb', 'vout', module.module_id);
+    assertPinAbove(lowerFeedback, 'fb', '0', module.module_id);
+    assertPinAbove(loadCap, 'vout', '0', module.module_id);
+    assertPinAbove(loadResistor, 'vout', '0', module.module_id);
+    assertNoComponentOverlap(module, ['eopamp', 'r2f', 'r1f', 'cload', 'rload']);
   }
   if (module.module_id === 'baseband_conditioning') {
     assertNoComponentOverlap(module, ['rin', 'rbias1']);
