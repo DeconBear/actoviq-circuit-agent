@@ -69,6 +69,13 @@ const opampFeedbackPorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const cascodePorts: CircuitPort[] = [
+  { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+  { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
 function component(
   id: string,
   type: CircuitComponent['type'],
@@ -296,6 +303,31 @@ const fixtures: CircuitModule[] = [
     component('cload', 'C', '10p', 390, 300, [['a', '1', 'vout'], ['b', '2', '0']]),
     component('rload', 'R', '10k', 520, 300, [['a', '1', 'vout'], ['b', '2', '0']]),
   ], opampFeedbackPorts),
+  moduleFixture('mos_cascode_amplifier', [
+    component('vddsrc', 'V', 'DC 5', 80, 80, [['p', '+', 'vdd'], ['n', '-', '0']]),
+    component('vin', 'V', 'AC 1', 80, 260, [['p', '+', 'in'], ['n', '-', '0']]),
+    component('vbias', 'V', 'DC 1.85', 80, 180, [['p', '+', 'vb'], ['n', '-', '0']]),
+    component('i1', 'I', 'DC 350u', 220, 380, [['p', '+', 'vdd'], ['n', '-', 'ns']]),
+    component('rs', 'R', '1.2k', 280, 440, [['a', '1', 'ns'], ['b', '2', '0']]),
+    component('m1', 'M', 'NMOS W=800u L=1u', 330, 300, [
+      ['d', 'D', 'nd'],
+      ['g', 'G', 'in'],
+      ['s', 'S', 'ns'],
+      ['b', 'B', '0'],
+    ]),
+    component('m2', 'M', 'NMOS W=500u L=1u', 330, 160, [
+      ['d', 'D', 'no'],
+      ['g', 'G', 'vb'],
+      ['s', 'S', 'nd'],
+      ['b', 'B', '0'],
+    ]),
+    component('rl', 'R', '25k', 330, 50, [['a', '1', 'vdd'], ['b', '2', 'no']]),
+    component('cint', 'C', '1.5p', 460, 250, [['a', '1', 'no'], ['b', '2', '0']]),
+    component('ccomp', 'C', '0.8p', 460, 90, [['a', '1', 'no'], ['b', '2', 'in']]),
+    component('rout', 'R', '8ohm', 520, 160, [['a', '1', 'no'], ['b', '2', 'out']]),
+    component('cload', 'C', '12p', 660, 260, [['a', '1', 'out'], ['b', '2', '0']]),
+    component('rprobe', 'R', '1Meg', 780, 260, [['a', '1', 'out'], ['b', '2', '0']]),
+  ], cascodePorts),
 ];
 
 assertJunctionNetIsolation();
@@ -335,6 +367,7 @@ for (const fixture of fixtures) {
   assertRailLabels(document.module, document.netLabels, document.wires);
   assertNoMosBodyRailLabels(document.module, document.netLabels);
   assertLdoInternalLabels(document);
+  assertCascodePhysicalOutputNode(document);
   assertMultiEndpointSpine(document);
   assertGeneratedWireClearance(document);
   assertGeneratedWireSimplicity(document);
@@ -625,6 +658,35 @@ function assertReadableLayout(module: CircuitModule) {
     assertPinAbove(loadResistor, 'vout', '0', module.module_id);
     assertNoComponentOverlap(module, ['eopamp', 'r2f', 'r1f', 'cload', 'rload']);
   }
+  if (module.module_id === 'mos_cascode_amplifier') {
+    const lower = mustComponent(module, 'm1');
+    const upper = mustComponent(module, 'm2');
+    const drainLoad = mustComponent(module, 'rl');
+    const sourceResistor = mustComponent(module, 'rs');
+    const compensation = mustComponent(module, 'ccomp');
+    const outputSeries = mustComponent(module, 'rout');
+    const outputCap = mustComponent(module, 'cload');
+    const outputProbe = mustComponent(module, 'rprobe');
+    assertActivePins(lower, module.module_id);
+    assertActivePins(upper, module.module_id);
+    assert.ok(upper.position.y < lower.position.y, 'cascode upper MOSFET should sit above the input MOSFET');
+    assert.ok(Math.abs(upper.position.x - lower.position.x) <= 1, 'cascode MOSFETs should share the stack column');
+    assert.ok(drainLoad.position.y < upper.position.y, 'cascode drain load should sit above the upper MOSFET');
+    assert.ok(sourceResistor.position.y > lower.position.y, 'cascode source degeneration resistor should sit below the lower MOSFET');
+    assert.ok(
+      compensation.position.y > upper.position.y && compensation.position.y < lower.position.y,
+      'cascode compensation capacitor should sit between the cascode devices near the output node',
+    );
+    assert.ok(outputSeries.position.x > upper.position.x, 'cascode output resistor should sit to the right of the stack');
+    assert.ok(outputCap.position.x > outputSeries.position.x, 'cascode output capacitor should sit beyond output resistor');
+    assert.ok(outputProbe.position.x > outputSeries.position.x, 'cascode output probe should sit beyond output resistor');
+    assertPinAbove(drainLoad, 'vdd', 'no', module.module_id);
+    assertPinAbove(sourceResistor, 'ns', '0', module.module_id);
+    assertPinLeftOf(outputSeries, 'no', 'out', module.module_id);
+    assertPinAbove(outputCap, 'out', '0', module.module_id);
+    assertPinAbove(outputProbe, 'out', '0', module.module_id);
+    assertNoComponentOverlap(module, ['m1', 'm2', 'rl', 'rs', 'cint', 'ccomp', 'rout', 'cload', 'rprobe']);
+  }
   if (module.module_id === 'baseband_conditioning') {
     assertNoComponentOverlap(module, ['rin', 'rbias1']);
   }
@@ -722,6 +784,27 @@ function assertLdoInternalLabels(document: ReturnType<typeof createSchematicDocu
       `mos_ldo should not render ${net} as a generated long wire`,
     );
   }
+}
+
+function assertCascodePhysicalOutputNode(document: ReturnType<typeof createSchematicDocument>) {
+  if (document.module.module_id !== 'mos_cascode_amplifier') return;
+  const outputDrainWires = document.wires.filter((wire) => wire.net === 'no');
+  assert.ok(outputDrainWires.length >= 3, 'cascode output drain net should render as physical wires, not only labels');
+  assert.equal(
+    document.netLabels.some((label) => label.net === 'no'),
+    false,
+    'cascode output drain net should stay compact enough to avoid local labels',
+  );
+  const upper = mustComponent(document.module, 'm2');
+  const compensationWire = document.wires.find((wire) => (
+    wire.net === 'in' &&
+    [wire.from, wire.to].some((endpoint) => endpoint?.component_id === 'ccomp')
+  ));
+  assert.ok(compensationWire, 'cascode compensation input should be physically wired to the input net');
+  assert.ok(
+    Math.min(...compensationWire.points.map((point) => point.y)) >= upper.position.y,
+    'cascode compensation input wire should not route through the top VDD/load region',
+  );
 }
 
 function assertMultiEndpointSpine(document: ReturnType<typeof createSchematicDocument>) {

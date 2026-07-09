@@ -21,6 +21,7 @@ const legacyCmosInverterPrefix = `${projectPrefix}legacy-cmos-inverter-`;
 const legacyDifferentialPairPrefix = `${projectPrefix}legacy-diff-pair-`;
 const legacyCurrentMirrorPrefix = `${projectPrefix}legacy-current-mirror-`;
 const legacyOpampFeedbackPrefix = `${projectPrefix}legacy-opamp-feedback-`;
+const legacyCascodePrefix = `${projectPrefix}legacy-cascode-`;
 const legacyBuckConverterPrefix = `${projectPrefix}legacy-buck-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
@@ -633,6 +634,78 @@ async function createLegacyOpampFeedbackProject() {
   return { projectId: project.project_id, projectName: project.name };
 }
 
+async function createLegacyCascodeProject() {
+  const expectedProjectId = legacyProjectId('cascode');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyCascodePrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy cascode fixture project id should not be truncated or reused');
+  const modulePorts = [
+    { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+    { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'cascode',
+    name: 'MOS cascode amplifier',
+    kind: 'amplifier',
+    function: 'Legacy notebook-only MOS cascode amplifier used to verify stacked MOS layout hydration.',
+    parameters: { Bias: '350 uA', Load: '25 kohm' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/cascode/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 500, height: 320 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'cascode',
+    name: 'MOS cascode amplifier',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'cascode');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# MOS cascode amplifier',
+    '',
+    '```spice',
+    '* Legacy notebook-only MOS cascode amplifier fixture',
+    '.model NMOS NMOS(LEVEL=1 VTO=0.8 KP=250u LAMBDA=0.03)',
+    'VDD vdd 0 DC 5',
+    'VIN in 0 AC 1',
+    'VBIAS vb 0 DC 1.85',
+    'I1 vdd ns DC 350u',
+    'RS ns 0 1.2k',
+    'M1 nd in ns 0 NMOS W=800u L=1u',
+    'M2 no vb nd 0 NMOS W=500u L=1u',
+    'RL vdd no 25k',
+    'CINT no 0 1.5p',
+    'CCOMP no in 0.8p',
+    'ROUT no out 8ohm',
+    'CLOAD out 0 12p',
+    'RPROBE out 0 1Meg',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
 async function createLegacyBuckConverterProject() {
   const expectedProjectId = legacyProjectId('buck');
   const created = runSkill([
@@ -1123,6 +1196,7 @@ const legacyCmosInverterProject = await createLegacyCmosInverterProject();
 const legacyDifferentialPairProject = await createLegacyDifferentialPairProject();
 const legacyCurrentMirrorProject = await createLegacyCurrentMirrorProject();
 const legacyOpampFeedbackProject = await createLegacyOpampFeedbackProject();
+const legacyCascodeProject = await createLegacyCascodeProject();
 const legacyBuckConverterProject = await createLegacyBuckConverterProject();
 
 const viteProcess = await startViteIfNeeded();
@@ -1165,6 +1239,12 @@ function observeWindow(windowPage) {
   });
 }
 electronApp.on('window', observeWindow);
+
+function isIgnorablePageError(entry) {
+  return entry.startsWith('console: WebSocket connection to ') &&
+    entry.includes(`ws://127.0.0.1:${vitePort}/`) &&
+    entry.includes('ERR_CONNECTION_FAILED');
+}
 
 async function waitForWorkbenchProject(page, targetProjectId) {
   await page.waitForFunction((projectId) => {
@@ -3489,6 +3569,111 @@ try {
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-opamp-feedback-drag.png') });
   console.log('[e2e] legacy opamp feedback drag isolated');
 
+  await page.getByTestId(`sidebar-project-${legacyCascodeProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyCascodeProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(legacyCascodeProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-cascode').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 13 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 8;
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
+  const cascodePositions = await componentPositions(page);
+  for (const id of ['m1', 'm2', 'rl', 'rs', 'cint', 'ccomp', 'rout', 'cload', 'rprobe']) {
+    assert.ok(cascodePositions[id], `hydrated cascode component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 13, 'hydrated cascode components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 8, 'hydrated cascode wires are not visibly drawn');
+  const cascodeWires = await editorWires(page);
+  assertWiresOrthogonal(cascodeWires, 'legacy cascode editor wires should remain orthogonal');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="m1"] [data-symbol-kind="mosfet"]').count(),
+    1,
+    'cascode lower transistor should use the refined MOSFET symbol body',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="m2"] [data-symbol-polarity="nmos"]').count(),
+    1,
+    'cascode upper transistor should expose NMOS polarity for symbol rendering',
+  );
+  assert.ok(cascodePositions.m2.y < cascodePositions.m1.y, 'cascode upper MOSFET should sit above lower MOSFET in GUI');
+  assert.ok(
+    Math.abs(cascodePositions.m2.x - cascodePositions.m1.x) <= schematicGrid,
+    'cascode MOSFETs should share the stack column in GUI',
+  );
+  assert.ok(cascodePositions.rl.y < cascodePositions.m2.y, 'cascode drain load should sit above upper MOSFET in GUI');
+  assert.ok(cascodePositions.rs.y > cascodePositions.m1.y, 'cascode source resistor should sit below lower MOSFET in GUI');
+  assert.ok(
+    cascodePositions.ccomp.y > cascodePositions.m2.y && cascodePositions.ccomp.y < cascodePositions.m1.y,
+    'cascode compensation capacitor should sit between the cascode devices in GUI',
+  );
+  assert.ok(cascodePositions.rout.x > cascodePositions.m2.x, 'cascode output resistor should sit to the right of the stack in GUI');
+  assert.ok(cascodePositions.cload.x > cascodePositions.rout.x, 'cascode output capacitor should sit beyond output resistor in GUI');
+  assert.ok(cascodePositions.rprobe.x > cascodePositions.rout.x, 'cascode output probe should sit beyond output resistor in GUI');
+  assert.ok(
+    cascodeWires.filter((wire) => wire.net === 'no').length >= 3,
+    'cascode output drain net should render as physical editable wires',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="input"]').getAttribute('data-port-side'),
+    'left',
+    'cascode input should render on the left edge',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="output"]').getAttribute('data-port-side'),
+    'right',
+    'cascode output should render on the right edge',
+  );
+  await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy cascode rendered wires');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cascode.png') });
+  console.log('[e2e] legacy cascode loaded');
+  await selectComponentForDrag(page, 'm1', [
+    { x: 0, y: 0 },
+    { x: -20, y: 0 },
+    { x: 12, y: 18 },
+    { x: 24, y: -18 },
+  ]);
+  const cascodeM1DragPoint = await selectedComponentFrameScreenPoint(page, 'm1');
+  await page.mouse.move(cascodeM1DragPoint.x, cascodeM1DragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.mouse.move(cascodeM1DragPoint.x + 25, cascodeM1DragPoint.y + 20, { steps: 4 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(cascodeM1DragPoint.x + 95, cascodeM1DragPoint.y + 55, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    cascodeWires,
+    await editorWires(page),
+    ['m1'],
+    'dragging cascode M1',
+  );
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const cascodePositionsAfterM1Drag = await componentPositions(page);
+  assertPositionChanged(cascodePositionsAfterM1Drag.m1, cascodePositions.m1, 'dragging cascode M1 did not move M1');
+  for (const id of ['m2', 'rl', 'rs', 'cint', 'ccomp', 'rout', 'cload', 'rprobe']) {
+    assertPositionEqual(cascodePositionsAfterM1Drag[id], cascodePositions[id], `dragging cascode M1 moved ${id}`);
+  }
+  await assertWireEndpointsMatchComponentPins(page, 'm1', 'committed cascode M1 drag should keep endpoints on moving pins');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cascode-drag.png') });
+  console.log('[e2e] legacy cascode drag isolated');
+
   await page.getByTestId(`sidebar-project-${legacyBuckConverterProject.projectId}`).click();
   await waitForWorkbenchProject(page, legacyBuckConverterProject.projectId);
   await page.getByTestId('circuit-workbench').getByText(legacyBuckConverterProject.projectName, { exact: true }).waitFor();
@@ -3643,7 +3828,10 @@ try {
 
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-smoke.png') });
   assert.deepEqual(
-    pageErrors.filter((entry) => /^(pageerror|console:|requestfailed|page-crash)/.test(entry)),
+    pageErrors.filter((entry) => (
+      /^(pageerror|console:|requestfailed|page-crash)/.test(entry) &&
+      !isIgnorablePageError(entry)
+    )),
     [],
   );
   console.log(JSON.stringify({
