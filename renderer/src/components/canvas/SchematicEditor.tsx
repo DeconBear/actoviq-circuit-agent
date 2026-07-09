@@ -142,6 +142,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [marqueeBounds, setMarqueeBounds] = useState<SchematicBounds | null>(null);
   const [spacePanActive, setSpacePanActive] = useState(false);
   const [dragPreviewPositions, setDragPreviewPositions] = useState<Record<string, CircuitPosition> | null>(null);
+  const [clipboardComponentCount, setClipboardComponentCount] = useState(0);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const editorShellRef = useRef<HTMLDivElement | null>(null);
@@ -152,6 +153,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const wirePointDragRef = useRef<WirePointDragState | null>(null);
   const marqueeRef = useRef<MarqueeState | null>(null);
   const panRef = useRef<PanState | null>(null);
+  const componentClipboardRef = useRef<CircuitComponent[]>([]);
+  const pasteSerialRef = useRef(0);
   const draftUpdateFrameRef = useRef<number | null>(null);
   const pendingDraftUpdateRef = useRef<DraftUpdate | null>(null);
   const viewportUpdateFrameRef = useRef<number | null>(null);
@@ -215,6 +218,9 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setMarqueeBounds(null);
     setSpacePanActive(false);
     setDragPreviewPositions(null);
+    componentClipboardRef.current = [];
+    pasteSerialRef.current = 0;
+    setClipboardComponentCount(0);
     setHistory([]);
     setFuture([]);
   }, [module.module_id, module.revision]);
@@ -851,33 +857,45 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (componentIds.length === 0 || busy) return;
     const next = cloneModule(draft);
     const selectedIds = new Set(componentIds);
-    const existingIds = new Set(next.components.map((component) => component.id));
     const selectedComponents = draft.components.filter((component) => selectedIds.has(component.id));
-    const duplicatedIds: string[] = [];
-    for (const component of selectedComponents) {
-      const id = makeId(component.type.toLowerCase(), existingIds);
-      existingIds.add(id);
-      next.components.push({
-        ...cloneComponent(component),
-        id,
-        name: `${component.type}${id.replace(/^[a-z]+/i, '')}`,
-        position: snapPoint({
-          x: component.position.x + SCHEMATIC_GRID * 2,
-          y: component.position.y + SCHEMATIC_GRID * 2,
-        }),
-        pins: component.pins.map((pin, index) => ({
-          ...pin,
-          net: `n_${id}_${index + 1}`,
-        })),
-      });
-      duplicatedIds.push(id);
-    }
-    if (duplicatedIds.length === 0) return;
+    const copiedComponentIds = appendCopiedComponents(next, selectedComponents, SCHEMATIC_GRID * 2);
+    if (copiedComponentIds.length === 0) return;
     commitDraft(next);
-    setSelection(selectionForComponentIds(duplicatedIds));
+    setSelection(selectionForComponentIds(copiedComponentIds));
     setTool('select');
     setWireStart(null);
     setHoverEndpoint(null);
+    setContextMenu(null);
+    setInteractionCursor('grab');
+  }
+
+  function copySelectedComponents(targetSelection: SchematicSelection = selection) {
+    const componentIds = componentIdsForSelection(targetSelection);
+    if (componentIds.length === 0) return;
+    const selectedIds = new Set(componentIds);
+    componentClipboardRef.current = draft.components
+      .filter((component) => selectedIds.has(component.id))
+      .map(cloneComponent);
+    setClipboardComponentCount(componentClipboardRef.current.length);
+    pasteSerialRef.current = 0;
+  }
+
+  function pasteCopiedComponents() {
+    if (busy || componentClipboardRef.current.length === 0) return;
+    pasteSerialRef.current += 1;
+    const next = cloneModule(draft);
+    const copiedComponentIds = appendCopiedComponents(
+      next,
+      componentClipboardRef.current,
+      SCHEMATIC_GRID * 2 * pasteSerialRef.current,
+    );
+    if (copiedComponentIds.length === 0) return;
+    commitDraft(next);
+    setSelection(selectionForComponentIds(copiedComponentIds));
+    setTool('select');
+    setWireStart(null);
+    setHoverEndpoint(null);
+    setHoverSelection(null);
     setContextMenu(null);
     setInteractionCursor('grab');
   }
@@ -923,6 +941,16 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if ((event.ctrlKey || event.metaKey) && key === 's') {
       event.preventDefault();
       if (!busy && dirty) void saveAndRebuild();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && key === 'c') {
+      event.preventDefault();
+      copySelectedComponents();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && key === 'v') {
+      event.preventDefault();
+      pasteCopiedComponents();
       return;
     }
     if ((event.ctrlKey || event.metaKey) && key === 'd') {
@@ -1156,6 +1184,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-dirty={dirty ? 'true' : 'false'}
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}
+      data-clipboard-component-count={String(clipboardComponentCount)}
       data-hover-target={selectionAttribute(hoverSelection)}
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
       data-wire-start={endpointIdentity(wireStart)}
@@ -1450,6 +1479,35 @@ function cloneComponent(component: CircuitComponent): CircuitComponent {
     position: { ...component.position },
     pins: component.pins.map((pin) => ({ ...pin })),
   };
+}
+
+function appendCopiedComponents(
+  module: CircuitModule,
+  sourceComponents: CircuitComponent[],
+  offset: number,
+): string[] {
+  const existingIds = new Set(module.components.map((component) => component.id));
+  const componentIds: string[] = [];
+  for (const source of sourceComponents) {
+    const id = makeId(source.type.toLowerCase(), existingIds);
+    existingIds.add(id);
+    const component: CircuitComponent = {
+      ...cloneComponent(source),
+      id,
+      name: `${source.type}${id.replace(/^[a-z]+/i, '')}`,
+      position: snapPoint({
+        x: source.position.x + offset,
+        y: source.position.y + offset,
+      }),
+      pins: source.pins.map((pin, index) => ({
+        ...pin,
+        net: `n_${id}_${index + 1}`,
+      })),
+    };
+    module.components.push(component);
+    componentIds.push(id);
+  }
+  return componentIds;
 }
 
 function cloneWire(wire: CircuitWire): CircuitWire {

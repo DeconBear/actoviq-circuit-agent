@@ -1923,6 +1923,45 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3' &&
     !document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions')?.includes('"r2"')
   ));
+  const r1AfterDuplicateUndoForCopy = await componentScreenPoint(page, 'r1');
+  await page.mouse.click(r1AfterDuplicateUndoForCopy.x, r1AfterDuplicateUndoForCopy.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
+  ));
+  await editor.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+C' : 'Control+C');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-clipboard-component-count') === '1'
+  ));
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '4' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r2'
+  ));
+  const filterPositionsAfterPaste = await componentPositions(page);
+  assert.deepEqual(
+    filterPositionsAfterPaste.r2,
+    {
+      x: filterPositionsAfterPlace.r1.x + schematicGrid * 2,
+      y: filterPositionsAfterPlace.r1.y + schematicGrid * 2,
+    },
+    'pasted component should be offset by two grid steps',
+  );
+  assert.deepEqual(
+    filterPositionsAfterPaste.r1,
+    filterPositionsAfterPlace.r1,
+    'pasting a copied component should not move the original component',
+  );
+  assert.notDeepEqual(
+    await componentPinNets(page, 'r2'),
+    r1NetsBeforeDuplicate,
+    'pasted component should receive fresh pin nets instead of shorting to the original',
+  );
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3' &&
+    !document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions')?.includes('"r2"')
+  ));
   const r1AfterDuplicateUndo = await componentScreenPoint(page, 'r1');
   await page.mouse.click(r1AfterDuplicateUndo.x, r1AfterDuplicateUndo.y);
   await page.waitForFunction(() => (
