@@ -2461,7 +2461,7 @@ try {
   const chainCanvasBox = await canvas.boundingBox();
   assert.ok(chainCanvasBox);
   const chainEnd = worldToScreen(
-    { x: filterPositionsAfterDrag.r1.x - 52, y: filterPositionsAfterDrag.r1.y + 80 },
+    { x: filterPositionsAfterDrag.r1.x - 130, y: filterPositionsAfterDrag.r1.y + 120 },
     chainViewBox,
     chainCanvasBox,
   );
@@ -3415,6 +3415,16 @@ try {
   assert.ok(await countVisibleSchematicWires(page) >= 3, 'hydrated current mirror wires are not visibly drawn');
   const currentMirrorWires = await editorWires(page);
   assertWiresOrthogonal(currentMirrorWires, 'legacy current mirror editor wires should remain orthogonal');
+  const currentMirrorBiasWires = currentMirrorWires.filter((wire) => wire.net === 'bias');
+  assert.ok(currentMirrorBiasWires.length >= 3, 'current mirror bias net should render physical editable wires');
+  assert.ok(
+    currentMirrorBiasWires.every((wire) => wire.from?.component_id === 'mref' && wire.from?.pin_id === 'd'),
+    'current mirror bias wires should originate at the diode-connected MREF drain in GUI',
+  );
+  assert.ok(
+    currentMirrorBiasWires.some((wire) => wire.to?.component_id === 'mref' && wire.to?.pin_id === 'g'),
+    'current mirror should visibly short MREF drain to gate in GUI',
+  );
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="mref"] [data-symbol-kind="mosfet"]').count(),
     1,

@@ -3027,7 +3027,7 @@ function materializeNetWires(
         continue;
       }
     }
-    const anchor = chooseNetAnchor(endpoints);
+    const anchor = chooseNetAnchor(module, net, endpoints);
     for (const endpoint of endpoints) {
       if (endpoint === anchor) continue;
       if (distance(endpointDrawPoint(anchor), endpointDrawPoint(endpoint)) < 1) continue;
@@ -3071,7 +3071,7 @@ function materializeEndpointSpineWires(
   const orientation: 'horizontal' | 'vertical' = spanX >= spanY ? 'horizontal' : 'vertical';
   if (Math.max(spanX, spanY) < SCHEMATIC_GRID * 6) return [];
 
-  const root = chooseSpineRoot(uniqueEndpoints, orientation);
+  const root = chooseSpineRoot(module, net, uniqueEndpoints, orientation);
   const routeSpecs = chooseSpineRouteSpecs(module, net, uniqueEndpoints, root, orientation, usedPairs);
   if (!routeSpecs || routeSpecs.length < uniqueEndpoints.length - 1) return [];
 
@@ -3096,7 +3096,14 @@ function materializeEndpointSpineWires(
   return wires;
 }
 
-function chooseSpineRoot(endpoints: EndpointHit[], orientation: 'horizontal' | 'vertical'): EndpointHit {
+function chooseSpineRoot(
+  module: CircuitModule,
+  net: string,
+  endpoints: EndpointHit[],
+  orientation: 'horizontal' | 'vertical',
+): EndpointHit {
+  const diodeAnchor = diodeConnectedDrainAnchor(module, net, endpoints);
+  if (diodeAnchor) return diodeAnchor;
   const candidates = endpoints.filter((endpoint) => endpoint.kind === 'pin');
   const available = candidates.length > 0 ? candidates : endpoints;
   return [...available].sort((left, right) => (
@@ -3205,7 +3212,7 @@ function materializeEndpointTreeWires(
   existingIds: Set<string>,
   usedPairs: Set<string>,
 ): CircuitWire[] {
-  const root = endpoints.find((endpoint) => endpoint.kind === 'port') ?? chooseNetAnchor(endpoints);
+  const root = endpoints.find((endpoint) => endpoint.kind === 'port') ?? chooseNetAnchor(module, net, endpoints);
   const connected = [root];
   const remaining = endpoints.filter((endpoint) => endpoint !== root);
   const wires: CircuitWire[] = [];
@@ -3549,7 +3556,7 @@ function setEndpointNetByKey(module: CircuitModule, key: string, net: string) {
   }
 }
 
-function chooseNetAnchor(endpoints: EndpointHit[]): EndpointHit {
+function chooseNetAnchor(module: CircuitModule, net: string, endpoints: EndpointHit[]): EndpointHit {
   const ports = endpoints.filter((endpoint) => endpoint.kind === 'port');
   const pins = endpoints.filter((endpoint) => endpoint.kind === 'pin');
   if (ports.length > 0 && pins.length > 0) {
@@ -3561,7 +3568,28 @@ function chooseNetAnchor(endpoints: EndpointHit[]): EndpointHit {
       ), pins[0] ?? port);
     }
   }
+  const diodeAnchor = diodeConnectedDrainAnchor(module, net, endpoints);
+  if (diodeAnchor) return diodeAnchor;
   return [...endpoints].sort((left, right) => (left.x - right.x) || (left.y - right.y))[0] ?? endpoints[0]!;
+}
+
+function diodeConnectedDrainAnchor(module: CircuitModule, net: string, endpoints: EndpointHit[]): EndpointHit | null {
+  for (const component of module.components) {
+    if (component.type !== 'M' && component.type !== 'Q') continue;
+    const activeNets = activeNetMap(component);
+    if (activeNets.gate !== net || activeNets.drain !== net) continue;
+    const drainPin = component.pins.find((pin) => (
+      pin.net === net && /drain|collector|\bd\b|\bc\b/i.test(`${pin.id} ${pin.name}`)
+    ));
+    if (!drainPin) continue;
+    const anchor = endpoints.find((endpoint) => (
+      endpoint.kind === 'pin' &&
+      endpoint.component_id === component.id &&
+      endpoint.pin_id === drainPin.id
+    ));
+    if (anchor) return anchor;
+  }
+  return null;
 }
 
 function endpointPairKey(left: CircuitWireEndpoint | undefined, right: CircuitWireEndpoint | undefined): string {

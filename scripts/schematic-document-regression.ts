@@ -367,6 +367,7 @@ for (const fixture of fixtures) {
   assertRailLabels(document.module, document.netLabels, document.wires);
   assertNoMosBodyRailLabels(document.module, document.netLabels);
   assertLdoInternalLabels(document);
+  assertCurrentMirrorDiodeConnection(document);
   assertCascodePhysicalOutputNode(document);
   assertMultiEndpointSpine(document);
   assertGeneratedWireClearance(document);
@@ -784,6 +785,23 @@ function assertLdoInternalLabels(document: ReturnType<typeof createSchematicDocu
       `mos_ldo should not render ${net} as a generated long wire`,
     );
   }
+}
+
+function assertCurrentMirrorDiodeConnection(document: ReturnType<typeof createSchematicDocument>) {
+  if (document.module.module_id !== 'current_mirror') return;
+  const biasWires = document.wires.filter((wire) => wire.net === 'bias');
+  assert.ok(biasWires.length >= 3, 'current mirror bias net should render physical gate/drain wires');
+  assert.ok(
+    biasWires.every((wire) => wire.from?.component_id === 'm_ref' && wire.from?.pin_id === 'd'),
+    'current mirror bias net should use the diode-connected drain as its route anchor',
+  );
+  const reference = mustComponent(document.module, 'm_ref');
+  const drain = pinPointByName(reference, /drain|\bd\b/);
+  const gate = pinPointByName(reference, /gate|\bg\b/);
+  const gateShort = biasWires.find((wire) => wire.to?.component_id === 'm_ref' && wire.to?.pin_id === 'g');
+  assert.ok(gateShort, 'current mirror diode-connected device should visibly short drain to gate');
+  assert.deepEqual(gateShort.points[0], drain, 'current mirror gate short should start at the reference drain');
+  assert.deepEqual(gateShort.points.at(-1), gate, 'current mirror gate short should end at the reference gate');
 }
 
 function assertCascodePhysicalOutputNode(document: ReturnType<typeof createSchematicDocument>) {
