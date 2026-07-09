@@ -273,6 +273,7 @@ const fixtures: CircuitModule[] = [
       ['b', 'B', '0'],
     ]),
     component('i_ref', 'I', 'DC 100u', 170, 50, [['p', '+', 'vdd'], ['n', '-', 'bias']]),
+    component('rload', 'R', '10k', 340, 50, [['a', '1', 'vdd'], ['b', '2', 'out']]),
   ]),
 ];
 
@@ -576,9 +577,16 @@ function assertReadableLayout(module: CircuitModule) {
   if (module.module_id === 'current_mirror') {
     const reference = mustComponent(module, 'm_ref');
     const output = mustComponent(module, 'm_out');
+    const referenceFeed = mustComponent(module, 'i_ref');
+    const outputLoad = mustComponent(module, 'rload');
     assertActivePins(reference, module.module_id);
     assertActivePins(output, module.module_id);
     assert.ok(reference.position.x < output.position.x, 'current mirror reference device should be left of output device');
+    assert.ok(referenceFeed.position.y < reference.position.y, 'current mirror reference current source should sit above the diode-connected device');
+    assert.ok(outputLoad.position.y < output.position.y, 'current mirror output load should sit above the output device');
+    assertPinAbove(referenceFeed, 'vdd', 'bias', module.module_id);
+    assertPinAbove(outputLoad, 'vdd', 'out', module.module_id);
+    assertNoComponentOverlap(module, ['m_ref', 'm_out', 'i_ref', 'rload']);
   }
   if (module.module_id === 'baseband_conditioning') {
     assertNoComponentOverlap(module, ['rin', 'rbias1']);

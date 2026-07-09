@@ -19,6 +19,7 @@ const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
 const legacyMosAmplifierPrefix = `${projectPrefix}legacy-mos-amp-`;
 const legacyCmosInverterPrefix = `${projectPrefix}legacy-cmos-inverter-`;
 const legacyDifferentialPairPrefix = `${projectPrefix}legacy-diff-pair-`;
+const legacyCurrentMirrorPrefix = `${projectPrefix}legacy-current-mirror-`;
 const legacyBuckConverterPrefix = `${projectPrefix}legacy-buck-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
@@ -497,6 +498,68 @@ async function createLegacyDifferentialPairProject() {
     'RDP vdd outp 10k',
     'RDN vdd outn 10k',
     'Itail tail 0 DC 100u',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
+async function createLegacyCurrentMirrorProject() {
+  const expectedProjectId = legacyProjectId('mirror');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyCurrentMirrorPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy current mirror fixture project id should not be truncated or reused');
+  const modulePorts = [
+    { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'mirror',
+    name: 'NMOS current mirror',
+    kind: 'bias',
+    function: 'Legacy notebook-only NMOS current mirror used to verify diode-connected mirror layout hydration.',
+    parameters: { Iref: '100 uA', Load: '10 kohm' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/mirror/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 420, height: 280 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'mirror',
+    name: 'NMOS current mirror',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'mirror');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# NMOS current mirror',
+    '',
+    '```spice',
+    '* Legacy notebook-only current mirror fixture',
+    '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+    'IREF vdd bias DC 100u',
+    'MREF bias bias 0 0 NMOS1 W=20u L=1u',
+    'MOUT out bias 0 0 NMOS1 W=20u L=1u',
+    'RLOAD vdd out 10k',
     '.end',
     '```',
     '',
@@ -992,6 +1055,7 @@ const legacyVoltageDividerProject = await createLegacyVoltageDividerProject();
 const legacyMosAmplifierProject = await createLegacyMosAmplifierProject();
 const legacyCmosInverterProject = await createLegacyCmosInverterProject();
 const legacyDifferentialPairProject = await createLegacyDifferentialPairProject();
+const legacyCurrentMirrorProject = await createLegacyCurrentMirrorProject();
 const legacyBuckConverterProject = await createLegacyBuckConverterProject();
 
 const viteProcess = await startViteIfNeeded();
@@ -3179,6 +3243,99 @@ try {
   }
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-differential-pair-drag.png') });
   console.log('[e2e] legacy differential pair drag isolated');
+
+  await page.getByTestId(`sidebar-project-${legacyCurrentMirrorProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyCurrentMirrorProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(legacyCurrentMirrorProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-mirror').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 4 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 3;
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
+  const currentMirrorPositions = await componentPositions(page);
+  for (const id of ['mref', 'mout', 'iref', 'rload']) {
+    assert.ok(currentMirrorPositions[id], `hydrated current mirror component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 4, 'hydrated current mirror components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 3, 'hydrated current mirror wires are not visibly drawn');
+  const currentMirrorWires = await editorWires(page);
+  assertWiresOrthogonal(currentMirrorWires, 'legacy current mirror editor wires should remain orthogonal');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="mref"] [data-symbol-kind="mosfet"]').count(),
+    1,
+    'current mirror reference transistor should use the refined MOSFET symbol body',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-component-id="mout"] [data-symbol-polarity="nmos"]').count(),
+    1,
+    'current mirror output transistor should expose NMOS polarity for symbol rendering',
+  );
+  assert.ok(currentMirrorPositions.mref.x < currentMirrorPositions.mout.x, 'current mirror reference device should sit left of output device in GUI');
+  assert.ok(currentMirrorPositions.iref.y < currentMirrorPositions.mref.y, 'current mirror reference source should sit above MREF in GUI');
+  assert.ok(currentMirrorPositions.rload.y < currentMirrorPositions.mout.y, 'current mirror output load should sit above MOUT in GUI');
+  assert.ok(
+    Math.abs(currentMirrorPositions.iref.x - currentMirrorPositions.mref.x) <= schematicGrid * 2,
+    'current mirror IREF should align with the reference drain in GUI',
+  );
+  assert.ok(
+    Math.abs(currentMirrorPositions.rload.x - currentMirrorPositions.mout.x) <= schematicGrid * 2,
+    'current mirror RLOAD should align with the output drain in GUI',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="output"]').getAttribute('data-port-side'),
+    'right',
+    'current mirror OUT should render on the right edge',
+  );
+  await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy current mirror rendered wires');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-current-mirror.png') });
+  console.log('[e2e] legacy current mirror loaded');
+  await selectComponentForDrag(page, 'mref', [
+    { x: 0, y: 0 },
+    { x: -20, y: 0 },
+    { x: 12, y: 18 },
+    { x: 24, y: -18 },
+  ]);
+  const currentMirrorMrefDragPoint = await selectedComponentFrameScreenPoint(page, 'mref');
+  await page.mouse.move(currentMirrorMrefDragPoint.x, currentMirrorMrefDragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.mouse.move(currentMirrorMrefDragPoint.x - 20, currentMirrorMrefDragPoint.y + 15, { steps: 4 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(currentMirrorMrefDragPoint.x - 90, currentMirrorMrefDragPoint.y + 45, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    currentMirrorWires,
+    await editorWires(page),
+    ['mref'],
+    'dragging current mirror MREF',
+  );
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const currentMirrorPositionsAfterMrefDrag = await componentPositions(page);
+  assertPositionChanged(currentMirrorPositionsAfterMrefDrag.mref, currentMirrorPositions.mref, 'dragging current mirror MREF did not move MREF');
+  for (const id of ['mout', 'iref', 'rload']) {
+    assertPositionEqual(currentMirrorPositionsAfterMrefDrag[id], currentMirrorPositions[id], `dragging current mirror MREF moved ${id}`);
+  }
+  await assertWireEndpointsMatchComponentPins(page, 'mref', 'committed current mirror MREF drag should keep endpoints on moving pins');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-current-mirror-drag.png') });
+  console.log('[e2e] legacy current mirror drag isolated');
 
   await page.getByTestId(`sidebar-project-${legacyBuckConverterProject.projectId}`).click();
   await waitForWorkbenchProject(page, legacyBuckConverterProject.projectId);

@@ -174,6 +174,8 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
   if (differentialPairLayout) return autoLayoutDifferentialPairModule(module, differentialPairLayout);
   const cmosInverterLayout = findCmosInverterLayout(module, activeComponents);
   if (cmosInverterLayout) return autoLayoutCmosInverterModule(module, cmosInverterLayout);
+  const currentMirrorLayout = findCurrentMirrorLayout(module, activeComponents);
+  if (currentMirrorLayout) return autoLayoutCurrentMirrorModule(module, currentMirrorLayout);
   const buckConverterLayout = findBuckConverterLayout(module, activeComponents);
   if (buckConverterLayout) return autoLayoutBuckConverterModule(module, buckConverterLayout);
   if (activeComponents.length === 1 && isSingleTransistorStageLikeModule(activeComponents[0])) {
@@ -263,6 +265,17 @@ interface DifferentialPairLayout {
   tailNet: string;
   powerNet: string;
   groundNet: string;
+}
+
+interface CurrentMirrorLayout {
+  reference: CircuitComponent;
+  output: CircuitComponent;
+  gateNet: string;
+  outputNet: string;
+  commonSourceNet: string;
+  powerNet: string;
+  groundNet: string;
+  pmos: boolean;
 }
 
 interface BuckConverterLayout {
@@ -616,6 +629,201 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
     }
     component.position = snapPoint({
       x: 850 + (fallbackIndex % 3) * 150,
+      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+    placed.add(component.id);
+    fallbackIndex += 1;
+  }
+  return module;
+}
+
+function findCurrentMirrorLayout(module: CircuitModule, activeComponents: CircuitComponent[]): CurrentMirrorLayout | null {
+  const mosComponents = activeComponents.filter((component) => component.type === 'M');
+  if (mosComponents.length < 2) return null;
+  const preferredOutputNet = preferredPortNet(module, 'output');
+  const powerNet = module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net ?? 'vdd';
+  const groundNet = module.ports.find(isGroundPort)?.net ?? '0';
+
+  for (let leftIndex = 0; leftIndex < mosComponents.length; leftIndex += 1) {
+    const left = mosComponents[leftIndex];
+    if (!left) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < mosComponents.length; rightIndex += 1) {
+      const right = mosComponents[rightIndex];
+      if (!right || isPmosComponent(left) !== isPmosComponent(right)) continue;
+      const layout = currentMirrorLayoutForPair(module, left, right, preferredOutputNet, powerNet, groundNet);
+      if (layout) return layout;
+    }
+  }
+  return null;
+}
+
+function currentMirrorLayoutForPair(
+  module: CircuitModule,
+  first: CircuitComponent,
+  second: CircuitComponent,
+  preferredOutputNet: string | null,
+  powerNet: string,
+  groundNet: string,
+): CurrentMirrorLayout | null {
+  const firstNets = activeNetMap(first);
+  const secondNets = activeNetMap(second);
+  if (!firstNets.gate || !firstNets.drain || !firstNets.source) return null;
+  if (!secondNets.gate || !secondNets.drain || !secondNets.source) return null;
+  if (firstNets.gate !== secondNets.gate) return null;
+  if (firstNets.source !== secondNets.source) return null;
+  if (firstNets.drain === secondNets.drain) return null;
+  if (!isRailNet(firstNets.source, module)) return null;
+
+  const firstDiodeConnected = firstNets.drain === firstNets.gate;
+  const secondDiodeConnected = secondNets.drain === secondNets.gate;
+  let reference = first;
+  let output = second;
+  let outputNet = secondNets.drain;
+
+  if (firstDiodeConnected && !secondDiodeConnected) {
+    reference = first;
+    output = second;
+    outputNet = secondNets.drain;
+  } else if (secondDiodeConnected && !firstDiodeConnected) {
+    reference = second;
+    output = first;
+    outputNet = firstNets.drain;
+  } else if (preferredOutputNet && firstNets.drain === preferredOutputNet && secondDiodeConnected) {
+    reference = second;
+    output = first;
+    outputNet = firstNets.drain;
+  } else if (preferredOutputNet && secondNets.drain === preferredOutputNet && firstDiodeConnected) {
+    reference = first;
+    output = second;
+    outputNet = secondNets.drain;
+  } else {
+    return null;
+  }
+
+  if (preferredOutputNet && outputNet !== preferredOutputNet) return null;
+  return {
+    reference,
+    output,
+    gateNet: firstNets.gate,
+    outputNet,
+    commonSourceNet: firstNets.source,
+    powerNet,
+    groundNet,
+    pmos: isPmosComponent(reference),
+  };
+}
+
+function autoLayoutCurrentMirrorModule(module: CircuitModule, layout: CurrentMirrorLayout): CircuitModule {
+  const placed = new Set<string>();
+  const mirrorY = layout.pmos ? 220 : 300;
+
+  layout.reference.position = snapPoint({ x: 320, y: mirrorY });
+  layout.reference.rotation = 0;
+  placed.add(layout.reference.id);
+
+  layout.output.position = snapPoint({ x: 560, y: mirrorY });
+  layout.output.rotation = 0;
+  placed.add(layout.output.id);
+
+  const referenceDrain = pinPointForComponentNet(layout.reference, layout.gateNet);
+  const outputDrain = pinPointForComponentNet(layout.output, layout.outputNet);
+  const feedRailNet = layout.pmos ? layout.groundNet : layout.powerNet;
+  const loadRailNet = layout.pmos ? layout.groundNet : layout.powerNet;
+  const twoPinComponents = module.components.filter((component) => component.pins.length === 2);
+
+  const referenceFeed = findTwoPinWithNets(
+    twoPinComponents,
+    placed,
+    /i(ref)?|bias|ref|source|r(ref)?/i,
+    feedRailNet,
+    layout.gateNet,
+  );
+  if (referenceFeed && referenceDrain) {
+    if (layout.pmos) {
+      placeVertical(referenceFeed, layout.gateNet, layout.groundNet, {
+        x: referenceDrain.x,
+        y: referenceDrain.y + 90,
+      });
+    } else {
+      placeVertical(referenceFeed, layout.powerNet, layout.gateNet, {
+        x: referenceDrain.x,
+        y: referenceDrain.y - 90,
+      });
+    }
+    placed.add(referenceFeed.id);
+  }
+
+  const outputLoad = findTwoPinWithNets(
+    twoPinComponents,
+    placed,
+    /r(load|out)|load|i(load|out)?/i,
+    layout.outputNet,
+    loadRailNet,
+  );
+  if (outputLoad && outputDrain) {
+    if (layout.pmos) {
+      placeVertical(outputLoad, layout.outputNet, layout.groundNet, {
+        x: outputDrain.x,
+        y: outputDrain.y + 90,
+      });
+    } else {
+      placeVertical(outputLoad, layout.powerNet, layout.outputNet, {
+        x: outputDrain.x,
+        y: outputDrain.y - 90,
+      });
+    }
+    placed.add(outputLoad.id);
+  }
+
+  let outputBranchIndex = 0;
+  let gateBranchIndex = 0;
+  let sourceBranchIndex = 0;
+  let fallbackIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    const [first, second] = component.pins;
+    if (first && second && component.pins.length === 2) {
+      const nets = new Set([first.net, second.net]);
+      if (nets.has(layout.outputNet) && (nets.has(layout.powerNet) || nets.has(layout.groundNet))) {
+        const railNet = nets.has(layout.powerNet) ? layout.powerNet : layout.groundNet;
+        const topNet = railNet === layout.groundNet ? layout.outputNet : railNet;
+        const bottomNet = railNet === layout.groundNet ? railNet : layout.outputNet;
+        placeVertical(component, topNet, bottomNet, {
+          x: (outputDrain?.x ?? layout.output.position.x + 26) + 120 + outputBranchIndex * 120,
+          y: (outputDrain?.y ?? mirrorY) + (railNet === layout.groundNet ? 95 : -95),
+        });
+        placed.add(component.id);
+        outputBranchIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.gateNet) && (nets.has(layout.powerNet) || nets.has(layout.groundNet))) {
+        const railNet = nets.has(layout.powerNet) ? layout.powerNet : layout.groundNet;
+        const topNet = railNet === layout.groundNet ? layout.gateNet : railNet;
+        const bottomNet = railNet === layout.groundNet ? railNet : layout.gateNet;
+        placeVertical(component, topNet, bottomNet, {
+          x: (referenceDrain?.x ?? layout.reference.position.x + 26) - 110 - gateBranchIndex * 110,
+          y: (referenceDrain?.y ?? mirrorY) + (railNet === layout.groundNet ? 95 : -95),
+        });
+        placed.add(component.id);
+        gateBranchIndex += 1;
+        continue;
+      }
+      if (nets.has(layout.commonSourceNet) && (nets.has(layout.powerNet) || nets.has(layout.groundNet))) {
+        const railNet = nets.has(layout.powerNet) ? layout.powerNet : layout.groundNet;
+        const topNet = railNet === layout.groundNet ? layout.commonSourceNet : railNet;
+        const bottomNet = railNet === layout.groundNet ? railNet : layout.commonSourceNet;
+        placeVertical(component, topNet, bottomNet, {
+          x: layout.reference.position.x + 120 + sourceBranchIndex * 120,
+          y: mirrorY + (railNet === layout.groundNet ? 150 : -150),
+        });
+        placed.add(component.id);
+        sourceBranchIndex += 1;
+        continue;
+      }
+    }
+    component.position = snapPoint({
+      x: 760 + (fallbackIndex % 3) * 150,
       y: 170 + Math.floor(fallbackIndex / 3) * 140,
     });
     component.rotation = normalizeRotation(component.rotation);
@@ -2780,6 +2988,7 @@ function shouldRepresentSignalNetWithLocalLabel(module: CircuitModule, net: stri
   if (!isReadableSignalNetName(net)) return false;
   if (module.ports.some((port) => port.net === net)) return false;
   if (isLdoInternalLabelNet(module, net)) return true;
+  if (isCurrentMirrorGateNet(module, net)) return false;
   const xs = endpoints.map((endpoint) => endpoint.x);
   const ys = endpoints.map((endpoint) => endpoint.y);
   const spanX = Math.max(...xs) - Math.min(...xs);
@@ -2791,6 +3000,25 @@ function isLdoInternalLabelNet(module: CircuitModule, net: string): boolean {
   const moduleText = `${module.module_id} ${module.name}`.toLowerCase();
   if (!/ldo|regulator/.test(moduleText)) return false;
   return /^(fb|feedback|tail|bias|eaout|err(or)?_?out|vref|ref)$/i.test(net);
+}
+
+function isCurrentMirrorGateNet(module: CircuitModule, net: string): boolean {
+  const mosComponents = module.components.filter((component) => component.type === 'M');
+  for (let leftIndex = 0; leftIndex < mosComponents.length; leftIndex += 1) {
+    const left = mosComponents[leftIndex];
+    if (!left) continue;
+    const leftNets = activeNetMap(left);
+    if (leftNets.gate !== net || !leftNets.drain || !leftNets.source) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < mosComponents.length; rightIndex += 1) {
+      const right = mosComponents[rightIndex];
+      if (!right || isPmosComponent(left) !== isPmosComponent(right)) continue;
+      const rightNets = activeNetMap(right);
+      if (rightNets.gate !== net || !rightNets.drain || rightNets.source !== leftNets.source) continue;
+      if (!isRailNet(leftNets.source, module)) continue;
+      if (leftNets.drain === net || rightNets.drain === net) return true;
+    }
+  }
+  return false;
 }
 
 function isReadableSignalNetName(net: string): boolean {
