@@ -700,14 +700,19 @@ function assertReadablePortPlacement(document: ReturnType<typeof createSchematic
     assert.ok(document.viewBox.maxX - outputPort.x >= 110, 'LDO VOUT port should leave room for the right-side symbol and label');
   }
   if (module.module_id === 'mos_differential_pair') {
+    const leftDevice = mustComponent(module, 'm_inp');
     const rightDevice = mustComponent(module, 'm_inn');
+    const innPort = mustPortPosition(portPositions, 'inn');
     const outpPort = mustPortPosition(portPositions, 'outp');
     const outnPort = mustPortPosition(portPositions, 'outn');
+    const leftBounds = boundsForComponent(leftDevice);
     const rightEdge = boundsForComponent(rightDevice).maxX;
 
-    assert.ok(outpPort.x > rightEdge, 'differential pair OUT+ should sit outside the right edge');
+    assert.ok(outpPort.x > leftBounds.maxX, 'differential pair OUT+ should sit outside the positive-input device');
+    assert.ok(outpPort.x < rightDevice.position.x, 'differential pair OUT+ should stay local to the positive-output branch');
     assert.ok(outnPort.x > rightEdge, 'differential pair OUT- should sit outside the right edge');
     assert.ok(Math.abs(outpPort.y - outnPort.y) >= 60, 'differential pair output ports should be vertically separated');
+    assert.ok(outpPort.y < innPort.y && outnPort.y < innPort.y, 'differential pair output ports should stay above the right-side input port');
     return;
   }
   if (module.module_id !== 'bjt_reset_network') return;

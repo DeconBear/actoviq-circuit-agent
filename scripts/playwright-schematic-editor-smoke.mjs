@@ -3321,7 +3321,7 @@ try {
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="outp"]').getAttribute('data-port-side'),
     'right',
-    'differential pair OUT+ should render on the right edge',
+    'differential pair OUT+ should render on the right side of its local branch',
   );
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="outn"]').getAttribute('data-port-side'),
@@ -3331,23 +3331,37 @@ try {
   const differentialOutputPorts = await page.getByTestId('schematic-editor-svg').evaluate(() => {
     const outp = document.querySelector('g[data-port-id="outp"]');
     const outn = document.querySelector('g[data-port-id="outn"]');
-    if (!(outp instanceof SVGGraphicsElement) || !(outn instanceof SVGGraphicsElement)) {
+    const inn = document.querySelector('g[data-port-id="inn"]');
+    if (!(outp instanceof SVGGraphicsElement) || !(outn instanceof SVGGraphicsElement) || !(inn instanceof SVGGraphicsElement)) {
       throw new Error('differential pair output port SVG groups are missing');
     }
     const outpBox = outp.getBBox();
     const outnBox = outn.getBBox();
+    const innBox = inn.getBBox();
     return {
-      minX: Math.min(outpBox.x, outnBox.x),
+      outpCenterX: outpBox.x + outpBox.width / 2,
+      outnCenterX: outnBox.x + outnBox.width / 2,
       centerGapY: Math.abs((outpBox.y + outpBox.height / 2) - (outnBox.y + outnBox.height / 2)),
+      outputMaxY: Math.max(outpBox.y + outpBox.height / 2, outnBox.y + outnBox.height / 2),
+      innCenterY: innBox.y + innBox.height / 2,
     };
   });
   assert.ok(
-    differentialOutputPorts.minX > diffPairPositions.m_inn.x + 52,
-    'differential pair output ports should render outside the right device, not between the input pair',
+    differentialOutputPorts.outpCenterX > diffPairPositions.m_inp.x + 52 &&
+      differentialOutputPorts.outpCenterX < diffPairPositions.m_inn.x - 52,
+    'differential pair OUT+ should stay local to the positive-output branch instead of crossing the whole pair',
+  );
+  assert.ok(
+    differentialOutputPorts.outnCenterX > diffPairPositions.m_inn.x + 52,
+    'differential pair OUT- should render outside the right device',
   );
   assert.ok(
     differentialOutputPorts.centerGapY >= schematicGrid * 2,
-    'differential pair output ports should be visibly separated on the right edge',
+    'differential pair output ports should be visibly separated on the output side',
+  );
+  assert.ok(
+    differentialOutputPorts.outputMaxY < differentialOutputPorts.innCenterY,
+    'differential pair output ports should stay above the right-side input port in GUI',
   );
   await waitForEditorIdle(page);
   await assertRenderedWirePolylinesOrthogonal(page, 'legacy differential pair rendered wires');
