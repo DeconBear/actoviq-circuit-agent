@@ -159,6 +159,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const pendingDraftUpdateRef = useRef<DraftUpdate | null>(null);
   const viewportUpdateFrameRef = useRef<number | null>(null);
   const pendingViewportRef = useRef<SchematicBounds | null>(null);
+  const dragPreviewFrameRef = useRef<number | null>(null);
+  const pendingDragPreviewRef = useRef<Record<string, CircuitPosition> | null>(null);
 
   const baseDocument = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
   const previewDraft = useMemo(() => {
@@ -205,6 +207,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
 
   useEffect(() => {
     cancelPendingViewportUpdate();
+    cancelPendingDragPreviewUpdate();
     setDraft(createSchematicDocument(module).module);
     setDirty(false);
     setSelection(null);
@@ -290,6 +293,25 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
   }
 
+  function scheduleDragPreviewPositions(next: Record<string, CircuitPosition>) {
+    pendingDragPreviewRef.current = next;
+    if (dragPreviewFrameRef.current !== null) return;
+    dragPreviewFrameRef.current = window.requestAnimationFrame(() => {
+      dragPreviewFrameRef.current = null;
+      const pending = pendingDragPreviewRef.current;
+      pendingDragPreviewRef.current = null;
+      if (pending) setDragPreviewPositions(pending);
+    });
+  }
+
+  function cancelPendingDragPreviewUpdate() {
+    pendingDragPreviewRef.current = null;
+    if (dragPreviewFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragPreviewFrameRef.current);
+      dragPreviewFrameRef.current = null;
+    }
+  }
+
   function markDirty() {
     setDirty((current) => (current ? current : true));
   }
@@ -297,6 +319,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   useEffect(() => () => {
     cancelPendingDraftUpdate();
     cancelPendingViewportUpdate();
+    cancelPendingDragPreviewUpdate();
   }, []);
 
   function clientToWorld(svg: SVGSVGElement, clientX: number, clientY: number): CircuitPosition {
@@ -662,7 +685,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     );
     if (samePositionMap(drag.lastPositions, nextPositions)) return;
     drag.lastPositions = clonePositionMap(nextPositions);
-    setDragPreviewPositions(nextPositions);
+    scheduleDragPreviewPositions(nextPositions);
     autoPanViewport(event.currentTarget, event.clientX, event.clientY);
   }
 
@@ -702,6 +725,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     wirePointDragRef.current = null;
     wireSegmentDragRef.current = null;
     marqueeRef.current = null;
+    cancelPendingDragPreviewUpdate();
     setMarqueeBounds(null);
     setDragPreviewPositions(null);
     const world = screenToWorld(event);
@@ -783,6 +807,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   function cancelActiveDrag() {
     cancelPendingDraftUpdate();
     cancelPendingViewportUpdate();
+    cancelPendingDragPreviewUpdate();
     const drag = dragRef.current;
     dragRef.current = null;
     wireDragRef.current = null;
