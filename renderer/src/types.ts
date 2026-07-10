@@ -229,6 +229,25 @@ export interface CircuitProjectSummary {
   moduleCount: number;
 }
 
+export interface CircuitTrashItem extends CircuitProjectSummary {
+  trashId: string;
+  deletedAt: string;
+  originalPath: string;
+  trashPath: string;
+}
+
+export interface CircuitHistoryEntry {
+  revision: number;
+  baseRevision: number;
+  actor: string;
+  message: string;
+  createdAt: string;
+  documentHash?: string;
+  restorable: boolean;
+  buildStatus?: string;
+  netlistDiff: { added: string[]; removed: string[] };
+}
+
 export interface SchematicOverrideItem {
   x: number;
   y: number;

@@ -9,10 +9,11 @@ const { _electron: electron } = await import('playwright');
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputRoot = path.resolve(root, 'output', 'playwright');
-const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
+const runId = Date.now().toString(36);
+const e2eRunRoot = path.resolve(outputRoot, '.workspace', `schematic-${process.pid}-${runId}`);
+const workspaceRoot = path.resolve(e2eRunRoot, 'workspaces', 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const projectPrefix = 'playwright-schematic-editor-';
-const runId = Date.now().toString(36);
 const legacyLdoPrefix = `${projectPrefix}legacy-ldo-`;
 const legacyBjtResetPrefix = `${projectPrefix}legacy-bjt-reset-`;
 const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
@@ -1274,8 +1275,8 @@ const legacyBuckConverterProject = await createLegacyBuckConverterProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
-const e2eUserDataDir = path.resolve(outputRoot, `schematic-editor-user-data-${Date.now()}`);
-const e2eHomeDir = path.resolve(outputRoot, `schematic-editor-home-${Date.now()}`);
+const e2eUserDataDir = path.resolve(e2eRunRoot, 'electron-user-data');
+const e2eHomeDir = path.resolve(e2eRunRoot, 'home');
 const electronDistDir = path.resolve(root, 'node_modules', 'electron', 'dist');
 await mkdir(e2eUserDataDir, { recursive: true });
 await mkdir(e2eHomeDir, { recursive: true });
@@ -1285,6 +1286,7 @@ const electronApp = await electron.launch({
   env: {
     ...process.env,
     ACTOVIQ_E2E: '1',
+    ACTOVIQ_E2E_WORKSPACE_ROOT: workspaceRoot,
     ACTOVIQ_RENDERER_URL: viteUrl,
     HOME: e2eHomeDir,
     USERPROFILE: e2eHomeDir,
@@ -4266,6 +4268,6 @@ try {
   throw error;
 } finally {
   await electronApp.close();
-  if (testSucceeded) await removePrefixedProjects();
+  await rm(e2eRunRoot, { recursive: true, force: true });
   if (viteProcess) viteProcess.kill();
 }

@@ -13,7 +13,7 @@ import { SettingsDialog } from './components/settings/SettingsDialog';
 import { SetupWizard } from './components/settings/SetupWizard';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { useAppStore, type SimulationMetric, type TabKey } from './store/appStore';
-import type { ModuleManifest, StageDef } from './types';
+import type { CircuitTrashItem, ModuleManifest, StageDef } from './types';
 
 const tabLabels: Record<TabKey, string> = {
   design: 'Design',
@@ -81,6 +81,7 @@ export function App() {
   const [isChatPending, setIsChatPending] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const [stagePanelWidth, setStagePanelWidth] = useState(280);
+  const [trashProjects, setTrashProjects] = useState<CircuitTrashItem[]>([]);
   const resizing = useRef<'sidebar' | 'stage' | null>(null);
   const workflowConversationIdRef = useRef<string | null>(null);
   const suppressAutoLoadRef = useRef(false);
@@ -302,8 +303,12 @@ export function App() {
       const state = useAppStore.getState();
       state.setWorkspaces(workspaces);
       state.setActiveWorkspace(activeWorkspace);
-      const projects = await window.electronAPI.listCircuitProjects();
+      const [projects, trash] = await Promise.all([
+        window.electronAPI.listCircuitProjects(),
+        window.electronAPI.listCircuitTrash(),
+      ]);
       state.setCircuitProjects(projects);
+      setTrashProjects(trash);
       await refreshReferences();
     } catch {
       useAppStore.getState().setWorkspaces([]);
@@ -314,6 +319,11 @@ export function App() {
     if (!window.electronAPI) return;
     const projects = await window.electronAPI.listCircuitProjects();
     useAppStore.getState().setCircuitProjects(projects);
+  }, []);
+
+  const refreshCircuitTrash = useCallback(async () => {
+    if (!window.electronAPI) return;
+    setTrashProjects(await window.electronAPI.listCircuitTrash());
   }, []);
 
   const loadCircuitProject = useCallback(async (projectId: string, openDesign = true) => {
@@ -411,6 +421,51 @@ export function App() {
       state.setCircuitBusy(false);
     }
   }, [loadCircuitProject, refreshCircuitProjects]);
+
+  const handleTrashCircuitProjects = useCallback(async (projectIds: string[]) => {
+    if (!window.electronAPI || projectIds.length === 0) return;
+    const state = useAppStore.getState();
+    state.setCircuitBusy(true);
+    state.setCircuitError('');
+    try {
+      await window.electronAPI.trashCircuitProjects(projectIds);
+      const [projects, trash] = await Promise.all([
+        window.electronAPI.listCircuitProjects(),
+        window.electronAPI.listCircuitTrash(),
+      ]);
+      state.setCircuitProjects(projects);
+      setTrashProjects(trash);
+      if (state.activeProjectId && projectIds.includes(state.activeProjectId)) {
+        const nextProjectId = projects[0]?.projectId;
+        if (nextProjectId) {
+          await loadCircuitProject(nextProjectId);
+        } else {
+          circuitLoadRequestRef.current += 1;
+          state.setActiveProjectId(null);
+          state.setActiveModuleId(null);
+          state.setCircuitProject(null);
+          state.setCircuitBuild(null);
+        }
+      }
+    } catch (error) {
+      state.setCircuitError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      useAppStore.getState().setCircuitBusy(false);
+    }
+  }, [loadCircuitProject]);
+
+  const handleRestoreCircuitProjects = useCallback(async (trashIds: string[]) => {
+    if (!window.electronAPI || trashIds.length === 0) return;
+    await window.electronAPI.restoreCircuitProjects(trashIds);
+    await Promise.all([refreshCircuitProjects(), refreshCircuitTrash()]);
+  }, [refreshCircuitProjects, refreshCircuitTrash]);
+
+  const handlePurgeCircuitProjects = useCallback(async (trashIds: string[]) => {
+    if (!window.electronAPI || trashIds.length === 0) return;
+    await window.electronAPI.purgeCircuitProjects(trashIds);
+    await refreshCircuitTrash();
+  }, [refreshCircuitTrash]);
 
   const handleCreateCircuitProjectFromTemplate = useCallback(async (
     templateId: string,
@@ -875,9 +930,14 @@ export function App() {
           onCreateWorkspace={handleCreateWorkspace}
           onRefreshReferences={refreshReferences}
           circuitProjects={store.circuitProjects}
+          trashProjects={trashProjects}
           activeProjectId={store.activeProjectId}
           onSelectProject={loadCircuitProject}
           onCreateProject={handleCreateCircuitProject}
+          onTrashProjects={handleTrashCircuitProjects}
+          onRestoreProjects={handleRestoreCircuitProjects}
+          onPurgeProjects={handlePurgeCircuitProjects}
+          onRefreshTrash={refreshCircuitTrash}
         />
 
         {!store.sidebarCollapsed && (

@@ -7,7 +7,10 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(currentDir, '..');
 const settingsDir = path.resolve(homedir(), '.actoviq');
 const workspaceConfigPath = path.resolve(settingsDir, 'actoviq-circuit-agent-workspaces.json');
-const defaultWorkspaceRoot = path.resolve(PROJECT_ROOT, 'workspace', 'workspaces', 'default');
+const e2eWorkspaceRoot = process.env.ACTOVIQ_E2E_WORKSPACE_ROOT?.trim();
+const defaultWorkspaceRoot = e2eWorkspaceRoot
+  ? path.resolve(e2eWorkspaceRoot)
+  : path.resolve(PROJECT_ROOT, 'workspace', 'workspaces', 'default');
 
 export interface WorkspaceSummary {
   id: string;
@@ -169,7 +172,10 @@ export async function createWorkspace(input: { name?: string; root?: string }): 
   }
   const root = input.root?.trim()
     ? path.resolve(input.root.trim())
-    : path.resolve(PROJECT_ROOT, 'workspace', 'workspaces', id);
+    : path.resolve(
+      e2eWorkspaceRoot ? path.dirname(defaultWorkspaceRoot) : path.resolve(PROJECT_ROOT, 'workspace', 'workspaces'),
+      id,
+    );
   const workspace = buildWorkspace(id, name, root, now);
   config.workspaces.push(workspace);
   config.activeWorkspaceId = workspace.id;

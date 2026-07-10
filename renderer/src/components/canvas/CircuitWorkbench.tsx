@@ -14,6 +14,7 @@ import { useAppStore } from '../../store/appStore';
 import type {
   CircuitCommand,
   CircuitConnection,
+  CircuitHistoryEntry,
   DesignMemoryItem,
   CircuitModule,
   CircuitModuleRef,
@@ -361,6 +362,9 @@ export function CircuitWorkbench({
     flows: DesignMemoryItem[];
   }>({ templates: [], flows: [] });
   const [designMemoryLoading, setDesignMemoryLoading] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [history, setHistory] = useState<CircuitHistoryEntry[]>([]);
 
   const project = bundle?.project ?? null;
   const currentProjectId = project?.project_id ?? activeProjectId;
@@ -436,6 +440,50 @@ export function CircuitWorkbench({
   useEffect(() => {
     void refreshDesignMemory();
   }, [refreshDesignMemory, activeProjectId]);
+
+  const refreshHistory = useCallback(async () => {
+    if (!currentProjectId) {
+      setHistory([]);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      setHistory(await window.electronAPI.listCircuitProjectHistory(currentProjectId));
+    } catch (historyError) {
+      setError(historyError instanceof Error ? historyError.message : String(historyError));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [currentProjectId, setError]);
+
+  useEffect(() => {
+    if (historyOpen) void refreshHistory();
+  }, [historyOpen, project?.revision, refreshHistory]);
+
+  async function restoreRevision(revision: number): Promise<void> {
+    if (!currentProjectId || !project || busy) return;
+    const operationProjectId = currentProjectId;
+    setBusy(true);
+    setError('');
+    setNotice(`Restoring revision ${revision}...`);
+    try {
+      await window.electronAPI.restoreCircuitProjectRevision(
+        operationProjectId,
+        revision,
+        project.revision,
+      );
+      await onReloadProject(operationProjectId);
+      if (isActiveProject(operationProjectId)) setNotice(`Restored revision ${revision} as a new revision`);
+      await refreshHistory();
+    } catch (restoreError) {
+      if (isActiveProject(operationProjectId)) {
+        setError(restoreError instanceof Error ? restoreError.message : String(restoreError));
+        setNotice('');
+      }
+    } finally {
+      if (isActiveProject(operationProjectId)) setBusy(false);
+    }
+  }
 
   useEffect(() => {
     const closeMenu = () => setContextMenu(null);
@@ -1224,7 +1272,7 @@ export function CircuitWorkbench({
           <div style={styles.projectTitle} data-testid="project-title" data-project-id={project.project_id}>
             {project.name}
           </div>
-          <div style={styles.projectMeta}>
+          <div style={styles.projectMeta} data-testid="project-meta">
             revision {project.revision} | {project.modules.length} modules
             {build ? ` | ${build.manifest.status}` : ''}
             {build && (build.manifest.source_revision ?? build.manifest.revision) !== project.revision ? ' | build stale' : ''}
@@ -1284,6 +1332,14 @@ export function CircuitWorkbench({
             Save flow
           </button>
           <button
+            style={styles.secondaryButton}
+            onClick={() => setHistoryOpen(true)}
+            disabled={busy}
+            data-testid="open-project-history"
+          >
+            History
+          </button>
+          <button
             style={styles.iconButton}
             onClick={() => { void openProjectFolder(); }}
             title="Open project folder"
@@ -1299,6 +1355,70 @@ export function CircuitWorkbench({
           {error || notice}
         </div>
       )}
+
+      {historyOpen ? (
+        <div style={styles.historyOverlay} data-testid="project-history-panel">
+          <section style={styles.historyPanel} aria-label="Project revision history">
+            <div style={styles.historyHeader}>
+              <div>
+                <div style={styles.historyTitle}>Project History</div>
+                <div style={styles.historySubtitle}>{project.name} | current revision {project.revision}</div>
+              </div>
+              <button
+                type="button"
+                style={styles.iconButton}
+                onClick={() => setHistoryOpen(false)}
+                aria-label="Close project history"
+                data-testid="close-project-history"
+              >
+                Close
+              </button>
+            </div>
+            <div style={styles.historyList}>
+              {historyLoading ? <div style={styles.historyEmpty}>Loading history...</div> : null}
+              {!historyLoading && history.length === 0 ? (
+                <div style={styles.historyEmpty}>No committed project revisions yet.</div>
+              ) : null}
+              {history.map((entry) => (
+                <div key={entry.revision} style={styles.historyEntry} data-testid={`history-revision-${entry.revision}`}>
+                  <div style={styles.historyEntryHeader}>
+                    <div>
+                      <strong>Revision {entry.revision}</strong>
+                      <span style={styles.historyActor}> by {entry.actor}</span>
+                    </div>
+                    <button
+                      type="button"
+                      style={styles.secondaryButton}
+                      onClick={() => { void restoreRevision(entry.revision); }}
+                      disabled={busy || !entry.restorable}
+                      data-testid={`restore-history-revision-${entry.revision}`}
+                    >
+                      Restore
+                    </button>
+                  </div>
+                  <div style={styles.historyMessage}>{entry.message || 'Circuit document update'}</div>
+                  <div style={styles.historyMeta}>
+                    {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : 'Unknown time'}
+                    {entry.buildStatus ? ` | build ${entry.buildStatus}` : ''}
+                    {entry.documentHash ? ` | ${entry.documentHash.slice(0, 10)}` : ''}
+                  </div>
+                  <details style={styles.historyDiff} data-testid={`history-netlist-diff-${entry.revision}`}>
+                    <summary>
+                      Netlist diff +{entry.netlistDiff.added.length} -{entry.netlistDiff.removed.length}
+                    </summary>
+                    {entry.netlistDiff.added.length > 0 ? (
+                      <pre style={styles.historyDiffText}>{entry.netlistDiff.added.map((line) => `+ ${line}`).join('\n')}</pre>
+                    ) : null}
+                    {entry.netlistDiff.removed.length > 0 ? (
+                      <pre style={styles.historyDiffRemoved}>{entry.netlistDiff.removed.map((line) => `- ${line}`).join('\n')}</pre>
+                    ) : null}
+                  </details>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <div style={styles.body}>
         <div
@@ -2533,6 +2653,61 @@ function SimulationMetrics({
 
 const styles: Record<string, CSSProperties> = {
   root: { height: '100%', display: 'flex', flexDirection: 'column', background: '#f3f4f6', color: '#20242a' },
+  historyOverlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 90,
+    display: 'flex',
+    justifyContent: 'flex-end',
+    background: 'rgba(32, 39, 48, 0.24)',
+  },
+  historyPanel: {
+    width: 520,
+    maxWidth: 'calc(100vw - 28px)',
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    background: '#ffffff',
+    borderLeft: '1px solid #cbd1d8',
+    boxShadow: '-10px 0 32px rgba(32, 39, 48, 0.16)',
+  },
+  historyHeader: {
+    minHeight: 68,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    padding: '12px 16px',
+    borderBottom: '1px solid #dfe3e8',
+  },
+  historyTitle: { color: '#252d37', fontSize: 17, fontWeight: 750 },
+  historySubtitle: { marginTop: 3, color: '#737d89', fontSize: 11 },
+  historyList: { minHeight: 0, flex: 1, overflowY: 'auto' },
+  historyEmpty: { padding: 24, color: '#7a838e', fontSize: 12, textAlign: 'center' },
+  historyEntry: { padding: '13px 16px', borderBottom: '1px solid #e5e8ec' },
+  historyEntryHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 12 },
+  historyActor: { color: '#68727e', fontWeight: 400 },
+  historyMessage: { marginTop: 5, color: '#343d48', fontSize: 12, lineHeight: 1.45 },
+  historyMeta: { marginTop: 4, color: '#89919b', fontSize: 10 },
+  historyDiff: { marginTop: 8, color: '#53606d', fontSize: 11, cursor: 'pointer' },
+  historyDiffText: {
+    margin: '7px 0 0',
+    padding: 8,
+    overflowX: 'auto',
+    background: '#edf8f1',
+    color: '#256942',
+    fontSize: 10,
+    whiteSpace: 'pre-wrap',
+  },
+  historyDiffRemoved: {
+    margin: '4px 0 0',
+    padding: 8,
+    overflowX: 'auto',
+    background: '#fff0f2',
+    color: '#98323e',
+    fontSize: 10,
+    whiteSpace: 'pre-wrap',
+  },
   header: {
     minHeight: 66,
     display: 'flex',

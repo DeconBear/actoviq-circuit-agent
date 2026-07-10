@@ -5,8 +5,10 @@ import type {
   ReferenceDocument,
   CircuitBuildState,
   CircuitCommand,
+  CircuitHistoryEntry,
   CircuitProjectBundle,
   CircuitProjectSummary,
+  CircuitTrashItem,
   DesignMemoryItem,
   SavedDesignMemorySummary,
   WorkflowEvent,
@@ -60,6 +62,16 @@ declare global {
       listReferenceDocuments(): Promise<ReferenceDocument[]>;
       runReferenceOcr(relativePath: string): Promise<{ textPath: string; text: string }>;
       listCircuitProjects(): Promise<CircuitProjectSummary[]>;
+      trashCircuitProjects(projectIds: string[]): Promise<CircuitTrashItem[]>;
+      listCircuitTrash(): Promise<CircuitTrashItem[]>;
+      restoreCircuitProjects(trashIds: string[]): Promise<CircuitProjectSummary[]>;
+      purgeCircuitProjects(trashIds: string[]): Promise<void>;
+      listCircuitProjectHistory(projectId: string): Promise<CircuitHistoryEntry[]>;
+      restoreCircuitProjectRevision(projectId: string, revision: number, baseRevision: number): Promise<{
+        ok: true;
+        revision: number;
+        changed_modules: string[];
+      }>;
       createCircuitProject(input: { name: string; demo?: boolean }): Promise<CircuitProjectBundle>;
       createCircuitProjectFromTemplate(input: { templateId: string; name?: string }): Promise<CircuitProjectBundle>;
       getCircuitProject(projectId: string): Promise<CircuitProjectBundle>;

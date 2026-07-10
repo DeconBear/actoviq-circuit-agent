@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
-import type { ReferenceDocument, WorkspaceSummary } from '../../types';
+import type { CircuitTrashItem, ReferenceDocument, WorkspaceSummary } from '../../types';
 import type { CircuitProjectSummary } from '../../types';
 
 interface JobEntry {
@@ -23,9 +23,14 @@ interface Props {
   onCreateWorkspace: (input: { name: string; root?: string }) => Promise<void>;
   onRefreshReferences: () => void;
   circuitProjects: CircuitProjectSummary[];
+  trashProjects: CircuitTrashItem[];
   activeProjectId: string | null;
   onSelectProject: (projectId: string) => void;
   onCreateProject: (demo: boolean, name: string) => Promise<void>;
+  onTrashProjects: (projectIds: string[]) => Promise<void>;
+  onRestoreProjects: (trashIds: string[]) => Promise<void>;
+  onPurgeProjects: (trashIds: string[]) => Promise<void>;
+  onRefreshTrash: () => void;
 }
 
 export function Sidebar({
@@ -42,9 +47,14 @@ export function Sidebar({
   onCreateWorkspace,
   onRefreshReferences,
   circuitProjects,
+  trashProjects,
   activeProjectId,
   onSelectProject,
   onCreateProject,
+  onTrashProjects,
+  onRestoreProjects,
+  onPurgeProjects,
+  onRefreshTrash,
 }: Props) {
   const [jobs, setJobs] = useState<JobEntry[]>([]);
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
@@ -55,10 +65,35 @@ export function Sidebar({
   const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [projectForm, setProjectForm] = useState<{ demo: boolean; name: string } | null>(null);
   const [creating, setCreating] = useState(false);
+  const [projectSelectionMode, setProjectSelectionMode] = useState(false);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [projectContextMenu, setProjectContextMenu] = useState<{ projectId: string; x: number; y: number } | null>(null);
+  const [projectConfirmation, setProjectConfirmation] = useState<{
+    kind: 'trash' | 'purge';
+    ids: string[];
+    names: string[];
+  } | null>(null);
   const creatingRef = useRef(false);
   const conversations = useAppStore((s) => s.conversations);
   const conversationId = useAppStore((s) => s.conversationId);
   const setConversationId = useAppStore((s) => s.setConversationId);
+
+  useEffect(() => {
+    setSelectedProjectIds((selected) => new Set(
+      [...selected].filter((projectId) => circuitProjects.some((project) => project.projectId === projectId)),
+    ));
+  }, [circuitProjects]);
+
+  useEffect(() => {
+    const closeContextMenu = () => setProjectContextMenu(null);
+    window.addEventListener('pointerdown', closeContextMenu);
+    window.addEventListener('blur', closeContextMenu);
+    return () => {
+      window.removeEventListener('pointerdown', closeContextMenu);
+      window.removeEventListener('blur', closeContextMenu);
+    };
+  }, []);
 
   const refreshJobs = useCallback(async () => {
     if (!window.electronAPI) return;
@@ -196,6 +231,66 @@ export function Sidebar({
       setCreating(false);
     }
   }, [creating, onCreateProject, projectForm]);
+
+  const requestProjectTrash = useCallback((projectIds: string[]) => {
+    const uniqueIds = [...new Set(projectIds)];
+    const projects = uniqueIds
+      .map((projectId) => circuitProjects.find((project) => project.projectId === projectId))
+      .filter((project): project is CircuitProjectSummary => Boolean(project));
+    if (projects.length === 0) return;
+    setProjectContextMenu(null);
+    setProjectConfirmation({
+      kind: 'trash',
+      ids: projects.map((project) => project.projectId),
+      names: projects.map((project) => project.name),
+    });
+  }, [circuitProjects]);
+
+  const requestTrashPurge = useCallback((items: CircuitTrashItem[]) => {
+    if (items.length === 0) return;
+    setProjectConfirmation({
+      kind: 'purge',
+      ids: items.map((item) => item.trashId),
+      names: items.map((item) => item.name),
+    });
+  }, []);
+
+  const handleConfirmedProjectAction = useCallback(async () => {
+    if (!projectConfirmation || creating) return;
+    setCreating(true);
+    setNotice(null);
+    try {
+      if (projectConfirmation.kind === 'trash') {
+        await onTrashProjects(projectConfirmation.ids);
+        setSelectedProjectIds(new Set());
+        setProjectSelectionMode(false);
+        setTrashOpen(true);
+        setNotice({ type: 'ok', text: `Moved ${projectConfirmation.ids.length} project(s) to trash` });
+      } else {
+        await onPurgeProjects(projectConfirmation.ids);
+        setNotice({ type: 'ok', text: `Permanently removed ${projectConfirmation.ids.length} project(s)` });
+      }
+      setProjectConfirmation(null);
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCreating(false);
+    }
+  }, [creating, onPurgeProjects, onTrashProjects, projectConfirmation]);
+
+  const handleRestoreProject = useCallback(async (trashId: string) => {
+    if (creating) return;
+    setCreating(true);
+    setNotice(null);
+    try {
+      await onRestoreProjects([trashId]);
+      setNotice({ type: 'ok', text: 'Project restored' });
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCreating(false);
+    }
+  }, [creating, onRestoreProjects]);
 
   const closeWorkspaceForm = useCallback(() => {
     if (creating) return;
@@ -466,32 +561,202 @@ export function Sidebar({
           {notice.text}
         </div>
       )}
+      {projectContextMenu ? (
+        <div
+          style={{ ...styles.projectContextMenu, left: projectContextMenu.x, top: projectContextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+          data-testid="sidebar-project-context-menu"
+        >
+          <button
+            type="button"
+            style={styles.contextDangerButton}
+            onClick={() => requestProjectTrash([projectContextMenu.projectId])}
+            data-testid="sidebar-context-trash-project"
+          >
+            Move to Trash
+          </button>
+        </div>
+      ) : null}
+      {projectConfirmation ? (
+        <div style={styles.confirmOverlay} data-testid="project-delete-confirmation">
+          <div
+            style={styles.confirmDialog}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="project-delete-confirmation-title"
+          >
+            <div id="project-delete-confirmation-title" style={styles.confirmTitle}>
+              {projectConfirmation.kind === 'trash'
+                ? `Move ${projectConfirmation.ids.length} project(s) to Trash?`
+                : `Permanently delete ${projectConfirmation.ids.length} project(s)?`}
+            </div>
+            <div style={styles.confirmDescription}>
+              {projectConfirmation.kind === 'trash'
+                ? 'Projects can be restored later.'
+                : 'This cannot be undone.'}
+            </div>
+            <div style={styles.confirmNames}>
+              {projectConfirmation.names.map((name) => <div key={name}>{name}</div>)}
+            </div>
+            <div style={styles.formActions}>
+              <button
+                type="button"
+                style={styles.formBtn}
+                onClick={() => setProjectConfirmation(null)}
+                disabled={creating}
+                data-testid="project-delete-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                style={styles.dangerButton}
+                onClick={() => { void handleConfirmedProjectAction(); }}
+                disabled={creating}
+                data-testid="project-delete-confirm"
+              >
+                {projectConfirmation.kind === 'trash' ? 'Move to Trash' : 'Delete permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div style={styles.list}>
-        <div style={styles.sectionHeader}>Circuit Projects</div>
+        <div style={styles.sectionHeader}>
+          <span>Circuit Projects</span>
+          <div style={styles.sectionActions}>
+            {projectSelectionMode && selectedProjectIds.size > 0 ? (
+              <button
+                type="button"
+                style={styles.inlineDangerBtn}
+                onClick={() => requestProjectTrash([...selectedProjectIds])}
+                disabled={creating}
+                data-testid="sidebar-trash-selected-projects"
+              >
+                Trash {selectedProjectIds.size}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              style={styles.inlineActionBtn}
+              onClick={() => {
+                setProjectSelectionMode((enabled) => !enabled);
+                setSelectedProjectIds(new Set());
+              }}
+              disabled={creating}
+              data-testid="sidebar-project-selection-mode"
+            >
+              {projectSelectionMode ? 'Cancel' : 'Select'}
+            </button>
+          </div>
+        </div>
         {circuitProjects.length === 0 && (
           <div style={styles.empty}>No circuit projects yet</div>
         )}
         {circuitProjects.map((project) => (
-          <button
+          <div
             key={project.projectId}
-            type="button"
-            onClick={() => onSelectProject(project.projectId)}
-            style={{
-              ...styles.projectItemButton,
-              ...(activeProjectId === project.projectId ? styles.itemActive : {}),
+            style={styles.projectRow}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setProjectContextMenu({ projectId: project.projectId, x: event.clientX, y: event.clientY });
             }}
-            data-testid={`sidebar-project-${project.projectId}`}
-            data-active={activeProjectId === project.projectId ? 'true' : 'false'}
-            aria-label={`Open project ${project.name}`}
-            aria-current={activeProjectId === project.projectId ? 'true' : undefined}
           >
-            <div style={styles.itemName}>{project.name}</div>
-            <div style={styles.itemMeta}>
-              <span>{project.moduleCount} modules</span>
-              <span>rev {project.revision}</span>
-            </div>
-          </button>
+            {projectSelectionMode ? (
+              <input
+                type="checkbox"
+                checked={selectedProjectIds.has(project.projectId)}
+                onChange={(event) => {
+                  setSelectedProjectIds((selected) => {
+                    const next = new Set(selected);
+                    if (event.target.checked) next.add(project.projectId);
+                    else next.delete(project.projectId);
+                    return next;
+                  });
+                }}
+                style={styles.projectCheckbox}
+                aria-label={`Select project ${project.name}`}
+                data-testid={`sidebar-project-select-${project.projectId}`}
+              />
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                if (projectSelectionMode) {
+                  setSelectedProjectIds((selected) => {
+                    const next = new Set(selected);
+                    if (next.has(project.projectId)) next.delete(project.projectId);
+                    else next.add(project.projectId);
+                    return next;
+                  });
+                } else {
+                  onSelectProject(project.projectId);
+                }
+              }}
+              style={{
+                ...styles.projectItemButton,
+                ...(projectSelectionMode ? styles.projectItemSelecting : {}),
+                ...(activeProjectId === project.projectId ? styles.itemActive : {}),
+              }}
+              data-testid={`sidebar-project-${project.projectId}`}
+              data-active={activeProjectId === project.projectId ? 'true' : 'false'}
+              aria-label={`${projectSelectionMode ? 'Select' : 'Open'} project ${project.name}`}
+              aria-current={activeProjectId === project.projectId ? 'true' : undefined}
+            >
+              <div style={styles.itemName}>{project.name}</div>
+              <div style={styles.itemMeta}>
+                <span>{project.moduleCount} modules</span>
+                <span>rev {project.revision}</span>
+              </div>
+            </button>
+          </div>
         ))}
+        <div style={styles.sectionHeader}>
+          <button
+            type="button"
+            style={styles.trashToggle}
+            onClick={() => {
+              setTrashOpen((open) => !open);
+              if (!trashOpen) onRefreshTrash();
+            }}
+            data-testid="sidebar-trash-toggle"
+          >
+            Trash ({trashProjects.length}) {trashOpen ? 'Hide' : 'Show'}
+          </button>
+          {trashOpen && trashProjects.length > 0 ? (
+            <button
+              type="button"
+              style={styles.inlineDangerBtn}
+              onClick={() => requestTrashPurge(trashProjects)}
+              disabled={creating}
+              data-testid="sidebar-empty-trash"
+            >
+              Empty
+            </button>
+          ) : null}
+        </div>
+        {trashOpen ? (
+          <div data-testid="sidebar-trash-list">
+            {trashProjects.length === 0 ? <div style={styles.emptyCompact}>Trash is empty</div> : null}
+            {trashProjects.map((item) => (
+              <div key={item.trashId} style={styles.trashItem} data-testid={`sidebar-trash-${item.trashId}`}>
+                <div style={styles.trashItemText}>
+                  <div style={styles.itemName}>{item.name}</div>
+                  <div style={styles.trashDate}>{new Date(item.deletedAt).toLocaleString()}</div>
+                </div>
+                <button
+                  type="button"
+                  style={styles.restoreBtn}
+                  onClick={() => { void handleRestoreProject(item.trashId); }}
+                  disabled={creating}
+                  data-testid={`sidebar-restore-${item.trashId}`}
+                >
+                  Restore
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={onNewDesign}
@@ -692,6 +957,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '3px 6px',
   },
   projectActions: { display: 'grid', gridTemplateColumns: '1fr 62px', gap: 6, margin: '10px 12px' },
+  projectRow: { position: 'relative', display: 'flex', alignItems: 'stretch', backgroundColor: '#ffffff' },
+  projectCheckbox: { width: 16, margin: '0 0 0 10px', flex: '0 0 16px', accentColor: '#2563eb' },
   newBtn: {
     padding: '8px 0',
     backgroundColor: '#2563eb',
@@ -824,6 +1091,102 @@ const styles: Record<string, React.CSSProperties> = {
     font: 'inherit',
     transition: 'background 0.1s',
   },
+  projectItemSelecting: { padding: '10px 14px 10px 10px' },
+  trashToggle: {
+    padding: 0,
+    border: 0,
+    background: 'transparent',
+    color: '#7b8490',
+    cursor: 'pointer',
+    font: 'inherit',
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  trashItem: {
+    minHeight: 44,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '7px 10px 7px 14px',
+    borderBottom: '1px solid #eef0f2',
+    backgroundColor: '#fafbfc',
+  },
+  trashItemText: { minWidth: 0, flex: 1 },
+  trashDate: { marginTop: 2, color: '#8a929d', fontSize: 9 },
+  restoreBtn: {
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#46515e',
+    cursor: 'pointer',
+    fontSize: 10,
+    padding: '4px 6px',
+  },
+  emptyCompact: { padding: '10px 14px', color: '#8a929d', fontSize: 11 },
+  projectContextMenu: {
+    position: 'fixed',
+    zIndex: 80,
+    minWidth: 148,
+    padding: 4,
+    border: '1px solid #cbd2db',
+    borderRadius: 5,
+    background: '#ffffff',
+    boxShadow: '0 8px 24px rgba(25, 34, 45, 0.18)',
+  },
+  contextDangerButton: {
+    width: '100%',
+    border: 0,
+    borderRadius: 3,
+    background: 'transparent',
+    color: '#a32d38',
+    cursor: 'pointer',
+    fontSize: 12,
+    padding: '7px 9px',
+    textAlign: 'left',
+  },
+  confirmOverlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 100,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(27, 34, 43, 0.28)',
+  },
+  confirmDialog: {
+    width: 360,
+    maxWidth: 'calc(100vw - 32px)',
+    padding: 16,
+    border: '1px solid #cbd2db',
+    borderRadius: 6,
+    background: '#ffffff',
+    boxShadow: '0 16px 48px rgba(25, 34, 45, 0.22)',
+  },
+  confirmTitle: { color: '#252d37', fontSize: 15, fontWeight: 700 },
+  confirmDescription: { marginTop: 5, color: '#66717e', fontSize: 12 },
+  confirmNames: {
+    maxHeight: 160,
+    overflowY: 'auto',
+    margin: '12px 0',
+    padding: '8px 10px',
+    border: '1px solid #e1e5ea',
+    background: '#f7f8fa',
+    color: '#3f4955',
+    fontSize: 11,
+    lineHeight: 1.6,
+    wordBreak: 'break-word',
+  },
+  dangerButton: {
+    border: '1px solid #b43b48',
+    borderRadius: 4,
+    background: '#b43b48',
+    color: '#ffffff',
+    padding: '5px 9px',
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: 700,
+  },
   itemActive: { backgroundColor: '#eaf2ff', boxShadow: 'inset 3px 0 #2563eb' },
   itemHeader: {
     display: 'flex',
@@ -861,6 +1224,16 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'transparent',
     border: 'none',
     color: '#2563eb',
+    cursor: 'pointer',
+    fontSize: 10,
+    padding: 0,
+    textTransform: 'none',
+    letterSpacing: 0,
+  },
+  inlineDangerBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: '#b43b48',
     cursor: 'pointer',
     fontSize: 10,
     padding: 0,

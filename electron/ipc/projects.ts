@@ -1,6 +1,6 @@
 import { app, BrowserWindow, type IpcMain, shell } from 'electron';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
-import { access, copyFile, cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { access, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
@@ -14,6 +14,25 @@ interface ProjectSummary {
   updatedAt: string;
   projectRoot: string;
   moduleCount: number;
+}
+
+interface TrashProjectSummary extends ProjectSummary {
+  trashId: string;
+  deletedAt: string;
+  originalPath: string;
+  trashPath: string;
+}
+
+interface ProjectHistoryEntry {
+  revision: number;
+  baseRevision: number;
+  actor: string;
+  message: string;
+  createdAt: string;
+  documentHash?: string;
+  restorable: boolean;
+  buildStatus?: string;
+  netlistDiff: { added: string[]; removed: string[] };
 }
 
 interface SavedDesignMemorySummary {
@@ -47,6 +66,7 @@ let watchedProjectId = '';
 let watchTimer: NodeJS.Timeout | null = null;
 let watchPollTimer: NodeJS.Timeout | null = null;
 let watchedProjectRevision: number | null = null;
+const legacyArchivePromises = new Map<string, Promise<void>>();
 
 async function exists(targetPath: string): Promise<boolean> {
   try {
@@ -82,6 +102,32 @@ async function resolveProjectRoot(projectId: string): Promise<string> {
     throw new Error(`Circuit project not found: ${projectId}`);
   }
   return candidate;
+}
+
+async function trashProjectsRoot(): Promise<string> {
+  const workspace = await getActiveWorkspace();
+  const root = path.resolve(workspace.root, '.trash', 'projects');
+  await mkdir(root, { recursive: true });
+  return root;
+}
+
+function assertDirectChild(root: string, candidate: string, id: string): void {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  if (!id || !relative || relative.startsWith('..') || path.isAbsolute(relative) || relative.includes(path.sep)) {
+    throw new Error(`Invalid project entry id: ${id}`);
+  }
+}
+
+function stopProjectWatcher(projectId: string): void {
+  if (watchedProjectId !== projectId) return;
+  activeWatcher?.close();
+  activeWatcher = null;
+  if (watchTimer) clearTimeout(watchTimer);
+  watchTimer = null;
+  if (watchPollTimer) clearInterval(watchPollTimer);
+  watchPollTimer = null;
+  watchedProjectId = '';
+  watchedProjectRevision = null;
 }
 
 function timestampForId(date = new Date()): string {
@@ -146,6 +192,7 @@ async function designMemoryTargetRoot(
   const workspace = await getActiveWorkspace();
   const memoryId = `${slugify(project.name)}-r${project.revision}-${timestampForId()}`;
   const targetRoot = path.resolve(workspace.referencesDir, 'design-memory', kind, memoryId);
+  await mkdir(path.dirname(targetRoot), { recursive: true });
   await mkdir(targetRoot, { recursive: false });
   return { workspaceReferencesDir: workspace.referencesDir, targetRoot, memoryId };
 }
@@ -599,7 +646,242 @@ function runProjectTool(args: string[]): Promise<Record<string, unknown>> {
   });
 }
 
+async function readProjectSummary(projectRoot: string): Promise<ProjectSummary> {
+  const project = JSON.parse(
+    await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'),
+  ) as {
+    project_id: string;
+    name: string;
+    revision: number;
+    updated_at?: string;
+    modules?: unknown[];
+  };
+  return {
+    projectId: project.project_id,
+    name: project.name,
+    revision: project.revision,
+    updatedAt: project.updated_at ?? '',
+    projectRoot,
+    moduleCount: project.modules?.length ?? 0,
+  };
+}
+
+async function uniqueTrashTarget(root: string, projectId: string): Promise<{ trashId: string; trashPath: string }> {
+  const base = `${timestampForId()}-${projectId}`;
+  let trashId = base;
+  let suffix = 2;
+  while (await exists(path.resolve(root, trashId))) {
+    trashId = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  const trashPath = path.resolve(root, trashId);
+  assertDirectChild(root, trashPath, trashId);
+  return { trashId, trashPath };
+}
+
+async function moveProjectToTrash(projectId: string): Promise<TrashProjectSummary> {
+  const projectRoot = await resolveProjectRoot(projectId);
+  const summary = await readProjectSummary(projectRoot);
+  const root = await trashProjectsRoot();
+  const { trashId, trashPath } = await uniqueTrashTarget(root, projectId);
+  const deletedAt = new Date().toISOString();
+  stopProjectWatcher(projectId);
+  await rename(projectRoot, trashPath);
+  const item: TrashProjectSummary = {
+    ...summary,
+    projectRoot: trashPath,
+    trashId,
+    deletedAt,
+    originalPath: projectRoot,
+    trashPath,
+  };
+  try {
+    await writeFile(path.resolve(trashPath, 'trash.json'), `${JSON.stringify(item, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    await rename(trashPath, projectRoot).catch(() => undefined);
+    throw error;
+  }
+  return item;
+}
+
+async function archiveLegacyPlaywrightProjects(): Promise<void> {
+  const root = await projectsRoot();
+  const existing = legacyArchivePromises.get(root);
+  if (existing) return existing;
+  const migration = (async () => {
+    const trashRoot = await trashProjectsRoot();
+    const markerPath = path.resolve(trashRoot, '..', 'legacy-playwright-projects-v1.json');
+    if (await exists(markerPath)) return;
+    const archived: string[] = [];
+    const entries = await readdir(root, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const projectRoot = path.resolve(root, entry.name);
+      try {
+        const summary = await readProjectSummary(projectRoot);
+        if (!/^Playwright Keyboard Project \d+$/.test(summary.name)) continue;
+        await moveProjectToTrash(summary.projectId);
+        archived.push(summary.projectId);
+      } catch {
+        // Ignore invalid projects and continue migrating exact test fixtures.
+      }
+    }
+    await writeFile(markerPath, `${JSON.stringify({ migratedAt: new Date().toISOString(), archived }, null, 2)}\n`, 'utf8');
+  })();
+  legacyArchivePromises.set(root, migration);
+  return migration;
+}
+
+async function listTrashProjects(): Promise<TrashProjectSummary[]> {
+  const root = await trashProjectsRoot();
+  const entries = await readdir(root, { withFileTypes: true });
+  const items: TrashProjectSummary[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const trashPath = path.resolve(root, entry.name);
+    try {
+      const metadataPath = path.resolve(trashPath, 'trash.json');
+      const metadata = await exists(metadataPath)
+        ? await readJsonFile<TrashProjectSummary>(metadataPath)
+        : null;
+      const summary = await readProjectSummary(trashPath);
+      items.push({
+        ...summary,
+        trashId: entry.name,
+        deletedAt: metadata?.deletedAt ?? summary.updatedAt,
+        originalPath: metadata?.originalPath ?? path.resolve(await projectsRoot(), summary.projectId),
+        trashPath,
+      });
+    } catch {
+      // Ignore incomplete trash entries instead of exposing unsafe restore actions.
+    }
+  }
+  return items.sort((left, right) => right.deletedAt.localeCompare(left.deletedAt));
+}
+
+async function resolveTrashProject(trashId: string): Promise<string> {
+  const root = await trashProjectsRoot();
+  const candidate = path.resolve(root, String(trashId ?? '').trim());
+  assertDirectChild(root, candidate, trashId);
+  if (!(await exists(path.resolve(candidate, 'project.circuit.json')))) {
+    throw new Error(`Trashed project not found: ${trashId}`);
+  }
+  return candidate;
+}
+
+async function restoreTrashProjects(trashIds: string[]): Promise<ProjectSummary[]> {
+  const root = await projectsRoot();
+  const restored: ProjectSummary[] = [];
+  for (const trashId of [...new Set(trashIds)]) {
+    const trashPath = await resolveTrashProject(trashId);
+    const summary = await readProjectSummary(trashPath);
+    const target = path.resolve(root, summary.projectId);
+    assertDirectChild(root, target, summary.projectId);
+    if (await exists(target)) {
+      throw new Error(`Cannot restore ${summary.name}: project id ${summary.projectId} already exists.`);
+    }
+    await rename(trashPath, target);
+    await rm(path.resolve(target, 'trash.json'), { force: true });
+    restored.push(await readProjectSummary(target));
+  }
+  return restored;
+}
+
+async function purgeTrashProjects(trashIds: string[]): Promise<void> {
+  for (const trashId of [...new Set(trashIds)]) {
+    const trashPath = await resolveTrashProject(trashId);
+    await rm(trashPath, { recursive: true, force: true });
+  }
+}
+
+function spiceLines(markdown: string): string[] {
+  const matches = [...markdown.matchAll(/```(?:spice|cir|netlist)\s*\r?\n([\s\S]*?)```/gi)];
+  const source = matches.length > 0 ? matches.map((match) => match[1]).join('\n') : markdown;
+  return source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+async function snapshotNetlistLines(snapshotRoot: string): Promise<string[]> {
+  const projectPath = path.resolve(snapshotRoot, 'project.circuit.json');
+  if (!(await exists(projectPath))) return [];
+  const project = await readJsonFile<{ modules?: Array<{ id?: string }> }>(projectPath);
+  const lines: string[] = [];
+  for (const module of project.modules ?? []) {
+    if (!module.id) continue;
+    const notebookPath = path.resolve(snapshotRoot, 'modules', module.id, 'netlist-notebook.md');
+    if (await exists(notebookPath)) lines.push(...spiceLines(await readFile(notebookPath, 'utf8')));
+  }
+  return lines;
+}
+
+function netlistDiff(before: string[], after: string[]): { added: string[]; removed: string[] } {
+  const beforeCounts = new Map<string, number>();
+  const afterCounts = new Map<string, number>();
+  for (const line of before) beforeCounts.set(line, (beforeCounts.get(line) ?? 0) + 1);
+  for (const line of after) afterCounts.set(line, (afterCounts.get(line) ?? 0) + 1);
+  const added: string[] = [];
+  const removed: string[] = [];
+  for (const [line, count] of afterCounts) {
+    for (let index = beforeCounts.get(line) ?? 0; index < count && added.length < 40; index += 1) added.push(line);
+  }
+  for (const [line, count] of beforeCounts) {
+    for (let index = afterCounts.get(line) ?? 0; index < count && removed.length < 40; index += 1) removed.push(line);
+  }
+  return { added, removed };
+}
+
+async function listProjectHistory(projectId: string): Promise<ProjectHistoryEntry[]> {
+  const projectRoot = await resolveProjectRoot(projectId);
+  const revisionsRoot = path.resolve(projectRoot, 'revisions');
+  const entries = await readdir(revisionsRoot, { withFileTypes: true }).catch(() => []);
+  let buildRevision: number | undefined;
+  let buildStatus: string | undefined;
+  try {
+    const manifest = await readJsonFile<{ source_revision?: number; revision?: number; status?: string }>(
+      path.resolve(projectRoot, 'build', 'build-manifest.json'),
+    );
+    buildRevision = manifest.source_revision ?? manifest.revision;
+    buildStatus = manifest.status;
+  } catch {
+    // History remains available before the first build.
+  }
+  const history: ProjectHistoryEntry[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d{6}$/.test(entry.name)) continue;
+    const revisionRoot = path.resolve(revisionsRoot, entry.name);
+    try {
+      const metadata = await readJsonFile<{
+        revision: number;
+        base_revision?: number;
+        actor?: string;
+        message?: string;
+        created_at?: string;
+        document_hash?: string;
+      }>(path.resolve(revisionRoot, 'metadata.json'));
+      const resultRoot = path.resolve(revisionRoot, 'result');
+      const [before, after] = await Promise.all([
+        snapshotNetlistLines(path.resolve(revisionRoot, 'snapshot')),
+        snapshotNetlistLines(resultRoot),
+      ]);
+      history.push({
+        revision: metadata.revision,
+        baseRevision: metadata.base_revision ?? Math.max(0, metadata.revision - 1),
+        actor: metadata.actor ?? 'unknown',
+        message: metadata.message ?? '',
+        createdAt: metadata.created_at ?? '',
+        documentHash: metadata.document_hash,
+        restorable: await exists(path.resolve(resultRoot, 'project.circuit.json')),
+        buildStatus: buildRevision === metadata.revision ? buildStatus : undefined,
+        netlistDiff: netlistDiff(before, after),
+      });
+    } catch {
+      // Ignore incomplete revision folders while an external transaction is being written.
+    }
+  }
+  return history.sort((left, right) => right.revision - left.revision);
+}
+
 async function listProjects(): Promise<ProjectSummary[]> {
+  await archiveLegacyPlaywrightProjects();
   const root = await projectsRoot();
   const entries = await readdir(root, { withFileTypes: true });
   const projects: ProjectSummary[] = [];
@@ -607,23 +889,7 @@ async function listProjects(): Promise<ProjectSummary[]> {
     if (!entry.isDirectory()) continue;
     const projectRoot = path.resolve(root, entry.name);
     try {
-      const project = JSON.parse(
-        await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'),
-      ) as {
-        project_id: string;
-        name: string;
-        revision: number;
-        updated_at?: string;
-        modules?: unknown[];
-      };
-      projects.push({
-        projectId: project.project_id,
-        name: project.name,
-        revision: project.revision,
-        updatedAt: project.updated_at ?? '',
-        projectRoot,
-        moduleCount: project.modules?.length ?? 0,
-      });
+      projects.push(await readProjectSummary(projectRoot));
     } catch {
       // Ignore invalid or partially written project directories.
     }
@@ -757,6 +1023,63 @@ async function watchProject(projectId: string): Promise<void> {
 
 export function registerProjectHandlers(ipcMain: IpcMain): void {
   ipcMain.handle('project:list', async () => listProjects());
+
+  ipcMain.handle('project:trash', async (_event, projectIds: string[]) => {
+    if (!Array.isArray(projectIds) || projectIds.length === 0) {
+      throw new Error('Select at least one project to move to trash.');
+    }
+    const trashed: TrashProjectSummary[] = [];
+    for (const projectId of [...new Set(projectIds)]) {
+      trashed.push(await moveProjectToTrash(projectId));
+    }
+    return trashed;
+  });
+
+  ipcMain.handle('project:list-trash', async () => {
+    await archiveLegacyPlaywrightProjects();
+    return listTrashProjects();
+  });
+
+  ipcMain.handle('project:restore-trash', async (_event, trashIds: string[]) => {
+    if (!Array.isArray(trashIds) || trashIds.length === 0) {
+      throw new Error('Select at least one trashed project to restore.');
+    }
+    return restoreTrashProjects(trashIds);
+  });
+
+  ipcMain.handle('project:purge-trash', async (_event, trashIds: string[]) => {
+    if (!Array.isArray(trashIds) || trashIds.length === 0) {
+      throw new Error('Select at least one trashed project to purge.');
+    }
+    await purgeTrashProjects(trashIds);
+  });
+
+  ipcMain.handle('project:list-history', async (_event, projectId: string) => {
+    return listProjectHistory(projectId);
+  });
+
+  ipcMain.handle(
+    'project:restore-revision',
+    async (_event, projectId: string, revision: number, baseRevision: number) => {
+      if (!Number.isInteger(revision) || revision < 1) throw new Error(`Invalid revision: ${revision}`);
+      const root = await resolveProjectRoot(projectId);
+      const result = await runProjectTool([
+        'apply',
+        '--project-root', root,
+        '--command-json', JSON.stringify({
+          schema: 'actoviq.command.v1',
+          command_id: `restore-${revision}-${Date.now()}`,
+          actor: 'user',
+          project_id: projectId,
+          base_revision: baseRevision,
+          message: `Restore revision ${revision}`,
+          operations: [{ op: 'restore_revision', revision }],
+        }),
+      ]);
+      const build = await runProjectTool(['compile', '--project-root', root]);
+      return { ...result, build };
+    },
+  );
 
   ipcMain.handle('project:create', async (_event, input: { name: string; demo?: boolean }) => {
     const root = await projectsRoot();

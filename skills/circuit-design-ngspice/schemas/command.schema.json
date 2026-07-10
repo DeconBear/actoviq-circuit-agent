@@ -38,7 +38,8 @@
               "set_module_netlist",
               "set_module_note",
               "set_module_preview",
-              "set_module_metadata"
+              "set_module_metadata",
+              "restore_revision"
             ]
           }
         },

@@ -1066,6 +1066,30 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
     assert.equal(buildManifest.source_revision, 7);
     assert.match(buildManifest.document_hash, /^[a-f0-9]{64}$/);
     assert.equal(buildManifest.modules.sensor.renderer, 'netlistsvg');
+    const restored = runTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify({
+        schema: 'actoviq.command.v1',
+        command_id: 'test-restore-revision',
+        actor: 'unit-test',
+        project_id: created.project.project_id,
+        base_revision: 7,
+        message: 'Restore passive sensor revision',
+        operations: [{ op: 'restore_revision', revision: 6 }],
+      }),
+    ]);
+    assert.equal(restored.revision, 8);
+    assert.ok(restored.changed_modules.includes('sensor'));
+    const restoredSummary = runTool(['summary', '--project-root', projectRoot]);
+    assert.equal(restoredSummary.project.revision, 8);
+    assert.ok(restoredSummary.modules.sensor.components.some((component: { id: string }) => component.id === 'r_sensor'));
+    assert.equal(restoredSummary.modules.sensor.components.some((component: { name: string }) => component.name === 'M1'), false);
+    await assert.rejects(readFile(sensorNotebookPath, 'utf8'));
+    assert.match(
+      await readFile(path.resolve(projectRoot, 'revisions', '000008', 'metadata.json'), 'utf8'),
+      /Restore passive sensor revision/,
+    );
   } finally {
     await rm(projectsRoot, { recursive: true, force: true });
   }

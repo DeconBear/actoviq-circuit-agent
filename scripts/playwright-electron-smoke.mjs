@@ -8,8 +8,9 @@ import { _electron as electron } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputRoot = path.resolve(root, 'output', 'playwright');
-const workspacesRoot = path.resolve(root, 'workspace', 'workspaces');
-const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
+const e2eRunRoot = path.resolve(outputRoot, '.workspace', `electron-${process.pid}-${Date.now()}`);
+const workspacesRoot = path.resolve(e2eRunRoot, 'workspaces');
+const workspaceRoot = path.resolve(workspacesRoot, 'default');
 const projectsRoot = path.resolve(workspaceRoot, 'projects');
 const designMemoryRoot = path.resolve(workspaceRoot, 'references', 'design-memory');
 const e2eWorkspacePrefix = 'playwright-workspace-';
@@ -122,15 +123,7 @@ async function cleanE2eDesignMemory() {
 }
 
 async function cleanE2eArtifacts() {
-  await Promise.all([
-    removePrefixedDirectories(workspacesRoot, e2eWorkspacePrefix),
-    removePrefixedDirectories(projectsRoot, e2eProjectPrefix),
-    removePrefixedDirectories(projectsRoot, e2eUiProjectPrefix),
-    removePrefixedDirectories(projectsRoot, e2eInlineProjectPrefix),
-    removePrefixedDirectories(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
-    removePrefixedFiles(path.resolve(workspaceRoot, 'jobs'), e2eJobPrefix),
-    cleanE2eDesignMemory(),
-  ]);
+  await rm(e2eRunRoot, { recursive: true, force: true });
 }
 
 async function createFixtureJob() {
@@ -290,8 +283,8 @@ await mkdir(outputRoot, { recursive: true });
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
-const e2eUserDataDir = path.resolve(outputRoot, `electron-smoke-user-data-${Date.now()}`);
-const e2eHomeDir = path.resolve(outputRoot, `electron-smoke-home-${Date.now()}`);
+const e2eUserDataDir = path.resolve(e2eRunRoot, 'electron-user-data');
+const e2eHomeDir = path.resolve(e2eRunRoot, 'home');
 const electronDistDir = path.resolve(root, 'node_modules', 'electron', 'dist');
 await mkdir(e2eUserDataDir, { recursive: true });
 await mkdir(e2eHomeDir, { recursive: true });
@@ -308,6 +301,7 @@ const electronApp = await electron.launch({
   env: {
     ...process.env,
     ACTOVIQ_E2E: '1',
+    ACTOVIQ_E2E_WORKSPACE_ROOT: workspaceRoot,
     ACTOVIQ_RENDERER_URL: viteUrl,
     HOME: e2eHomeDir,
     USERPROFILE: e2eHomeDir,
@@ -547,6 +541,40 @@ try {
   assert.equal(sidebarDemoProjectManifest.project.modules.length, 3);
   assert.ok(sidebarDemoProjectManifest.project.connections.length >= 2);
   assert.ok(sidebarDemoProjectManifest.project.modules.some((module) => module.id === 'filter'));
+
+  await sidebarDemoProject.click({ button: 'right' });
+  await page.getByTestId('sidebar-project-context-menu').waitFor();
+  await page.getByTestId('sidebar-context-trash-project').click();
+  await page.getByTestId('project-delete-confirmation').getByText(sidebarDemoProjectName, { exact: true }).waitFor();
+  await page.getByTestId('project-delete-confirm').click();
+  await page.getByTestId(`sidebar-project-${sidebarDemoProjectManifest.project.project_id}`).waitFor({ state: 'detached' });
+  await page.waitForFunction((deletedId) => (
+    document.querySelector('[data-testid="circuit-workbench"]')?.getAttribute('data-project-id') !== deletedId
+  ), sidebarDemoProjectManifest.project.project_id);
+  const trashedDemo = page.locator('[data-testid^="sidebar-trash-"]')
+    .filter({ hasText: sidebarDemoProjectName }).last();
+  await trashedDemo.getByRole('button', { name: 'Restore', exact: true }).click();
+  await page.getByTestId(`sidebar-project-${sidebarDemoProjectManifest.project.project_id}`).waitFor({ timeout: 30_000 });
+
+  await page.getByTestId('sidebar-project-selection-mode').click();
+  await page.getByTestId(`sidebar-project-select-${sidebarBlankProjectManifest.project.project_id}`).check();
+  await page.getByTestId(`sidebar-project-select-${sidebarKeyboardProjectManifest.project.project_id}`).check();
+  await page.getByTestId('sidebar-trash-selected-projects').click();
+  const batchConfirmation = page.getByTestId('project-delete-confirmation');
+  await batchConfirmation.getByText(sidebarProjectName, { exact: true }).waitFor();
+  await batchConfirmation.getByText(sidebarKeyboardProjectName, { exact: true }).waitFor();
+  await page.getByTestId('project-delete-confirm').click();
+  await page.getByTestId(`sidebar-project-${sidebarBlankProjectManifest.project.project_id}`).waitFor({ state: 'detached' });
+  await page.getByTestId(`sidebar-project-${sidebarKeyboardProjectManifest.project.project_id}`).waitFor({ state: 'detached' });
+  for (const [name, id] of [
+    [sidebarProjectName, sidebarBlankProjectManifest.project.project_id],
+    [sidebarKeyboardProjectName, sidebarKeyboardProjectManifest.project.project_id],
+  ]) {
+    const trashItem = page.locator('[data-testid^="sidebar-trash-"]').filter({ hasText: name }).last();
+    await trashItem.getByRole('button', { name: 'Restore', exact: true }).click();
+    await page.getByTestId(`sidebar-project-${id}`).waitFor({ timeout: 30_000 });
+  }
+
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
   await waitForWorkbenchProject(page, projectId);
@@ -947,6 +975,20 @@ try {
     /"value": "22n"/,
   );
 
+  await page.getByTestId('open-project-history').click();
+  await page.getByTestId('project-history-panel').waitFor();
+  await page.getByTestId(`history-revision-${projectAfterAgent.revision}`).waitFor();
+  assert.ok(
+    await page.locator('[data-testid^="history-netlist-diff-"]').filter({ hasText: /Netlist diff \+[1-9]/ }).count() >= 1,
+    'history should expose at least one notebook netlist change',
+  );
+  await page.getByTestId(`restore-history-revision-${projectAfterAgent.revision}`).click();
+  await page.getByTestId('project-meta')
+    .filter({ hasText: `revision ${projectAfterAgent.revision + 1}` })
+    .waitFor({ timeout: 30_000 });
+  await page.getByTestId('close-project-history').click();
+  await page.getByTestId('project-history-panel').waitFor({ state: 'detached' });
+
   await page.getByTestId('back-to-board').click();
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();
   assert.equal(
@@ -1209,7 +1251,7 @@ try {
   throw error;
 } finally {
   await electronApp.close();
-  if (testSucceeded) await cleanE2eArtifacts();
+  await cleanE2eArtifacts();
   if (viteProcess) {
     viteProcess.kill();
   }

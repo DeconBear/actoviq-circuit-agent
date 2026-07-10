@@ -191,6 +191,30 @@ const electronAPI = {
     return ipcRenderer.invoke('project:list');
   },
 
+  trashCircuitProjects(projectIds: string[]): Promise<unknown[]> {
+    return ipcRenderer.invoke('project:trash', projectIds);
+  },
+
+  listCircuitTrash(): Promise<unknown[]> {
+    return ipcRenderer.invoke('project:list-trash');
+  },
+
+  restoreCircuitProjects(trashIds: string[]): Promise<unknown[]> {
+    return ipcRenderer.invoke('project:restore-trash', trashIds);
+  },
+
+  purgeCircuitProjects(trashIds: string[]): Promise<void> {
+    return ipcRenderer.invoke('project:purge-trash', trashIds);
+  },
+
+  listCircuitProjectHistory(projectId: string): Promise<unknown[]> {
+    return ipcRenderer.invoke('project:list-history', projectId);
+  },
+
+  restoreCircuitProjectRevision(projectId: string, revision: number, baseRevision: number): Promise<unknown> {
+    return ipcRenderer.invoke('project:restore-revision', projectId, revision, baseRevision);
+  },
+
   createCircuitProject(input: { name: string; demo?: boolean }): Promise<unknown> {
     return ipcRenderer.invoke('project:create', input);
   },

@@ -75,6 +75,17 @@ def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def replace_with_retry(temp_path: Path, target_path: Path) -> None:
+    for attempt in range(20):
+        try:
+            os.replace(temp_path, target_path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.02 * (attempt + 1))
+
+
 def atomic_write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
@@ -88,7 +99,7 @@ def atomic_write_json(path: Path, value: Any) -> None:
     ) as handle:
         handle.write(content)
         temp_path = Path(handle.name)
-    os.replace(temp_path, path)
+    replace_with_retry(temp_path, path)
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -98,7 +109,7 @@ def atomic_write_text(path: Path, content: str) -> None:
     ) as handle:
         handle.write(content)
         temp_path = Path(handle.name)
-    os.replace(temp_path, path)
+    replace_with_retry(temp_path, path)
 
 
 def project_path(root: Path) -> Path:
@@ -566,18 +577,28 @@ def write_revision_result(
     revision_root: Path,
     project: dict[str, Any],
     modules: dict[str, dict[str, Any]],
-    notebook_writes: dict[str, str] | None = None,
+    notebook_writes: dict[str, str | None] | None = None,
 ) -> None:
     result_root = revision_root / "result"
     atomic_write_json(result_root / "project.circuit.json", project)
     digest = hashlib.sha256(json.dumps(project, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    project_root = revision_root.parent.parent
     for module_id, module in sorted(modules.items()):
         atomic_write_json(result_root / "modules" / module_id / "module.circuit.json", module)
         digest.update(json.dumps(module, ensure_ascii=False, sort_keys=True).encode("utf-8"))
         notebook = (notebook_writes or {}).get(module_id)
+        if module_id not in (notebook_writes or {}):
+            current_notebook = project_root / "modules" / module_id / "netlist-notebook.md"
+            if current_notebook.exists():
+                notebook = current_notebook.read_text(encoding="utf-8")
         if notebook is not None:
             atomic_write_text(result_root / "modules" / module_id / "netlist-notebook.md", notebook)
             digest.update(notebook.encode("utf-8"))
+        current_overrides = schematic_overrides_path(project_root, module_id)
+        if current_overrides.exists():
+            overrides = read_json(current_overrides)
+            atomic_write_json(result_root / "modules" / module_id / "schematic.overrides.json", overrides)
+            digest.update(json.dumps(overrides, ensure_ascii=False, sort_keys=True).encode("utf-8"))
     metadata_path = revision_root / "metadata.json"
     metadata = read_json(metadata_path)
     metadata["schema"] = "actoviq.revision.v2"
@@ -653,9 +674,61 @@ def apply_operation(
     operation: dict[str, Any],
     changed_modules: set[str],
     schematic_override_writes: dict[str, dict[str, Any]],
-    notebook_writes: dict[str, str],
+    notebook_writes: dict[str, str | None],
 ) -> None:
     op = operation.get("op")
+    if op == "restore_revision":
+        target_revision = int(operation.get("revision", -1))
+        result_root = root / "revisions" / f"{target_revision:06d}" / "result"
+        restored_project_path = result_root / "project.circuit.json"
+        if target_revision < 1 or not restored_project_path.exists():
+            raise ValueError(f"revision {target_revision} does not have a restorable result snapshot")
+        current_project_id = project["project_id"]
+        current_revision = project["revision"]
+        current_created_at = project.get("created_at")
+        current_module_revisions = {
+            module_id: int(module.get("revision", 0))
+            for module_id, module in modules.items()
+        }
+        restored_project = read_json(restored_project_path)
+        restored_modules: dict[str, dict[str, Any]] = {}
+        for module_ref in restored_project.get("modules", []):
+            module_id = str(module_ref.get("id", ""))
+            restored_module_path = result_root / "modules" / module_id / "module.circuit.json"
+            if not module_id or not restored_module_path.exists():
+                raise ValueError(f"revision {target_revision} is missing module {module_id or '<unknown>'}")
+            restored_module = read_json(restored_module_path)
+            restored_module["revision"] = current_module_revisions.get(
+                module_id,
+                int(restored_module.get("revision", 0)),
+            )
+            restored_modules[module_id] = restored_module
+            restored_notebook = result_root / "modules" / module_id / "netlist-notebook.md"
+            if restored_notebook.exists():
+                notebook_writes[module_id] = restored_notebook.read_text(encoding="utf-8")
+            else:
+                notebook_writes[module_id] = None
+            restored_overrides = result_root / "modules" / module_id / "schematic.overrides.json"
+            if restored_overrides.exists():
+                schematic_override_writes[module_id] = read_json(restored_overrides)
+            else:
+                schematic_override_writes[module_id] = {
+                    "schema": SCHEMATIC_OVERRIDES_SCHEMA,
+                    "project_id": current_project_id,
+                    "module_id": module_id,
+                    "updated_at": utc_now(),
+                    "items": {},
+                }
+        project.clear()
+        project.update(restored_project)
+        project["project_id"] = current_project_id
+        project["revision"] = current_revision
+        if current_created_at:
+            project["created_at"] = current_created_at
+        modules.clear()
+        modules.update(restored_modules)
+        changed_modules.update(restored_modules)
+        return
     if op == "upsert_module":
         module_ref = operation["module_ref"]
         module = operation["module"]
@@ -1042,7 +1115,7 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
     revision_root = snapshot_revision(root, project, modules, command)
     changed_modules: set[str] = set()
     schematic_override_writes: dict[str, dict[str, Any]] = {}
-    notebook_writes: dict[str, str] = {}
+    notebook_writes: dict[str, str | None] = {}
     for operation in operations:
         apply_operation(
             root,
@@ -1062,7 +1135,11 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
         validate_module(modules[module_id])
     validate_project(project)
     for module_id, notebook in notebook_writes.items():
-        atomic_write_text(root / "modules" / module_id / "netlist-notebook.md", notebook)
+        notebook_path = root / "modules" / module_id / "netlist-notebook.md"
+        if notebook is None:
+            notebook_path.unlink(missing_ok=True)
+        else:
+            atomic_write_text(notebook_path, notebook)
     for module_id in changed_modules:
         atomic_write_json(module_path(root, module_id), modules[module_id])
     for module_id, overrides in schematic_override_writes.items():
