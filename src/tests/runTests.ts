@@ -960,22 +960,38 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
     assert.doesNotMatch(blockNetlist, /^BLOCKfilter_UAI\s/m);
     const notebookPath = path.resolve(projectRoot, 'modules', 'filter', 'netlist-notebook.md');
     const notebookNetlist = blockNetlist;
-    await writeFile(
-      notebookPath,
-      [
+    const updatedFilterNotebook = [
         '# Filter notebook',
         '',
         'Editable explanation outside the circuit code block.',
         '',
         '```spice',
+        '.param FILTER_SCALE=1',
+        '.model TESTD D(IS=1e-14)',
         notebookNetlist.replace('Cfilter_Cfilter out 0 22n', 'Cfilter_Cfilter out 0 33n').trim(),
         '```',
         '',
         'Persistent review note.',
         '',
-      ].join('\n'),
-      'utf8',
-    );
+      ].join('\n');
+    const notebookApplied = runTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify({
+        schema: 'actoviq.command.v1',
+        command_id: 'test-set-module-netlist',
+        actor: 'unit-test',
+        project_id: created.project.project_id,
+        base_revision: 5,
+        message: 'Save complete module netlist transaction',
+        operations: [{
+          op: 'set_module_netlist',
+          module_id: 'filter',
+          netlist_notebook: updatedFilterNotebook,
+        }],
+      }),
+    ]);
+    assert.equal(notebookApplied.revision, 6);
     const notebookCompiled = runTool([
       'compile-module',
       '--project-root', projectRoot,
@@ -987,6 +1003,13 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
       await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'),
     );
     assert.equal(notebookSyncedModule.components.find((component: { id: string }) => component.id === 'agent_adc')?.type, 'BLOCK');
+    assert.equal(notebookSyncedModule.schema, 'actoviq.module.v2');
+    assert.ok(notebookSyncedModule.nets.every((net: { id?: string }) => Boolean(net.id)));
+    assert.match(notebookSyncedModule.spice.models.join('\n'), /\.model TESTD/);
+    assert.match(
+      await readFile(path.resolve(projectRoot, 'revisions', '000006', 'result', 'modules', 'filter', 'netlist-notebook.md'), 'utf8'),
+      /Persistent review note/,
+    );
     const blockSummary = runTool(['summary', '--project-root', projectRoot]);
     assert.equal(
       blockSummary.modules.filter.components.find((component: { id: string }) => component.id === 'agent_adc')?.type,
@@ -998,9 +1021,7 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
       0,
     );
     const sensorNotebookPath = path.resolve(projectRoot, 'modules', 'sensor', 'netlist-notebook.md');
-    await writeFile(
-      sensorNotebookPath,
-      [
+    const sensorNotebook = [
         '# Active sensor notebook',
         '',
         '```spice',
@@ -1008,12 +1029,27 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
         'VDD vdd 0 DC 5',
         'M1 out in 0 0 NMTEST W=10u L=1u',
         'RLOAD out 0 1k',
+        '.op',
+        '.tran 1u 20u',
+        '.meas tran sensor_peak max v(out)',
         '.end',
         '```',
         '',
-      ].join('\n'),
-      'utf8',
-    );
+      ].join('\n');
+    const activeApplied = runTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify({
+        schema: 'actoviq.command.v1',
+        command_id: 'test-active-module-netlist',
+        actor: 'agent',
+        project_id: created.project.project_id,
+        base_revision: 6,
+        message: 'Agent saves active device model and analyses',
+        operations: [{ op: 'set_module_netlist', module_id: 'sensor', netlist_notebook: sensorNotebook }],
+      }),
+    ]);
+    assert.equal(activeApplied.revision, 7);
     const activeCompiled = runTool([
       'compile-module',
       '--project-root', projectRoot,
@@ -1021,7 +1057,14 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
     ]);
     assert.equal(activeCompiled.render.ok, true);
     assert.equal(activeCompiled.render.renderer, 'netlistsvg');
+    const activeSystemCompiled = runTool(['compile', '--project-root', projectRoot]);
+    const activeSystemNetlist = await readFile(String(activeSystemCompiled.netlist_path), 'utf8');
+    assert.match(activeSystemNetlist, /\.model NMTEST/);
+    assert.match(activeSystemNetlist, /\.tran 1u 20u/);
+    assert.match(activeSystemNetlist, /\.meas tran sensor_peak/);
     const buildManifest = JSON.parse(await readFile(path.resolve(projectRoot, 'build', 'build-manifest.json'), 'utf8'));
+    assert.equal(buildManifest.source_revision, 7);
+    assert.match(buildManifest.document_hash, /^[a-f0-9]{64}$/);
     assert.equal(buildManifest.modules.sensor.renderer, 'netlistsvg');
   } finally {
     await rm(projectsRoot, { recursive: true, force: true });

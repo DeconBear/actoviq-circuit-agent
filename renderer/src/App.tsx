@@ -88,6 +88,7 @@ export function App() {
   const circuitLoadRequestRef = useRef(0);
   const jobLoadRequestRef = useRef(0);
   const circuitCreateRequestRef = useRef(false);
+  const pendingProjectReloadRef = useRef<string | null>(null);
   const setJobId = useCallback((id: string | null) => {
     setCurrentJobId(id);
     currentJobIdRef.current = id;
@@ -361,12 +362,24 @@ export function App() {
     if (!window.electronAPI) return;
     return window.electronAPI.onCircuitProjectChanged((event) => {
       const state = useAppStore.getState();
-      if (event.projectId === state.activeProjectId && !state.circuitBusy) {
-        void loadCircuitProject(event.projectId, false);
+      if (event.projectId === state.activeProjectId) {
+        if (state.circuitBusy) {
+          pendingProjectReloadRef.current = event.projectId;
+        } else {
+          void loadCircuitProject(event.projectId, false);
+        }
       }
       void refreshCircuitProjects();
     });
   }, [loadCircuitProject, refreshCircuitProjects]);
+
+  useEffect(() => {
+    if (store.circuitBusy) return;
+    const projectId = pendingProjectReloadRef.current;
+    if (!projectId || projectId !== store.activeProjectId) return;
+    pendingProjectReloadRef.current = null;
+    void loadCircuitProject(projectId, false);
+  }, [loadCircuitProject, store.activeProjectId, store.circuitBusy]);
 
   useEffect(() => {
     const state = useAppStore.getState();

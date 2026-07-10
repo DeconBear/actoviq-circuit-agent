@@ -91,7 +91,7 @@ declare global {
           error?: string;
         };
       }>;
-      saveCircuitModuleNotebook(projectId: string, moduleId: string, markdown: string): Promise<{
+      saveCircuitModuleNotebook(projectId: string, moduleId: string, markdown: string, baseRevision?: number): Promise<{
         ok: true;
         module_id: string;
         revision: number;

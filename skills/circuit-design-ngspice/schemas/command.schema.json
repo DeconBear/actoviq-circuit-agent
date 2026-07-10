@@ -35,6 +35,7 @@
               "remove_component",
               "add_port",
               "set_module_schematic",
+              "set_module_netlist",
               "set_module_note",
               "set_module_preview",
               "set_module_metadata"

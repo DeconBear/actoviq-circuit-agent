@@ -45,6 +45,8 @@ interface DesignMemoryItem {
 let activeWatcher: FSWatcher | null = null;
 let watchedProjectId = '';
 let watchTimer: NodeJS.Timeout | null = null;
+let watchPollTimer: NodeJS.Timeout | null = null;
+let watchedProjectRevision: number | null = null;
 
 async function exists(targetPath: string): Promise<boolean> {
   try {
@@ -709,13 +711,48 @@ function notifyProjectChanged(projectId: string): void {
   }, 120);
 }
 
+function normalizeAtomicSourcePath(relativePath: string): string {
+  return relativePath.replace(
+    /(^|\/)\.(project\.circuit\.json|module\.circuit\.json|netlist-notebook\.md|schematic\.overrides\.json)\.[^/]+\.tmp$/,
+    '$1$2',
+  );
+}
+
 async function watchProject(projectId: string): Promise<void> {
   if (activeWatcher && watchedProjectId === projectId) return;
   activeWatcher?.close();
   activeWatcher = null;
+  if (watchPollTimer) clearInterval(watchPollTimer);
+  watchPollTimer = null;
   watchedProjectId = projectId;
   const root = await resolveProjectRoot(projectId);
-  activeWatcher = watch(root, { recursive: true }, () => notifyProjectChanged(projectId));
+  try {
+    const initial = JSON.parse(await readFile(path.join(root, 'project.circuit.json'), 'utf8')) as { revision?: number };
+    watchedProjectRevision = typeof initial.revision === 'number' ? initial.revision : null;
+  } catch {
+    watchedProjectRevision = null;
+  }
+  activeWatcher = watch(root, { recursive: true }, (_eventType, filename) => {
+    const relative = normalizeAtomicSourcePath(String(filename ?? '').replace(/\\/g, '/'));
+    if (!relative || relative.startsWith('build/') || relative.startsWith('commands/') ||
+        relative.startsWith('revisions/') || relative.startsWith('logs/')) return;
+    if (relative !== 'project.circuit.json' &&
+        !/modules\/[^/]+\/(?:module\.circuit\.json|netlist-notebook\.md|schematic\.overrides\.json)$/.test(relative)) return;
+    notifyProjectChanged(projectId);
+  });
+  watchPollTimer = setInterval(() => {
+    void (async () => {
+      if (watchedProjectId !== projectId) return;
+      try {
+        const current = JSON.parse(await readFile(path.join(root, 'project.circuit.json'), 'utf8')) as { revision?: number };
+        if (typeof current.revision !== 'number' || current.revision === watchedProjectRevision) return;
+        watchedProjectRevision = current.revision;
+        notifyProjectChanged(projectId);
+      } catch {
+        // The watcher will retry on its next interval while an atomic replace is in flight.
+      }
+    })();
+  }, 500);
 }
 
 export function registerProjectHandlers(ipcMain: IpcMain): void {
@@ -773,7 +810,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(
     'project:save-module-notebook',
-    async (_event, projectId: string, moduleId: string, markdown: string) => {
+    async (_event, projectId: string, moduleId: string, markdown: string, baseRevision?: number) => {
       if (!/^[A-Za-z0-9_-]+$/.test(moduleId)) {
         throw new Error(`Invalid module id: ${moduleId}`);
       }
@@ -781,13 +818,20 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
         throw new Error('The notebook needs a fenced spice, cir, or netlist code block.');
       }
       const root = await resolveProjectRoot(projectId);
-      const moduleRoot = path.resolve(root, 'modules', moduleId);
-      const relative = path.relative(root, moduleRoot);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) {
-        throw new Error(`Invalid module path: ${moduleId}`);
-      }
-      await mkdir(moduleRoot, { recursive: true });
-      await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), markdown, 'utf8');
+      const project = await readJsonFile<{ revision: number }>(path.resolve(root, 'project.circuit.json'));
+      await runProjectTool([
+        'apply',
+        '--project-root', root,
+        '--command-json', JSON.stringify({
+          schema: 'actoviq.command.v1',
+          command_id: `netlist-${Date.now()}`,
+          actor: 'user',
+          project_id: projectId,
+          base_revision: baseRevision ?? project.revision,
+          message: `Edit module netlist ${moduleId}`,
+          operations: [{ op: 'set_module_netlist', module_id: moduleId, netlist_notebook: markdown }],
+        }),
+      ]);
       return runProjectTool([
         'compile-module',
         '--project-root', root,

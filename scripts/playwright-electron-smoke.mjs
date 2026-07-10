@@ -644,6 +644,10 @@ try {
     await readFile(path.resolve(projectRoot, 'modules', 'filter', 'netlist-notebook.md'), 'utf8'),
     /Playwright verified the Markdown notebook/,
   );
+  const revisionAfterNotebook = JSON.parse(
+    await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'),
+  ).revision;
+  assert.equal(revisionAfterNotebook, initialRevision + 1, 'notebook save should create exactly one project revision');
   await page.getByTestId('netlist-mode-preview').click();
   await page.getByTestId('netlist-notebook-preview')
     .getByText('Playwright verified the Markdown notebook and matching SVG context.', { exact: true })
@@ -805,7 +809,7 @@ try {
     { steps: 8 },
   );
   await page.mouse.up();
-  await page.getByText(new RegExp(`revision ${initialRevision + 1}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${revisionAfterNotebook + 1}`)).waitFor({ timeout: 10_000 });
   const cardAfterResize = await filterCard.boundingBox();
   assert.ok(cardAfterResize);
   assert.ok(cardAfterResize.width > cardBeforeResize.width + 60);
@@ -817,7 +821,7 @@ try {
 
   await page.getByTestId('module-note').fill('Reduce the cutoff frequency and preserve the IN/OUT/GND interface.');
   await page.getByTestId('save-module-note').click();
-  await page.getByText(new RegExp(`revision ${initialRevision + 2}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${revisionAfterNotebook + 2}`)).waitFor({ timeout: 10_000 });
 
   let projectForPreview = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
   runSkill([
@@ -833,7 +837,7 @@ try {
       operations: [{ op: 'set_module_preview', module_id: 'filter', enabled: false }],
     }),
   ]);
-  await page.getByText(new RegExp(`revision ${initialRevision + 3}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${revisionAfterNotebook + 3}`)).waitFor({ timeout: 10_000 });
   await page.getByTestId('module-summary-filter').waitFor();
   await page.getByText('15.9 nF', { exact: true }).first().waitFor();
   await page.screenshot({ path: path.resolve(outputRoot, 'module-summary-mode.png') });
@@ -852,7 +856,7 @@ try {
       operations: [{ op: 'set_module_preview', module_id: 'filter', enabled: true }],
     }),
   ]);
-  await page.getByText(new RegExp(`revision ${initialRevision + 4}`)).waitFor({ timeout: 10_000 });
+  await page.getByText(new RegExp(`revision ${revisionAfterNotebook + 4}`)).waitFor({ timeout: 10_000 });
   await page.getByTestId('module-preview-filter').locator('svg').waitFor();
 
   await page.getByTestId('module-card-filter').dblclick();

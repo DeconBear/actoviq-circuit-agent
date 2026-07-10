@@ -219,8 +219,8 @@ const electronAPI = {
     return ipcRenderer.invoke('project:compile-module', projectId, moduleId);
   },
 
-  saveCircuitModuleNotebook(projectId: string, moduleId: string, markdown: string): Promise<unknown> {
-    return ipcRenderer.invoke('project:save-module-notebook', projectId, moduleId, markdown);
+  saveCircuitModuleNotebook(projectId: string, moduleId: string, markdown: string, baseRevision?: number): Promise<unknown> {
+    return ipcRenderer.invoke('project:save-module-notebook', projectId, moduleId, markdown, baseRevision);
   },
 
   simulateCircuitModule(projectId: string, moduleId: string): Promise<unknown> {

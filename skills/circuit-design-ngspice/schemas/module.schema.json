@@ -70,6 +70,14 @@
               "height": { "type": "number", "minimum": 40, "maximum": 1000 }
             },
             "additionalProperties": false
+          },
+          "spice": {
+            "type": "object",
+            "properties": {
+              "raw": { "type": "string" },
+              "simulated": { "type": "boolean" }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": true
@@ -89,6 +97,17 @@
         },
         "additionalProperties": false
       }
+    },
+    "spice": {
+      "type": "object",
+      "properties": {
+        "models": { "type": "array", "items": { "type": "string" } },
+        "directives": { "type": "array", "items": { "type": "string" } },
+        "opaque": { "type": "array", "items": { "type": "string" } },
+        "source": { "type": "string" },
+        "generated_testbench": { "type": "boolean" }
+      },
+      "additionalProperties": false
     },
     "wires": { "type": "array" },
     "annotations": { "type": "array" }

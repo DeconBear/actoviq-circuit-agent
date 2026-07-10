@@ -169,6 +169,14 @@ export interface CircuitBlockStyle {
   height?: number;
 }
 
+export interface CircuitSpiceSource {
+  models?: string[];
+  directives?: string[];
+  opaque?: string[];
+  source?: string;
+  generated_testbench?: boolean;
+}
+
 export interface CircuitWireEndpoint {
   x: number;
   y: number;
@@ -196,6 +204,7 @@ export interface CircuitComponent {
   rotation: number;
   pins: CircuitPin[];
   block?: CircuitBlockStyle;
+  spice?: { raw?: string; simulated?: boolean };
 }
 
 export interface CircuitModule {
@@ -204,6 +213,7 @@ export interface CircuitModule {
   name: string;
   revision: number;
   nets?: CircuitNet[];
+  spice?: CircuitSpiceSource;
   ports: CircuitPort[];
   components: CircuitComponent[];
   wires: CircuitWire[];
@@ -265,6 +275,8 @@ export interface CircuitBuildState {
     schema: string;
     project_id: string;
     revision: number;
+    source_revision?: number;
+    document_hash?: string;
     built_at: string;
     status: string;
     netlist?: string;

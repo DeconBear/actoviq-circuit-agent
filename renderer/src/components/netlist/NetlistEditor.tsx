@@ -39,6 +39,8 @@ export function NetlistEditor({
   const [editorFallback, setEditorFallback] = useState(false);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const loadedSourceKeyRef = useRef('');
+  const saveInFlightRef = useRef(false);
+  const lastSubmittedValueRef = useRef('');
   const forcePlainEditor = Boolean(window.electronAPI?.isE2E?.());
 
   useEffect(() => {
@@ -60,6 +62,7 @@ export function NetlistEditor({
       loadedSourceKeyRef.current = sourceKey;
       setDraft(value);
       setSavedValue(value);
+      lastSubmittedValueRef.current = value;
       if (sourceChanged) {
         setSaveStatus('idle');
         setSaveMessage('');
@@ -84,6 +87,8 @@ export function NetlistEditor({
 
   const handleSave = useCallback(async (): Promise<boolean> => {
     const value = editorRef.current?.getValue() ?? draft;
+    if (value === lastSubmittedValueRef.current) return true;
+    if (saveInFlightRef.current) return false;
     let netlist: string;
     try {
       netlist = extractNetlistCode(value);
@@ -93,11 +98,18 @@ export function NetlistEditor({
       return false;
     }
 
+    saveInFlightRef.current = true;
+    lastSubmittedValueRef.current = value;
     setSaveStatus('saving');
     setSaveMessage(projectContext ? 'Saving and rendering SVG...' : 'Saving notebook...');
     try {
       if (projectContext && projectId && moduleId) {
-        const result = await window.electronAPI.saveCircuitModuleNotebook(projectId, moduleId, value);
+        const result = await window.electronAPI.saveCircuitModuleNotebook(
+          projectId,
+          moduleId,
+          value,
+          bundle?.project.revision,
+        );
         if (!result.render.ok) {
           throw new Error(result.render.error || 'netlistsvg could not render this code block.');
         }
@@ -117,11 +129,14 @@ export function NetlistEditor({
       setSaveMessage(projectContext ? 'Saved and SVG refreshed' : 'Notebook saved');
       return true;
     } catch (error) {
+      lastSubmittedValueRef.current = savedValue;
       setSaveStatus('error');
       setSaveMessage(`Save failed: ${error instanceof Error ? error.message : String(error)}`);
       return false;
+    } finally {
+      saveInFlightRef.current = false;
     }
-  }, [draft, jobId, moduleId, onReloadProject, projectContext, projectId, setNetlistContent]);
+  }, [bundle?.project.revision, draft, jobId, moduleId, onReloadProject, projectContext, projectId, savedValue, setNetlistContent]);
 
   const handleSaveAndValidate = useCallback(async () => {
     const saved = dirty ? await handleSave() : true;
@@ -184,6 +199,13 @@ export function NetlistEditor({
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleSave]);
+
+  useEffect(() => {
+    if (!projectContext || mode !== 'edit' || !dirty || saveStatus !== 'idle') return undefined;
+    if (!/```(?:spice|cir|netlist)\s*\r?\n[\s\S]+?```/i.test(draft)) return undefined;
+    const timer = window.setTimeout(() => { void handleSave(); }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [dirty, draft, handleSave, mode, projectContext, saveStatus]);
 
   if (!draft) {
     return (

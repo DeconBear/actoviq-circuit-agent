@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -84,6 +85,16 @@ def atomic_write_json(path: Path, value: Any) -> None:
         prefix=f".{path.name}.",
         suffix=".tmp",
         delete=False,
+    ) as handle:
+        handle.write(content)
+        temp_path = Path(handle.name)
+    os.replace(temp_path, path)
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
     ) as handle:
         handle.write(content)
         temp_path = Path(handle.name)
@@ -527,6 +538,12 @@ def snapshot_revision(root: Path, project: dict[str, Any], modules: dict[str, di
     atomic_write_json(snapshot_root / "project.circuit.json", project)
     for module_id, module in modules.items():
         atomic_write_json(snapshot_root / "modules" / module_id / "module.circuit.json", module)
+        notebook_path = root / "modules" / module_id / "netlist-notebook.md"
+        if notebook_path.exists():
+            atomic_write_text(
+                snapshot_root / "modules" / module_id / "netlist-notebook.md",
+                notebook_path.read_text(encoding="utf-8"),
+            )
         overrides_path = schematic_overrides_path(root, module_id)
         if overrides_path.exists():
             atomic_write_json(
@@ -543,6 +560,38 @@ def snapshot_revision(root: Path, project: dict[str, Any], modules: dict[str, di
         "created_at": utc_now(),
     })
     return revision_root
+
+
+def write_revision_result(
+    revision_root: Path,
+    project: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+    notebook_writes: dict[str, str] | None = None,
+) -> None:
+    result_root = revision_root / "result"
+    atomic_write_json(result_root / "project.circuit.json", project)
+    digest = hashlib.sha256(json.dumps(project, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    for module_id, module in sorted(modules.items()):
+        atomic_write_json(result_root / "modules" / module_id / "module.circuit.json", module)
+        digest.update(json.dumps(module, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        notebook = (notebook_writes or {}).get(module_id)
+        if notebook is not None:
+            atomic_write_text(result_root / "modules" / module_id / "netlist-notebook.md", notebook)
+            digest.update(notebook.encode("utf-8"))
+    metadata_path = revision_root / "metadata.json"
+    metadata = read_json(metadata_path)
+    metadata["schema"] = "actoviq.revision.v2"
+    metadata["document_hash"] = digest.hexdigest()
+    metadata["result_snapshot"] = "result/"
+    atomic_write_json(metadata_path, metadata)
+
+
+def project_document_hash(project: dict[str, Any], modules: dict[str, dict[str, Any]]) -> str:
+    digest = hashlib.sha256(json.dumps(project, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    for module_id, module in sorted(modules.items()):
+        digest.update(module_id.encode("utf-8"))
+        digest.update(json.dumps(module, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def find_module_ref(project: dict[str, Any], module_id: str) -> dict[str, Any]:
@@ -604,6 +653,7 @@ def apply_operation(
     operation: dict[str, Any],
     changed_modules: set[str],
     schematic_override_writes: dict[str, dict[str, Any]],
+    notebook_writes: dict[str, str],
 ) -> None:
     op = operation.get("op")
     if op == "upsert_module":
@@ -733,6 +783,7 @@ def apply_operation(
         wires = operation.get("wires", [])
         nets = operation.get("nets", module.get("nets", []))
         annotations = operation.get("annotations", module.get("annotations", []))
+        notebook = operation.get("netlist_notebook")
         if not isinstance(components, list):
             raise ValueError("set_module_schematic components must be an array")
         if not isinstance(ports, list):
@@ -751,13 +802,53 @@ def apply_operation(
             "nets": nets,
             "annotations": annotations,
         }
+        if notebook is not None:
+            if not isinstance(notebook, str):
+                raise ValueError("set_module_schematic netlist_notebook must be text")
+            netlist_text = extract_notebook_netlist(notebook)
+            next_module["spice"] = parse_spice_source(module_id, netlist_text, components)
+            notebook_writes[module_id] = notebook
+        next_module = upgrade_module_document(next_module)
         validate_module(next_module)
         module["components"] = components
         module["ports"] = ports
         module["wires"] = wires
         module["nets"] = nets
         module["annotations"] = annotations
+        module["schema"] = next_module["schema"]
+        module["nets"] = next_module.get("nets", [])
+        if "spice" in next_module:
+            module["spice"] = next_module["spice"]
         find_module_ref(project, module_id)["ports"] = ports
+        changed_modules.add(module_id)
+        return
+    if op == "set_module_netlist":
+        module_id = str(operation["module_id"])
+        module = modules[module_id]
+        notebook = operation.get("netlist_notebook")
+        if not isinstance(notebook, str):
+            raise ValueError("set_module_netlist netlist_notebook must be text")
+        netlist_text = extract_notebook_netlist(notebook)
+        parsed_components = parse_editable_netlist_components(module_id, netlist_text, module)
+        parsed_ids = {str(component.get("id")) for component in parsed_components}
+        schematic_blocks = [
+            component for component in module.get("components", [])
+            if component.get("type") == "BLOCK" and str(component.get("id")) not in parsed_ids
+        ]
+        components = [*parsed_components, *schematic_blocks]
+        if not components:
+            raise ValueError("netlist contains no editable or preserved components")
+        ports = infer_editable_ports(list(module.get("ports", [])), components)
+        next_module = upgrade_module_document({
+            **module,
+            "components": components,
+            "ports": ports,
+            "spice": parse_spice_source(module_id, netlist_text, components),
+        })
+        validate_module(next_module)
+        modules[module_id] = next_module
+        find_module_ref(project, module_id)["ports"] = ports
+        notebook_writes[module_id] = notebook
         changed_modules.add(module_id)
         return
     if op == "move_schematic_item":
@@ -948,18 +1039,30 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
     if not isinstance(operations, list) or not operations:
         raise ValueError("command operations must be a non-empty array")
 
-    snapshot_revision(root, project, modules, command)
+    revision_root = snapshot_revision(root, project, modules, command)
     changed_modules: set[str] = set()
     schematic_override_writes: dict[str, dict[str, Any]] = {}
+    notebook_writes: dict[str, str] = {}
     for operation in operations:
-        apply_operation(root, project, modules, operation, changed_modules, schematic_override_writes)
+        apply_operation(
+            root,
+            project,
+            modules,
+            operation,
+            changed_modules,
+            schematic_override_writes,
+            notebook_writes,
+        )
 
     project["revision"] += 1
     project["updated_at"] = utc_now()
     for module_id in changed_modules:
+        modules[module_id] = upgrade_module_document(modules[module_id])
         modules[module_id]["revision"] = int(modules[module_id].get("revision", 0)) + 1
         validate_module(modules[module_id])
     validate_project(project)
+    for module_id, notebook in notebook_writes.items():
+        atomic_write_text(root / "modules" / module_id / "netlist-notebook.md", notebook)
     for module_id in changed_modules:
         atomic_write_json(module_path(root, module_id), modules[module_id])
     for module_id, overrides in schematic_override_writes.items():
@@ -968,6 +1071,7 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
     command_id = command.get("command_id") or f"command-{project['revision']:06d}"
     applied_path = root / "commands" / "applied" / f"{command_id}.json"
     atomic_write_json(applied_path, {**command, "applied_revision": project["revision"], "applied_at": utc_now()})
+    write_revision_result(revision_root, project, modules, notebook_writes)
     return {
         "ok": True,
         "project_id": project["project_id"],
@@ -1157,6 +1261,49 @@ def parse_editable_netlist_components(
     return parsed
 
 
+def parse_spice_source(
+    module_id: str,
+    netlist_text: str,
+    components: list[dict[str, Any]],
+) -> dict[str, Any]:
+    known_instances = {
+        compiled_component_name(module_id, component).lower()
+        for component in components
+        if component.get("type") != "BLOCK"
+    }
+    known_instances.update(
+        str(component.get("name", "")).lower()
+        for component in components
+        if component.get("type") != "BLOCK"
+    )
+    models: list[str] = []
+    directives: list[str] = []
+    opaque: list[str] = []
+    for raw in merged_spice_lines(netlist_text):
+        line = strip_spice_comment(raw)
+        if not line:
+            continue
+        low = line.lower()
+        if low == ".end":
+            continue
+        if low.startswith((".model", ".param", ".include", ".lib", ".func")):
+            models.append(line)
+            continue
+        if low.startswith("."):
+            directives.append(line)
+            continue
+        instance = line.split(maxsplit=1)[0].lower()
+        if instance not in known_instances:
+            opaque.append(line)
+    return {
+        "source": netlist_text,
+        "models": models,
+        "directives": directives,
+        "opaque": opaque,
+        "generated_testbench": "standalone module testbench generated by circuit_project.py" in netlist_text.lower(),
+    }
+
+
 def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[dict[str, Any]]) -> list[dict[str, Any]]:
     nodes: list[str] = []
     for component in components:
@@ -1172,8 +1319,6 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
         if not port_id or port_id in used_port_ids:
             continue
         if port.get("inferred") and str(port.get("net", "")) not in nodes:
-            continue
-        if port_id in {"gnd", "vdd", "vcc", "vee", "vss", "input", "output"} and str(port.get("net", "")) not in nodes:
             continue
         used_port_ids.add(port_id)
         ports.append(port)
@@ -1418,9 +1563,6 @@ def write_project_report(
 
 def compile_project(root: Path) -> dict[str, Any]:
     project, modules = load_project(root)
-    for module_ref in project["modules"]:
-        sync_module_from_netlist(root, module_ref["id"])
-    project, modules = load_project(root)
     union = UnionFind()
     port_lookup: dict[tuple[str, str], dict[str, Any]] = {}
     for module_ref in project["modules"]:
@@ -1555,6 +1697,25 @@ def compile_project(root: Path) -> dict[str, Any]:
                     else:
                         lines.append(stripped)
 
+        spice = module.get("spice") if isinstance(module.get("spice"), dict) else {}
+        generated_testbench = bool(spice.get("generated_testbench")) or (
+            "standalone module testbench generated by circuit_project.py" in str(spice.get("source", "")).lower()
+        )
+        if not generated_testbench:
+            for raw in spice.get("opaque", []):
+                stripped = str(raw).strip()
+                if stripped and stripped not in lines:
+                    lines.append(stripped)
+        for raw in spice.get("models", []):
+            stripped = str(raw).strip()
+            if stripped and stripped not in model_lines:
+                model_lines.append(stripped)
+        if not generated_testbench:
+            for raw in spice.get("directives", []):
+                stripped = str(raw).strip()
+                if stripped and stripped.lower() != ".end" and stripped not in notebook_directives:
+                    notebook_directives.append(stripped)
+
     if model_lines:
         lines.append("* Device models")
         lines.extend(model_lines)
@@ -1593,6 +1754,8 @@ def compile_project(root: Path) -> dict[str, Any]:
         "schema": "actoviq.build.v1",
         "project_id": project["project_id"],
         "revision": project["revision"],
+        "source_revision": project["revision"],
+        "document_hash": project_document_hash(project, modules),
         "built_at": utc_now(),
         "status": "compiling",
         "netlist": "system/design.final.cir",
@@ -1757,7 +1920,6 @@ def render_module_schematic(
 
 
 def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> dict[str, Any]:
-    sync_module_from_netlist(root, module_id)
     project, modules = load_project(root)
     if module_id not in modules:
         raise ValueError(f"unknown module: {module_id}")

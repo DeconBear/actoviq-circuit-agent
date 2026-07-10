@@ -284,6 +284,13 @@ function moduleToSpiceNetlist(moduleId: string, moduleData: CircuitModule): stri
       component.value.trim() || '1',
     ].join(' '));
   }
+  if (!moduleData.spice?.generated_testbench) {
+    for (const line of moduleData.spice?.opaque ?? []) lines.push(line);
+  }
+  for (const line of moduleData.spice?.models ?? []) lines.push(line);
+  if (!moduleData.spice?.generated_testbench) {
+    for (const line of moduleData.spice?.directives ?? []) lines.push(line);
+  }
   lines.push('.end');
   return `${lines.join('\n')}\n`;
 }
@@ -578,27 +585,14 @@ export function CircuitWorkbench({
       nets: moduleData.nets ?? [],
       wires: moduleData.wires ?? [],
       annotations: moduleData.annotations ?? [],
+      netlist_notebook: moduleNotebookMarkdown(moduleId, moduleData),
     }]);
     if (saved) {
       setBusy(true);
-      setError('');
       setNotice('Applying schematic netlist and rebuilding SVG...');
       try {
-        const result = await window.electronAPI.saveCircuitModuleNotebook(
-          operationProjectId,
-          moduleId,
-          moduleNotebookMarkdown(moduleId, moduleData),
-        );
-        if (!result.render.ok) {
-          throw new Error(result.render.error || 'netlistsvg could not render the applied schematic netlist.');
-        }
-        await onReloadProject(operationProjectId);
-        if (isActiveProject(operationProjectId)) setNotice('Applied netlist and SVG rebuilt');
-      } catch (saveError) {
-        if (isActiveProject(operationProjectId)) {
-          setError(saveError instanceof Error ? saveError.message : String(saveError));
-          setNotice('');
-        }
+        const built = await buildModulePreview(moduleId, false);
+        if (built && isActiveProject(operationProjectId)) setNotice('Applied netlist and SVG rebuilt');
       } finally {
         if (isActiveProject(operationProjectId)) setBusy(false);
       }
@@ -1233,6 +1227,7 @@ export function CircuitWorkbench({
           <div style={styles.projectMeta}>
             revision {project.revision} | {project.modules.length} modules
             {build ? ` | ${build.manifest.status}` : ''}
+            {build && (build.manifest.source_revision ?? build.manifest.revision) !== project.revision ? ' | build stale' : ''}
           </div>
         </div>
         <div style={styles.toolbar}>
