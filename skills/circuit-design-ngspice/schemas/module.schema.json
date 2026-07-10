@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["schema", "module_id", "name", "revision", "ports", "components"],
   "properties": {
-    "schema": { "const": "actoviq.module.v1" },
+    "schema": { "enum": ["actoviq.module.v1", "actoviq.module.v2"] },
     "module_id": { "type": "string", "minLength": 1 },
     "name": { "type": "string", "minLength": 1 },
     "revision": { "type": "integer", "minimum": 0 },
@@ -20,6 +20,8 @@
           "direction": { "enum": ["input", "output", "bidirectional"] },
           "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
           "net": { "type": "string", "minLength": 1 }
+          ,"net_id": { "type": "string", "minLength": 1 }
+          ,"inferred": { "type": "boolean" }
         }
       }
     },
@@ -54,6 +56,7 @@
                 "id": { "type": "string", "minLength": 1 },
                 "name": { "type": "string", "minLength": 1 },
                 "net": { "type": "string", "minLength": 1 },
+                "net_id": { "type": "string", "minLength": 1 },
                 "side": { "enum": ["left", "right", "top", "bottom"] },
                 "order": { "type": "number" }
               },
@@ -70,6 +73,21 @@
           }
         },
         "additionalProperties": true
+      }
+    },
+    "nets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["signal", "analog", "digital", "power", "ground"] },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "conflict": { "type": "boolean" }
+        },
+        "additionalProperties": false
       }
     },
     "wires": { "type": "array" },

@@ -17,8 +17,10 @@ from pathlib import Path
 from typing import Any
 
 
-PROJECT_SCHEMA = "actoviq.project.v1"
-MODULE_SCHEMA = "actoviq.module.v1"
+PROJECT_SCHEMA = "actoviq.project.v2"
+MODULE_SCHEMA = "actoviq.module.v2"
+LEGACY_PROJECT_SCHEMAS = {"actoviq.project.v1", PROJECT_SCHEMA}
+LEGACY_MODULE_SCHEMAS = {"actoviq.module.v1", MODULE_SCHEMA}
 COMMAND_SCHEMA = "actoviq.command.v1"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
 ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK"}
@@ -108,8 +110,8 @@ def ensure_inside(root: Path, candidate: Path) -> None:
 
 
 def validate_project(project: dict[str, Any]) -> None:
-    if project.get("schema") != PROJECT_SCHEMA:
-        raise ValueError(f"project schema must be {PROJECT_SCHEMA}")
+    if project.get("schema") not in LEGACY_PROJECT_SCHEMAS:
+        raise ValueError(f"project schema must be one of {sorted(LEGACY_PROJECT_SCHEMAS)}")
     if not isinstance(project.get("project_id"), str) or not project["project_id"]:
         raise ValueError("project_id is required")
     if not isinstance(project.get("revision"), int) or project["revision"] < 0:
@@ -142,8 +144,8 @@ def validate_project(project: dict[str, Any]) -> None:
 
 
 def validate_module(module: dict[str, Any]) -> None:
-    if module.get("schema") != MODULE_SCHEMA:
-        raise ValueError(f"module schema must be {MODULE_SCHEMA}")
+    if module.get("schema") not in LEGACY_MODULE_SCHEMAS:
+        raise ValueError(f"module schema must be one of {sorted(LEGACY_MODULE_SCHEMAS)}")
     if not isinstance(module.get("module_id"), str) or not module["module_id"]:
         raise ValueError("module_id is required")
     component_ids: set[str] = set()
@@ -181,6 +183,58 @@ def validate_module(module: dict[str, Any]) -> None:
     port_ids = [port.get("id") for port in module.get("ports", [])]
     if len(port_ids) != len(set(port_ids)) or any(not value for value in port_ids):
         raise ValueError("module port ids must be present and unique")
+
+
+def stable_net_token(value: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_") or "net"
+    return f"net_{token}"
+
+
+def upgrade_module_document(module: dict[str, Any]) -> dict[str, Any]:
+    existing = {
+        str(net.get("id")): dict(net)
+        for net in module.get("nets", [])
+        if isinstance(net, dict) and net.get("id") and net.get("name")
+    }
+    by_name: dict[str, str] = {}
+    for net_id, net in existing.items():
+        by_name[str(net["name"])] = net_id
+        for alias in net.get("aliases", []):
+            by_name[str(alias)] = net_id
+
+    def ensure_net(name: str, current_id: Any = None, kind: str = "signal") -> str:
+        if current_id and str(current_id) in existing:
+            return str(current_id)
+        if name in by_name:
+            return by_name[name]
+        base = stable_net_token(name)
+        net_id = base
+        suffix = 2
+        while net_id in existing:
+            net_id = f"{base}_{suffix}"
+            suffix += 1
+        existing[net_id] = {
+            "id": net_id,
+            "name": name,
+            "kind": "ground" if name == "0" else kind,
+            "aliases": [],
+        }
+        by_name[name] = net_id
+        return net_id
+
+    for component in module.get("components", []):
+        for pin in component.get("pins", []):
+            pin["net_id"] = ensure_net(str(pin.get("net", "")), pin.get("net_id"))
+    for port in module.get("ports", []):
+        net_id = ensure_net(str(port.get("net", "")), port.get("net_id"), str(port.get("signal_type", "signal")))
+        port["net_id"] = net_id
+        if existing[net_id].get("kind") in (None, "signal"):
+            existing[net_id]["kind"] = port.get("signal_type", "signal")
+    for wire in module.get("wires", []):
+        wire["net_id"] = ensure_net(str(wire.get("net") or f"n_{wire.get('id', 'wire')}"), wire.get("net_id"))
+    module["schema"] = MODULE_SCHEMA
+    module["nets"] = list(existing.values())
+    return module
 
 
 def default_schematic_overrides(project: dict[str, Any], module_id: str) -> dict[str, Any]:
@@ -232,7 +286,9 @@ def load_project(root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]
         validate_module(module)
         if module["module_id"] != module_ref["id"]:
             raise ValueError(f"module id mismatch: {module_ref['id']}")
-        modules[module_ref["id"]] = module
+        modules[module_ref["id"]] = upgrade_module_document(module)
+        module_ref["ports"] = modules[module_ref["id"]].get("ports", [])
+    project["schema"] = PROJECT_SCHEMA
     return project, modules
 
 
@@ -675,6 +731,7 @@ def apply_operation(
         components = operation.get("components")
         ports = operation.get("ports")
         wires = operation.get("wires", [])
+        nets = operation.get("nets", module.get("nets", []))
         annotations = operation.get("annotations", module.get("annotations", []))
         if not isinstance(components, list):
             raise ValueError("set_module_schematic components must be an array")
@@ -682,6 +739,8 @@ def apply_operation(
             raise ValueError("set_module_schematic ports must be an array")
         if not isinstance(wires, list):
             raise ValueError("set_module_schematic wires must be an array")
+        if not isinstance(nets, list):
+            raise ValueError("set_module_schematic nets must be an array")
         if not isinstance(annotations, list):
             raise ValueError("set_module_schematic annotations must be an array")
         next_module = {
@@ -689,12 +748,14 @@ def apply_operation(
             "components": components,
             "ports": ports,
             "wires": wires,
+            "nets": nets,
             "annotations": annotations,
         }
         validate_module(next_module)
         module["components"] = components
         module["ports"] = ports
         module["wires"] = wires
+        module["nets"] = nets
         module["annotations"] = annotations
         find_module_ref(project, module_id)["ports"] = ports
         changed_modules.add(module_id)
@@ -1110,6 +1171,10 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
         port_id = str(port.get("id", "")).strip()
         if not port_id or port_id in used_port_ids:
             continue
+        if port.get("inferred") and str(port.get("net", "")) not in nodes:
+            continue
+        if port_id in {"gnd", "vdd", "vcc", "vee", "vss", "input", "output"} and str(port.get("net", "")) not in nodes:
+            continue
         used_port_ids.add(port_id)
         ports.append(port)
 
@@ -1120,7 +1185,9 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
             return
         used_port_ids.add(port_id)
         existing_nets.add(net)
-        ports.append(make_port(port_id, name, direction, signal_type, net))
+        port = make_port(port_id, name, direction, signal_type, net)
+        port["inferred"] = True
+        ports.append(port)
 
     lower_to_node = {node.lower(): node for node in nodes}
     if "0" in nodes:

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import type { CircuitComponent, CircuitModule, CircuitPort } from '../renderer/src/types';
 import {
+  addWire,
   blockBodySize,
   componentBounds,
   createSchematicDocument,
@@ -425,6 +426,39 @@ for (const fixture of fixtures) {
   assertGeneratedWireSimplicity(document);
   assertGeneratedWireCrossings(document);
 }
+
+const mosWireModule = moduleFixture('mos_wire_merge', [
+  component('m3', 'M', 'PMOS1 W=40u L=1u', 220, 220, [
+    ['d', 'D', 'd3'], ['g', 'G', 'gate_left'], ['s', 'S', 'vin'], ['b', 'B', 'vin'],
+  ]),
+  component('m4', 'M', 'PMOS1 W=40u L=1u', 480, 220, [
+    ['d', 'D', 'd4'], ['g', 'G', 'gate_right'], ['s', 'S', 'vin'], ['b', 'B', 'vin'],
+  ]),
+], ldoPorts);
+const leftGate = mosWireModule.components[0]!.pins.find((pin) => pin.id === 'g')!;
+const rightGate = mosWireModule.components[1]!.pins.find((pin) => pin.id === 'g')!;
+const leftGatePoint = pinWorld(mosWireModule.components[0]!, leftGate, 1);
+const rightGatePoint = pinWorld(mosWireModule.components[1]!, rightGate, 1);
+addWire(
+  mosWireModule,
+  { kind: 'pin', ...leftGatePoint, component_id: 'm3', pin_id: 'g', label: 'M3.G', net: leftGate.net },
+  { kind: 'pin', ...rightGatePoint, component_id: 'm4', pin_id: 'g', label: 'M4.G', net: rightGate.net },
+);
+const mergedLeftGate = mosWireModule.components[0]!.pins.find((pin) => pin.id === 'g')!;
+const mergedRightGate = mosWireModule.components[1]!.pins.find((pin) => pin.id === 'g')!;
+assert.equal(mergedLeftGate.net_id, mergedRightGate.net_id, 'connected MOS gates should share a stable net id');
+assert.notEqual(mergedLeftGate.net, 'vin', 'connecting MOS gates must not inherit VIN from source/body pins');
+assert.equal(
+  mosWireModule.nets?.find((net) => net.id === mergedLeftGate.net_id)?.aliases?.includes('gate_right'),
+  true,
+  'merged named nets should retain aliases for ERC and history',
+);
+const mosWireDocument = createSchematicDocument(mosWireModule, { autoLayout: false });
+assert.equal(
+  mosWireDocument.netLabels.some((label) => label.net === 'vin' && label.endpoint.pin_id === 'g'),
+  false,
+  'VIN power labels must not materialize on MOS gate pins',
+);
 
 console.log(JSON.stringify({
   ok: true,

@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["schema", "project_id", "name", "revision", "modules", "connections"],
   "properties": {
-    "schema": { "const": "actoviq.project.v1" },
+    "schema": { "enum": ["actoviq.project.v1", "actoviq.project.v2"] },
     "project_id": { "type": "string", "minLength": 1 },
     "name": { "type": "string", "minLength": 1 },
     "revision": { "type": "integer", "minimum": 0 },
@@ -81,6 +81,8 @@
         "direction": { "enum": ["input", "output", "bidirectional"] },
         "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
         "net": { "type": "string", "minLength": 1 },
+        "net_id": { "type": "string", "minLength": 1 },
+        "inferred": { "type": "boolean" },
         "network": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": true

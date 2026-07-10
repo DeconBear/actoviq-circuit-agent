@@ -104,7 +104,17 @@ export interface CircuitPort {
   direction: PortDirection;
   signal_type: SignalType;
   net: string;
+  net_id?: string;
+  inferred?: boolean;
   network?: string;
+}
+
+export interface CircuitNet {
+  id: string;
+  name: string;
+  kind?: SignalType | 'signal';
+  aliases?: string[];
+  conflict?: boolean;
 }
 
 export interface CircuitPosition {
@@ -134,7 +144,7 @@ export interface CircuitConnection {
 }
 
 export interface CircuitProject {
-  schema: 'actoviq.project.v1';
+  schema: 'actoviq.project.v1' | 'actoviq.project.v2';
   project_id: string;
   name: string;
   revision: number;
@@ -149,6 +159,7 @@ export interface CircuitPin {
   id: string;
   name: string;
   net: string;
+  net_id?: string;
   side?: 'left' | 'right' | 'top' | 'bottom';
   order?: number;
 }
@@ -172,6 +183,7 @@ export interface CircuitWire {
   from?: CircuitWireEndpoint;
   to?: CircuitWireEndpoint;
   net?: string;
+  net_id?: string;
   source?: 'stored' | 'net';
 }
 
@@ -187,10 +199,11 @@ export interface CircuitComponent {
 }
 
 export interface CircuitModule {
-  schema: 'actoviq.module.v1';
+  schema: 'actoviq.module.v1' | 'actoviq.module.v2';
   module_id: string;
   name: string;
   revision: number;
+  nets?: CircuitNet[];
   ports: CircuitPort[];
   components: CircuitComponent[];
   wires: CircuitWire[];

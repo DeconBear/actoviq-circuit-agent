@@ -575,6 +575,7 @@ export function CircuitWorkbench({
       module_id: moduleId,
       components: moduleData.components,
       ports: moduleData.ports,
+      nets: moduleData.nets ?? [],
       wires: moduleData.wires ?? [],
       annotations: moduleData.annotations ?? [],
     }]);

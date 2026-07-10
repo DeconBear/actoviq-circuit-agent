@@ -106,6 +106,7 @@ export function createSchematicDocument(
 ): SchematicDocument {
   const shouldAutoLayout = options.autoLayout !== false && (module.wires ?? []).length === 0;
   const next = shouldAutoLayout ? autoLayoutModule(cloneModule(module)) : cloneModule(module);
+  ensureStableNetModel(next);
   for (const component of next.components) {
     component.rotation = normalizeRotation(component.rotation);
     component.position = snapPoint(component.position);
@@ -2632,6 +2633,116 @@ export function endpointNet(module: CircuitModule, endpoint: CircuitWireEndpoint
   return null;
 }
 
+export function ensureStableNetModel(module: CircuitModule): CircuitModule {
+  const existing = new Map((module.nets ?? []).map((net) => [net.id, net]));
+  const byName = new Map<string, string>();
+  for (const net of existing.values()) {
+    byName.set(net.name, net.id);
+    for (const alias of net.aliases ?? []) byName.set(alias, net.id);
+  }
+  const usedIds = new Set(existing.keys());
+  const ensure = (name: string, currentId?: string): string => {
+    if (currentId && existing.has(currentId)) return currentId;
+    const known = byName.get(name);
+    if (known) return known;
+    const base = `net_${wireIdToken(name)}`;
+    let id = base;
+    let suffix = 2;
+    while (usedIds.has(id)) id = `${base}_${suffix++}`;
+    usedIds.add(id);
+    existing.set(id, { id, name, kind: name === '0' ? 'ground' : 'signal', aliases: [] });
+    byName.set(name, id);
+    return id;
+  };
+  for (const component of module.components) {
+    for (const pin of component.pins) pin.net_id = ensure(pin.net, pin.net_id);
+  }
+  for (const port of module.ports) {
+    port.net_id = ensure(port.net, port.net_id);
+    const net = existing.get(port.net_id);
+    if (net && (net.kind === 'signal' || !net.kind)) net.kind = port.signal_type;
+  }
+  for (const wire of module.wires ?? []) wire.net_id = ensure(wire.net ?? `n_${wire.id}`, wire.net_id);
+  module.nets = [...existing.values()];
+  module.schema = 'actoviq.module.v2';
+  return module;
+}
+
+function endpointNetId(module: CircuitModule, endpoint: CircuitWireEndpoint | undefined): string | null {
+  if (!endpoint) return null;
+  if (endpoint.component_id && endpoint.pin_id) {
+    return module.components
+      .find((entry) => entry.id === endpoint.component_id)
+      ?.pins.find((pin) => pin.id === endpoint.pin_id)?.net_id ?? null;
+  }
+  if (endpoint.port_id) return module.ports.find((port) => port.id === endpoint.port_id)?.net_id ?? null;
+  return null;
+}
+
+function syntheticNetName(name: string): boolean {
+  return /^(n|net|node)(?:[_-]|\d|$)/i.test(name);
+}
+
+function mergeStableNets(
+  module: CircuitModule,
+  leftId: string | null,
+  rightId: string | null,
+): { id: string; name: string } {
+  ensureStableNetModel(module);
+  const nets = module.nets ?? [];
+  const left = nets.find((net) => net.id === leftId);
+  const right = nets.find((net) => net.id === rightId);
+  if (!left && !right) {
+    const name = `n_${Date.now()}`;
+    const id = `net_${wireIdToken(name)}`;
+    nets.push({ id, name, kind: 'signal', aliases: [] });
+    return { id, name };
+  }
+  if (!left || !right || left.id === right.id) {
+    const only = left ?? right!;
+    return { id: only.id, name: only.name };
+  }
+  const score = (net: typeof left): number => {
+    if (!net) return -1;
+    if (net.name === '0' || net.kind === 'ground') return 100;
+    if (net.kind === 'power') return 80;
+    if (!syntheticNetName(net.name)) return 40;
+    return 10;
+  };
+  const primary = score(left) > score(right) || (score(left) === score(right) && left.name.localeCompare(right.name) <= 0)
+    ? left
+    : right;
+  const secondary = primary.id === left.id ? right : left;
+  const aliases = new Set([...(primary.aliases ?? []), secondary.name, ...(secondary.aliases ?? [])]);
+  aliases.delete(primary.name);
+  primary.aliases = [...aliases].sort();
+  primary.conflict = primary.conflict || secondary.conflict || (
+    !syntheticNetName(primary.name) && !syntheticNetName(secondary.name) && primary.name !== secondary.name
+  );
+  for (const component of module.components) {
+    for (const pin of component.pins) {
+      if (pin.net_id === secondary.id) {
+        pin.net_id = primary.id;
+        pin.net = primary.name;
+      }
+    }
+  }
+  for (const port of module.ports) {
+    if (port.net_id === secondary.id) {
+      port.net_id = primary.id;
+      port.net = primary.name;
+    }
+  }
+  for (const wire of module.wires ?? []) {
+    if (wire.net_id === secondary.id) {
+      wire.net_id = primary.id;
+      wire.net = primary.name;
+    }
+  }
+  module.nets = nets.filter((net) => net.id !== secondary.id);
+  return { id: primary.id, name: primary.name };
+}
+
 export function replaceNet(module: CircuitModule, oldNet: string, newNet: string) {
   if (oldNet === newNet) return;
   for (const component of module.components) {
@@ -2653,14 +2764,13 @@ export function chooseMergedNet(left: string | null, right: string | null): stri
 }
 
 export function addWire(module: CircuitModule, start: EndpointHit, end: EndpointHit) {
+  ensureStableNetModel(module);
   const startPoint = endpointDrawPoint(start);
   const endPoint = endpointDrawPoint(end);
   const leftNet = endpointNet(module, start);
   const rightNet = endpointNet(module, end);
-  const mergedNet = chooseMergedNet(leftNet, rightNet);
-  if (leftNet && rightNet) {
-    replaceNet(module, leftNet === mergedNet ? rightNet : leftNet, mergedNet);
-  }
+  const merged = mergeStableNets(module, endpointNetId(module, start), endpointNetId(module, end));
+  const mergedNet = merged.name || chooseMergedNet(leftNet, rightNet);
   const id = makeId('w', new Set((module.wires ?? []).map((wire) => wire.id)));
   module.wires = [
     ...(module.wires ?? []),
@@ -2670,6 +2780,7 @@ export function addWire(module: CircuitModule, start: EndpointHit, end: Endpoint
       from: stripEndpoint(startPoint, start),
       to: stripEndpoint(endPoint, end),
       net: mergedNet,
+      net_id: merged.id,
     },
   ];
 }
@@ -3720,8 +3831,7 @@ function shouldRepresentNetWithLocalLabel(module: CircuitModule, net: string | u
 function shouldLabelRailPin(component: CircuitComponent, pin: CircuitPin): boolean {
   if (component.type !== 'M') return true;
   const pinKey = `${pin.id} ${pin.name}`.toLowerCase();
-  if (!/body|bulk|\bb\b/.test(pinKey)) return true;
-  return false;
+  return /source|\bs\b/.test(pinKey);
 }
 
 function railLabelName(module: CircuitModule, net: string): string {
