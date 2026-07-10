@@ -300,12 +300,78 @@ export interface CircuitBuildState {
     status: string;
     netlist?: string;
   };
-  simulation: {
-    ok: boolean;
-    metrics?: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
-    stderr?: string;
-  } | null;
+  simulation: SimulationRun | null;
   report?: string;
+}
+
+export interface SimulationRunMetric {
+  name: string;
+  value: number | null;
+  unit: string;
+  pass?: boolean;
+  measurement_status?: 'measured' | 'failed';
+  specification_status?: 'not_evaluated' | 'pass' | 'fail';
+  source?: string;
+}
+
+export interface SimulationAnalysisSummary {
+  id: string;
+  type: 'op' | 'dc' | 'ac' | 'tran' | 'sparameter' | string;
+  directive: string;
+  status: 'completed' | 'failed' | 'configuration_error' | string;
+  execution_status: string;
+  measurement_status: string;
+  specification_status: string;
+  diagnostics?: string[];
+  metrics?: SimulationRunMetric[];
+  dataset?: {
+    path: string;
+    id: string;
+    plotname: string;
+    point_count: number;
+    x_name: string;
+    x_unit: string;
+    traces: Array<{ name: string; unit: string; complex: boolean }>;
+  } | null;
+}
+
+export interface SimulationRun {
+  schema?: string;
+  run_id?: string;
+  scope?: string;
+  source_revision?: number;
+  document_hash?: string;
+  ok: boolean;
+  execution_status?: string;
+  measurement_status?: string;
+  specification_status?: string;
+  analysis_count?: number;
+  analyses?: SimulationAnalysisSummary[];
+  metrics?: SimulationRunMetric[];
+  stderr?: string;
+  simulated_at?: string;
+}
+
+export interface SimulationDatasetTrace {
+  name: string;
+  unit: string;
+  real: number[];
+  imag?: number[];
+  magnitude?: number[];
+  db?: number[];
+  phase_deg?: number[];
+}
+
+export interface SimulationDataset {
+  schema: string;
+  id: string;
+  analysis_id: string;
+  analysis_type: string;
+  plotname: string;
+  point_count: number;
+  total_point_count?: number;
+  x: { name: string; unit: string; values: number[] };
+  traces: SimulationDatasetTrace[];
 }
 
 export interface DesignMemoryItem {

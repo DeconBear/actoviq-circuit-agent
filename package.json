@@ -46,6 +46,7 @@
     "test:e2e:electron": "npm run build:electron && node scripts/playwright-electron-smoke.mjs",
     "test:e2e:schematic-editor": "npm run build:electron && node scripts/playwright-schematic-editor-smoke.mjs",
     "test:schematic-quality": "node scripts/schematic-quality-regression.mjs",
+    "test:simulation-regression": "python scripts/simulation-regression.py",
     "typecheck": "npm run typecheck:src && npm run typecheck:electron && npm run typecheck:renderer",
     "typecheck:src": "tsc -p tsconfig.json --noEmit",
     "typecheck:electron": "tsc -p tsconfig.electron.json --noEmit",

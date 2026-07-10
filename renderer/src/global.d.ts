@@ -11,6 +11,8 @@ import type {
   CircuitTrashItem,
   DesignMemoryItem,
   SavedDesignMemorySummary,
+  SimulationDataset,
+  SimulationRun,
   WorkflowEvent,
   WorkspaceSummary,
 } from './types';
@@ -85,11 +87,7 @@ declare global {
         revision: number;
         netlist_path: string;
       }>;
-      simulateCircuitProject(projectId: string): Promise<{
-        ok: boolean;
-        metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
-        stderr?: string;
-      }>;
+      simulateCircuitProject(projectId: string): Promise<SimulationRun>;
       compileCircuitModule(projectId: string, moduleId: string): Promise<{
         ok: true;
         module_id: string;
@@ -116,13 +114,16 @@ declare global {
           error?: string;
         };
       }>;
-      simulateCircuitModule(projectId: string, moduleId: string): Promise<{
-        ok: boolean;
-        module_id: string;
-        metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
-        stderr?: string;
-      }>;
+      simulateCircuitModule(projectId: string, moduleId: string): Promise<SimulationRun & { module_id: string }>;
       readCircuitBuild(projectId: string): Promise<CircuitBuildState | null>;
+      readCircuitSimulationDataset(projectId: string, input: {
+        runId: string;
+        analysisId: string;
+        moduleId?: string;
+        maxPoints?: number;
+        xMin?: number;
+        xMax?: number;
+      }): Promise<SimulationDataset>;
       saveCircuitDesignTemplate(projectId: string): Promise<SavedDesignMemorySummary>;
       saveCircuitDesignFlow(projectId: string): Promise<SavedDesignMemorySummary>;
       listCircuitDesignMemory(): Promise<{ templates: DesignMemoryItem[]; flows: DesignMemoryItem[] }>;

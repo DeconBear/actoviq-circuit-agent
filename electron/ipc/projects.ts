@@ -880,6 +880,68 @@ async function listProjectHistory(projectId: string): Promise<ProjectHistoryEntr
   return history.sort((left, right) => right.revision - left.revision);
 }
 
+async function readSimulationDataset(
+  projectId: string,
+  input: {
+    runId: string;
+    analysisId: string;
+    moduleId?: string;
+    maxPoints?: number;
+    xMin?: number;
+    xMax?: number;
+  },
+): Promise<Record<string, unknown>> {
+  const projectRoot = await resolveProjectRoot(projectId);
+  if (!/^[A-Za-z0-9_.:-]+$/.test(input.runId) || !/^[A-Za-z0-9_.:-]+$/.test(input.analysisId)) {
+    throw new Error('Invalid simulation dataset identifier.');
+  }
+  const simulationRoot = input.moduleId
+    ? path.resolve(projectRoot, 'build', 'modules', assertModuleId(input.moduleId), 'simulation')
+    : path.resolve(projectRoot, 'build', 'system', 'simulation');
+  const result = await readJsonFile<{
+    run_id?: string;
+    analyses?: Array<{ id?: string; dataset?: { path?: string } | null }>;
+  }>(path.resolve(simulationRoot, 'result.json'));
+  if (result.run_id !== input.runId) throw new Error(`Simulation run is stale or unavailable: ${input.runId}`);
+  const analysis = result.analyses?.find((entry) => entry.id === input.analysisId);
+  const relativeDatasetPath = analysis?.dataset?.path;
+  if (!relativeDatasetPath) throw new Error(`Simulation analysis has no dataset: ${input.analysisId}`);
+  const datasetPath = path.resolve(simulationRoot, relativeDatasetPath);
+  const relative = path.relative(simulationRoot, datasetPath);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Simulation dataset path escapes its run.');
+  const dataset = await readJsonFile<{
+    x?: { values?: number[] };
+    traces?: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+  }>(datasetPath);
+  const xValues = dataset.x?.values ?? [];
+  let indices = xValues.map((_value, index) => index).filter((index) => (
+    (input.xMin === undefined || xValues[index]! >= input.xMin) &&
+    (input.xMax === undefined || xValues[index]! <= input.xMax)
+  ));
+  const maxPoints = Math.max(50, Math.min(5000, Math.floor(input.maxPoints ?? 1200)));
+  if (indices.length > maxPoints) {
+    const source = indices;
+    indices = Array.from({ length: maxPoints }, (_value, index) => (
+      source[Math.round(index * (source.length - 1) / (maxPoints - 1))]!
+    ));
+  }
+  const selectValues = (value: unknown): unknown => (
+    Array.isArray(value) && value.length === xValues.length
+      ? indices.map((index) => value[index])
+      : value
+  );
+  return {
+    ...dataset,
+    point_count: indices.length,
+    total_point_count: xValues.length,
+    x: dataset.x ? { ...dataset.x, values: indices.map((index) => xValues[index]) } : dataset.x,
+    traces: (dataset.traces ?? []).map((trace) => Object.fromEntries(
+      Object.entries(trace).map(([key, value]) => [key, selectValues(value)]),
+    )),
+  };
+}
+
 async function listProjects(): Promise<ProjectSummary[]> {
   await archiveLegacyPlaywrightProjects();
   const root = await projectsRoot();
@@ -1189,6 +1251,13 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       report: await exists(reportPath) ? await readFile(reportPath, 'utf8') : '',
     };
   });
+
+  ipcMain.handle(
+    'project:read-simulation-dataset',
+    async (_event, projectId: string, input: Parameters<typeof readSimulationDataset>[1]) => (
+      readSimulationDataset(projectId, input)
+    ),
+  );
 
   ipcMain.handle('project:save-design-template', async (_event, projectId: string) => {
     return saveDesignTemplate(projectId);

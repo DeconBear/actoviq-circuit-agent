@@ -255,6 +255,17 @@ const electronAPI = {
     return ipcRenderer.invoke('project:read-build', projectId);
   },
 
+  readCircuitSimulationDataset(projectId: string, input: {
+    runId: string;
+    analysisId: string;
+    moduleId?: string;
+    maxPoints?: number;
+    xMin?: number;
+    xMax?: number;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:read-simulation-dataset', projectId, input);
+  },
+
   saveCircuitDesignTemplate(projectId: string): Promise<unknown> {
     return ipcRenderer.invoke('project:save-design-template', projectId);
   },

@@ -1,25 +1,40 @@
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Scatter,
+  ScatterChart,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from 'recharts';
 import { useAppStore, type SimulationMetric } from '../../store/appStore';
+import type {
+  SimulationAnalysisSummary,
+  SimulationDataset,
+  SimulationDatasetTrace,
+  SimulationRun,
+  SimulationRunMetric,
+} from '../../types';
 
-interface ProjectMetric {
-  name: string;
-  value: number | null;
-  unit: string;
-  pass: boolean;
-}
+type DiagramMode = 'cartesian' | 'bode' | 'polar' | 'smith' | 'table';
+
+const traceColors = ['#176b4d', '#b43b48', '#2368a2', '#7a4f9a', '#9a6a15', '#237d82'];
 
 export function SimulationTab() {
-  const legacyData = useAppStore((s) => s.simulationData);
-  const projectId = useAppStore((s) => s.activeProjectId);
-  const bundle = useAppStore((s) => s.circuitProject);
-  const build = useAppStore((s) => s.circuitBuild);
+  const legacyData = useAppStore((state) => state.simulationData);
+  const projectId = useAppStore((state) => state.activeProjectId);
+  const bundle = useAppStore((state) => state.circuitProject);
+  const build = useAppStore((state) => state.circuitBuild);
 
   if (projectId && bundle) {
     return (
       <ProjectSimulation
+        projectId={projectId}
+        projectRevision={bundle.project.revision}
         simulation={build?.simulation ?? null}
         status={build?.manifest?.status}
       />
@@ -28,262 +43,410 @@ export function SimulationTab() {
   return <LegacySimulation data={legacyData} />;
 }
 
+function defaultDiagram(analysis?: SimulationAnalysisSummary): DiagramMode {
+  if (analysis?.type === 'ac') return 'bode';
+  if (analysis?.type === 'sparameter') return 'smith';
+  if (analysis?.type === 'op') return 'table';
+  return 'cartesian';
+}
+
 function ProjectSimulation({
+  projectId,
+  projectRevision,
   simulation,
   status,
 }: {
-  simulation: { ok: boolean; metrics?: ProjectMetric[]; stderr?: string } | null;
+  projectId: string;
+  projectRevision: number;
+  simulation: SimulationRun | null;
   status?: string;
 }) {
-  const metrics = simulation?.metrics ?? [];
-  if (!simulation || metrics.length === 0) {
+  const analyses = simulation?.analyses ?? [];
+  const [analysisId, setAnalysisId] = useState('');
+  const [dataset, setDataset] = useState<SimulationDataset | null>(null);
+  const [datasetLoading, setDatasetLoading] = useState(false);
+  const [datasetError, setDatasetError] = useState('');
+  const [selectedTraces, setSelectedTraces] = useState<string[]>([]);
+  const [diagram, setDiagram] = useState<DiagramMode>('cartesian');
+
+  const selectedAnalysis = analyses.find((analysis) => analysis.id === analysisId) ?? analyses[0];
+
+  useEffect(() => {
+    const next = analyses[0];
+    setAnalysisId(next?.id ?? '');
+    setDiagram(defaultDiagram(next));
+  }, [simulation?.run_id]);
+
+  useEffect(() => {
+    if (!selectedAnalysis) return;
+    setDiagram(defaultDiagram(selectedAnalysis));
+  }, [selectedAnalysis?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDataset(null);
+    setDatasetError('');
+    if (!simulation?.run_id || !selectedAnalysis?.dataset) return () => { cancelled = true; };
+    setDatasetLoading(true);
+    void window.electronAPI.readCircuitSimulationDataset(projectId, {
+      runId: simulation.run_id,
+      analysisId: selectedAnalysis.id,
+      maxPoints: 1400,
+    }).then((nextDataset) => {
+      if (cancelled) return;
+      setDataset(nextDataset);
+      setSelectedTraces(nextDataset.traces.slice(0, 4).map((trace) => trace.name));
+    }).catch((error) => {
+      if (!cancelled) setDatasetError(error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      if (!cancelled) setDatasetLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [projectId, selectedAnalysis?.dataset, selectedAnalysis?.id, simulation?.run_id]);
+
+  if (!simulation) {
     return (
       <div style={styles.empty}>
-        <div style={styles.emptyIcon}>📊</div>
-        <div style={styles.emptyTitle}>No system simulation yet</div>
-        <div style={styles.emptyDesc}>
-          Click <strong>Simulate system</strong> in the Design tab to run ngspice and
-          show the AC metrics here.
-          {status ? <><br />Current build status: {status}.</> : null}
-        </div>
+        <div style={styles.emptyTitle}>No simulation run</div>
+        <div style={styles.emptyMeta}>{status ? `Build status: ${status}` : 'Project is not compiled'}</div>
       </div>
     );
   }
 
-  const passCount = metrics.filter((m) => m.pass).length;
-  const overallPass = simulation.ok && passCount === metrics.length;
-  const chartData = metrics
-    .filter((m): m is ProjectMetric & { value: number } => Number.isFinite(m.value))
-    .map((m) => ({ name: m.name, value: m.value, pass: m.pass }));
+  const stale = simulation.source_revision !== undefined && simulation.source_revision !== projectRevision;
+  const metrics = selectedAnalysis?.metrics ?? simulation.metrics ?? [];
+  const modes: DiagramMode[] = ['cartesian', 'bode', 'polar', 'smith', 'table'];
 
   return (
-    <div style={styles.container} data-testid="project-simulation">
-      <div style={styles.summary}>
-        <div style={{
-          ...styles.summaryBadge,
-          backgroundColor: overallPass ? '#edf8f1' : '#fff0f2',
-          borderColor: overallPass ? '#68ad7e' : '#d58b95',
-          color: overallPass ? '#267346' : '#a32d38',
-        }}>
-          {overallPass ? 'ngspice PASSED' : simulation.ok ? `${passCount}/${metrics.length} PASS` : 'ngspice FAILED'}
+    <div style={styles.workbench} data-testid="project-simulation">
+      <div style={styles.runHeader}>
+        <div style={styles.runIdentity}>
+          <strong>{simulation.run_id ?? 'Legacy run'}</strong>
+          <span>revision {simulation.source_revision ?? 'unknown'}</span>
+          {stale ? <span style={styles.stale}>stale</span> : null}
+        </div>
+        <div style={styles.statusGroup}>
+          <Status label="Run" value={simulation.execution_status ?? (simulation.ok ? 'success' : 'failed')} />
+          <Status label="Measurements" value={simulation.measurement_status ?? 'unknown'} />
+          <Status label="Specifications" value={simulation.specification_status ?? 'not_evaluated'} />
         </div>
       </div>
 
+      <div style={styles.analysisBar}>
+        <label style={styles.fieldLabel}>
+          Analysis
+          <select
+            value={selectedAnalysis?.id ?? ''}
+            onChange={(event) => setAnalysisId(event.target.value)}
+            style={styles.select}
+            data-testid="simulation-analysis-select"
+          >
+            {analyses.map((analysis) => (
+              <option key={analysis.id} value={analysis.id}>
+                {analysis.id} | {analysis.directive}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div style={styles.segmented} aria-label="Simulation diagram">
+          {modes.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              style={{ ...styles.segment, ...(diagram === mode ? styles.segmentActive : {}) }}
+              onClick={() => setDiagram(mode)}
+              disabled={!dataset || ((mode === 'polar' || mode === 'smith') && !dataset.traces.some((trace) => trace.imag))}
+              data-testid={`simulation-diagram-${mode}`}
+            >
+              {mode === 'smith' ? 'Smith' : mode[0]!.toUpperCase() + mode.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={styles.content}>
+        <aside style={styles.tracePanel}>
+          <div style={styles.panelTitle}>Traces</div>
+          {dataset?.traces.map((trace, index) => (
+            <label key={trace.name} style={styles.traceChoice}>
+              <input
+                type="checkbox"
+                checked={selectedTraces.includes(trace.name)}
+                onChange={(event) => setSelectedTraces((current) => (
+                  event.target.checked
+                    ? [...new Set([...current, trace.name])]
+                    : current.filter((name) => name !== trace.name)
+                ))}
+              />
+              <span style={{ ...styles.traceSwatch, background: traceColors[index % traceColors.length] }} />
+              <span style={styles.traceName}>{trace.name}</span>
+              <span style={styles.traceUnit}>{trace.unit}</span>
+            </label>
+          ))}
+          {!dataset && !datasetLoading ? <div style={styles.panelEmpty}>No vectors</div> : null}
+        </aside>
+
+        <main style={styles.plotPanel} data-testid="simulation-dataset-view">
+          {datasetLoading ? <div style={styles.plotEmpty}>Loading vectors...</div> : null}
+          {datasetError ? <div style={styles.plotError}>{datasetError}</div> : null}
+          {!datasetLoading && !datasetError && dataset ? (
+            <Diagram dataset={dataset} selectedTraces={selectedTraces} mode={diagram} />
+          ) : null}
+          {!datasetLoading && !datasetError && !dataset ? (
+            <div style={styles.plotEmpty}>{selectedAnalysis?.diagnostics?.join('\n') || 'Analysis produced no dataset.'}</div>
+          ) : null}
+        </main>
+      </div>
+
+      <MetricTable metrics={metrics} />
+    </div>
+  );
+}
+
+function Status({ label, value }: { label: string; value: string }) {
+  const failed = /fail|error|partial|stale/i.test(value);
+  return (
+    <div style={styles.statusItem}>
+      <span>{label}</span>
+      <strong style={{ color: failed ? '#a32d38' : value === 'not_evaluated' ? '#68727e' : '#267346' }}>
+        {value.replaceAll('_', ' ')}
+      </strong>
+    </div>
+  );
+}
+
+function selectedDatasetTraces(dataset: SimulationDataset, names: string[]): SimulationDatasetTrace[] {
+  return dataset.traces.filter((trace) => names.includes(trace.name));
+}
+
+function Diagram({
+  dataset,
+  selectedTraces,
+  mode,
+}: {
+  dataset: SimulationDataset;
+  selectedTraces: string[];
+  mode: DiagramMode;
+}) {
+  const traces = selectedDatasetTraces(dataset, selectedTraces);
+  const cartesianData = useMemo(() => dataset.x.values.map((x, index) => Object.fromEntries([
+    ['x', x],
+    ...traces.map((trace) => [trace.name, trace.real[index]]),
+  ])), [dataset, traces]);
+  const bodeData = useMemo(() => dataset.x.values.map((x, index) => Object.fromEntries([
+    ['x', x],
+    ...traces.flatMap((trace) => [
+      [`${trace.name}:db`, trace.db?.[index]],
+      [`${trace.name}:phase`, trace.phase_deg?.[index]],
+    ]),
+  ])), [dataset, traces]);
+
+  if (mode === 'table') return <DatasetTable dataset={dataset} traces={traces} />;
+  if ((mode === 'polar' || mode === 'smith') && traces.length > 0) {
+    return <ComplexDiagram traces={traces} smith={mode === 'smith'} />;
+  }
+  if (mode === 'bode') {
+    return (
+      <div style={styles.bodeStack} data-testid="simulation-bode-chart">
+        <ResponsiveContainer width="100%" height="52%">
+          <LineChart data={bodeData} margin={{ top: 12, right: 20, left: 8, bottom: 0 }}>
+            <CartesianGrid stroke="#e1e5e9" />
+            <XAxis dataKey="x" type="number" scale="log" domain={['auto', 'auto']} hide />
+            <YAxis tick={{ fontSize: 10 }} label={{ value: 'dB', angle: -90, position: 'insideLeft' }} />
+            <Tooltip contentStyle={styles.tooltip} />
+            <Legend />
+            {traces.filter((trace) => trace.db).map((trace, index) => (
+              <Line key={trace.name} dataKey={`${trace.name}:db`} name={`${trace.name} dB`} stroke={traceColors[index % traceColors.length]} dot={false} isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+        <ResponsiveContainer width="100%" height="48%">
+          <LineChart data={bodeData} margin={{ top: 0, right: 20, left: 8, bottom: 12 }}>
+            <CartesianGrid stroke="#e1e5e9" />
+            <XAxis dataKey="x" type="number" scale="log" domain={['auto', 'auto']} tick={{ fontSize: 10 }} />
+            <YAxis tick={{ fontSize: 10 }} label={{ value: 'deg', angle: -90, position: 'insideLeft' }} />
+            <Tooltip contentStyle={styles.tooltip} />
+            {traces.filter((trace) => trace.phase_deg).map((trace, index) => (
+              <Line key={trace.name} dataKey={`${trace.name}:phase`} name={`${trace.name} phase`} stroke={traceColors[index % traceColors.length]} dot={false} isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+  return (
+    <div style={styles.chart} data-testid="simulation-cartesian-chart">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={cartesianData} margin={{ top: 14, right: 22, left: 8, bottom: 14 }}>
+          <CartesianGrid stroke="#e1e5e9" />
+          <XAxis
+            dataKey="x"
+            type="number"
+            scale={dataset.analysis_type === 'ac' ? 'log' : 'auto'}
+            domain={['auto', 'auto']}
+            tick={{ fontSize: 10 }}
+            label={{ value: `${dataset.x.name} (${dataset.x.unit})`, position: 'insideBottom', offset: -8 }}
+          />
+          <YAxis tick={{ fontSize: 10 }} />
+          <Tooltip contentStyle={styles.tooltip} />
+          <Legend />
+          {traces.map((trace, index) => (
+            <Line key={trace.name} dataKey={trace.name} stroke={traceColors[index % traceColors.length]} dot={false} isAnimationActive={false} />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function ComplexDiagram({ traces, smith }: { traces: SimulationDatasetTrace[]; smith: boolean }) {
+  const unitCircle = Array.from({ length: 73 }, (_value, index) => {
+    const angle = index * Math.PI / 36;
+    return { real: Math.cos(angle), imag: Math.sin(angle) };
+  });
+  return (
+    <div style={styles.chart} data-testid={smith ? 'simulation-smith-chart' : 'simulation-polar-chart'}>
+      <ResponsiveContainer width="100%" height="100%">
+        <ScatterChart margin={{ top: 16, right: 24, bottom: 20, left: 24 }}>
+          <CartesianGrid stroke="#e1e5e9" />
+          <XAxis type="number" dataKey="real" domain={smith ? [-1.1, 1.1] : ['auto', 'auto']} tick={{ fontSize: 10 }} />
+          <YAxis type="number" dataKey="imag" domain={smith ? [-1.1, 1.1] : ['auto', 'auto']} tick={{ fontSize: 10 }} />
+          <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={styles.tooltip} />
+          {smith ? <Scatter data={unitCircle} fill="none" stroke="#9ba4ae" line shape={() => null} isAnimationActive={false} /> : null}
+          {traces.filter((trace) => trace.imag).map((trace, index) => (
+            <Scatter
+              key={trace.name}
+              name={trace.name}
+              data={trace.real.map((real, point) => ({ real, imag: trace.imag?.[point] ?? 0 }))}
+              fill={traceColors[index % traceColors.length]}
+              line
+              isAnimationActive={false}
+            />
+          ))}
+          <Legend />
+        </ScatterChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function DatasetTable({ dataset, traces }: { dataset: SimulationDataset; traces: SimulationDatasetTrace[] }) {
+  return (
+    <div style={styles.datasetTableWrap} data-testid="simulation-dataset-table">
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>{dataset.x.name}</th>
+            {traces.map((trace) => <th key={trace.name} style={styles.th}>{trace.name}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {dataset.x.values.slice(0, 300).map((x, index) => (
+            <tr key={`${x}-${index}`} style={styles.tr}>
+              <td style={styles.tdMono}>{formatNumber(x)}</td>
+              {traces.map((trace) => <td key={trace.name} style={styles.tdMono}>{formatNumber(trace.real[index])}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MetricTable({ metrics }: { metrics: SimulationRunMetric[] }) {
+  if (metrics.length === 0) return null;
+  return (
+    <div style={styles.metrics}>
+      <div style={styles.panelTitle}>Measurements</div>
       <table style={styles.table}>
         <thead>
           <tr>
             <th style={styles.th}>Metric</th>
             <th style={styles.th}>Value</th>
-            <th style={styles.th}>Status</th>
+            <th style={styles.th}>Measurement</th>
+            <th style={styles.th}>Specification</th>
           </tr>
         </thead>
         <tbody>
-          {metrics.map((row) => (
-            <tr key={row.name} style={styles.tr}>
-              <td style={styles.td}>{row.name}</td>
-              <td style={{ ...styles.td, ...styles.tdMono }}>
-                {typeof row.value === 'number' ? row.value.toFixed(4) : '—'} {row.unit}
-              </td>
-              <td style={styles.td}>
-                <span style={{
-                  ...styles.badge,
-                  color: row.pass ? '#267346' : '#a32d38',
-                  backgroundColor: row.pass ? '#edf8f1' : '#fff0f2',
-                }}>
-                  {row.pass ? 'PASS' : 'FAIL'}
-                </span>
-              </td>
+          {metrics.map((metric, index) => (
+            <tr key={`${metric.name}-${index}`} style={styles.tr}>
+              <td style={styles.td}>{metric.name}</td>
+              <td style={styles.tdMono}>{formatNumber(metric.value)} {metric.unit}</td>
+              <td style={styles.td}>{metric.measurement_status ?? (metric.pass ? 'measured' : 'failed')}</td>
+              <td style={styles.td}>{metric.specification_status ?? 'not evaluated'}</td>
             </tr>
           ))}
         </tbody>
       </table>
-
-      {chartData.length > 0 && (
-        <div style={styles.chartSection}>
-          <div style={styles.chartTitle}>AC measurements</div>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#dfe3e8" />
-              <XAxis dataKey="name" stroke="#7b8490" tick={{ fontSize: 11 }} />
-              <YAxis
-                stroke="#7b8490"
-                tick={{ fontSize: 11 }}
-                domain={[
-                  (min: number) => Math.floor(Math.min(0, min) - 2),
-                  (max: number) => Math.ceil(Math.max(0, max) + 2),
-                ]}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#ffffff',
-                  border: '1px solid #dfe3e8',
-                  borderRadius: 4,
-                  color: '#303741',
-                }}
-              />
-              <Bar dataKey="value" name="Value" isAnimationActive={false} minPointSize={2}>
-                {chartData.map((entry) => (
-                  <Cell key={entry.name} fill={entry.pass ? '#267346' : '#c73b4a'} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {simulation.stderr ? <pre style={styles.stderr}>{simulation.stderr}</pre> : null}
     </div>
   );
+}
+
+function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
+  if (value === 0) return '0';
+  if (Math.abs(value) >= 1e4 || Math.abs(value) < 1e-3) return value.toExponential(4);
+  return value.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 function LegacySimulation({ data }: { data: SimulationMetric[] | null }) {
-  const chartData = (!data || data.length === 0) ? null : data.map((m, i) => ({
-    name: m.name,
-    measured: parseFloat(m.measured) || 0,
-    target: parseFloat(m.target) || parseFloat(m.target.replace(/[^0-9.-]/g, '')) || 0,
-    index: i,
-  }));
-
   if (!data || data.length === 0) {
     return (
       <div style={styles.empty}>
-        <div style={styles.emptyIcon}>📊</div>
-        <div style={styles.emptyTitle}>No Simulation Data</div>
-        <div style={styles.emptyDesc}>
-          Run the simulation stage to see results.<br />
-          Metrics and comparison charts will appear here.
-        </div>
+        <div style={styles.emptyTitle}>No simulation data</div>
       </div>
     );
   }
-
-  const passCount = data.filter((m) => m.pass).length;
-  const overallPass = passCount === data.length;
-
   return (
-    <div style={styles.container}>
-      <div style={styles.summary}>
-        <div style={{
-          ...styles.summaryBadge,
-          backgroundColor: overallPass ? '#edf8f1' : '#fff0f2',
-          borderColor: overallPass ? '#68ad7e' : '#d58b95',
-          color: overallPass ? '#267346' : '#a32d38',
-        }}>
-          {overallPass ? 'ALL PASS' : `${passCount}/${data.length} PASS`}
-        </div>
-      </div>
-
+    <div style={styles.legacy}>
       <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.th}>Metric</th>
-            <th style={styles.th}>Target</th>
-            <th style={styles.th}>Measured</th>
-            <th style={styles.th}>Status</th>
+        <thead><tr><th style={styles.th}>Metric</th><th style={styles.th}>Target</th><th style={styles.th}>Measured</th><th style={styles.th}>Status</th></tr></thead>
+        <tbody>{data.map((metric) => (
+          <tr key={metric.name} style={styles.tr}>
+            <td style={styles.td}>{metric.name}</td><td style={styles.td}>{metric.target}</td><td style={styles.td}>{metric.measured}</td><td style={styles.td}>{metric.pass ? 'pass' : 'fail'}</td>
           </tr>
-        </thead>
-        <tbody>
-          {data.map((row) => (
-            <tr key={row.name} style={styles.tr}>
-              <td style={styles.td}>{row.name}</td>
-              <td style={{ ...styles.td, ...styles.tdMono }}>{row.target}</td>
-              <td style={{ ...styles.td, ...styles.tdMono }}>{row.measured}</td>
-              <td style={styles.td}>
-                <span style={{
-                  ...styles.badge,
-                  color: row.pass ? '#267346' : '#a32d38',
-                  backgroundColor: row.pass ? '#edf8f1' : '#fff0f2',
-                }}>
-                  {row.pass ? 'PASS' : 'FAIL'}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
+        ))}</tbody>
       </table>
-
-      {chartData && chartData.length > 1 && (
-        <div style={styles.chartSection}>
-          <div style={styles.chartTitle}>Metrics Comparison</div>
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#dfe3e8" />
-              <XAxis dataKey="name" stroke="#7b8490" tick={{ fontSize: 11 }} />
-              <YAxis stroke="#7b8490" tick={{ fontSize: 11 }} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#ffffff',
-                  border: '1px solid #dfe3e8',
-                  borderRadius: 4,
-                  color: '#303741',
-                }}
-              />
-              <Legend />
-              <Line type="monotone" dataKey="target" stroke="#c73b4a" name="Target" strokeWidth={2} dot={{ r: 4 }} />
-              <Line type="monotone" dataKey="measured" stroke="#267346" name="Measured" strokeWidth={2} dot={{ r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  container: { padding: '20px 24px', overflowY: 'auto', height: '100%', background: '#f7f8fa', color: '#303741' },
-  summary: { marginBottom: 16 },
-  summaryBadge: {
-    display: 'inline-block',
-    padding: '8px 18px',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderStyle: 'solid',
-    fontWeight: 700,
-    fontSize: 14,
-  },
-  table: { width: '100%', borderCollapse: 'collapse', marginBottom: 24 },
-  th: {
-    textAlign: 'left',
-    padding: '8px 12px',
-    borderBottom: '2px solid #c8cfd7',
-    color: '#69727d',
-    fontSize: 12,
-    fontWeight: 600,
-    textTransform: 'uppercase',
-  },
-  tr: { borderBottom: '1px solid #e5e8ec' },
-  td: { padding: '8px 12px', fontSize: 13, color: '#303741' },
-  tdMono: { fontFamily: "'Cascadia Code', 'Consolas', monospace", fontSize: 12 },
-  badge: {
-    padding: '2px 10px',
-    borderRadius: 4,
-    fontSize: 11,
-    fontWeight: 700,
-  },
-  chartSection: { marginTop: 16 },
-  chartTitle: { fontSize: 13, fontWeight: 600, color: '#59636e', marginBottom: 12 },
-  stderr: {
-    marginTop: 16,
-    padding: 12,
-    background: '#fff0f2',
-    border: '1px solid #e9b7b7',
-    borderRadius: 6,
-    color: '#9c2525',
-    fontSize: 11,
-    whiteSpace: 'pre-wrap',
-    overflowX: 'auto',
-  },
-  empty: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: '100%',
-    color: '#8a929d',
-    gap: 8,
-  },
-  emptyIcon: { fontSize: 40, opacity: 0.4 },
-  emptyTitle: { fontSize: 16, fontWeight: 600, color: '#303741' },
-  emptyDesc: { fontSize: 13, color: '#7b8490', textAlign: 'center', lineHeight: 1.6 },
+const styles: Record<string, CSSProperties> = {
+  workbench: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: '#f5f6f8', color: '#2d3540' },
+  runHeader: { minHeight: 54, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '8px 14px', borderBottom: '1px solid #d9dee4', background: '#fff' },
+  runIdentity: { minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11, color: '#737d88' },
+  stale: { color: '#a32d38', fontWeight: 700 },
+  statusGroup: { display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  statusItem: { display: 'flex', gap: 6, fontSize: 10, color: '#7a838e', textTransform: 'capitalize' },
+  analysisBar: { minHeight: 50, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, padding: '7px 14px', borderBottom: '1px solid #d9dee4', background: '#fff' },
+  fieldLabel: { minWidth: 280, display: 'flex', alignItems: 'center', gap: 8, color: '#65707c', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' },
+  select: { minWidth: 220, maxWidth: 460, height: 30, flex: 1, border: '1px solid #c6cdd5', borderRadius: 4, background: '#fff', color: '#303a46', fontSize: 11, padding: '0 7px' },
+  segmented: { height: 30, display: 'flex', border: '1px solid #c6cdd5', borderRadius: 4, overflow: 'hidden', background: '#fff' },
+  segment: { minWidth: 66, border: 0, borderRight: '1px solid #d9dee4', background: '#fff', color: '#596572', cursor: 'pointer', fontSize: 10, padding: '0 8px' },
+  segmentActive: { background: '#e8f1fb', color: '#1f5f96', fontWeight: 700 },
+  content: { minHeight: 280, flex: 1, display: 'grid', gridTemplateColumns: '220px minmax(0, 1fr)', borderBottom: '1px solid #d9dee4' },
+  tracePanel: { minWidth: 0, overflowY: 'auto', padding: '10px 8px', borderRight: '1px solid #d9dee4', background: '#fafbfc' },
+  panelTitle: { padding: '0 6px 7px', color: '#68727d', fontSize: 10, fontWeight: 750, textTransform: 'uppercase' },
+  traceChoice: { minHeight: 28, display: 'grid', gridTemplateColumns: '16px 9px minmax(0, 1fr) auto', alignItems: 'center', gap: 6, padding: '2px 6px', color: '#36414d', fontSize: 10 },
+  traceSwatch: { width: 8, height: 8 },
+  traceName: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'Consolas, monospace' },
+  traceUnit: { color: '#8a929c' },
+  panelEmpty: { padding: 8, color: '#8a929c', fontSize: 10 },
+  plotPanel: { minWidth: 0, minHeight: 0, position: 'relative', background: '#fff' },
+  plotEmpty: { height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, color: '#7c8691', fontSize: 12, whiteSpace: 'pre-wrap', textAlign: 'center' },
+  plotError: { margin: 16, padding: 10, border: '1px solid #e2b6bc', background: '#fff0f2', color: '#9b303c', fontSize: 11 },
+  chart: { width: '100%', height: '100%', minHeight: 280 },
+  bodeStack: { width: '100%', height: '100%', minHeight: 300, padding: '0 4px 4px', boxSizing: 'border-box' },
+  tooltip: { border: '1px solid #cbd2d9', borderRadius: 4, background: '#fff', color: '#2d3540', fontSize: 10 },
+  datasetTableWrap: { height: '100%', overflow: 'auto' },
+  metrics: { maxHeight: 210, overflowY: 'auto', padding: '9px 14px 14px', background: '#fff' },
+  table: { width: '100%', borderCollapse: 'collapse' },
+  th: { position: 'sticky', top: 0, zIndex: 1, padding: '6px 9px', borderBottom: '1px solid #cbd2d9', background: '#f5f6f8', color: '#69737f', fontSize: 10, fontWeight: 700, textAlign: 'left', textTransform: 'uppercase' },
+  tr: { borderBottom: '1px solid #e6e9ed' },
+  td: { padding: '6px 9px', color: '#39434e', fontSize: 11 },
+  tdMono: { padding: '6px 9px', color: '#39434e', fontFamily: 'Consolas, monospace', fontSize: 10 },
+  empty: { height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 5, color: '#7d8791' },
+  emptyTitle: { color: '#38424d', fontSize: 15, fontWeight: 650 },
+  emptyMeta: { fontSize: 11 },
+  legacy: { height: '100%', overflow: 'auto', padding: 16, background: '#fff' },
 };

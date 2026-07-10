@@ -20,6 +20,7 @@ import type {
   CircuitModuleRef,
   CircuitPort,
   SchematicOverrides,
+  SimulationRun,
 } from '../../types';
 import { SchematicEditor } from './SchematicEditor';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
@@ -352,11 +353,7 @@ export function CircuitWorkbench({
   >({});
   const [modulePreviewBusy, setModulePreviewBusy] = useState<Record<string, boolean>>({});
   const modulePreviewBusyRef = useRef<Set<string>>(new Set());
-  const [moduleSimulation, setModuleSimulation] = useState<{
-    ok: boolean;
-    module_id: string;
-    metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
-  } | null>(null);
+  const [moduleSimulation, setModuleSimulation] = useState<(SimulationRun & { module_id: string }) | null>(null);
   const [designMemory, setDesignMemory] = useState<{
     templates: DesignMemoryItem[];
     flows: DesignMemoryItem[];
@@ -2413,15 +2410,8 @@ function ModuleInspector({
   copied: boolean;
   onOpen: () => void;
   onSimulate: () => void;
-  moduleSimulation: {
-    ok: boolean;
-    module_id: string;
-    metrics: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
-  } | null;
-  systemSimulation: {
-    ok: boolean;
-    metrics?: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
-  } | null;
+  moduleSimulation: (SimulationRun & { module_id: string }) | null;
+  systemSimulation: SimulationRun | null;
   designMemory: { templates: DesignMemoryItem[]; flows: DesignMemoryItem[] };
   designMemoryLoading: boolean;
   onRefreshDesignMemory: () => void;
@@ -2634,7 +2624,7 @@ function SimulationMetrics({
   title: string;
   data: {
     ok: boolean;
-    metrics?: Array<{ name: string; value: number | null; unit: string; pass: boolean }>;
+    metrics?: Array<{ name: string; value: number | null; unit: string; pass?: boolean }>;
   };
 }) {
   return (

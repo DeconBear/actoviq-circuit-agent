@@ -1030,6 +1030,12 @@ try {
   await clickApplicationMenuPath(electronApp, ['Design', 'Run Simulation']);
   await page.getByTestId('project-simulation').waitFor({ timeout: 30_000 });
   await page.getByRole('cell', { name: 'output_1khz_db', exact: true }).waitFor({ timeout: 30_000 });
+  await page.getByTestId('simulation-analysis-select').selectOption('ac-1');
+  await page.getByTestId('simulation-bode-chart').waitFor({ timeout: 30_000 });
+  await page.getByTestId('simulation-diagram-table').click();
+  await page.getByTestId('simulation-dataset-table').waitFor();
+  assert.ok(await page.getByTestId('simulation-dataset-table').getByRole('row').count() > 10);
+  await page.getByText('not evaluated', { exact: true }).first().waitFor();
   await page.getByRole('button', { name: 'Design', exact: true }).click();
   await waitForWorkbenchProject(page, projectId);
 

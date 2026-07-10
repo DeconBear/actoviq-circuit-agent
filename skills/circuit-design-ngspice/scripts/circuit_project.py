@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1601,21 +1603,67 @@ def build_report_markdown(
     if simulation is None:
         lines.append("_Not simulated yet. Run \"Simulate system\" to populate AC metrics._")
     else:
-        status = "passed" if simulation.get("ok") else "failed"
-        lines.append(
-            f"ngspice **{status}** · {simulation.get('ngspice', '')} · {simulation.get('simulated_at', '')}"
+        execution_status = simulation.get("execution_status") or (
+            "success" if simulation.get("ok") else "failed"
         )
+        measurement_status = simulation.get("measurement_status", "unknown")
+        specification_status = simulation.get("specification_status", "not_evaluated")
+        lines.extend([
+            f"- Run: `{simulation.get('run_id', 'legacy')}`",
+            f"- Source revision: `{simulation.get('source_revision', project.get('revision', 'unknown'))}`",
+            f"- Document hash: `{simulation.get('document_hash', 'unknown')}`",
+            f"- Execution: **{execution_status}**",
+            f"- Measurements: **{measurement_status}**",
+            f"- Specifications: **{specification_status}**",
+            f"- Backend: `{simulation.get('ngspice', '')}`",
+            f"- Simulated at: {simulation.get('simulated_at', '')}",
+        ])
         lines.append("")
+        analyses = simulation.get("analyses") or []
+        if analyses:
+            lines.extend([
+                "### Analyses",
+                "",
+                "| Analysis | Type | Execution | Measurements | Dataset |",
+                "| --- | --- | --- | --- | --- |",
+            ])
+            for analysis in analyses:
+                dataset = analysis.get("dataset") or {}
+                dataset_summary = "not produced"
+                if dataset:
+                    dataset_summary = (
+                        f"{dataset.get('point_count', 0)} points / "
+                        f"{len(dataset.get('traces') or [])} traces"
+                    )
+                lines.append(
+                    f"| {analysis.get('id', '')} | {analysis.get('type', '')} | "
+                    f"{analysis.get('execution_status', analysis.get('status', 'unknown'))} | "
+                    f"{analysis.get('measurement_status', 'unknown')} | {dataset_summary} |"
+                )
+                for diagnostic in analysis.get("diagnostics") or []:
+                    lines.append(f"- `{analysis.get('id', '')}`: {diagnostic}")
+            lines.append("")
         metrics = simulation.get("metrics") or []
         if metrics:
-            lines.append("| Metric | Value | Status |")
-            lines.append("| --- | --- | --- |")
+            lines.extend([
+                "### Metrics",
+                "",
+                "| Metric | Value | Measurement | Specification |",
+                "| --- | --- | --- | --- |",
+            ])
             for metric in metrics:
                 unit = metric.get("unit", "")
-                verdict = "PASS" if metric.get("pass") else "FAIL"
                 value = metric.get("value")
                 shown = f"{value:.4g} {unit}".strip() if isinstance(value, (int, float)) else "failed"
-                lines.append(f"| {metric['name']} | {shown} | {verdict} |")
+                measured = metric.get("measurement_status")
+                if measured is None:
+                    measured = "measured" if value is not None else "failed"
+                specification = metric.get("specification_status")
+                if specification is None:
+                    specification = "passed" if metric.get("pass") else "not_evaluated"
+                lines.append(
+                    f"| {metric['name']} | {shown} | {measured} | {specification} |"
+                )
         else:
             lines.append("_No measurements were produced._")
     lines.extend(["", "## System netlist", "", "```spice", netlist_text.strip(), "```", ""])
@@ -2161,42 +2209,518 @@ def parse_measurements(netlist_text: str, log_text: str) -> list[dict[str, Any]]
             "value": value,
             "unit": "dB" if name.lower().endswith("_db") else "",
             "pass": value is not None,
+            "measurement_status": "measured" if value is not None else "failed",
+            "specification_status": "not_evaluated",
+            "source": "ngspice-measure",
         })
     return metrics
+
+
+ANALYSIS_LINE = re.compile(r"^\s*\.(op|dc|ac|tran|sp)\b", re.IGNORECASE)
+ANALYSIS_OUTPUT_LINE = re.compile(
+    r"^\s*\.(?:meas(?:ure)?|print|plot|probe)\s+(op|dc|ac|tran|sp)\b",
+    re.IGNORECASE,
+)
+
+
+def split_analysis_decks(netlist_text: str) -> list[dict[str, str]]:
+    lines = netlist_text.splitlines()
+    title = lines[0] if lines and lines[0].strip() else "* Actoviq simulation"
+    analyses: list[tuple[str, str]] = []
+    base_lines: list[str] = [title]
+    output_lines: list[tuple[str, str]] = []
+    for index, raw in enumerate(lines):
+        if index == 0:
+            continue
+        stripped = raw.strip()
+        low = stripped.lower()
+        if low == ".end":
+            continue
+        analysis_match = ANALYSIS_LINE.match(stripped)
+        if analysis_match:
+            analyses.append((analysis_match.group(1).lower(), stripped))
+            continue
+        output_match = ANALYSIS_OUTPUT_LINE.match(stripped)
+        if output_match:
+            output_lines.append((output_match.group(1).lower(), stripped))
+            continue
+        base_lines.append(raw)
+    if not analyses:
+        analyses.append(("op", ".op"))
+    counts: dict[str, int] = {}
+    decks: list[dict[str, str]] = []
+    for analysis_type, directive in analyses:
+        counts[analysis_type] = counts.get(analysis_type, 0) + 1
+        analysis_id = f"{'sparameter' if analysis_type == 'sp' else analysis_type}-{counts[analysis_type]}"
+        related = [line for line_type, line in output_lines if line_type == analysis_type]
+        if not any(re.match(r"(?i)^\s*\.print\b", line) for line in related):
+            probes = []
+            for line in related:
+                probes.extend(re.findall(r"(?i)\b(?:v(?:db|m|p|r|i)?|i)\([^()]+\)", line))
+            if probes:
+                related.append(f".print {analysis_type} {' '.join(dict.fromkeys(probes))}")
+        deck = "\n".join([*base_lines, directive, *related, ".end", ""])
+        decks.append({
+            "id": analysis_id,
+            "type": "sparameter" if analysis_type == "sp" else analysis_type,
+            "directive_type": analysis_type,
+            "directive": directive,
+            "deck": deck,
+        })
+    return decks
+
+
+def parse_raw_scalar(token: str) -> complex:
+    normalized = token.strip().strip("()")
+    if "," in normalized:
+        real, imaginary = normalized.split(",", 1)
+        return complex(float(real), float(imaginary))
+    return complex(float(normalized), 0.0)
+
+
+def raw_header_int(header: str, name: str) -> int:
+    match = re.search(rf"(?im)^{re.escape(name)}:\s*(\d+)", header)
+    if not match:
+        raise ValueError(f"ngspice rawfile is missing {name}")
+    return int(match.group(1))
+
+
+def parse_ngspice_raw(raw_path: Path) -> list[dict[str, Any]]:
+    data = raw_path.read_bytes()
+    cursor = 0
+    plots: list[dict[str, Any]] = []
+    while cursor < len(data):
+        while cursor < len(data) and data[cursor] in b"\r\n\x00 \t":
+            cursor += 1
+        if cursor >= len(data):
+            break
+        markers = [
+            (position, marker)
+            for marker in (b"Values:", b"Binary:")
+            if (position := data.find(marker, cursor)) >= 0
+        ]
+        if not markers:
+            break
+        marker_position, marker = min(markers, key=lambda value: value[0])
+        header = data[cursor:marker_position].decode("utf-8", errors="replace")
+        if "Title:" not in header:
+            cursor = marker_position + len(marker)
+            continue
+        variable_count = raw_header_int(header, "No. Variables")
+        point_count = raw_header_int(header, "No. Points")
+        flags_match = re.search(r"(?im)^Flags:\s*(.+)$", header)
+        flags = (flags_match.group(1).strip().lower().split() if flags_match else ["real"])
+        complex_values = "complex" in flags
+        plotname_match = re.search(r"(?im)^Plotname:\s*(.+)$", header)
+        variables: list[dict[str, str]] = []
+        variables_section = header.split("Variables:", 1)[-1] if "Variables:" in header else ""
+        for raw in variables_section.splitlines():
+            match = re.match(r"^\s*\d+\s+(\S+)\s+(\S+)", raw)
+            if match:
+                variables.append({"name": match.group(1), "kind": match.group(2)})
+        if len(variables) != variable_count:
+            raise ValueError(
+                f"ngspice rawfile variable table has {len(variables)} entries, expected {variable_count}"
+            )
+        line_end = data.find(b"\n", marker_position)
+        values_start = len(data) if line_end < 0 else line_end + 1
+        values: list[list[complex]] = [[] for _ in range(variable_count)]
+        if marker == b"Binary:":
+            scalar_count = point_count * variable_count * (2 if complex_values else 1)
+            byte_count = scalar_count * 8
+            if values_start + byte_count > len(data):
+                raise ValueError("ngspice binary rawfile is truncated")
+            scalar_values = struct.unpack_from(f"<{scalar_count}d", data, values_start)
+            scalar_index = 0
+            for _point in range(point_count):
+                for variable_index in range(variable_count):
+                    if complex_values:
+                        value = complex(scalar_values[scalar_index], scalar_values[scalar_index + 1])
+                        scalar_index += 2
+                    else:
+                        value = complex(scalar_values[scalar_index], 0.0)
+                        scalar_index += 1
+                    values[variable_index].append(value)
+            cursor = values_start + byte_count
+        else:
+            cursor = values_start
+            for _point in range(point_count):
+                for variable_index in range(variable_count):
+                    while cursor < len(data):
+                        next_line = data.find(b"\n", cursor)
+                        if next_line < 0:
+                            next_line = len(data)
+                        line = data[cursor:next_line].decode("utf-8", errors="replace").strip()
+                        cursor = min(len(data), next_line + 1)
+                        if line:
+                            break
+                    tokens = line.split()
+                    if not tokens:
+                        raise ValueError("ngspice ASCII rawfile is truncated")
+                    token = tokens[-1]
+                    values[variable_index].append(parse_raw_scalar(token))
+        plots.append({
+            "plotname": plotname_match.group(1).strip() if plotname_match else "ngspice analysis",
+            "flags": flags,
+            "variables": variables,
+            "values": values,
+            "point_count": point_count,
+        })
+    return plots
+
+
+def variable_unit(kind: str, name: str) -> str:
+    low_kind = kind.lower()
+    low_name = name.lower()
+    if low_kind == "frequency" or low_name == "frequency":
+        return "Hz"
+    if low_kind == "time" or low_name == "time":
+        return "s"
+    if low_kind == "voltage" or low_name.startswith("v("):
+        return "V"
+    if low_kind == "current" or low_name.startswith("i("):
+        return "A"
+    return ""
+
+
+def plot_to_dataset(plot: dict[str, Any], analysis_id: str, analysis_type: str) -> dict[str, Any]:
+    variables = plot["variables"]
+    values = plot["values"]
+    scale_values = values[0] if values else []
+    traces: list[dict[str, Any]] = []
+    for variable, variable_values in zip(variables[1:], values[1:]):
+        real = [value.real for value in variable_values]
+        imaginary = [value.imag for value in variable_values]
+        trace: dict[str, Any] = {
+            "name": variable["name"],
+            "unit": variable_unit(variable["kind"], variable["name"]),
+            "real": real,
+        }
+        if "complex" in plot["flags"] or any(abs(value) > 1e-30 for value in imaginary):
+            magnitude = [math.hypot(real_value, imaginary_value) for real_value, imaginary_value in zip(real, imaginary)]
+            trace.update({
+                "imag": imaginary,
+                "magnitude": magnitude,
+                "db": [20 * math.log10(max(value, 1e-300)) for value in magnitude],
+                "phase_deg": [math.degrees(math.atan2(imag_value, real_value)) for real_value, imag_value in zip(real, imaginary)],
+            })
+        traces.append(trace)
+    return {
+        "schema": "actoviq.simulation-dataset.v1",
+        "id": f"{analysis_id}-dataset-1",
+        "analysis_id": analysis_id,
+        "analysis_type": analysis_type,
+        "plotname": plot["plotname"],
+        "point_count": plot["point_count"],
+        "x": {
+            "name": variables[0]["name"] if variables else "index",
+            "unit": variable_unit(variables[0]["kind"], variables[0]["name"]) if variables else "",
+            "values": [value.real for value in scale_values],
+        },
+        "traces": traces,
+    }
+
+
+def measured_metric(name: str, value: float | None, unit: str, source: str = "derived") -> dict[str, Any]:
+    return {
+        "name": name,
+        "value": value,
+        "unit": unit,
+        "pass": value is not None and math.isfinite(value),
+        "measurement_status": "measured" if value is not None and math.isfinite(value) else "failed",
+        "specification_status": "not_evaluated",
+        "source": source,
+    }
+
+
+def primary_trace(dataset: dict[str, Any]) -> dict[str, Any] | None:
+    traces = dataset.get("traces", [])
+    def output_score(trace: dict[str, Any]) -> int:
+        name = str(trace.get("name", "")).lower()
+        if re.fullmatch(r"v\((?:v?out|output)\)", name):
+            return 0
+        if "vout" in name or "output" in name:
+            return 1
+        if "out" in name:
+            return 2
+        return 100
+
+    preferred = sorted((trace for trace in traces if output_score(trace) < 100), key=output_score)
+    voltages = [trace for trace in traces if trace.get("unit") == "V"]
+    return (preferred or voltages or traces or [None])[0]
+
+
+def crossing_x(x: list[float], y: list[float], target: float, start_index: int = 1) -> float | None:
+    for index in range(max(1, start_index), min(len(x), len(y))):
+        left = y[index - 1] - target
+        right = y[index] - target
+        if left == 0:
+            return x[index - 1]
+        if left * right <= 0 and y[index] != y[index - 1]:
+            ratio = (target - y[index - 1]) / (y[index] - y[index - 1])
+            return x[index - 1] + ratio * (x[index] - x[index - 1])
+    return None
+
+
+def derived_metrics(dataset: dict[str, Any]) -> list[dict[str, Any]]:
+    analysis_type = dataset.get("analysis_type")
+    x = [float(value) for value in dataset.get("x", {}).get("values", [])]
+    trace = primary_trace(dataset)
+    if not trace or not x:
+        return []
+    metrics: list[dict[str, Any]] = []
+    if analysis_type == "ac" and trace.get("db"):
+        db = [float(value) for value in trace["db"]]
+        phase = [float(value) for value in trace.get("phase_deg", [])]
+        bandwidth = crossing_x(x, db, db[0] - 3.0)
+        metrics.append(measured_metric("bandwidth_3db", bandwidth, "Hz"))
+        unity = crossing_x(x, db, 0.0)
+        if unity is not None and phase:
+            unity_index = min(range(len(x)), key=lambda index: abs(x[index] - unity))
+            metrics.append(measured_metric("phase_margin", 180.0 + phase[unity_index], "deg"))
+        if phase:
+            phase_crossing = crossing_x(x, phase, -180.0)
+            if phase_crossing is not None:
+                phase_index = min(range(len(x)), key=lambda index: abs(x[index] - phase_crossing))
+                metrics.append(measured_metric("gain_margin", -db[phase_index], "dB"))
+    elif analysis_type == "tran":
+        y = [float(value) for value in trace.get("real", [])]
+        if len(y) >= 2:
+            low = min(y)
+            high = max(y)
+            span = high - low
+            t10 = crossing_x(x, y, low + 0.1 * span) if span > 0 else None
+            t90 = crossing_x(x, y, low + 0.9 * span) if span > 0 else None
+            rise_time = t90 - t10 if t10 is not None and t90 is not None and t90 >= t10 else None
+            slopes = [
+                (y[index] - y[index - 1]) / (x[index] - x[index - 1])
+                for index in range(1, min(len(x), len(y)))
+                if x[index] != x[index - 1]
+            ]
+            metrics.extend([
+                measured_metric("rise_time_10_90", rise_time, "s"),
+                measured_metric("slew_rate_positive", max(slopes) if slopes else None, "V/s"),
+                measured_metric("slew_rate_negative", min(slopes) if slopes else None, "V/s"),
+            ])
+            tail = y[max(0, int(len(y) * 0.8)):]
+            metrics.append(measured_metric("output_ripple", max(tail) - min(tail) if tail else None, "V"))
+    elif analysis_type == "dc":
+        y = [float(value) for value in trace.get("real", [])]
+        if len(y) >= 2 and x[-1] != x[0]:
+            metrics.append(measured_metric("dc_output_min", min(y), trace.get("unit", "")))
+            metrics.append(measured_metric("dc_output_max", max(y), trace.get("unit", "")))
+            metrics.append(measured_metric("dc_line_slope", (y[-1] - y[0]) / (x[-1] - x[0]), "V/V"))
+    elif analysis_type == "sparameter" and trace.get("magnitude"):
+        return_loss = [-20 * math.log10(max(float(value), 1e-300)) for value in trace["magnitude"]]
+        metrics.append(measured_metric("minimum_return_loss", min(return_loss), "dB"))
+    return metrics
+
+
+def has_sparameter_ports(deck: str) -> bool:
+    ports = {
+        int(value)
+        for value in re.findall(r"(?im)^\s*v\S+\s+\S+\s+\S+.*\bportnum\s*(?:=\s*)?(\d+)", deck)
+    }
+    return len(ports) >= 2 and ports == set(range(1, len(ports) + 1))
+
+
+def run_analysis(
+    executable: str,
+    run_root: Path,
+    analysis: dict[str, str],
+) -> dict[str, Any]:
+    analysis_root = run_root / analysis["id"]
+    analysis_root.mkdir(parents=True, exist_ok=True)
+    deck_path = analysis_root / "deck.cir"
+    raw_path = analysis_root / "vectors.raw"
+    log_path = analysis_root / "ngspice.log"
+    atomic_write_text(deck_path, analysis["deck"])
+    if analysis["type"] == "sparameter" and not has_sparameter_ports(analysis["deck"]):
+        return {
+            "id": analysis["id"],
+            "type": analysis["type"],
+            "directive": analysis["directive"],
+            "status": "configuration_error",
+            "execution_status": "not_run",
+            "measurement_status": "not_requested",
+            "specification_status": "not_evaluated",
+            "diagnostics": ["S-parameter analysis requires at least two consecutive VSRC portnum ports with Z0."],
+            "metrics": [],
+            "dataset": None,
+            "deck_path": str(deck_path),
+            "log_path": str(log_path),
+        }
+    try:
+        # Windows rejects long working-directory paths before ngspice starts.
+        # Execute from a short temporary directory, then persist every artifact
+        # beneath the revisioned run directory once the process has exited.
+        with tempfile.TemporaryDirectory(prefix="actoviq-ngspice-") as temporary:
+            execution_root = Path(temporary)
+            execution_deck_path = execution_root / "deck.cir"
+            execution_raw_path = execution_root / "vectors.raw"
+            execution_log_path = execution_root / "ngspice.log"
+            execution_deck_path.write_text(analysis["deck"], encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    executable,
+                    "-b",
+                    "-r",
+                    str(execution_raw_path),
+                    "-o",
+                    str(execution_log_path),
+                    str(execution_deck_path),
+                ],
+                cwd=str(execution_root),
+                text=True,
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+            log_text = (
+                execution_log_path.read_text(encoding="utf-8", errors="replace")
+                if execution_log_path.exists() else ""
+            )
+            plots = parse_ngspice_raw(execution_raw_path) if execution_raw_path.exists() else []
+            if execution_raw_path.exists():
+                shutil.copyfile(execution_raw_path, raw_path)
+            atomic_write_text(log_path, log_text)
+            measurement_log_path: Path | None = None
+            measurement_log_text = log_text
+            if re.search(r"(?im)^\s*\.meas(?:ure)?\b", analysis["deck"]):
+                measurement_log_path = analysis_root / "measurements.log"
+                execution_measurement_path = execution_root / "measurements.log"
+                subprocess.run(
+                    [executable, "-b", "-o", str(execution_measurement_path), str(execution_deck_path)],
+                    cwd=str(execution_root),
+                    text=True,
+                    capture_output=True,
+                    timeout=120,
+                    check=False,
+                )
+                measurement_log_text = (
+                    execution_measurement_path.read_text(encoding="utf-8", errors="replace")
+                    if execution_measurement_path.exists() else ""
+                )
+                atomic_write_text(measurement_log_path, measurement_log_text)
+        dataset = plot_to_dataset(plots[-1], analysis["id"], analysis["type"]) if plots else None
+        dataset_path = analysis_root / "dataset.json"
+        if dataset:
+            atomic_write_json(dataset_path, dataset)
+        metrics = parse_measurements(analysis["deck"], measurement_log_text)
+        if dataset:
+            metrics.extend(derived_metrics(dataset))
+        measured = [metric for metric in metrics if metric.get("measurement_status") == "measured"]
+        status = "completed" if completed.returncode == 0 and dataset else "failed"
+        diagnostics = []
+        if status == "failed":
+            diagnostics.append(log_text[-2000:] or completed.stderr.strip() or "ngspice produced no dataset")
+        return {
+            "id": analysis["id"],
+            "type": analysis["type"],
+            "directive": analysis["directive"],
+            "status": status,
+            "execution_status": "success" if completed.returncode == 0 else "failed",
+            "measurement_status": (
+                "not_requested" if not metrics else "success" if len(measured) == len(metrics) else "partial"
+            ),
+            "specification_status": "not_evaluated",
+            "return_code": completed.returncode,
+            "diagnostics": diagnostics,
+            "metrics": metrics,
+            "dataset": ({
+                "path": str(dataset_path.relative_to(run_root.parent.parent)).replace("\\", "/"),
+                "id": dataset["id"],
+                "plotname": dataset["plotname"],
+                "point_count": dataset["point_count"],
+                "x_name": dataset["x"]["name"],
+                "x_unit": dataset["x"]["unit"],
+                "traces": [
+                    {"name": trace["name"], "unit": trace["unit"], "complex": "imag" in trace}
+                    for trace in dataset["traces"]
+                ],
+            } if dataset else None),
+            "deck_path": str(deck_path),
+            "raw_path": str(raw_path) if raw_path.exists() else None,
+            "log_path": str(log_path),
+            "measurement_log_path": str(measurement_log_path) if measurement_log_path else None,
+            "stderr": completed.stderr.strip(),
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "id": analysis["id"],
+            "type": analysis["type"],
+            "directive": analysis["directive"],
+            "status": "failed",
+            "execution_status": "timeout",
+            "measurement_status": "not_requested",
+            "specification_status": "not_evaluated",
+            "diagnostics": ["ngspice analysis exceeded the 120 second timeout."],
+            "metrics": [],
+            "dataset": None,
+            "deck_path": str(deck_path),
+            "log_path": str(log_path),
+        }
+
+
+def execute_simulation_run(
+    root: Path,
+    executable: str,
+    netlist_path: Path,
+    source_revision: int,
+    document_hash: str,
+    scope: str,
+) -> dict[str, Any]:
+    netlist_text = netlist_path.read_text(encoding="utf-8", errors="replace")
+    simulation_root = netlist_path.parent / "simulation"
+    runs_root = simulation_root / "runs"
+    run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}-{document_hash[:8] or 'document'}"
+    run_root = runs_root / run_id
+    run_root.mkdir(parents=True, exist_ok=False)
+    analyses = [run_analysis(executable, run_root, analysis) for analysis in split_analysis_decks(netlist_text)]
+    metrics = [metric for analysis in analyses for metric in analysis.get("metrics", [])]
+    completed = [analysis for analysis in analyses if analysis.get("status") == "completed"]
+    failed = [analysis for analysis in analyses if analysis.get("status") != "completed"]
+    result = {
+        "schema": "actoviq.simulation.v2",
+        "run_id": run_id,
+        "scope": scope,
+        "source_revision": source_revision,
+        "document_hash": document_hash,
+        "ok": len(failed) == 0 and len(completed) > 0,
+        "execution_status": "success" if not failed else "partial" if completed else "failed",
+        "measurement_status": (
+            "not_requested" if not metrics else
+            "success" if all(metric.get("measurement_status") == "measured" for metric in metrics) else "partial"
+        ),
+        "specification_status": "not_evaluated",
+        "analysis_count": len(analyses),
+        "analyses": analyses,
+        "metrics": metrics,
+        "ngspice": executable,
+        "simulated_at": utc_now(),
+    }
+    atomic_write_json(run_root / "run.json", result)
+    atomic_write_json(simulation_root / "result.json", result)
+    return result
 
 
 def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
     compile_result = compile_project(root)
     executable = resolve_ngspice(ngspice_bin)
     netlist_path = Path(compile_result["netlist_path"])
-    simulation_root = root / "build" / "system" / "simulation"
-    simulation_root.mkdir(parents=True, exist_ok=True)
-    log_path = simulation_root / "ngspice.log"
-    completed = subprocess.run(
-        [executable, "-b", "-o", str(log_path), str(netlist_path)],
-        cwd=str(simulation_root),
-        text=True,
-        capture_output=True,
-        timeout=120,
-        check=False,
-    )
-    log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
-    metrics = parse_measurements(netlist_path.read_text(encoding="utf-8", errors="replace"), log_text)
-    result = {
-        "schema": "actoviq.simulation.v1",
-        "ok": completed.returncode == 0,
-        "return_code": completed.returncode,
-        "ngspice": executable,
-        "log_path": str(log_path),
-        "metrics": metrics,
-        "stderr": completed.stderr.strip(),
-        "simulated_at": utc_now(),
-    }
-    atomic_write_json(simulation_root / "result.json", result)
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path)
+    result = execute_simulation_run(
+        root,
+        executable,
+        netlist_path,
+        int(manifest.get("source_revision", manifest.get("revision", compile_result.get("revision", 0)))),
+        str(manifest.get("document_hash", "")),
+        "project",
+    )
     manifest["status"] = "simulated" if result["ok"] else "simulation_failed"
     manifest["simulation"] = "system/simulation/result.json"
+    manifest["simulation_run_id"] = result["run_id"]
     atomic_write_json(manifest_path, manifest)
     report_project, report_modules = load_project(root)
     write_project_report(
@@ -2213,37 +2737,23 @@ def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, A
     compile_result = compile_module(root, module_id)
     executable = resolve_ngspice(ngspice_bin)
     netlist_path = Path(compile_result["netlist_path"])
-    simulation_root = netlist_path.parent / "simulation"
-    simulation_root.mkdir(parents=True, exist_ok=True)
-    log_path = simulation_root / "ngspice.log"
-    completed = subprocess.run(
-        [executable, "-b", "-o", str(log_path), str(netlist_path)],
-        cwd=str(simulation_root),
-        text=True,
-        capture_output=True,
-        timeout=120,
-        check=False,
-    )
-    log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
-    metrics = parse_measurements(netlist_path.read_text(encoding="utf-8", errors="replace"), log_text)
-    result = {
-        "schema": "actoviq.module-simulation.v1",
-        "ok": completed.returncode == 0,
-        "module_id": module_id,
-        "return_code": completed.returncode,
-        "ngspice": executable,
-        "log_path": str(log_path),
-        "metrics": metrics,
-        "stderr": completed.stderr.strip(),
-        "simulated_at": utc_now(),
-    }
-    atomic_write_json(simulation_root / "result.json", result)
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path)
+    result = execute_simulation_run(
+        root,
+        executable,
+        netlist_path,
+        int(manifest.get("source_revision", manifest.get("revision", 0))),
+        str(manifest.get("document_hash", project_document_hash(*load_project(root)))),
+        f"module:{module_id}",
+    )
+    result["module_id"] = module_id
+    atomic_write_json(netlist_path.parent / "simulation" / "result.json", result)
     manifest.setdefault("modules", {}).setdefault(module_id, {})["status"] = (
         "simulated" if result["ok"] else "simulation_failed"
     )
     manifest["modules"][module_id]["simulation"] = f"modules/{module_id}/simulation/result.json"
+    manifest["modules"][module_id]["simulation_run_id"] = result["run_id"]
     atomic_write_json(manifest_path, manifest)
     return result
 
