@@ -46,6 +46,12 @@ const differentialPairPorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const cmosRingPorts: CircuitPort[] = [
+  { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'output', name: 'OUT', direction: 'output', signal_type: 'digital', net: 'n3' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
 const basebandPorts: CircuitPort[] = [
   { id: 'det_out', name: 'DET_OUT', direction: 'input', signal_type: 'analog', net: 'det_out' },
   { id: 'ref', name: 'VREF', direction: 'input', signal_type: 'analog', net: 'ref' },
@@ -187,6 +193,32 @@ const fixtures: CircuitModule[] = [
     ]),
     component('cload', 'C', '10p', 430, 250, [['a', '1', 'out'], ['b', '2', '0']]),
   ]),
+  moduleFixture('cmos_ring_oscillator', [
+    component('m1', 'M', 'NMOS W=60u L=1u', 180, 300, [
+      ['d', 'D', 'n1'], ['g', 'G', 'n3'], ['s', 'S', '0'], ['b', 'B', '0'],
+    ]),
+    component('m2', 'M', 'PMOS W=120u L=1u', 180, 120, [
+      ['d', 'D', 'n1'], ['g', 'G', 'n3'], ['s', 'S', 'vdd'], ['b', 'B', 'vdd'],
+    ]),
+    component('m3', 'M', 'NMOS W=60u L=1u', 500, 300, [
+      ['d', 'D', 'n2'], ['g', 'G', 'n1'], ['s', 'S', '0'], ['b', 'B', '0'],
+    ]),
+    component('m4', 'M', 'PMOS W=120u L=1u', 500, 120, [
+      ['d', 'D', 'n2'], ['g', 'G', 'n1'], ['s', 'S', 'vdd'], ['b', 'B', 'vdd'],
+    ]),
+    component('m5', 'M', 'NMOS W=60u L=1u', 820, 300, [
+      ['d', 'D', 'n3'], ['g', 'G', 'n2'], ['s', 'S', '0'], ['b', 'B', '0'],
+    ]),
+    component('m6', 'M', 'PMOS W=120u L=1u', 820, 120, [
+      ['d', 'D', 'n3'], ['g', 'G', 'n2'], ['s', 'S', 'vdd'], ['b', 'B', 'vdd'],
+    ]),
+    component('c1', 'C', '120f', 300, 500, [['a', '1', 'n1'], ['b', '2', '0']]),
+    component('c2', 'C', '120f', 620, 500, [['a', '1', 'n2'], ['b', '2', '0']]),
+    component('c3', 'C', '120f', 940, 500, [['a', '1', 'n3'], ['b', '2', '0']]),
+    component('rleak1', 'R', '5Meg', 390, 500, [['a', '1', 'n1'], ['b', '2', '0']]),
+    component('rleak2', 'R', '5Meg', 710, 500, [['a', '1', 'n2'], ['b', '2', '0']]),
+    component('rleak3', 'R', '5Meg', 1030, 500, [['a', '1', 'n3'], ['b', '2', '0']]),
+  ], cmosRingPorts),
   moduleFixture('mos_differential_pair', [
     component('m_inp', 'M', 'NMOS W=20u L=1u', 220, 240, [
       ['d', 'D', 'outp'],
@@ -367,6 +399,7 @@ for (const fixture of fixtures) {
   assertRailLabels(document.module, document.netLabels, document.wires);
   assertNoMosBodyRailLabels(document.module, document.netLabels);
   assertLdoInternalLabels(document);
+  assertCmosRingConnections(document);
   assertCurrentMirrorDiodeConnection(document);
   assertCascodePhysicalOutputNode(document);
   assertMultiEndpointSpine(document);
@@ -576,6 +609,23 @@ function assertReadableLayout(module: CircuitModule) {
     assertPinAbove(nmos, 'out', '0', module.module_id);
     assertPinAbove(load, 'out', '0', module.module_id);
     assertNoComponentOverlap(module, ['mp1', 'mn1', 'cload']);
+  }
+  if (module.module_id === 'cmos_ring_oscillator') {
+    const stages = [
+      [mustComponent(module, 'm2'), mustComponent(module, 'm1')],
+      [mustComponent(module, 'm4'), mustComponent(module, 'm3')],
+      [mustComponent(module, 'm6'), mustComponent(module, 'm5')],
+    ];
+    for (const [pmos, nmos] of stages) {
+      assert.ok(pmos.position.y < nmos.position.y, `${pmos.id}/${nmos.id} PMOS should sit above NMOS`);
+      assert.ok(Math.abs(pmos.position.x - nmos.position.x) <= 1, `${pmos.id}/${nmos.id} should share a stage column`);
+    }
+    assert.ok(stages[0]![0]!.position.x < stages[1]![0]!.position.x, 'ring oscillator stage 1 should precede stage 2');
+    assert.ok(stages[1]![0]!.position.x < stages[2]![0]!.position.x, 'ring oscillator stage 2 should precede stage 3');
+    for (const id of ['c1', 'c2', 'c3', 'rleak1', 'rleak2', 'rleak3']) {
+      assert.ok(mustComponent(module, id).position.y > stages[0]![1]!.position.y, `${id} should sit below the CMOS stages`);
+    }
+    assertNoComponentOverlap(module, module.components.map((component) => component.id));
   }
   if (module.module_id === 'mos_differential_pair') {
     const left = mustComponent(module, 'm_inp');
@@ -811,6 +861,29 @@ function assertLdoInternalLabels(document: ReturnType<typeof createSchematicDocu
     (wire.from?.pin_id === 'g' || wire.to?.pin_id === 'g')
   ));
   assert.ok(passGateWire, 'mos_ldo pass MOSFET gate should have a visible EAOUT wire');
+}
+
+function assertCmosRingConnections(document: ReturnType<typeof createSchematicDocument>) {
+  if (document.module.module_id !== 'cmos_ring_oscillator') return;
+  const expectedComponents = new Map([
+    ['n1', ['m1', 'm2', 'm3', 'm4', 'c1', 'rleak1']],
+    ['n2', ['m3', 'm4', 'm5', 'm6', 'c2', 'rleak2']],
+    ['n3', ['m5', 'm6', 'm1', 'm2', 'c3', 'rleak3']],
+  ]);
+  const signalLabelNets = new Set(
+    document.netLabels.filter((label) => label.kind === 'signal').map((label) => label.net),
+  );
+  for (const [net, componentIds] of expectedComponents) {
+    const wires = document.wires.filter((wire) => wire.net === net);
+    assert.ok(wires.length >= componentIds.length - 1, `cmos_ring_oscillator.${net} should use physical editable wires`);
+    assert.equal(signalLabelNets.has(net), false, `cmos_ring_oscillator.${net} should not be replaced by local labels`);
+    for (const componentId of componentIds) {
+      assert.ok(
+        wires.some((wire) => wire.from?.component_id === componentId || wire.to?.component_id === componentId),
+        `cmos_ring_oscillator.${net} should visibly reach ${componentId}`,
+      );
+    }
+  }
 }
 
 function assertCurrentMirrorDiodeConnection(document: ReturnType<typeof createSchematicDocument>) {

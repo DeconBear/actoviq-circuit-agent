@@ -18,6 +18,7 @@ const legacyBjtResetPrefix = `${projectPrefix}legacy-bjt-reset-`;
 const legacyVoltageDividerPrefix = `${projectPrefix}legacy-divider-`;
 const legacyMosAmplifierPrefix = `${projectPrefix}legacy-mos-amp-`;
 const legacyCmosInverterPrefix = `${projectPrefix}legacy-cmos-inverter-`;
+const legacyCmosRingPrefix = `${projectPrefix}legacy-cmos-ring-`;
 const legacyDifferentialPairPrefix = `${projectPrefix}legacy-diff-pair-`;
 const legacyCurrentMirrorPrefix = `${projectPrefix}legacy-current-mirror-`;
 const legacyOpampFeedbackPrefix = `${projectPrefix}legacy-opamp-feedback-`;
@@ -434,6 +435,77 @@ async function createLegacyCmosInverterProject() {
     'MP1 out in vdd vdd PMOS1 W=40u L=1u',
     'MN1 out in 0 0 NMOS1 W=20u L=1u',
     'Cload out 0 10p',
+    '.end',
+    '```',
+    '',
+  ].join('\n'), 'utf8');
+  return { projectId: project.project_id, projectName: project.name };
+}
+
+async function createLegacyCmosRingProject() {
+  const expectedProjectId = legacyProjectId('cmos-ring');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${legacyCmosRingPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'legacy CMOS ring fixture project id should not be truncated or reused');
+  const modulePorts = [
+    { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+    { id: 'output', name: 'OUT', direction: 'output', signal_type: 'digital', net: 'n3' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ];
+  const moduleRef = {
+    id: 'ring',
+    name: 'CMOS ring oscillator',
+    kind: 'oscillator',
+    function: 'Three-stage CMOS ring oscillator used to verify closed-loop editable routing.',
+    parameters: { Vdd: '5 V', Load: '120 fF per stage' },
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/ring/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 520, height: 320 },
+    ports: modulePorts,
+  };
+  const module = {
+    schema: 'actoviq.module.v1',
+    module_id: 'ring',
+    name: 'CMOS ring oscillator',
+    revision: 0,
+    ports: modulePorts,
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'ring');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'netlist-notebook.md'), [
+    '# CMOS ring oscillator',
+    '',
+    '```spice',
+    '* Three-stage CMOS ring oscillator fixture',
+    '.model NMOS1 NMOS (LEVEL=1 VTO=0.9 KP=220u)',
+    '.model PMOS1 PMOS (LEVEL=1 VTO=-0.9 KP=110u)',
+    'M1 n1 n3 0 0 NMOS1 W=60u L=1u',
+    'M2 n1 n3 vdd vdd PMOS1 W=120u L=1u',
+    'M3 n2 n1 0 0 NMOS1 W=60u L=1u',
+    'M4 n2 n1 vdd vdd PMOS1 W=120u L=1u',
+    'M5 n3 n2 0 0 NMOS1 W=60u L=1u',
+    'M6 n3 n2 vdd vdd PMOS1 W=120u L=1u',
+    'C1 n1 0 120f',
+    'C2 n2 0 120f',
+    'C3 n3 0 120f',
+    'RLEAK1 n1 0 5Meg',
+    'RLEAK2 n2 0 5Meg',
+    'RLEAK3 n3 0 5Meg',
     '.end',
     '```',
     '',
@@ -1193,6 +1265,7 @@ const legacyBjtResetProject = await createLegacyBjtResetProject();
 const legacyVoltageDividerProject = await createLegacyVoltageDividerProject();
 const legacyMosAmplifierProject = await createLegacyMosAmplifierProject();
 const legacyCmosInverterProject = await createLegacyCmosInverterProject();
+const legacyCmosRingProject = await createLegacyCmosRingProject();
 const legacyDifferentialPairProject = await createLegacyDifferentialPairProject();
 const legacyCurrentMirrorProject = await createLegacyCurrentMirrorProject();
 const legacyOpampFeedbackProject = await createLegacyOpampFeedbackProject();
@@ -3297,6 +3370,97 @@ try {
   }
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-inverter-drag.png') });
   console.log('[e2e] legacy cmos inverter drag isolated');
+
+  await page.getByTestId(`sidebar-project-${legacyCmosRingProject.projectId}`).click();
+  await waitForWorkbenchProject(page, legacyCmosRingProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(legacyCmosRingProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-ring').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return Number(node?.getAttribute('data-component-count') ?? '0') >= 12 &&
+      Number(node?.getAttribute('data-wire-count') ?? '0') >= 15;
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
+  ));
+  const ringPositions = await componentPositions(page);
+  const ringComponentIds = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'c1', 'c2', 'c3', 'rleak1', 'rleak2', 'rleak3'];
+  for (const id of ringComponentIds) {
+    assert.ok(ringPositions[id], `hydrated CMOS ring component ${id} is missing from editable schematic`);
+  }
+  assert.ok(await countVisibleSchematicComponents(page) >= 12, 'hydrated CMOS ring components are not visibly drawn');
+  assert.ok(await countVisibleSchematicWires(page) >= 15, 'hydrated CMOS ring wires are not visibly drawn');
+  const ringWires = await editorWires(page);
+  assertWiresOrthogonal(ringWires, 'legacy CMOS ring editor wires should remain orthogonal');
+  for (const [pmosId, nmosId] of [['m2', 'm1'], ['m4', 'm3'], ['m6', 'm5']]) {
+    assert.ok(ringPositions[pmosId].y < ringPositions[nmosId].y, `${pmosId}/${nmosId} PMOS should sit above NMOS in GUI`);
+    assert.ok(
+      Math.abs(ringPositions[pmosId].x - ringPositions[nmosId].x) <= schematicGrid,
+      `${pmosId}/${nmosId} should share a stage column in GUI`,
+    );
+  }
+  assert.ok(ringPositions.m2.x < ringPositions.m4.x && ringPositions.m4.x < ringPositions.m6.x, 'CMOS ring stages should progress left to right');
+  for (const id of ['c1', 'c2', 'c3', 'rleak1', 'rleak2', 'rleak3']) {
+    assert.ok(ringPositions[id].y > ringPositions.m1.y, `${id} should sit below the CMOS ring stages in GUI`);
+  }
+  for (const net of ['n1', 'n2', 'n3']) {
+    assert.ok(ringWires.filter((wire) => wire.net === net).length >= 5, `CMOS ring ${net} should use physical editable wires`);
+    assert.equal(
+      await page.locator(`[data-testid="schematic-net-label"][data-net="${net}"]`).count(),
+      0,
+      `CMOS ring ${net} should not be replaced by local labels`,
+    );
+  }
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="output"]').getAttribute('data-port-side'),
+    'right',
+    'CMOS ring output should render on the right edge',
+  );
+  await waitForEditorIdle(page);
+  await assertRenderedWirePolylinesOrthogonal(page, 'legacy CMOS ring rendered wires');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-ring.png') });
+  console.log('[e2e] legacy cmos ring loaded');
+  await selectComponentForDrag(page, 'm4', [
+    { x: 0, y: 0 },
+    { x: -20, y: 0 },
+    { x: 12, y: 18 },
+    { x: 24, y: -18 },
+  ]);
+  const ringM4DragPoint = await selectedComponentFrameScreenPoint(page, 'm4');
+  await page.mouse.move(ringM4DragPoint.x, ringM4DragPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grab'
+  ));
+  await page.mouse.down();
+  await page.mouse.move(ringM4DragPoint.x - 20, ringM4DragPoint.y - 15, { steps: 4 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(ringM4DragPoint.x - 90, ringM4DragPoint.y - 55, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    ringWires,
+    await editorWires(page),
+    ['m4'],
+    'dragging CMOS ring M4',
+  );
+  await page.mouse.up();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  const ringPositionsAfterM4Drag = await componentPositions(page);
+  assertPositionChanged(ringPositionsAfterM4Drag.m4, ringPositions.m4, 'dragging CMOS ring M4 did not move M4');
+  for (const id of ringComponentIds.filter((componentId) => componentId !== 'm4')) {
+    assertPositionEqual(ringPositionsAfterM4Drag[id], ringPositions[id], `dragging CMOS ring M4 moved ${id}`);
+  }
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-cmos-ring-drag.png') });
+  console.log('[e2e] legacy cmos ring drag isolated');
 
   await page.getByTestId(`sidebar-project-${legacyDifferentialPairProject.projectId}`).click();
   await waitForWorkbenchProject(page, legacyDifferentialPairProject.projectId);

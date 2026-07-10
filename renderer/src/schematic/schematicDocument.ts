@@ -172,6 +172,8 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
   if (activeComponents.length > 0 && isLdoLikeModule(module, activeComponents)) return autoLayoutLdoModule(module, activeComponents);
   const differentialPairLayout = findDifferentialPairLayout(module, activeComponents);
   if (differentialPairLayout) return autoLayoutDifferentialPairModule(module, differentialPairLayout);
+  const cmosRingLayout = findCmosRingLayout(module, activeComponents);
+  if (cmosRingLayout) return autoLayoutCmosRingModule(module, cmosRingLayout);
   const cmosInverterLayout = findCmosInverterLayout(module, activeComponents);
   if (cmosInverterLayout) return autoLayoutCmosInverterModule(module, cmosInverterLayout);
   const currentMirrorLayout = findCurrentMirrorLayout(module, activeComponents);
@@ -255,6 +257,19 @@ interface CmosInverterLayout {
   nmos: CircuitComponent;
   inputNet: string;
   outputNet: string;
+  powerNet: string;
+  groundNet: string;
+}
+
+interface CmosRingStage {
+  pmos: CircuitComponent;
+  nmos: CircuitComponent;
+  inputNet: string;
+  outputNet: string;
+}
+
+interface CmosRingLayout {
+  stages: CmosRingStage[];
   powerNet: string;
   groundNet: string;
 }
@@ -361,6 +376,55 @@ function autoLayoutVoltageDividerModule(module: CircuitModule): CircuitModule {
     placed.add(component.id);
   }
   return module;
+}
+
+function findCmosRingLayout(module: CircuitModule, activeComponents: CircuitComponent[]): CmosRingLayout | null {
+  const mosComponents = activeComponents.filter((component) => component.type === 'M');
+  if (mosComponents.length < 6 || mosComponents.length % 2 !== 0) return null;
+  const powerNet = module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net;
+  const groundNet = module.ports.find(isGroundPort)?.net ?? '0';
+  if (!powerNet) return null;
+
+  const pmosComponents = mosComponents.filter(isPmosComponent);
+  const nmosComponents = mosComponents.filter((component) => !isPmosComponent(component));
+  if (pmosComponents.length !== nmosComponents.length) return null;
+
+  const usedNmos = new Set<string>();
+  const stages: CmosRingStage[] = [];
+  for (const pmos of [...pmosComponents].sort((left, right) => left.id.localeCompare(right.id))) {
+    const pmosNets = activeNetMap(pmos);
+    if (!pmosNets.gate || !pmosNets.drain || pmosNets.source !== powerNet) return null;
+    const nmos = nmosComponents.find((candidate) => {
+      if (usedNmos.has(candidate.id)) return false;
+      const nets = activeNetMap(candidate);
+      return nets.gate === pmosNets.gate && nets.drain === pmosNets.drain && nets.source === groundNet;
+    });
+    if (!nmos) return null;
+    usedNmos.add(nmos.id);
+    stages.push({
+      pmos,
+      nmos,
+      inputNet: pmosNets.gate,
+      outputNet: pmosNets.drain,
+    });
+  }
+  if (stages.length < 3 || stages.length * 2 !== mosComponents.length) return null;
+
+  const preferredOutputNet = preferredPortNet(module, 'output');
+  const first = stages.find((stage) => stage.inputNet === preferredOutputNet) ??
+    [...stages].sort((left, right) => left.outputNet.localeCompare(right.outputNet))[0];
+  if (!first) return null;
+
+  const ordered: CmosRingStage[] = [];
+  const visited = new Set<string>();
+  let current: CmosRingStage | undefined = first;
+  while (current && !visited.has(current.outputNet)) {
+    ordered.push(current);
+    visited.add(current.outputNet);
+    current = stages.find((stage) => stage.inputNet === current?.outputNet);
+  }
+  if (ordered.length !== stages.length || ordered.at(-1)?.outputNet !== first.inputNet) return null;
+  return { stages: ordered, powerNet, groundNet };
 }
 
 function findCmosInverterLayout(module: CircuitModule, activeComponents: CircuitComponent[]): CmosInverterLayout | null {
@@ -1315,6 +1379,62 @@ function autoLayoutOpampFeedbackModule(module: CircuitModule, layout: OpampFeedb
   return module;
 }
 
+function autoLayoutCmosRingModule(module: CircuitModule, layout: CmosRingLayout): CircuitModule {
+  const placed = new Set<string>();
+  const stageX = new Map<string, number>();
+  const xStart = 300;
+  const stageSpacing = 360;
+
+  layout.stages.forEach((stage, index) => {
+    const x = xStart + index * stageSpacing;
+    stageX.set(stage.outputNet, x);
+    stage.pmos.position = snapPoint({ x, y: 160 });
+    stage.pmos.rotation = 0;
+    stage.nmos.position = snapPoint({ x, y: 380 });
+    stage.nmos.rotation = 0;
+    placed.add(stage.pmos.id);
+    placed.add(stage.nmos.id);
+  });
+
+  const shuntCounts = new Map<string, number>();
+  let railBranchIndex = 0;
+  let fallbackIndex = 0;
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    const [first, second] = component.pins;
+    if (first && second && component.pins.length === 2) {
+      const stage = layout.stages.find((entry) => componentHasNets(component, entry.outputNet, layout.groundNet));
+      if (stage) {
+        const index = shuntCounts.get(stage.outputNet) ?? 0;
+        shuntCounts.set(stage.outputNet, index + 1);
+        placeVertical(component, stage.outputNet, layout.groundNet, {
+          x: (stageX.get(stage.outputNet) ?? xStart) + 120 + index * 110,
+          y: 560,
+        });
+        placed.add(component.id);
+        continue;
+      }
+      if (componentHasNets(component, layout.powerNet, layout.groundNet)) {
+        placeVertical(component, layout.powerNet, layout.groundNet, {
+          x: 100 - railBranchIndex * 110,
+          y: 280,
+        });
+        railBranchIndex += 1;
+        placed.add(component.id);
+        continue;
+      }
+    }
+    component.position = snapPoint({
+      x: xStart + layout.stages.length * stageSpacing + (fallbackIndex % 2) * 150,
+      y: 180 + Math.floor(fallbackIndex / 2) * 140,
+    });
+    component.rotation = normalizeRotation(component.rotation);
+    placed.add(component.id);
+    fallbackIndex += 1;
+  }
+  return module;
+}
+
 function autoLayoutCmosInverterModule(module: CircuitModule, layout: CmosInverterLayout): CircuitModule {
   const placed = new Set<string>();
   layout.pmos.position = snapPoint({ x: 420, y: 150 });
@@ -1934,15 +2054,13 @@ function activePlacementScore(component: CircuitComponent): number {
 }
 
 function isLdoLikeModule(module: CircuitModule, activeComponents: CircuitComponent[]): boolean {
-  const text = [
-    module.module_id,
-    module.name,
-    ...module.components.flatMap((component) => [component.id, component.name, component.value]),
-  ].join(' ').toLowerCase();
-  const hasPassDevice = activeComponents.some((component) => /pass|ldo|pmos/i.test(`${component.id} ${component.name} ${component.value}`));
+  const moduleText = `${module.module_id} ${module.name}`.toLowerCase();
+  const hasNamedPassDevice = activeComponents.some((component) => (
+    /(^|[_-])m?p(ass)?($|[_-])|\bmp\b|pass|ldo/i.test(`${component.id} ${component.name}`)
+  ));
   const hasInputOutputRails = module.ports.some((port) => port.direction === 'input' && !isGroundPort(port)) &&
     module.ports.some((port) => port.direction === 'output' && !isGroundPort(port));
-  return activeComponents.length >= 3 && hasInputOutputRails && (text.includes('ldo') || hasPassDevice);
+  return activeComponents.length >= 3 && hasInputOutputRails && (/ldo|regulator/.test(moduleText) || hasNamedPassDevice);
 }
 
 function findPassDevice(activeComponents: CircuitComponent[], powerNet: string, outputNet: string): CircuitComponent | undefined {
@@ -2453,14 +2571,69 @@ function routePointsForModule(
   startEndpoint?: CircuitWireEndpoint,
   endEndpoint?: CircuitWireEndpoint,
   net?: string,
+  occupiedWires: CircuitWire[] = [],
 ): CircuitPosition[] {
   const obstacles = obstaclesForEndpoints(module, startEndpoint, endEndpoint, net);
   const candidates = orthogonalRouteCandidates(startPoint, endPoint, obstacles);
   return candidates
     .filter((points) => routeIsClear(points, obstacles))
-    .sort((left, right) => routeCost(left) - routeCost(right))[0] ?? routePoints(startPoint, endPoint);
+    .sort((left, right) => (
+      routeCost(left) + routeCrossingPenalty(left, net, occupiedWires) -
+      routeCost(right) - routeCrossingPenalty(right, net, occupiedWires)
+    ))[0] ?? routePoints(startPoint, endPoint);
 }
 
+function routeCrossingPenalty(points: CircuitPosition[], net: string | undefined, occupiedWires: CircuitWire[]): number {
+  if (!net || occupiedWires.length === 0) return 0;
+  let conflicts = 0;
+  for (const wire of occupiedWires) {
+    if (!wire.net || wire.net === net) continue;
+    const occupiedPoints = wire.points ?? [];
+    for (let leftIndex = 1; leftIndex < points.length; leftIndex += 1) {
+      const leftStart = points[leftIndex - 1];
+      const leftEnd = points[leftIndex];
+      if (!leftStart || !leftEnd) continue;
+      for (let rightIndex = 1; rightIndex < occupiedPoints.length; rightIndex += 1) {
+        const rightStart = occupiedPoints[rightIndex - 1];
+        const rightEnd = occupiedPoints[rightIndex];
+        if (!rightStart || !rightEnd) continue;
+        if (orthogonalSegmentsConflict(leftStart, leftEnd, rightStart, rightEnd)) conflicts += 1;
+      }
+    }
+  }
+  return conflicts * 1_000_000;
+}
+
+function orthogonalSegmentsConflict(
+  leftStart: CircuitPosition,
+  leftEnd: CircuitPosition,
+  rightStart: CircuitPosition,
+  rightEnd: CircuitPosition,
+): boolean {
+  const leftVertical = leftStart.x === leftEnd.x;
+  const rightVertical = rightStart.x === rightEnd.x;
+  const leftHorizontal = leftStart.y === leftEnd.y;
+  const rightHorizontal = rightStart.y === rightEnd.y;
+  if (leftVertical && rightVertical) {
+    return leftStart.x === rightStart.x &&
+      Math.max(Math.min(leftStart.y, leftEnd.y), Math.min(rightStart.y, rightEnd.y)) <=
+        Math.min(Math.max(leftStart.y, leftEnd.y), Math.max(rightStart.y, rightEnd.y));
+  }
+  if (leftHorizontal && rightHorizontal) {
+    return leftStart.y === rightStart.y &&
+      Math.max(Math.min(leftStart.x, leftEnd.x), Math.min(rightStart.x, rightEnd.x)) <=
+        Math.min(Math.max(leftStart.x, leftEnd.x), Math.max(rightStart.x, rightEnd.x));
+  }
+  const verticalStart = leftVertical ? leftStart : rightVertical ? rightStart : null;
+  const verticalEnd = leftVertical ? leftEnd : rightVertical ? rightEnd : null;
+  const horizontalStart = leftHorizontal ? leftStart : rightHorizontal ? rightStart : null;
+  const horizontalEnd = leftHorizontal ? leftEnd : rightHorizontal ? rightEnd : null;
+  if (!verticalStart || !verticalEnd || !horizontalStart || !horizontalEnd) return false;
+  return verticalStart.x >= Math.min(horizontalStart.x, horizontalEnd.x) &&
+    verticalStart.x <= Math.max(horizontalStart.x, horizontalEnd.x) &&
+    horizontalStart.y >= Math.min(verticalStart.y, verticalEnd.y) &&
+    horizontalStart.y <= Math.max(verticalStart.y, verticalEnd.y);
+}
 function obstaclesForEndpoints(
   module: CircuitModule,
   startEndpoint?: CircuitWireEndpoint,
@@ -3059,12 +3232,14 @@ function materializeNetWires(
     if (shouldRepresentNetWithLocalLabel(module, net)) continue;
     if (shouldRepresentSignalNetWithLocalLabel(module, net, endpoints)) continue;
     if (endpoints.length >= 4) {
-      const spineWires = materializeEndpointSpineWires(module, net, endpoints, existingIds, usedPairs);
-      if (spineWires.length > 0) {
-        wires.push(...spineWires);
-        continue;
+      if (!isCmosRingFeedbackNet(module, net)) {
+        const spineWires = materializeEndpointSpineWires(module, net, endpoints, existingIds, usedPairs, wires);
+        if (spineWires.length > 0) {
+          wires.push(...spineWires);
+          continue;
+        }
       }
-      const treeWires = materializeEndpointTreeWires(module, net, endpoints, existingIds, usedPairs);
+      const treeWires = materializeEndpointTreeWires(module, net, endpoints, existingIds, usedPairs, wires);
       if (treeWires.length > 0) {
         wires.push(...treeWires);
         continue;
@@ -3083,7 +3258,7 @@ function materializeNetWires(
       const endPoint = endpointDrawPoint(endpoint);
       wires.push({
         id,
-        points: routePointsForModule(module, startPoint, endPoint, anchor, endpoint, net),
+        points: routePointsForModule(module, startPoint, endPoint, anchor, endpoint, net, wires),
         from: stripEndpoint(startPoint, anchor),
         to: stripEndpoint(endPoint, endpoint),
         net,
@@ -3100,6 +3275,7 @@ function materializeEndpointSpineWires(
   endpoints: EndpointHit[],
   existingIds: Set<string>,
   usedPairs: Set<string>,
+  occupiedWires: CircuitWire[],
 ): CircuitWire[] {
   const uniqueEndpoints = endpoints.filter((endpoint, index) => (
     endpoints.findIndex((candidate) => distance(endpointDrawPoint(endpoint), endpointDrawPoint(candidate)) < 1) === index
@@ -3115,7 +3291,7 @@ function materializeEndpointSpineWires(
   if (Math.max(spanX, spanY) < SCHEMATIC_GRID * 6) return [];
 
   const root = chooseSpineRoot(module, net, uniqueEndpoints, orientation);
-  const routeSpecs = chooseSpineRouteSpecs(module, net, uniqueEndpoints, root, orientation, usedPairs);
+  const routeSpecs = chooseSpineRouteSpecs(module, net, uniqueEndpoints, root, orientation, usedPairs, occupiedWires);
   if (!routeSpecs || routeSpecs.length < uniqueEndpoints.length - 1) return [];
 
   const localExistingIds = new Set(existingIds);
@@ -3172,6 +3348,7 @@ function chooseSpineRouteSpecs(
   root: EndpointHit,
   orientation: 'horizontal' | 'vertical',
   usedPairs: Set<string>,
+  occupiedWires: CircuitWire[],
 ): SpineRouteSpec[] | null {
   const coordinates = endpoints
     .map((endpoint) => orientation === 'horizontal' ? endpoint.y : endpoint.x)
@@ -3214,7 +3391,7 @@ function chooseSpineRouteSpecs(
         failed = true;
         break;
       }
-      const cost = routeCost(points);
+      const cost = routeCost(points) + routeCrossingPenalty(points, net, occupiedWires);
       specs.push({ endpoint, pairKey, startPoint, endPoint, points, cost });
       totalCost += cost;
     }
@@ -3254,8 +3431,10 @@ function materializeEndpointTreeWires(
   endpoints: EndpointHit[],
   existingIds: Set<string>,
   usedPairs: Set<string>,
+  occupiedWires: CircuitWire[],
 ): CircuitWire[] {
-  const root = endpoints.find((endpoint) => endpoint.kind === 'port') ?? chooseNetAnchor(module, net, endpoints);
+  const root = cmosRingFeedbackAnchor(module, net, endpoints) ??
+    endpoints.find((endpoint) => endpoint.kind === 'port') ?? chooseNetAnchor(module, net, endpoints);
   const connected = [root];
   const remaining = endpoints.filter((endpoint) => endpoint !== root);
   const wires: CircuitWire[] = [];
@@ -3284,8 +3463,9 @@ function materializeEndpointTreeWires(
           source,
           target,
           net,
+          occupiedWires,
         );
-        const cost = routeCost(points);
+        const cost = routeCost(points) + routeCrossingPenalty(points, net, occupiedWires);
         if (!best || cost < best.cost) {
           best = { source, target, targetIndex, points, cost, pairKey };
         }
@@ -3414,6 +3594,7 @@ function shouldRepresentSignalNetWithLocalLabel(module: CircuitModule, net: stri
   if (!net || endpoints.length < 2) return false;
   if (!isReadableSignalNetName(net)) return false;
   if (module.ports.some((port) => port.net === net)) return false;
+  if (isCmosRingSignalNet(module, net)) return false;
   if (isCurrentMirrorGateNet(module, net)) return false;
   if (isCascodeBiasNet(module, net)) return true;
   const xs = endpoints.map((endpoint) => endpoint.x);
@@ -3425,6 +3606,41 @@ function shouldRepresentSignalNetWithLocalLabel(module: CircuitModule, net: stri
   }
   return spanX > 260 || spanY > 180;
 }
+
+function isCmosRingSignalNet(module: CircuitModule, net: string): boolean {
+  const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
+  const layout = findCmosRingLayout(module, activeComponents);
+  return Boolean(layout?.stages.some((stage) => stage.inputNet === net || stage.outputNet === net));
+}
+function isCmosRingFeedbackNet(module: CircuitModule, net: string): boolean {
+  const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
+  const layout = findCmosRingLayout(module, activeComponents);
+  const first = layout?.stages[0];
+  const last = layout?.stages.at(-1);
+  return Boolean(first && last && first.inputNet === net && last.outputNet === net);
+}
+
+function cmosRingFeedbackAnchor(
+  module: CircuitModule,
+  net: string,
+  endpoints: EndpointHit[],
+): EndpointHit | null {
+  const activeComponents = module.components.filter((component) => component.type === 'M' || component.type === 'Q');
+  const layout = findCmosRingLayout(module, activeComponents);
+  const first = layout?.stages[0];
+  const last = layout?.stages.at(-1);
+  if (!first || !last || first.inputNet !== net || last.outputNet !== net) return null;
+  const drainPin = last.pmos.pins.find((pin) => (
+    pin.net === net && /drain|\bd\b/i.test(`${pin.id} ${pin.name}`)
+  ));
+  if (!drainPin) return null;
+  return endpoints.find((endpoint) => (
+    endpoint.kind === 'pin' &&
+    endpoint.component_id === last.pmos.id &&
+    endpoint.pin_id === drainPin.id
+  )) ?? null;
+}
+
 
 function isLdoInternalLabelNet(module: CircuitModule, net: string): boolean {
   const moduleText = `${module.module_id} ${module.name}`.toLowerCase();
