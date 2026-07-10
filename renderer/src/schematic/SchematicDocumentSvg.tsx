@@ -1,6 +1,9 @@
 import type { MouseEventHandler, PointerEventHandler, Ref } from 'react';
 import type { CircuitComponent, CircuitPosition, CircuitWire } from '../types';
 import {
+  blockBodySize,
+  blockPinBodyWorld,
+  blockPinSide,
   componentBounds,
   isPmosComponent,
   isGroundPort,
@@ -537,21 +540,23 @@ function ComponentSymbol({ component, selected, hovered }: { component: CircuitC
       >
         {component.name}
       </text>
-      <text
-        x={labels.value.x}
-        y={labels.value.y}
-        textAnchor={labels.value.anchor}
-        fontSize={COMPONENT_VALUE_FONT_SIZE}
-        fontFamily={LABEL_FONT}
-        fill={LABEL_COLOR}
-        stroke={LABEL_HALO_COLOR}
-        strokeWidth="3"
-        paintOrder="stroke"
-        pointerEvents="none"
-        data-testid="schematic-component-value-label"
-      >
-        {component.value}
-      </text>
+      {component.type !== 'BLOCK' ? (
+        <text
+          x={labels.value.x}
+          y={labels.value.y}
+          textAnchor={labels.value.anchor}
+          fontSize={COMPONENT_VALUE_FONT_SIZE}
+          fontFamily={LABEL_FONT}
+          fill={LABEL_COLOR}
+          stroke={LABEL_HALO_COLOR}
+          strokeWidth="3"
+          paintOrder="stroke"
+          pointerEvents="none"
+          data-testid="schematic-component-value-label"
+        >
+          {component.value}
+        </text>
+      ) : null}
     </g>
   );
 }
@@ -664,6 +669,13 @@ function componentLabelPositions(component: CircuitComponent): {
       value: { x: x + 8, y: y + 78, anchor: 'middle' },
     };
   }
+  if (component.type === 'BLOCK') {
+    const { height } = blockBodySize(component);
+    return {
+      name: { x, y: y - height / 2 - 18, anchor: 'middle' },
+      value: { x, y, anchor: 'middle' },
+    };
+  }
   return {
     name: { x, y: y - (isActive ? 68 : 42), anchor: 'middle' },
     value: { x, y: y + (isActive ? 74 : 44), anchor: 'middle' },
@@ -671,6 +683,17 @@ function componentLabelPositions(component: CircuitComponent): {
 }
 
 function LeadLines({ component }: { component: CircuitComponent }) {
+  if (component.type === 'BLOCK') {
+    return (
+      <g stroke={SYMBOL_COLOR} strokeWidth="2.2" pointerEvents="none" data-testid="schematic-block-leads">
+        {component.pins.map((pin, index) => {
+          const endpoint = pinWorld(component, pin, index);
+          const body = blockPinBodyWorld(component, pin, index);
+          return <line key={`block-lead-${pin.id}`} x1={endpoint.x} y1={endpoint.y} x2={body.x} y2={body.y} />;
+        })}
+      </g>
+    );
+  }
   if (component.pins.length !== 2) return null;
   const bodyOffsets = bodyTerminalOffsets(component);
   return (
@@ -726,10 +749,74 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
       </g>
     );
   }
+  if (component.type === 'BLOCK') {
+    const { width, height } = blockBodySize(component);
+    return (
+      <g pointerEvents="none" data-testid="schematic-symbol-body" data-symbol-kind="block">
+        <g transform={`rotate(${rotation} ${x} ${y})`}>
+          <rect
+            x={x - width / 2}
+            y={y - height / 2}
+            width={width}
+            height={height}
+            rx="2"
+            fill="#fff"
+            stroke={SYMBOL_COLOR}
+            strokeWidth={SYMBOL_STROKE}
+          />
+          <text
+            x={x}
+            y={y + 6}
+            textAnchor="middle"
+            fontSize="18"
+            fontFamily={LABEL_FONT}
+            fontWeight="700"
+            fill={LABEL_COLOR}
+            stroke={LABEL_HALO_COLOR}
+            strokeWidth="3"
+            paintOrder="stroke"
+            data-testid="schematic-block-label"
+          >
+            {component.value}
+          </text>
+        </g>
+        {component.pins.map((pin, index) => {
+          const body = blockPinBodyWorld(component, pin, index);
+          const side = blockPinSide(component, pin, index);
+          const dx = body.x - x;
+          const dy = body.y - y;
+          const horizontalEdge = Math.abs(dx) >= Math.abs(dy);
+          const labelX = horizontalEdge ? body.x + (dx < 0 ? 8 : -8) : body.x;
+          const labelY = horizontalEdge ? body.y + 5 : body.y + (dy < 0 ? 16 : -8);
+          const anchor: TextAnchor = horizontalEdge ? (dx < 0 ? 'start' : 'end') : 'middle';
+          return (
+            <text
+              key={`block-pin-label-${pin.id}`}
+              x={labelX}
+              y={labelY}
+              textAnchor={anchor}
+              fontSize="13"
+              fontFamily={LABEL_FONT}
+              fill={LABEL_COLOR}
+              stroke={LABEL_HALO_COLOR}
+              strokeWidth="2.5"
+              paintOrder="stroke"
+              data-testid="schematic-block-pin-label"
+              data-pin-id={pin.id}
+              data-pin-side={side}
+            >
+              {pin.name}
+            </text>
+          );
+        })}
+      </g>
+    );
+  }
   if (component.type === 'M') {
     const pmos = isPmosComponent(component);
     const gateX = x - 20;
-    const channelX = x + 12;
+    const channelX = x + 4;
+    const terminalX = x + 22;
     return (
       <g
         transform={`rotate(${rotation} ${x} ${y})`}
@@ -742,23 +829,27 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
         data-testid="schematic-symbol-body"
         data-symbol-kind="mosfet"
         data-symbol-polarity={pmos ? 'pmos' : 'nmos'}
+        data-mos-arrow={pmos ? 'out' : 'in'}
+        data-mos-body="separate"
       >
+        <circle cx={x + 2} cy={y} r="44" fill="#fff" data-testid="schematic-mos-outline" />
         <line x1={gateX} y1={y - 34} x2={gateX} y2={y + 34} />
-        <line x1={channelX} y1={y - 38} x2={channelX} y2={y - 13} />
-        <line x1={channelX} y1={y - 5} x2={channelX} y2={y + 5} />
-        <line x1={channelX} y1={y + 13} x2={channelX} y2={y + 38} />
-        <line x1={x - 58} y1={y} x2={pmos ? x - 31 : gateX} y2={y} />
-        {pmos ? <circle cx={x - 26} cy={y} r="5" fill="#fff" /> : null}
-        <line x1={channelX} y1={y - 30} x2={x + 26} y2={y - 52} />
-        <line x1={channelX} y1={y + 30} x2={x + 26} y2={y + 52} />
-        <line x1={x + 29} y1={y} x2={x + 58} y2={y} />
-        <line x1={x + 26} y1={y - 16} x2={x + 26} y2={y + 16} />
+        <line x1={channelX} y1={y - 36} x2={channelX} y2={y - 14} />
+        <line x1={channelX} y1={y - 7} x2={channelX} y2={y + 7} />
+        <line x1={channelX} y1={y + 14} x2={channelX} y2={y + 36} />
+        <line x1={x - 58} y1={y} x2={gateX} y2={y} />
+        <path d={`M ${channelX} ${y - 30} H ${terminalX} V ${y - 52}`} />
+        <path d={`M ${channelX} ${y + 30} H ${terminalX} V ${y + 52}`} />
+        <line x1={channelX} y1={y} x2={x + 58} y2={y} />
+        <circle cx={terminalX} cy={y - 30} r="2.8" fill={SYMBOL_COLOR} stroke="none" />
+        <circle cx={terminalX} cy={y + 30} r="2.8" fill={SYMBOL_COLOR} stroke="none" />
         <path
           d={pmos
-            ? `M ${x + 21} ${y - 19} l 10 -5 l -3 10 z`
-            : `M ${x + 32} ${y + 24} l -10 5 l 3 -10 z`}
+            ? `M ${x + 20} ${y} L ${x + 10} ${y - 6} L ${x + 10} ${y + 6} Z`
+            : `M ${x + 8} ${y} L ${x + 18} ${y - 6} L ${x + 18} ${y + 6} Z`}
           fill={SYMBOL_COLOR}
           stroke="none"
+          data-testid="schematic-mos-arrow"
         />
       </g>
     );

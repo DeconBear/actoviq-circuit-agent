@@ -149,6 +149,13 @@ export interface CircuitPin {
   id: string;
   name: string;
   net: string;
+  side?: 'left' | 'right' | 'top' | 'bottom';
+  order?: number;
+}
+
+export interface CircuitBlockStyle {
+  width?: number;
+  height?: number;
 }
 
 export interface CircuitWireEndpoint {
@@ -170,12 +177,13 @@ export interface CircuitWire {
 
 export interface CircuitComponent {
   id: string;
-  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E';
+  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E' | 'BLOCK';
   name: string;
   value: string;
   position: CircuitPosition;
   rotation: number;
   pins: CircuitPin[];
+  block?: CircuitBlockStyle;
 }
 
 export interface CircuitModule {

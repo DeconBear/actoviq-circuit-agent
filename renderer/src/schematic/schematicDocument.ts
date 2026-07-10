@@ -10,9 +10,19 @@ import type {
 
 export const SCHEMATIC_GRID = 20;
 export const PIN_REACH = 12;
+export const BLOCK_PIN_LEAD = 24;
 const ROUTE_OBSTACLE_PADDING = SCHEMATIC_GRID + 4;
 
-export type ToolComponentType = Exclude<CircuitComponent['type'], 'E'>;
+export type ToolComponentType = Exclude<CircuitComponent['type'], 'E' | 'BLOCK'>;
+export type BlockPinSide = NonNullable<CircuitPin['side']>;
+
+export interface BlockDefinition {
+  name?: string;
+  value: string;
+  width?: number;
+  height?: number;
+  pins: Array<Pick<CircuitPin, 'id' | 'name' | 'net' | 'side' | 'order'>>;
+}
 
 export type SchematicSelection =
   | { kind: 'component'; id: string }
@@ -162,6 +172,47 @@ export function makePlacedComponent(
     position,
     rotation: 0,
     pins,
+  };
+}
+
+export function makePlacedBlock(
+  module: CircuitModule,
+  position: CircuitPosition,
+  definition: BlockDefinition,
+): CircuitComponent {
+  const existingIds = new Set(module.components.map((component) => component.id));
+  const id = makeId('block', existingIds);
+  const numericId = id.replace(/^[a-z_-]+/i, '') || String(module.components.length + 1);
+  const usedPinIds = new Set<string>();
+  const pins = definition.pins.map((pin, index) => {
+    const base = pin.id.trim().replace(/[^A-Za-z0-9_-]+/g, '_') || `p${index + 1}`;
+    let pinId = base;
+    let suffix = 2;
+    while (usedPinIds.has(pinId)) {
+      pinId = `${base}_${suffix}`;
+      suffix += 1;
+    }
+    usedPinIds.add(pinId);
+    return {
+      id: pinId,
+      name: pin.name.trim() || `PIN${index + 1}`,
+      net: pin.net.trim() || `n_${id}_${index + 1}`,
+      side: pin.side,
+      order: typeof pin.order === 'number' && Number.isFinite(pin.order) ? pin.order : index,
+    };
+  });
+  return {
+    id,
+    type: 'BLOCK',
+    name: definition.name?.trim() || `U${numericId}`,
+    value: definition.value.trim() || 'Custom block',
+    position,
+    rotation: 0,
+    pins: pins.length > 0 ? pins : [{ id: 'p1', name: 'PIN1', net: `n_${id}_1`, side: 'left', order: 0 }],
+    block: {
+      width: definition.width,
+      height: definition.height,
+    },
   };
 }
 
@@ -2200,10 +2251,90 @@ export function pinWorld(component: CircuitComponent, pin: CircuitPin, index: nu
   };
 }
 
+export function blockPinSide(component: CircuitComponent, pin: CircuitPin, index: number): BlockPinSide {
+  if (pin.side) return pin.side;
+  const key = `${pin.id} ${pin.name}`.toLowerCase();
+  if (/\b(vdd|vcc|vin|v\+)\b/.test(key)) return 'top';
+  if (/\b(gnd|vss|vee|0|v-)\b/.test(key)) return 'bottom';
+  if (/\b(out|output|q)\b/.test(key)) return 'right';
+  return index < Math.ceil(component.pins.length / 2) ? 'left' : 'right';
+}
+
+export function blockBodySize(component: CircuitComponent): { width: number; height: number } {
+  const sideCounts: Record<BlockPinSide, number> = { left: 0, right: 0, top: 0, bottom: 0 };
+  component.pins.forEach((pin, index) => {
+    sideCounts[blockPinSide(component, pin, index)] += 1;
+  });
+  const requestedWidth = Number(component.block?.width);
+  const requestedHeight = Number(component.block?.height);
+  const minimumWidth = Math.max(120, Math.max(sideCounts.top, sideCounts.bottom) * 38 + 32);
+  const minimumHeight = Math.max(84, Math.max(sideCounts.left, sideCounts.right) * 30 + 30);
+  return {
+    width: Math.min(480, Math.max(minimumWidth, Number.isFinite(requestedWidth) ? requestedWidth : 160)),
+    height: Math.min(480, Math.max(minimumHeight, Number.isFinite(requestedHeight) ? requestedHeight : 100)),
+  };
+}
+
+function blockPinLocalOffsets(
+  component: CircuitComponent,
+  pin: CircuitPin,
+  index: number,
+): { endpoint: CircuitPosition; body: CircuitPosition; side: BlockPinSide } {
+  const side = blockPinSide(component, pin, index);
+  const { width, height } = blockBodySize(component);
+  const ordered = component.pins
+    .map((entry, entryIndex) => ({
+      pin: entry,
+      index: entryIndex,
+      order: typeof entry.order === 'number' && Number.isFinite(entry.order) ? entry.order : entryIndex,
+    }))
+    .filter((entry) => blockPinSide(component, entry.pin, entry.index) === side)
+    .sort((left, right) => left.order - right.order || left.index - right.index);
+  const rank = Math.max(0, ordered.findIndex((entry) => entry.index === index));
+  if (side === 'left' || side === 'right') {
+    const y = -height / 2 + height * ((rank + 1) / (ordered.length + 1));
+    const bodyX = (side === 'left' ? -1 : 1) * width / 2;
+    return {
+      side,
+      body: { x: bodyX, y },
+      endpoint: { x: bodyX + (side === 'left' ? -BLOCK_PIN_LEAD : BLOCK_PIN_LEAD), y },
+    };
+  }
+  const x = -width / 2 + width * ((rank + 1) / (ordered.length + 1));
+  const bodyY = (side === 'top' ? -1 : 1) * height / 2;
+  return {
+    side,
+    body: { x, y: bodyY },
+    endpoint: { x, y: bodyY + (side === 'top' ? -BLOCK_PIN_LEAD : BLOCK_PIN_LEAD) },
+  };
+}
+
+export function blockPinBodyWorld(component: CircuitComponent, pin: CircuitPin, index: number): CircuitPosition {
+  const offset = rotateOffset(blockPinLocalOffsets(component, pin, index).body, normalizeRotation(component.rotation));
+  return { x: component.position.x + offset.x, y: component.position.y + offset.y };
+}
+
 export function componentBounds(component: CircuitComponent): SchematicBounds {
   const pins = component.pins.map((pin, index) => pinWorld(component, pin, index));
-  const xs = [component.position.x - 52, component.position.x + 52, ...pins.map((pin) => pin.x)];
-  const ys = [component.position.y - 52, component.position.y + 52, ...pins.map((pin) => pin.y)];
+  const bodyPoints = component.type === 'BLOCK'
+    ? (() => {
+        const { width, height } = blockBodySize(component);
+        return [
+          { x: -width / 2, y: -height / 2 },
+          { x: width / 2, y: -height / 2 },
+          { x: width / 2, y: height / 2 },
+          { x: -width / 2, y: height / 2 },
+        ].map((point) => {
+          const offset = rotateOffset(point, normalizeRotation(component.rotation));
+          return { x: component.position.x + offset.x, y: component.position.y + offset.y };
+        });
+      })()
+    : [
+        { x: component.position.x - 52, y: component.position.y - 52 },
+        { x: component.position.x + 52, y: component.position.y + 52 },
+      ];
+  const xs = [...bodyPoints.map((point) => point.x), ...pins.map((pin) => pin.x)];
+  const ys = [...bodyPoints.map((point) => point.y), ...pins.map((pin) => pin.y)];
   return {
     minX: Math.min(...xs),
     minY: Math.min(...ys),
@@ -3051,6 +3182,10 @@ function pointHitsComponentGraphic(component: CircuitComponent, world: CircuitPo
   if (component.type === 'E') return pointNearOpampGraphic(component, world);
 
   const local = componentLocalPoint(component, world);
+  if (component.type === 'BLOCK') {
+    const { width, height } = blockBodySize(component);
+    return Math.abs(local.x) <= width / 2 && Math.abs(local.y) <= height / 2;
+  }
   if (component.type === 'R') return Math.abs(local.x) <= 32 && Math.abs(local.y) <= 14;
   if (component.type === 'C') return Math.abs(local.x) <= 16 && Math.abs(local.y) <= 36;
   if (component.type === 'L') return Math.abs(local.x) <= 38 && Math.abs(local.y) <= 12;
@@ -3097,16 +3232,20 @@ function componentLocalPoint(component: CircuitComponent, world: CircuitPosition
 
 function pointNearMosGraphic(component: CircuitComponent, world: CircuitPosition): boolean {
   const local = componentLocalPoint(component, world);
-  if (Math.abs(local.x) <= 46 && Math.abs(local.y) <= 58) return true;
-  const pmos = isPmosComponent(component);
+  if (Math.hypot(local.x - 2, local.y) <= 46) return true;
   const gateX = -20;
-  const channelX = 12;
+  const channelX = 4;
+  const terminalX = 22;
   const segments: Array<[CircuitPosition, CircuitPosition]> = [
     [{ x: gateX, y: -34 }, { x: gateX, y: 34 }],
-    [{ x: channelX, y: -38 }, { x: channelX, y: 38 }],
-    [{ x: -58, y: 0 }, { x: pmos ? -31 : gateX, y: 0 }],
-    [{ x: channelX, y: -30 }, { x: 26, y: -52 }],
-    [{ x: channelX, y: 30 }, { x: 26, y: 52 }],
+    [{ x: channelX, y: -36 }, { x: channelX, y: -14 }],
+    [{ x: channelX, y: -7 }, { x: channelX, y: 7 }],
+    [{ x: channelX, y: 14 }, { x: channelX, y: 36 }],
+    [{ x: -58, y: 0 }, { x: gateX, y: 0 }],
+    [{ x: channelX, y: -30 }, { x: terminalX, y: -30 }],
+    [{ x: terminalX, y: -30 }, { x: terminalX, y: -52 }],
+    [{ x: channelX, y: 30 }, { x: terminalX, y: 30 }],
+    [{ x: terminalX, y: 30 }, { x: terminalX, y: 52 }],
     [{ x: channelX, y: 0 }, { x: 58, y: 0 }],
   ];
   return segments.some(([start, end]) => pointToSegmentDistance(local, start, end) <= 8);
@@ -3152,11 +3291,13 @@ export function wireIdToken(value: string): string {
 function pinOffset(component: CircuitComponent, pin: CircuitPin, index: number): CircuitPosition {
   const key = `${pin.id} ${pin.name}`.toLowerCase();
   let offset: CircuitPosition;
-  if (component.type === 'M') {
+  if (component.type === 'BLOCK') {
+    offset = blockPinLocalOffsets(component, pin, index).endpoint;
+  } else if (component.type === 'M') {
     const pmos = isPmosComponent(component);
     if (/gate|\bg\b/.test(key)) offset = { x: -58, y: 0 };
-    else if (/drain|\bd\b/.test(key)) offset = { x: 26, y: pmos ? 52 : -52 };
-    else if (/source|\bs\b/.test(key)) offset = { x: 26, y: pmos ? -52 : 52 };
+    else if (/drain|\bd\b/.test(key)) offset = { x: 22, y: pmos ? 52 : -52 };
+    else if (/source|\bs\b/.test(key)) offset = { x: 22, y: pmos ? -52 : 52 };
     else offset = { x: 58, y: 0 };
   } else if (component.type === 'Q') {
     if (/base|\bb\b/.test(key)) offset = { x: -58, y: 0 };

@@ -85,6 +85,41 @@ rejected, not silently rebased. Supported initial operations are
 Use `set_module_note`, `set_module_preview`, and `set_module_metadata` for the
 GUI card note, preview preference, name, kind, function summary, and parameter
 summary. Keep the stable module `id` unchanged when editing metadata.
+
+Agents may create schematic-only functional blocks with `add_component` and
+`type: "BLOCK"`. A block accepts any non-empty `pins` array; each pin has a
+stable `id`, visible `name`, electrical `net`, and optional `side`
+(`left|right|top|bottom`) plus `order`. Optional `block.width` and
+`block.height` control its symbol body. Example:
+
+```json
+{
+  "op": "add_component",
+  "module_id": "control",
+  "component": {
+    "id": "adc_block",
+    "type": "BLOCK",
+    "name": "U1",
+    "value": "ADC + DSP",
+    "position": { "x": 420, "y": 220 },
+    "rotation": 0,
+    "pins": [
+      { "id": "ain", "name": "AIN", "net": "filtered", "side": "left", "order": 0 },
+      { "id": "clk", "name": "CLK", "net": "sample_clk", "side": "left", "order": 1 },
+      { "id": "data", "name": "DATA", "net": "sample_data", "side": "right", "order": 0 },
+      { "id": "vdd", "name": "VDD", "net": "vdd", "side": "top", "order": 0 },
+      { "id": "gnd", "name": "GND", "net": "0", "side": "bottom", "order": 0 }
+    ],
+    "block": { "width": 180, "height": 140 }
+  }
+}
+```
+
+`BLOCK` is deliberately not emitted as a SPICE device. The compiler records
+it as a comment/source-map entry while the underlying simulated behavior must
+still be implemented with primitive R/C/L/D/Q/M/V/I components. The editable
+canvas, module card, and document SVG all render the block from module data.
+
 Schemas live under `schemas/`.
 
 The desktop module canvas keeps `module.circuit.json` as the structured manual

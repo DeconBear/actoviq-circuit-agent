@@ -9,7 +9,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import type { CircuitComponent, CircuitModule, CircuitPosition, CircuitWire } from '../../types';
+import type { CircuitComponent, CircuitModule, CircuitPin, CircuitPosition, CircuitWire } from '../../types';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import {
   addWire,
@@ -22,6 +22,7 @@ import {
   hitEndpoint,
   hitWire,
   makeId,
+  makePlacedBlock,
   makePlacedComponent,
   moduleBounds,
   normalizeConnectivity,
@@ -34,6 +35,8 @@ import {
   rerouteStoredWires,
   SCHEMATIC_GRID,
   snapPoint,
+  type BlockDefinition,
+  type BlockPinSide,
   type EndpointHit,
   type SchematicDocument,
   type SchematicBounds,
@@ -41,7 +44,7 @@ import {
   type ToolComponentType,
 } from '../../schematic/schematicDocument';
 
-type ToolMode = 'select' | 'wire' | 'place';
+type ToolMode = 'select' | 'wire' | 'place' | 'place-block';
 type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
 const COMPONENT_TOOL_LABELS: Record<ToolComponentType, string> = {
@@ -57,6 +60,37 @@ const COMPONENT_TOOL_LABELS: Record<ToolComponentType, string> = {
 
 const AUTOPAN_MARGIN_PX = 44;
 const AUTOPAN_STEP_RATIO = 0.055;
+const MAX_BLOCK_PINS = 32;
+
+interface BlockDraftPin {
+  id: string;
+  name: string;
+  net: string;
+  side: BlockPinSide;
+}
+
+interface BlockDraft {
+  name: string;
+  value: string;
+  width: number;
+  height: number;
+  pins: BlockDraftPin[];
+}
+
+function defaultBlockDraft(): BlockDraft {
+  return {
+    name: '',
+    value: 'Functional block',
+    width: 180,
+    height: 120,
+    pins: [
+      { id: 'p1', name: 'IN', net: 'block_in', side: 'left' },
+      { id: 'p2', name: 'EN', net: 'block_en', side: 'left' },
+      { id: 'p3', name: 'OUT', net: 'block_out', side: 'right' },
+      { id: 'p4', name: 'GND', net: '0', side: 'bottom' },
+    ],
+  };
+}
 
 interface Props {
   module: CircuitModule;
@@ -130,6 +164,9 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
   const [placeType, setPlaceType] = useState<ToolComponentType>('R');
+  const [blockDialogOpen, setBlockDialogOpen] = useState(false);
+  const [blockDraft, setBlockDraft] = useState<BlockDraft>(() => defaultBlockDraft());
+  const [pendingBlock, setPendingBlock] = useState<BlockDefinition | null>(null);
   const [selection, setSelection] = useState<SchematicSelection>(null);
   const [wireStart, setWireStart] = useState<EndpointHit | null>(null);
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
@@ -201,7 +238,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (interactionCursor === 'grabbing') return 'grabbing';
     if (spacePanActive) return 'grab';
     if (tool === 'wire') return 'crosshair';
-    if (tool === 'place') return 'copy';
+    if (tool === 'place' || tool === 'place-block') return 'copy';
     return interactionCursor;
   })();
 
@@ -210,7 +247,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     cancelPendingDragPreviewUpdate();
     setDraft(createSchematicDocument(module).module);
     setDirty(false);
+    setTool('select');
     setSelection(null);
+    setBlockDialogOpen(false);
+    setBlockDraft(defaultBlockDraft());
+    setPendingBlock(null);
     setWireStart(null);
     setHoverWorld(null);
     setHoverEndpoint(null);
@@ -433,6 +474,22 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     const world = screenToWorld(event);
     setHoverWorld(snapPoint(world));
     setHoverEndpoint(tool === 'wire' || tool === 'place' || wireStart ? hitEndpoint(document, world) : null);
+
+    if (tool === 'place-block') {
+      if (!pendingBlock) {
+        setBlockDialogOpen(true);
+        return;
+      }
+      const next = cloneModule(draft);
+      const component = makePlacedBlock(next, snapPoint(world), pendingBlock);
+      next.components.push(component);
+      commitDraft(next);
+      setSelection({ kind: 'component', id: component.id });
+      setPendingBlock(null);
+      setTool('select');
+      setInteractionCursor('grab');
+      return;
+    }
 
     if (tool === 'place') {
       const next = cloneModule(draft);
@@ -936,6 +993,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setSelection(null);
       setContextMenu(null);
       setTool('select');
+      setBlockDialogOpen(false);
+      setPendingBlock(null);
       setSpacePanActive(false);
       setHoverSelection(null);
       setInteractionCursor('default');
@@ -1053,6 +1112,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setHoverEndpoint(null);
       setHoverSelection(null);
       setInteractionCursor('default');
+      return;
+    }
+    if (key === 'b') {
+      event.preventDefault();
+      openBlockDialog();
       return;
     }
     const componentType = event.key.toUpperCase() as ToolComponentType;
@@ -1177,6 +1241,112 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setInteractionCursor('default');
   }
 
+  function openBlockDialog() {
+    setBlockDraft(defaultBlockDraft());
+    setBlockDialogOpen(true);
+    setPendingBlock(null);
+    setTool('select');
+    setWireStart(null);
+    setHoverEndpoint(null);
+    setHoverSelection(null);
+    setContextMenu(null);
+  }
+
+  function setBlockPinCount(value: number) {
+    const count = clamp(Math.round(value || 1), 1, MAX_BLOCK_PINS);
+    setBlockDraft((current) => {
+      const pins = current.pins.slice(0, count);
+      while (pins.length < count) {
+        const index = pins.length;
+        pins.push({
+          id: `p${index + 1}`,
+          name: `PIN${index + 1}`,
+          net: `block_${index + 1}`,
+          side: index % 2 === 0 ? 'left' : 'right',
+        });
+      }
+      return { ...current, pins };
+    });
+  }
+
+  function updateBlockDraftPin(index: number, patch: Partial<BlockDraftPin>) {
+    setBlockDraft((current) => ({
+      ...current,
+      pins: current.pins.map((pin, pinIndex) => pinIndex === index ? { ...pin, ...patch } : pin),
+    }));
+  }
+
+  function beginBlockPlacement() {
+    const definition: BlockDefinition = {
+      name: blockDraft.name,
+      value: blockDraft.value,
+      width: blockDraft.width,
+      height: blockDraft.height,
+      pins: blockDraft.pins.map((pin, index) => ({ ...pin, order: index })),
+    };
+    setPendingBlock(definition);
+    setBlockDialogOpen(false);
+    setTool('place-block');
+    setWireStart(null);
+    setHoverEndpoint(null);
+    setHoverSelection(null);
+    setInteractionCursor('default');
+    editorShellRef.current?.focus();
+  }
+
+  function updateSelectedBlockPin(pinId: string, patch: Partial<CircuitPin>) {
+    if (!selectedComponent || selectedComponent.type !== 'BLOCK') return;
+    const next = cloneModule(draft);
+    const component = next.components.find((entry) => entry.id === selectedComponent.id);
+    const pin = component?.pins.find((entry) => entry.id === pinId);
+    if (!component || !pin) return;
+    const previousNet = pin.net;
+    Object.assign(pin, patch);
+    if (patch.net !== undefined) {
+      pin.net = patch.net.trim() || previousNet;
+      for (const wire of next.wires ?? []) {
+        const touchesPin = [wire.from, wire.to].some((endpoint) => (
+          endpoint?.component_id === component.id && endpoint.pin_id === pin.id
+        ));
+        if (touchesPin) wire.net = pin.net;
+      }
+    }
+    next.wires = rerouteStoredWires(next);
+    commitDraft(next);
+  }
+
+  function addSelectedBlockPin() {
+    if (!selectedComponent || selectedComponent.type !== 'BLOCK' || selectedComponent.pins.length >= MAX_BLOCK_PINS) return;
+    const next = cloneModule(draft);
+    const component = next.components.find((entry) => entry.id === selectedComponent.id);
+    if (!component) return;
+    const existing = new Set(component.pins.map((pin) => pin.id));
+    const pinId = makeId('p', existing);
+    const index = component.pins.length;
+    component.pins.push({
+      id: pinId,
+      name: `PIN${index + 1}`,
+      net: `n_${component.id}_${index + 1}`,
+      side: index % 2 === 0 ? 'left' : 'right',
+      order: index,
+    });
+    next.wires = rerouteStoredWires(next);
+    commitDraft(next);
+  }
+
+  function removeSelectedBlockPin(pinId: string) {
+    if (!selectedComponent || selectedComponent.type !== 'BLOCK' || selectedComponent.pins.length <= 1) return;
+    const next = cloneModule(draft);
+    const component = next.components.find((entry) => entry.id === selectedComponent.id);
+    if (!component) return;
+    component.pins = component.pins.filter((pin) => pin.id !== pinId);
+    next.wires = (next.wires ?? []).filter((wire) => ![wire.from, wire.to].some((endpoint) => (
+      endpoint?.component_id === component.id && endpoint.pin_id === pinId
+    )));
+    next.wires = rerouteStoredWires(next);
+    commitDraft(next);
+  }
+
   function updateSelectedComponent(patch: Partial<CircuitComponent>) {
     if (!selectedComponent) return;
     const next = cloneModule(draft);
@@ -1216,8 +1386,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-cursor-mode={editorCursor}
       data-zoom={zoom.toFixed(3)}
       data-space-pan={spacePanActive ? 'true' : 'false'}
+      data-block-dialog={blockDialogOpen ? 'true' : 'false'}
+      data-block-placement-ready={pendingBlock ? 'true' : 'false'}
       data-viewport={JSON.stringify(activeViewBox)}
       data-component-count={draft.components.length}
+      data-components={JSON.stringify(draft.components)}
       data-wire-count={document.wires.length}
       data-net-label-count={document.netLabels.length}
       data-drag-preview={dragPreviewPositions ? 'true' : 'false'}
@@ -1246,7 +1419,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       <div style={styles.toolbar}>
         <button
           style={tool === 'select' ? styles.activeToolButton : styles.toolButton}
-          onClick={() => { setTool('select'); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
+          onClick={() => { setTool('select'); setPendingBlock(null); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
           disabled={busy}
           aria-label="Select tool (S)"
           title="Select tool (S)"
@@ -1256,7 +1429,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         </button>
         <button
           style={tool === 'wire' ? styles.activeToolButton : styles.toolButton}
-          onClick={() => { setTool('wire'); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
+          onClick={() => { setTool('wire'); setPendingBlock(null); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
           disabled={busy}
           aria-label="Wire tool (W)"
           title="Wire tool (W)"
@@ -1268,7 +1441,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           <button
             key={type}
             style={tool === 'place' && placeType === type ? styles.activeToolButton : styles.toolButton}
-            onClick={() => { setTool('place'); setPlaceType(type); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
+            onClick={() => { setTool('place'); setPendingBlock(null); setPlaceType(type); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
             disabled={busy}
             aria-label={COMPONENT_TOOL_LABELS[type]}
             title={COMPONENT_TOOL_LABELS[type]}
@@ -1277,6 +1450,16 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             {type}
           </button>
         ))}
+        <button
+          style={tool === 'place-block' || blockDialogOpen ? styles.activeToolButton : styles.toolButton}
+          onClick={openBlockDialog}
+          disabled={busy}
+          aria-label="Place custom block (B)"
+          title="Place custom block (B)"
+          data-testid="schematic-editor-place-block"
+        >
+          Block
+        </button>
         <span style={styles.toolbarDivider} />
         <button
           style={styles.toolButton}
@@ -1413,14 +1596,109 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
                   <option value="270">270</option>
                 </select>
               </label>
-              <div style={styles.pinList}>
-                {selectedComponent.pins.map((pin) => (
-                  <div key={pin.id} style={styles.pinRow}>
-                    <span>{pin.name}</span>
-                    <code>{pin.net}</code>
+              {selectedComponent.type === 'BLOCK' ? (
+                <>
+                  <div style={styles.fieldGrid}>
+                    <label style={styles.fieldLabel}>
+                      Width
+                      <input
+                        type="number"
+                        min="120"
+                        max="480"
+                        step="20"
+                        style={styles.input}
+                        value={selectedComponent.block?.width ?? 180}
+                        onChange={(event) => updateSelectedComponent({
+                          block: { ...selectedComponent.block, width: Number(event.target.value) },
+                        })}
+                        disabled={busy}
+                        data-testid="schematic-editor-block-width"
+                      />
+                    </label>
+                    <label style={styles.fieldLabel}>
+                      Height
+                      <input
+                        type="number"
+                        min="84"
+                        max="480"
+                        step="20"
+                        style={styles.input}
+                        value={selectedComponent.block?.height ?? 120}
+                        onChange={(event) => updateSelectedComponent({
+                          block: { ...selectedComponent.block, height: Number(event.target.value) },
+                        })}
+                        disabled={busy}
+                        data-testid="schematic-editor-block-height"
+                      />
+                    </label>
                   </div>
-                ))}
-              </div>
+                  <div style={styles.pinEditorHeader}>
+                    <span>Pins ({selectedComponent.pins.length})</span>
+                    <button
+                      type="button"
+                      style={styles.smallButton}
+                      onClick={addSelectedBlockPin}
+                      disabled={busy || selectedComponent.pins.length >= MAX_BLOCK_PINS}
+                      data-testid="schematic-editor-block-add-pin"
+                    >
+                      Add pin
+                    </button>
+                  </div>
+                  <div style={styles.blockPinList} data-testid="schematic-editor-block-pins">
+                    {selectedComponent.pins.map((pin) => (
+                      <div key={pin.id} style={styles.blockPinRow} data-testid={`schematic-editor-block-pin-${pin.id}`}>
+                        <code style={styles.pinId}>{pin.id}</code>
+                        <input
+                          style={styles.compactInput}
+                          value={pin.name}
+                          onChange={(event) => updateSelectedBlockPin(pin.id, { name: event.target.value })}
+                          aria-label={`Pin ${pin.id} label`}
+                          data-testid={`schematic-editor-block-pin-label-${pin.id}`}
+                        />
+                        <input
+                          style={styles.compactInput}
+                          value={pin.net}
+                          onChange={(event) => updateSelectedBlockPin(pin.id, { net: event.target.value })}
+                          aria-label={`Pin ${pin.id} net`}
+                          data-testid={`schematic-editor-block-pin-net-${pin.id}`}
+                        />
+                        <select
+                          style={styles.compactInput}
+                          value={pin.side ?? 'left'}
+                          onChange={(event) => updateSelectedBlockPin(pin.id, { side: event.target.value as BlockPinSide })}
+                          aria-label={`Pin ${pin.id} side`}
+                          data-testid={`schematic-editor-block-pin-side-${pin.id}`}
+                        >
+                          <option value="left">Left</option>
+                          <option value="right">Right</option>
+                          <option value="top">Top</option>
+                          <option value="bottom">Bottom</option>
+                        </select>
+                        <button
+                          type="button"
+                          style={styles.removePinButton}
+                          onClick={() => removeSelectedBlockPin(pin.id)}
+                          disabled={busy || selectedComponent.pins.length <= 1}
+                          aria-label={`Remove pin ${pin.id}`}
+                          title={`Remove pin ${pin.id}`}
+                          data-testid={`schematic-editor-block-pin-remove-${pin.id}`}
+                        >
+                          X
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div style={styles.pinList}>
+                  {selectedComponent.pins.map((pin) => (
+                    <div key={pin.id} style={styles.pinRow}>
+                      <span>{pin.name}</span>
+                      <code>{pin.net}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
             </>
           ) : selection?.kind === 'components' ? (
             <div style={styles.emptyText}>{selection.ids.length} components selected</div>
@@ -1487,6 +1765,155 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           </button>
         </div>
       ) : null}
+      {blockDialogOpen ? (
+        <div
+          style={styles.modalBackdrop}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Configure custom block"
+          data-testid="schematic-block-dialog"
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              setBlockDialogOpen(false);
+            }
+          }}
+        >
+          <div style={styles.blockModal}>
+            <div style={styles.modalHeader}>
+              <div>
+                <div style={styles.panelTitle}>Custom symbol</div>
+                <div style={styles.modalTitle}>Place block</div>
+              </div>
+              <button
+                type="button"
+                style={styles.modalCloseButton}
+                onClick={() => setBlockDialogOpen(false)}
+                aria-label="Close block dialog"
+                title="Close"
+                data-testid="schematic-block-cancel-x"
+              >
+                X
+              </button>
+            </div>
+            <div style={styles.fieldGrid}>
+              <label style={styles.fieldLabel}>
+                Reference
+                <input
+                  style={styles.input}
+                  value={blockDraft.name}
+                  onChange={(event) => setBlockDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="U1"
+                  data-testid="schematic-block-name"
+                />
+              </label>
+              <label style={styles.fieldLabel}>
+                Block label
+                <input
+                  style={styles.input}
+                  value={blockDraft.value}
+                  onChange={(event) => setBlockDraft((current) => ({ ...current, value: event.target.value }))}
+                  data-testid="schematic-block-value"
+                />
+              </label>
+              <label style={styles.fieldLabel}>
+                Width
+                <input
+                  type="number"
+                  min="120"
+                  max="480"
+                  step="20"
+                  style={styles.input}
+                  value={blockDraft.width}
+                  onChange={(event) => setBlockDraft((current) => ({ ...current, width: clamp(Number(event.target.value), 120, 480) }))}
+                  data-testid="schematic-block-width"
+                />
+              </label>
+              <label style={styles.fieldLabel}>
+                Height
+                <input
+                  type="number"
+                  min="84"
+                  max="480"
+                  step="20"
+                  style={styles.input}
+                  value={blockDraft.height}
+                  onChange={(event) => setBlockDraft((current) => ({ ...current, height: clamp(Number(event.target.value), 84, 480) }))}
+                  data-testid="schematic-block-height"
+                />
+              </label>
+            </div>
+            <label style={styles.fieldLabel}>
+              Pin count
+              <input
+                type="number"
+                min="1"
+                max={MAX_BLOCK_PINS}
+                style={styles.input}
+                value={blockDraft.pins.length}
+                onChange={(event) => setBlockPinCount(Number(event.target.value))}
+                data-testid="schematic-block-pin-count"
+              />
+            </label>
+            <div style={styles.blockDraftHeader} aria-hidden="true">
+              <span>ID</span><span>Label</span><span>Net</span><span>Side</span>
+            </div>
+            <div style={styles.blockDraftPins} data-testid="schematic-block-pin-config">
+              {blockDraft.pins.map((pin, index) => (
+                <div key={pin.id} style={styles.blockDraftPinRow} data-testid={`schematic-block-draft-pin-${index + 1}`}>
+                  <code style={styles.pinId}>{pin.id}</code>
+                  <input
+                    style={styles.compactInput}
+                    value={pin.name}
+                    onChange={(event) => updateBlockDraftPin(index, { name: event.target.value })}
+                    aria-label={`Block pin ${index + 1} label`}
+                    data-testid={`schematic-block-draft-pin-label-${index + 1}`}
+                  />
+                  <input
+                    style={styles.compactInput}
+                    value={pin.net}
+                    onChange={(event) => updateBlockDraftPin(index, { net: event.target.value })}
+                    aria-label={`Block pin ${index + 1} net`}
+                    data-testid={`schematic-block-draft-pin-net-${index + 1}`}
+                  />
+                  <select
+                    style={styles.compactInput}
+                    value={pin.side}
+                    onChange={(event) => updateBlockDraftPin(index, { side: event.target.value as BlockPinSide })}
+                    aria-label={`Block pin ${index + 1} side`}
+                    data-testid={`schematic-block-draft-pin-side-${index + 1}`}
+                  >
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                    <option value="top">Top</option>
+                    <option value="bottom">Bottom</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div style={styles.modalActions}>
+              <button
+                type="button"
+                style={styles.toolButton}
+                onClick={() => setBlockDialogOpen(false)}
+                data-testid="schematic-block-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                style={styles.primaryButton}
+                onClick={beginBlockPlacement}
+                disabled={!blockDraft.value.trim() || blockDraft.pins.length === 0}
+                data-testid="schematic-block-place"
+              >
+                Place on canvas
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1503,6 +1930,7 @@ function cloneComponent(component: CircuitComponent): CircuitComponent {
     ...component,
     position: { ...component.position },
     pins: component.pins.map((pin) => ({ ...pin })),
+    block: component.block ? { ...component.block } : undefined,
   };
 }
 
@@ -2099,7 +2527,7 @@ const styles: Record<string, CSSProperties> = {
     overflow: 'auto',
     background: '#fbfcfe',
     minHeight: 86,
-    maxHeight: 180,
+    maxHeight: 'min(320px, 34vh)',
   },
   panelTitle: {
     color: '#697386',
@@ -2109,6 +2537,7 @@ const styles: Record<string, CSSProperties> = {
     marginBottom: 10,
   },
   fieldLabel: { display: 'grid', gap: 5, fontSize: 12, color: '#536172', marginBottom: 10, fontWeight: 650 },
+  fieldGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 10px' },
   input: {
     width: '100%',
     boxSizing: 'border-box',
@@ -2129,6 +2558,57 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 4,
     background: '#ffffff',
     fontSize: 12,
+  },
+  pinEditorHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 4,
+    color: '#536172',
+    fontSize: 12,
+    fontWeight: 750,
+  },
+  blockPinList: { display: 'grid', gap: 5, marginTop: 8 },
+  blockPinRow: {
+    display: 'grid',
+    gridTemplateColumns: '48px minmax(92px, 1fr) minmax(110px, 1.2fr) 96px 30px',
+    gap: 6,
+    alignItems: 'center',
+  },
+  compactInput: {
+    minWidth: 0,
+    width: '100%',
+    boxSizing: 'border-box',
+    height: 30,
+    border: '1px solid #c7ced6',
+    borderRadius: 4,
+    padding: '4px 6px',
+    color: '#202a37',
+    background: '#ffffff',
+    fontSize: 12,
+  },
+  pinId: { color: '#64748b', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' },
+  smallButton: {
+    height: 28,
+    padding: '0 8px',
+    border: '1px solid #c7ced6',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#253041',
+    cursor: 'pointer',
+    fontWeight: 650,
+    fontSize: 11,
+  },
+  removePinButton: {
+    width: 30,
+    height: 30,
+    border: '1px solid #d8a5a5',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#a32626',
+    cursor: 'pointer',
+    fontWeight: 800,
   },
   emptyText: { color: '#748094', fontSize: 12, lineHeight: 1.5 },
   contextMenu: {
@@ -2165,4 +2645,60 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 700,
     cursor: 'pointer',
   },
+  modalBackdrop: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 1200,
+    display: 'grid',
+    placeItems: 'center',
+    padding: 20,
+    background: 'rgba(15, 23, 42, 0.34)',
+  },
+  blockModal: {
+    width: 'min(760px, calc(100vw - 40px))',
+    maxHeight: 'min(760px, calc(100vh - 40px))',
+    overflow: 'auto',
+    boxSizing: 'border-box',
+    padding: 16,
+    border: '1px solid #c7ced6',
+    borderRadius: 6,
+    background: '#ffffff',
+    boxShadow: '0 18px 46px rgba(15, 23, 42, 0.24)',
+  },
+  modalHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 16,
+    marginBottom: 14,
+  },
+  modalTitle: { color: '#1f2937', fontSize: 18, fontWeight: 760 },
+  modalCloseButton: {
+    width: 30,
+    height: 30,
+    border: '1px solid #c7ced6',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#526071',
+    cursor: 'pointer',
+    fontWeight: 750,
+  },
+  blockDraftHeader: {
+    display: 'grid',
+    gridTemplateColumns: '48px minmax(120px, 1fr) minmax(140px, 1.2fr) 104px',
+    gap: 6,
+    padding: '0 0 5px',
+    color: '#697386',
+    fontSize: 10,
+    fontWeight: 800,
+    textTransform: 'uppercase',
+  },
+  blockDraftPins: { display: 'grid', gap: 6, maxHeight: 310, overflow: 'auto', paddingRight: 3 },
+  blockDraftPinRow: {
+    display: 'grid',
+    gridTemplateColumns: '48px minmax(120px, 1fr) minmax(140px, 1.2fr) 104px',
+    gap: 6,
+    alignItems: 'center',
+  },
+  modalActions: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 },
 };

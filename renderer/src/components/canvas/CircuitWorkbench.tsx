@@ -272,6 +272,11 @@ function moduleToSpiceNetlist(moduleId: string, moduleData: CircuitModule): stri
     '* Editable schematic netlist generated from actoviq.module.v1',
   ];
   for (const component of moduleData.components) {
+    if (component.type === 'BLOCK') {
+      const pinSummary = component.pins.map((pin) => `${pin.name}=${pin.net}`).join(', ');
+      lines.push(`* BLOCK ${component.name}: ${component.value} [${pinSummary}]`);
+      continue;
+    }
     const nodes = component.pins.map((pin) => sanitizeSpiceToken(pin.net || `n_${component.id}_${pin.id}`));
     lines.push([
       componentSpiceName(moduleId, component),

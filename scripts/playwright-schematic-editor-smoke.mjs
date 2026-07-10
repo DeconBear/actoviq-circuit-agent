@@ -2802,6 +2802,84 @@ try {
   assert.ok(await isWireVisible(page, drawnWire.id), 'undo did not restore the Backspace-deleted visible wire');
   console.log('[e2e] wire delete undo redo isolated');
 
+  const positionsBeforeBlockPlacement = await componentPositions(page);
+  await page.getByTestId('schematic-editor-place-block').click();
+  await page.getByTestId('schematic-block-dialog').waitFor();
+  await page.getByTestId('schematic-block-name').fill('U_CTRL');
+  await page.getByTestId('schematic-block-value').fill('ADC + DSP');
+  await page.getByTestId('schematic-block-width').fill('200');
+  await page.getByTestId('schematic-block-height').fill('160');
+  await page.getByTestId('schematic-block-pin-count').fill('6');
+  await page.getByTestId('schematic-block-draft-pin-6').waitFor();
+  const manualBlockPins = [
+    { label: 'AIN', net: 'out', side: 'left' },
+    { label: 'CLK', net: 'sample_clk', side: 'left' },
+    { label: 'DATA', net: 'sample_data', side: 'right' },
+    { label: 'IRQ', net: 'irq', side: 'right' },
+    { label: 'VDD', net: 'vdd', side: 'top' },
+    { label: 'GND', net: '0', side: 'bottom' },
+  ];
+  for (let index = 0; index < manualBlockPins.length; index += 1) {
+    const pin = manualBlockPins[index];
+    const pinNumber = index + 1;
+    await page.getByTestId(`schematic-block-draft-pin-label-${pinNumber}`).fill(pin.label);
+    await page.getByTestId(`schematic-block-draft-pin-net-${pinNumber}`).fill(pin.net);
+    await page.getByTestId(`schematic-block-draft-pin-side-${pinNumber}`).selectOption(pin.side);
+  }
+  await page.getByTestId('schematic-block-place').click();
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return node?.getAttribute('data-tool') === 'place-block' &&
+      node?.getAttribute('data-block-placement-ready') === 'true' &&
+      node?.getAttribute('data-block-dialog') === 'false';
+  });
+  const blockCanvasBox = await page.getByTestId('schematic-editor-svg').boundingBox();
+  assert.ok(blockCanvasBox, 'custom block placement requires a visible schematic canvas');
+  await page.mouse.click(
+    blockCanvasBox.x + blockCanvasBox.width * 0.9,
+    blockCanvasBox.y + blockCanvasBox.height * 0.85,
+  );
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    const components = JSON.parse(node?.getAttribute('data-components') ?? '[]');
+    return node?.getAttribute('data-component-count') === '4' &&
+      node?.getAttribute('data-tool') === 'select' &&
+      components.some((component) => component.type === 'BLOCK' && component.name === 'U_CTRL');
+  });
+  const componentsAfterBlockPlacement = JSON.parse(await editor.getAttribute('data-components') ?? '[]');
+  const manualBlock = componentsAfterBlockPlacement.find((component) => component.type === 'BLOCK' && component.name === 'U_CTRL');
+  assert.ok(manualBlock, 'custom block placement did not add a structured BLOCK component');
+  assert.equal(manualBlock.pins.length, 6, 'custom block should preserve the requested pin count');
+  const manualBlockSymbol = page.getByTestId('schematic-editor-svg').locator(
+    `g[data-component-id="${manualBlock.id}"] [data-symbol-kind="block"]`,
+  );
+  await manualBlockSymbol.waitFor();
+  assert.equal(
+    await manualBlockSymbol.locator('[data-testid="schematic-block-pin-label"]').count(),
+    6,
+    'custom block should render every configured pin label',
+  );
+  await page.getByTestId('schematic-editor-block-pin-label-p1').fill('AIN0');
+  await page.getByTestId('schematic-editor-block-pin-net-p1').fill('filtered');
+  await page.getByTestId('schematic-editor-block-add-pin').click();
+  await page.getByTestId('schematic-editor-block-pin-p7').waitFor();
+  await page.getByTestId('schematic-editor-block-pin-remove-p7').click();
+  await page.waitForFunction(() => (
+    !document.querySelector('[data-testid="schematic-editor-block-pin-p7"]') &&
+    JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-components') ?? '[]')
+      .find((component) => component.type === 'BLOCK' && component.name === 'U_CTRL')?.pins.length === 6
+  ));
+  const positionsAfterBlockPlacement = await componentPositions(page);
+  for (const [componentId, position] of Object.entries(positionsBeforeBlockPlacement)) {
+    assertPositionEqual(
+      positionsAfterBlockPlacement[componentId],
+      position,
+      `placing a custom block moved existing component ${componentId}`,
+    );
+  }
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-custom-block.png') });
+  console.log('[e2e] custom block placement and pin editing isolated');
+
   assert.equal(await editor.getAttribute('data-dirty'), 'true', 'Ctrl/Cmd+S persistence check requires a dirty schematic');
   await editor.focus();
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
@@ -2809,21 +2887,40 @@ try {
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
     return node?.getAttribute('data-dirty') === 'false' &&
-      node?.getAttribute('data-component-count') === '3' &&
+      node?.getAttribute('data-component-count') === '4' &&
       Number(node?.getAttribute('data-wire-count') ?? '0') >= 3;
   });
 
   const moduleData = JSON.parse(await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'));
-  assert.equal(moduleData.components.length, 3);
+  assert.equal(moduleData.components.length, 4);
   assert.ok((moduleData.wires ?? []).length >= 3, 'saved schematic document did not persist visible wires');
   assertWiresOrthogonal(moduleData.wires ?? [], 'saved schematic document wires should remain orthogonal');
   assert.ok(moduleData.components.some((component) => component.id === 'r1' && component.type === 'R'));
   const savedR1 = moduleData.components.find((component) => component.id === 'r1');
+  const savedManualBlock = moduleData.components.find((component) => component.id === manualBlock.id);
   assert.equal(savedR1?.name, 'Rtrim');
   assert.equal(savedR1?.value, '2k');
+  assert.equal(savedManualBlock?.type, 'BLOCK');
+  assert.equal(savedManualBlock?.value, 'ADC + DSP');
+  assert.equal(savedManualBlock?.pins.length, 6);
+  assert.deepEqual(
+    savedManualBlock?.pins.map((pin) => [pin.name, pin.net, pin.side]),
+    [
+      ['AIN0', 'filtered', 'left'],
+      ['CLK', 'sample_clk', 'left'],
+      ['DATA', 'sample_data', 'right'],
+      ['IRQ', 'irq', 'right'],
+      ['VDD', 'vdd', 'top'],
+      ['GND', '0', 'bottom'],
+    ],
+  );
   assert.match(
     await readFile(path.resolve(projectRoot, 'build', 'modules', 'filter', 'design.cir'), 'utf8'),
     /Rfilter_Rtrim\s+out\s+\S+\s+2k/,
+  );
+  assert.match(
+    await readFile(path.resolve(projectRoot, 'build', 'modules', 'filter', 'design.cir'), 'utf8'),
+    /\* BLOCK U_CTRL: ADC \+ DSP/,
   );
   console.log('[e2e] apply persisted');
 
@@ -2841,12 +2938,67 @@ try {
     1,
     'document SVG did not render the applied manually drawn wire',
   );
+  assert.equal(
+    await page.getByTestId('module-document-svg').locator(`g[data-component-id="${manualBlock.id}"] [data-symbol-kind="block"]`).count(),
+    1,
+    'document SVG did not render the applied custom block from the same schematic document',
+  );
+
+  const projectBeforeAgentBlock = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
+  const agentBlockResult = runSkill([
+    'apply',
+    '--project-root', projectRoot,
+    '--command-json', JSON.stringify({
+      schema: 'actoviq.command.v1',
+      command_id: `playwright-agent-block-${Date.now()}`,
+      actor: 'agent',
+      project_id: projectId,
+      base_revision: projectBeforeAgentBlock.revision,
+      message: 'Agent adds a configurable control block',
+      operations: [{
+        op: 'add_component',
+        module_id: 'filter',
+        component: {
+          id: 'agent_logic',
+          type: 'BLOCK',
+          name: 'U_AI',
+          value: 'AI control block',
+          position: { x: 720, y: 360 },
+          rotation: 0,
+          pins: [
+            { id: 'sense', name: 'SENSE', net: 'out', side: 'left', order: 0 },
+            { id: 'enable', name: 'EN', net: 'enable', side: 'left', order: 1 },
+            { id: 'drive', name: 'DRIVE', net: 'drive', side: 'right', order: 0 },
+            { id: 'vdd', name: 'VDD', net: 'vdd', side: 'top', order: 0 },
+            { id: 'gnd', name: 'GND', net: '0', side: 'bottom', order: 0 },
+          ],
+          block: { width: 180, height: 140 },
+        },
+      }],
+    }),
+  ]);
+  assert.equal(agentBlockResult.revision, projectBeforeAgentBlock.revision + 1);
+  const agentBlockCompile = runSkill(['compile-module', '--project-root', projectRoot, '--module-id', 'filter']);
+  assert.equal(agentBlockCompile.render.ok, true);
+  await page.getByTestId('module-document-svg').locator(
+    'g[data-component-id="agent_logic"] [data-symbol-kind="block"]',
+  ).waitFor({ timeout: 30_000 });
+  assert.equal(
+    await page.getByTestId('module-document-svg').locator(
+      'g[data-component-id="agent_logic"] [data-testid="schematic-block-pin-label"]',
+    ).count(),
+    5,
+    'Agent-generated block did not render all requested pins',
+  );
+  const agentModuleData = JSON.parse(await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'));
+  assert.equal(agentModuleData.components.find((component) => component.id === 'agent_logic')?.type, 'BLOCK');
   console.log('[e2e] svg tab verified');
   await page.getByTestId('back-to-board').click();
   await page.getByTestId('module-card-filter').dblclick();
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => (
-    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') >= 3
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') >= 3 &&
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') ?? '0') >= 5
   ));
   assert.equal(await page.getByTestId('schematic-editor').getAttribute('data-schematic-source'), 'document');
   const reopenedFilterPositions = await componentPositions(page);
@@ -2861,6 +3013,13 @@ try {
   assert.ok(
     reopenedFilterWires.some((wire) => wire.id === drawnWire.id && wire.source === 'stored'),
     'reopened editor did not preserve the applied manually drawn wire as editable data',
+  );
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator(
+      `g[data-component-id="${manualBlock.id}"] [data-symbol-kind="block"], g[data-component-id="agent_logic"] [data-symbol-kind="block"]`,
+    ).count(),
+    2,
+    'manual and Agent-generated blocks should both reopen as editable schematic components',
   );
   const reopenedRtrimPoint = await componentScreenPoint(page, 'r1');
   await page.mouse.click(reopenedRtrimPoint.x, reopenedRtrimPoint.y);
@@ -3220,6 +3379,18 @@ try {
     1,
     'MOS amplifier transistor should expose NMOS polarity for symbol rendering',
   );
+  const nmosSymbol = page.getByTestId('schematic-editor-svg').locator(
+    'g[data-component-id="m1"] [data-symbol-kind="mosfet"]',
+  );
+  assert.equal(await nmosSymbol.getAttribute('data-mos-body'), 'separate');
+  assert.equal(await nmosSymbol.getAttribute('data-mos-arrow'), 'in');
+  assert.equal(await nmosSymbol.getByTestId('schematic-mos-outline').count(), 1);
+  assert.equal(await nmosSymbol.getByTestId('schematic-mos-arrow').count(), 1);
+  assert.equal(
+    await nmosSymbol.locator('[data-testid="schematic-mos-gate-bubble"]').count(),
+    0,
+    'NMOS gate should not have a BJT-style polarity bubble',
+  );
   assert.ok(mosAmpPositions.cin.x < mosAmpPositions.m1.x, 'MOS amplifier input capacitor should sit left of M1 in GUI');
   assert.ok(mosAmpPositions.rg1.y < mosAmpPositions.m1.y, 'MOS amplifier gate pull-up should sit above M1 in GUI');
   assert.ok(mosAmpPositions.rg2.y > mosAmpPositions.m1.y, 'MOS amplifier gate pull-down should sit below M1 in GUI');
@@ -3319,6 +3490,18 @@ try {
     'CMOS inverter devices should share the output column in GUI',
   );
   assert.ok(cmosInverterPositions.cload.x > cmosInverterPositions.mn1.x, 'CMOS inverter load should sit on the output side in GUI');
+  const pmosSymbol = page.getByTestId('schematic-editor-svg').locator(
+    'g[data-component-id="mp1"] [data-symbol-kind="mosfet"]',
+  );
+  assert.equal(await pmosSymbol.getAttribute('data-symbol-polarity'), 'pmos');
+  assert.equal(await pmosSymbol.getAttribute('data-mos-body'), 'separate');
+  assert.equal(await pmosSymbol.getAttribute('data-mos-arrow'), 'out');
+  assert.equal(await pmosSymbol.getByTestId('schematic-mos-outline').count(), 1);
+  assert.equal(
+    await pmosSymbol.locator('[data-testid="schematic-mos-gate-bubble"]').count(),
+    0,
+    'PMOS gate should use the IEEE/KiCad arrow convention instead of a gate bubble',
+  );
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="input"]').getAttribute('data-port-side'),
     'left',
@@ -4064,8 +4247,8 @@ try {
   console.log(JSON.stringify({
     ok: true,
     projectId,
-    moduleComponentCount: moduleData.components.length,
-    moduleWireCount: moduleData.wires.length,
+    moduleComponentCount: agentModuleData.components.length,
+    moduleWireCount: agentModuleData.wires.length,
     screenshot: 'output/playwright/schematic-editor-smoke.png',
     wireScreenshot: 'output/playwright/schematic-editor-wire-visible.png',
   }, null, 2));

@@ -21,7 +21,8 @@ PROJECT_SCHEMA = "actoviq.project.v1"
 MODULE_SCHEMA = "actoviq.module.v1"
 COMMAND_SCHEMA = "actoviq.command.v1"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
-ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I", "E"}
+ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK"}
+BLOCK_PIN_SIDES = {"left", "right", "top", "bottom"}
 EDITABLE_PIN_NAMES = {
     "R": [("a", "1"), ("b", "2")],
     "C": [("a", "1"), ("b", "2")],
@@ -153,16 +154,30 @@ def validate_module(module: dict[str, Any]) -> None:
         if not component_id or component_id in component_ids:
             raise ValueError("component ids must be present and unique")
         if component_type not in ALLOWED_COMPONENT_TYPES:
-            raise ValueError(f"unsupported primitive component type: {component_type}")
+            raise ValueError(f"unsupported component type: {component_type}")
         component_ids.add(component_id)
-        for pin in component.get("pins", []):
+        pins = component.get("pins", [])
+        if not isinstance(pins, list) or not pins:
+            raise ValueError(f"component {component_id} must have at least one pin")
+        for pin in pins:
             pin_id = pin.get("id")
             key = (component_id, pin_id)
             if not pin_id or key in pin_keys:
                 raise ValueError("component pin ids must be present and unique")
             if not isinstance(pin.get("net"), str) or not pin["net"]:
                 raise ValueError(f"pin {component_id}.{pin_id} has no net")
+            side = pin.get("side")
+            if side is not None and side not in BLOCK_PIN_SIDES:
+                raise ValueError(f"pin {component_id}.{pin_id} has invalid side: {side}")
             pin_keys.add(key)
+        if component_type == "BLOCK":
+            block = component.get("block", {})
+            if not isinstance(block, dict):
+                raise ValueError(f"block geometry for {component_id} must be an object")
+            for dimension in ("width", "height"):
+                value = block.get(dimension)
+                if value is not None and (not isinstance(value, (int, float)) or value < 40 or value > 1000):
+                    raise ValueError(f"block {component_id} {dimension} is outside 40..1000")
     port_ids = [port.get("id") for port in module.get("ports", [])]
     if len(port_ids) != len(set(port_ids)) or any(not value for value in port_ids):
         raise ValueError("module port ids must be present and unique")
@@ -1137,7 +1152,13 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
 
     module = modules[module_id]
     netlist_text = extract_notebook_netlist(notebook_path.read_text(encoding="utf-8"))
-    components = parse_editable_netlist_components(module_id, netlist_text, module)
+    parsed_components = parse_editable_netlist_components(module_id, netlist_text, module)
+    parsed_ids = {str(component.get("id")) for component in parsed_components}
+    schematic_blocks = [
+        component for component in module.get("components", [])
+        if component.get("type") == "BLOCK" and str(component.get("id")) not in parsed_ids
+    ]
+    components = [*parsed_components, *schematic_blocks]
     if not components:
         return {"ok": True, "project_id": project["project_id"], "module_id": module_id, "changed": False}
     ports = infer_editable_ports(list(module.get("ports", [])), components)
@@ -1207,7 +1228,13 @@ def hydrated_summary_module(root: Path, module_id: str, module: dict[str, Any]) 
     if not netlist_text:
         return module
 
-    components = parse_editable_netlist_components(module_id, netlist_text, module)
+    parsed_components = parse_editable_netlist_components(module_id, netlist_text, module)
+    parsed_ids = {str(component.get("id")) for component in parsed_components}
+    schematic_blocks = [
+        component for component in module.get("components", [])
+        if component.get("type") == "BLOCK" and str(component.get("id")) not in parsed_ids
+    ]
+    components = [*parsed_components, *schematic_blocks]
     if not components:
         return module
     next_module = {
@@ -1382,7 +1409,7 @@ def compile_project(root: Path) -> dict[str, Any]:
         used_names.add(node)
         global_names[root_key] = node
 
-    source_map: dict[str, Any] = {"components": {}, "nodes": {}}
+    source_map: dict[str, Any] = {"components": {}, "blocks": {}, "nodes": {}}
     lines = [
         f"* {project['name']}",
         "* Generated from actoviq.project.v1 by circuit_project.py",
@@ -1407,6 +1434,18 @@ def compile_project(root: Path) -> dict[str, Any]:
             for component in module["components"]:
                 component_name = sanitize_node(f"{module_id}_{component['name']}")
                 component_type = component["type"]
+                if component_type == "BLOCK":
+                    pin_summary = ", ".join(
+                        f"{pin.get('name', pin.get('id', 'PIN'))}={pin.get('net', '')}"
+                        for pin in component.get("pins", [])
+                    )
+                    lines.append(f"* BLOCK {component_name}: {component.get('value', '')} [{pin_summary}]")
+                    source_map["blocks"][component_name] = {
+                        "module_id": module_id,
+                        "component_id": component["id"],
+                        "pins": component.get("pins", []),
+                    }
+                    continue
                 if not component_name.upper().startswith(component_type):
                     component_name = f"{component_type}{component_name}"
                 node_values = []
@@ -1671,6 +1710,13 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
     for component in module["components"]:
         component_name = sanitize_node(f"{module_id}_{component['name']}")
         component_type = component["type"]
+        if component_type == "BLOCK":
+            pin_summary = ", ".join(
+                f"{pin.get('name', pin.get('id', 'PIN'))}={pin.get('net', '')}"
+                for pin in component.get("pins", [])
+            )
+            body_lines.append(f"* BLOCK {component_name}: {component.get('value', '')} [{pin_summary}]")
+            continue
         if not component_name.upper().startswith(component_type):
             component_name = f"{component_type}{component_name}"
         nodes = [node_name(pin["net"]) for pin in component["pins"]]

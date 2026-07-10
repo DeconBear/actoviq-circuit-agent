@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import type { CircuitComponent, CircuitModule, CircuitPort } from '../renderer/src/types';
 import {
+  blockBodySize,
+  componentBounds,
   createSchematicDocument,
   endpointWorldPosition,
   isGroundPort,
@@ -119,6 +121,21 @@ const fixtures: CircuitModule[] = [
     component('r1', 'R', '10k', 80, 120, [['a', '1', 'in'], ['b', '2', 'out']]),
     component('c1', 'C', '15.9n', 240, 220, [['a', '1', 'out'], ['b', '2', '0']]),
   ]),
+  moduleFixture('custom_block', [{
+    id: 'adc_block',
+    type: 'BLOCK',
+    name: 'U1',
+    value: 'ADC + DSP',
+    position: { x: 300, y: 220 },
+    rotation: 0,
+    pins: [
+      { id: 'ain', name: 'AIN', net: 'in', side: 'left', order: 0 },
+      { id: 'data', name: 'DATA', net: 'out', side: 'right', order: 0 },
+      { id: 'vdd', name: 'VDD', net: 'vdd', side: 'top', order: 0 },
+      { id: 'gnd', name: 'GND', net: '0', side: 'bottom', order: 0 },
+    ],
+    block: { width: 180, height: 140 },
+  }]),
   moduleFixture('rlc_band_pass', [
     component('r1', 'R', '50', 80, 120, [['a', '1', 'in'], ['b', '2', 'n1']]),
     component('l1', 'L', '10u', 220, 120, [['a', '1', 'n1'], ['b', '2', 'out']]),
@@ -399,6 +416,7 @@ for (const fixture of fixtures) {
   assertRailLabels(document.module, document.netLabels, document.wires);
   assertNoMosBodyRailLabels(document.module, document.netLabels);
   assertLdoInternalLabels(document);
+  assertCustomBlock(document);
   assertCmosRingConnections(document);
   assertCurrentMirrorDiodeConnection(document);
   assertCascodePhysicalOutputNode(document);
@@ -413,6 +431,22 @@ console.log(JSON.stringify({
   fixtureCount: fixtures.length,
   fixtures: fixtures.map((fixture) => fixture.module_id),
 }, null, 2));
+
+function assertCustomBlock(document: ReturnType<typeof createSchematicDocument>) {
+  if (document.module.module_id !== 'custom_block') return;
+  const block = document.module.components.find((component) => component.id === 'adc_block');
+  assert.ok(block && block.type === 'BLOCK', 'custom block component is missing');
+  assert.deepEqual(blockBodySize(block), { width: 180, height: 140 });
+  const bounds = componentBounds(block);
+  assert.ok(bounds.maxX - bounds.minX >= 180, 'custom block bounds should include its body width');
+  assert.ok(bounds.maxY - bounds.minY >= 140, 'custom block bounds should include its body height');
+  const pinPoints = Object.fromEntries(block.pins.map((pin, index) => [pin.id, pinWorld(block, pin, index)]));
+  assert.ok(pinPoints.ain && pinPoints.ain.x < block.position.x, 'left block pin should stay left of the body');
+  assert.ok(pinPoints.data && pinPoints.data.x > block.position.x, 'right block pin should stay right of the body');
+  assert.ok(pinPoints.vdd && pinPoints.vdd.y < block.position.y, 'top block pin should stay above the body');
+  assert.ok(pinPoints.gnd && pinPoints.gnd.y > block.position.y, 'bottom block pin should stay below the body');
+  assert.equal(document.wires.some((wire) => wire.from?.component_id === block.id || wire.to?.component_id === block.id), true);
+}
 
 function assertJunctionNetIsolation() {
   const crossNetOnly = {

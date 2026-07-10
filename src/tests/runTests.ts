@@ -917,8 +917,49 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
     ]);
     assert.equal(manuallyCompiled.render.ok, true);
     assert.match(await readFile(String(manuallyCompiled.netlist_path), 'utf8'), /Rfilter_Rmanual out n_manual 2k/);
+    const agentBlockApplied = runTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify({
+        schema: 'actoviq.command.v1',
+        command_id: 'test-agent-add-block',
+        actor: 'agent',
+        project_id: created.project.project_id,
+        base_revision: 4,
+        message: 'Agent adds an arbitrary-pin functional block',
+        operations: [{
+          op: 'add_component',
+          module_id: 'filter',
+          component: {
+            id: 'agent_adc',
+            type: 'BLOCK',
+            name: 'UAI',
+            value: 'AI ADC block',
+            position: { x: 520, y: 180 },
+            rotation: 0,
+            pins: [
+              { id: 'ain', name: 'AIN', net: 'out', side: 'left', order: 0 },
+              { id: 'clk', name: 'CLK', net: 'sample_clk', side: 'left', order: 1 },
+              { id: 'data', name: 'DATA', net: 'sample_data', side: 'right', order: 0 },
+              { id: 'vdd', name: 'VDD', net: 'vdd', side: 'top', order: 0 },
+              { id: 'gnd', name: 'GND', net: '0', side: 'bottom', order: 0 },
+            ],
+            block: { width: 180, height: 140 },
+          },
+        }],
+      }),
+    ]);
+    assert.equal(agentBlockApplied.revision, 5);
+    const blockCompiled = runTool([
+      'compile-module',
+      '--project-root', projectRoot,
+      '--module-id', 'filter',
+    ]);
+    const blockNetlist = await readFile(String(blockCompiled.netlist_path), 'utf8');
+    assert.match(blockNetlist, /\* BLOCK filter_UAI: AI ADC block/);
+    assert.doesNotMatch(blockNetlist, /^BLOCKfilter_UAI\s/m);
     const notebookPath = path.resolve(projectRoot, 'modules', 'filter', 'netlist-notebook.md');
-    const notebookNetlist = await readFile(String(manuallyCompiled.netlist_path), 'utf8');
+    const notebookNetlist = blockNetlist;
     await writeFile(
       notebookPath,
       [
@@ -942,6 +983,15 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
     ]);
     assert.equal(notebookCompiled.render.ok, true);
     assert.match(await readFile(String(notebookCompiled.netlist_path), 'utf8'), /Cfilter_Cfilter out 0 33n/);
+    const notebookSyncedModule = JSON.parse(
+      await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'),
+    );
+    assert.equal(notebookSyncedModule.components.find((component: { id: string }) => component.id === 'agent_adc')?.type, 'BLOCK');
+    const blockSummary = runTool(['summary', '--project-root', projectRoot]);
+    assert.equal(
+      blockSummary.modules.filter.components.find((component: { id: string }) => component.id === 'agent_adc')?.type,
+      'BLOCK',
+    );
     assert.equal(
       await readFile(path.resolve(projectRoot, 'revisions', '000001', 'metadata.json'), 'utf8')
         .then((value) => JSON.parse(value).base_revision),

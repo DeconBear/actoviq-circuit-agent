@@ -30,7 +30,7 @@
         "required": ["id", "type", "name", "value", "position", "rotation", "pins"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "type": { "enum": ["R", "C", "L", "D", "Q", "M", "V", "I"] },
+          "type": { "enum": ["R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK"] },
           "name": { "type": "string", "minLength": 1 },
           "value": { "type": "string", "minLength": 1 },
           "position": {
@@ -45,17 +45,28 @@
           "rotation": { "type": "number" },
           "pins": {
             "type": "array",
-            "minItems": 2,
+            "minItems": 1,
+            "maxItems": 64,
             "items": {
               "type": "object",
               "required": ["id", "name", "net"],
               "properties": {
                 "id": { "type": "string", "minLength": 1 },
                 "name": { "type": "string", "minLength": 1 },
-                "net": { "type": "string", "minLength": 1 }
+                "net": { "type": "string", "minLength": 1 },
+                "side": { "enum": ["left", "right", "top", "bottom"] },
+                "order": { "type": "number" }
               },
               "additionalProperties": false
             }
+          },
+          "block": {
+            "type": "object",
+            "properties": {
+              "width": { "type": "number", "minimum": 40, "maximum": 1000 },
+              "height": { "type": "number", "minimum": 40, "maximum": 1000 }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": true
