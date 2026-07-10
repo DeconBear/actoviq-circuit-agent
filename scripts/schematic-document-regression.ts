@@ -779,7 +779,8 @@ function assertNoMosBodyRailLabels(module: CircuitModule, netLabels: ReturnType<
 
 function assertLdoInternalLabels(document: ReturnType<typeof createSchematicDocument>) {
   if (document.module.module_id !== 'mos_ldo') return;
-  const localNets = new Set(['fb', 'tail', 'eaout', 'vref']);
+  const localNets = new Set(['fb', 'vref']);
+  const physicalNets = new Set(['tail', 'eaout']);
   const moduleNets = new Set(document.module.components.flatMap((component) => component.pins.map((pin) => pin.net)));
   const signalLabelNets = new Set(
     document.netLabels
@@ -795,6 +796,21 @@ function assertLdoInternalLabels(document: ReturnType<typeof createSchematicDocu
       `mos_ldo should not render ${net} as a generated long wire`,
     );
   }
+  for (const net of physicalNets) {
+    if (!moduleNets.has(net)) continue;
+    assert.equal(signalLabelNets.has(net), false, `mos_ldo should render nearby ${net} endpoints with physical wires`);
+    assert.equal(
+      document.wires.some((wire) => wire.net === net),
+      true,
+      `mos_ldo should visibly connect ${net} with generated wires`,
+    );
+  }
+  const passGateWire = document.wires.find((wire) => (
+    wire.net === 'eaout' &&
+    (wire.from?.component_id === 'mp' || wire.to?.component_id === 'mp') &&
+    (wire.from?.pin_id === 'g' || wire.to?.pin_id === 'g')
+  ));
+  assert.ok(passGateWire, 'mos_ldo pass MOSFET gate should have a visible EAOUT wire');
 }
 
 function assertCurrentMirrorDiodeConnection(document: ReturnType<typeof createSchematicDocument>) {

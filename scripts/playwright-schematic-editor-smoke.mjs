@@ -2822,16 +2822,28 @@ try {
     'hydrated LDO local rail labels are not visibly drawn',
   );
   assert.ok(
-    await page.locator('[data-testid="schematic-net-label"][data-kind="signal"]').count() >= 4,
-    'hydrated LDO should render long named internal nets as local signal labels',
+    await page.locator('[data-testid="schematic-net-label"][data-kind="signal"]').count() >= 2,
+    'hydrated LDO should render distant named internal nets as local signal labels',
   );
   const ldoWires = await editorWires(page);
   assertWiresOrthogonal(ldoWires, 'legacy LDO editor wires should remain orthogonal');
   assert.equal(ldoWires.some((wire) => wire.net === 'vin' || wire.net === '0'), false, 'LDO rail nets should not be rendered as long generated wires');
   assert.equal(
-    ldoWires.some((wire) => ['fb', 'tail', 'eaout', 'vref'].includes(wire.net)),
+    ldoWires.some((wire) => ['fb', 'vref'].includes(wire.net)),
     false,
-    'LDO long named internal nets should be represented by local labels instead of long generated wires',
+    'LDO distant named internal nets should be represented by local labels instead of long generated wires',
+  );
+  assert.ok(
+    ldoWires.some((wire) => wire.net === 'tail'),
+    'LDO nearby tail endpoints should be visibly connected by physical wires',
+  );
+  assert.ok(
+    ldoWires.some((wire) => (
+      wire.net === 'eaout' &&
+      (wire.from?.component_id === 'mp' || wire.to?.component_id === 'mp') &&
+      (wire.from?.pin_id === 'g' || wire.to?.pin_id === 'g')
+    )),
+    'LDO pass MOSFET gate should be visibly connected to EAOUT',
   );
   assert.ok(
     ldoPositions.mp.x > Math.max(ldoPositions.m1?.x ?? 0, ldoPositions.m2?.x ?? 0, ldoPositions.m3?.x ?? 0, ldoPositions.m4?.x ?? 0),

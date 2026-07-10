@@ -3414,13 +3414,15 @@ function shouldRepresentSignalNetWithLocalLabel(module: CircuitModule, net: stri
   if (!net || endpoints.length < 2) return false;
   if (!isReadableSignalNetName(net)) return false;
   if (module.ports.some((port) => port.net === net)) return false;
-  if (isLdoInternalLabelNet(module, net)) return true;
   if (isCurrentMirrorGateNet(module, net)) return false;
   if (isCascodeBiasNet(module, net)) return true;
   const xs = endpoints.map((endpoint) => endpoint.x);
   const ys = endpoints.map((endpoint) => endpoint.y);
   const spanX = Math.max(...xs) - Math.min(...xs);
   const spanY = Math.max(...ys) - Math.min(...ys);
+  if (isLdoInternalLabelNet(module, net)) {
+    return spanX > 360 || spanY > 340;
+  }
   return spanX > 260 || spanY > 180;
 }
 
