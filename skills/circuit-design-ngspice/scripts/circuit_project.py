@@ -22,6 +22,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import (
+    get_active_workspace,
+    list_workspaces,
+    resolve_projects_root,
+    select_workspace,
+)
+
 
 PROJECT_SCHEMA = "actoviq.project.v2"
 MODULE_SCHEMA = "actoviq.module.v2"
@@ -3905,10 +3912,44 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name, demo in (("create", False), ("create-demo", True)):
         subparser = subparsers.add_parser(name)
-        subparser.add_argument("--projects-root", required=True)
+        subparser.add_argument(
+            "--projects-root",
+            default="",
+            help="Projects directory. Defaults to the active GUI workspace projectsDir.",
+        )
+        subparser.add_argument(
+            "--workspace-id",
+            default="",
+            help="Create under this workspace's projectsDir (does not change active).",
+        )
         subparser.add_argument("--name", required=True)
         subparser.add_argument("--project-id", default="")
         subparser.set_defaults(demo=demo)
+
+    workspace_list = subparsers.add_parser(
+        "workspace-list",
+        help="List GUI workspaces and mark the active one.",
+    )
+    workspace_list.set_defaults()
+
+    workspace_active = subparsers.add_parser(
+        "workspace-active",
+        help="Show the active workspace root and projectsDir (use before create).",
+    )
+    workspace_active.set_defaults()
+
+    workspace_use = subparsers.add_parser(
+        "workspace-use",
+        help="Select the active workspace (shared with the Electron GUI).",
+    )
+    workspace_use.add_argument("--workspace-id", required=True)
+
+    workspace_resolve = subparsers.add_parser(
+        "workspace-resolve-projects-root",
+        help="Resolve where create/create-demo will write projects.",
+    )
+    workspace_resolve.add_argument("--projects-root", default="")
+    workspace_resolve.add_argument("--workspace-id", default="")
 
     summary = subparsers.add_parser("summary")
     summary.add_argument("--project-root", required=True)
@@ -3950,14 +3991,32 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
-        if args.command in {"create", "create-demo"}:
+        if args.command == "workspace-list":
+            result = list_workspaces()
+        elif args.command == "workspace-active":
+            result = get_active_workspace()
+        elif args.command == "workspace-use":
+            result = select_workspace(args.workspace_id)
+        elif args.command == "workspace-resolve-projects-root":
+            result = resolve_projects_root(
+                projects_root=args.projects_root or None,
+                workspace_id=args.workspace_id or None,
+            )
+        elif args.command in {"create", "create-demo"}:
+            resolved = resolve_projects_root(
+                projects_root=args.projects_root or None,
+                workspace_id=args.workspace_id or None,
+            )
             root = initialize_project(
-                Path(args.projects_root).resolve(),
+                Path(resolved["projects_root"]),
                 args.name,
                 args.project_id or None,
                 bool(args.demo),
             )
-            result = project_summary(root)
+            result = {
+                **project_summary(root),
+                "workspace_resolution": resolved,
+            }
         elif args.command == "summary":
             result = project_summary(Path(args.project_root).resolve())
         elif args.command == "erc":

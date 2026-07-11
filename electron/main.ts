@@ -49,7 +49,8 @@ function createWindow(): void {
 
   if (!app.isPackaged) {
     mainWindow.loadURL(process.env.ACTOVIQ_RENDERER_URL ?? 'http://127.0.0.1:5173');
-    if (process.env.ACTOVIQ_E2E !== '1') {
+    // Opt-in only: set ACTOVIQ_DEVTOOLS=1 to open DevTools on startup.
+    if (process.env.ACTOVIQ_DEVTOOLS === '1') {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
   } else {

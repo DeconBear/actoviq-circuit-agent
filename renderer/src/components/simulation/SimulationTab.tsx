@@ -304,14 +304,20 @@ function Diagram({
     return <ComplexDiagram traces={traces} smith={mode === 'smith'} />;
   }
   if (mode === 'bode') {
+    const frequencyUnit = dataset.x.unit || 'Hz';
+    const formatFrequencyTick = (value: number) => formatAxisTick(value, frequencyUnit);
     return (
       <div style={styles.bodeStack} data-testid="simulation-bode-chart">
         <ResponsiveContainer width="100%" height="52%">
           <LineChart data={bodeData} margin={{ top: 12, right: 20, left: 8, bottom: 0 }}>
             <CartesianGrid stroke="#e1e5e9" />
             <XAxis dataKey="x" type="number" scale="log" domain={['auto', 'auto']} hide />
-            <YAxis tick={{ fontSize: 10 }} label={{ value: 'dB', angle: -90, position: 'insideLeft' }} />
-            <Tooltip contentStyle={styles.tooltip} />
+            <YAxis tick={{ fontSize: 10 }} tickFormatter={(value) => formatNumber(Number(value))} label={{ value: 'dB', angle: -90, position: 'insideLeft' }} />
+            <Tooltip
+              contentStyle={styles.tooltip}
+              labelFormatter={(value) => `${formatFrequencyTick(Number(value))} ${frequencyUnit}`}
+              formatter={(value) => formatNumber(typeof value === 'number' ? value : Number(value))}
+            />
             <Legend />
             {traces.filter((trace) => trace.db).map((trace, index) => (
               <Line key={trace.name} dataKey={`${trace.name}:db`} name={`${trace.name} dB`} stroke={traceColors[index % traceColors.length]} dot={false} isAnimationActive={false} />
@@ -319,11 +325,24 @@ function Diagram({
           </LineChart>
         </ResponsiveContainer>
         <ResponsiveContainer width="100%" height="48%">
-          <LineChart data={bodeData} margin={{ top: 0, right: 20, left: 8, bottom: 12 }}>
+          <LineChart data={bodeData} margin={{ top: 0, right: 20, left: 8, bottom: 18 }}>
             <CartesianGrid stroke="#e1e5e9" />
-            <XAxis dataKey="x" type="number" scale="log" domain={['auto', 'auto']} tick={{ fontSize: 10 }} />
-            <YAxis tick={{ fontSize: 10 }} label={{ value: 'deg', angle: -90, position: 'insideLeft' }} />
-            <Tooltip contentStyle={styles.tooltip} />
+            <XAxis
+              dataKey="x"
+              type="number"
+              scale="log"
+              domain={['auto', 'auto']}
+              tick={{ fontSize: 10 }}
+              tickFormatter={formatFrequencyTick}
+              minTickGap={28}
+              label={{ value: `${dataset.x.name} (${frequencyUnit})`, position: 'insideBottom', offset: -6 }}
+            />
+            <YAxis tick={{ fontSize: 10 }} tickFormatter={(value) => formatNumber(Number(value))} label={{ value: 'deg', angle: -90, position: 'insideLeft' }} />
+            <Tooltip
+              contentStyle={styles.tooltip}
+              labelFormatter={(value) => `${formatFrequencyTick(Number(value))} ${frequencyUnit}`}
+              formatter={(value) => formatNumber(typeof value === 'number' ? value : Number(value))}
+            />
             {traces.filter((trace) => trace.phase_deg).map((trace, index) => (
               <Line key={trace.name} dataKey={`${trace.name}:phase`} name={`${trace.name} phase`} stroke={traceColors[index % traceColors.length]} dot={false} isAnimationActive={false} />
             ))}
@@ -332,10 +351,12 @@ function Diagram({
       </div>
     );
   }
+  const xUnit = dataset.x.unit || '';
+  const formatXTick = (value: number) => formatAxisTick(value, xUnit);
   return (
     <div style={styles.chart} data-testid="simulation-cartesian-chart">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={cartesianData} margin={{ top: 14, right: 22, left: 8, bottom: 14 }}>
+        <LineChart data={cartesianData} margin={{ top: 14, right: 22, left: 8, bottom: 18 }}>
           <CartesianGrid stroke="#e1e5e9" />
           <XAxis
             dataKey="x"
@@ -343,10 +364,16 @@ function Diagram({
             scale={['ac', 'noise'].includes(dataset.analysis_type) ? 'log' : 'auto'}
             domain={['auto', 'auto']}
             tick={{ fontSize: 10 }}
-            label={{ value: `${dataset.x.name} (${dataset.x.unit})`, position: 'insideBottom', offset: -8 }}
+            tickFormatter={formatXTick}
+            minTickGap={28}
+            label={{ value: `${dataset.x.name} (${dataset.x.unit})`, position: 'insideBottom', offset: -6 }}
           />
-          <YAxis tick={{ fontSize: 10 }} />
-          <Tooltip contentStyle={styles.tooltip} />
+          <YAxis tick={{ fontSize: 10 }} tickFormatter={(value) => formatNumber(Number(value))} />
+          <Tooltip
+            contentStyle={styles.tooltip}
+            labelFormatter={(value) => `${formatXTick(Number(value))}${xUnit ? ` ${xUnit}` : ''}`}
+            formatter={(value) => formatNumber(typeof value === 'number' ? value : Number(value))}
+          />
           <Legend />
           {traces.map((trace, index) => (
             <Line key={trace.name} dataKey={trace.name} stroke={traceColors[index % traceColors.length]} dot={false} isAnimationActive={false} />
@@ -454,10 +481,51 @@ function formatSpecification(metric: SimulationRunMetric): string {
   return '-';
 }
 
+function formatSiNumber(value: number): string {
+  if (!Number.isFinite(value)) return '';
+  if (value === 0) return '0';
+  const sign = value < 0 ? '-' : '';
+  const abs = Math.abs(value);
+  const tiers: Array<[number, string]> = [
+    [1e12, 'T'],
+    [1e9, 'G'],
+    [1e6, 'M'],
+    [1e3, 'k'],
+    [1, ''],
+    [1e-3, 'm'],
+    [1e-6, 'µ'],
+    [1e-9, 'n'],
+    [1e-12, 'p'],
+  ];
+  for (const [scale, suffix] of tiers) {
+    if (abs >= scale || scale <= 1e-12) {
+      const scaled = abs / scale;
+      const rounded = Math.abs(scaled - Math.round(scaled)) < 1e-9 * Math.max(1, scaled)
+        ? String(Math.round(scaled))
+        : scaled >= 100
+          ? scaled.toFixed(0)
+          : scaled >= 10
+            ? scaled.toFixed(1)
+            : scaled.toFixed(2);
+      return `${sign}${rounded.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')}${suffix}`;
+    }
+  }
+  return String(value);
+}
+
+function formatAxisTick(value: number, unit = ''): string {
+  if (!Number.isFinite(value)) return '';
+  const normalized = unit.trim().toLowerCase();
+  if (normalized === 'hz' || normalized === 's' || Math.abs(value) >= 1000 || (value !== 0 && Math.abs(value) < 1e-2)) {
+    return formatSiNumber(value);
+  }
+  return formatNumber(value);
+}
+
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '-';
   if (value === 0) return '0';
-  if (Math.abs(value) >= 1e4 || Math.abs(value) < 1e-3) return value.toExponential(4);
+  if (Math.abs(value) >= 1e4 || Math.abs(value) < 1e-3) return formatSiNumber(value);
   return value.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
 }
 

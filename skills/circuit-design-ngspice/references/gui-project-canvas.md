@@ -3,9 +3,34 @@
 When the Actoviq desktop GUI is open, treat the active workspace as the
 handoff boundary between the coding agent and the visual app.
 
-- Create or use a project under `<workspace-root>/projects/<project-id>/`.
-- Put user-provided reference files under `<workspace-root>/references/`.
-- If OCR text exists, read it from `<workspace-root>/references/.ocr/`.
+## Workspace location (do this first)
+
+The GUI and `circuit_project.py` share
+`~/.actoviq/actoviq-circuit-agent-workspaces.json`. The default workspace root
+is `<repo>/workspace/workspaces/default/` with projects under `projects/`.
+
+**Never** create projects under bare `<repo>/workspace/projects/` — the GUI
+will not list them.
+
+```bash
+python scripts/circuit_project.py workspace-active
+python scripts/circuit_project.py workspace-list
+python scripts/circuit_project.py workspace-use --workspace-id default
+python scripts/circuit_project.py workspace-resolve-projects-root
+```
+
+`create` / `create-demo` omit `--projects-root` to use the active workspace
+`projectsDir`. Optional overrides:
+
+- `--workspace-id <id>` — write into that workspace without changing active
+- `--projects-root <path>` — explicit projects directory
+- `ACTOVIQ_CIRCUIT_AGENT_WORKSPACE_ROOT` — env override of the workspace root
+
+## Project contract
+
+- Create or use a project under `<active-workspace>/projects/<project-id>/`.
+- Put user-provided reference files under `<active-workspace>/references/`.
+- If OCR text exists, read it from `<active-workspace>/references/.ocr/`.
 - Treat `project.circuit.json` and each `modules/<id>/module.circuit.json` as
   the only editable source of truth.
 - Use `scripts/circuit_project.py` for deterministic creation, modification,
@@ -18,7 +43,14 @@ Create a project:
 
 ```bash
 python scripts/circuit_project.py create \
-  --projects-root <workspace-root>/projects \
+  --name "<project name>"
+```
+
+Or pin a workspace explicitly:
+
+```bash
+python scripts/circuit_project.py create \
+  --workspace-id default \
   --name "<project name>"
 ```
 
@@ -26,7 +58,6 @@ Create the three-module power/amplifier/filter example:
 
 ```bash
 python scripts/circuit_project.py create-demo \
-  --projects-root <workspace-root>/projects \
   --name "<project name>"
 ```
 
@@ -34,18 +65,18 @@ Inspect before modifying:
 
 ```bash
 python scripts/circuit_project.py summary \
-  --project-root <workspace-root>/projects/<project-id>
+  --project-root <projectsDir>/<project-id>
 python scripts/circuit_project.py agent-context \
-  --project-root <workspace-root>/projects/<project-id>
+  --project-root <projectsDir>/<project-id>
 python scripts/circuit_project.py erc \
-  --project-root <workspace-root>/projects/<project-id>
+  --project-root <projectsDir>/<project-id>
 ```
 
 Apply a structured command:
 
 ```bash
 python scripts/circuit_project.py apply \
-  --project-root <workspace-root>/projects/<project-id> \
+  --project-root <projectsDir>/<project-id> \
   --command-file <command.json>
 ```
 

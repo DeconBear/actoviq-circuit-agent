@@ -60,16 +60,24 @@ netlistsvg / `schematic.overrides.json`: export / legacy placement only.
 Full contract:
 [references/gui-project-canvas.md](references/gui-project-canvas.md)
 
+**Always resolve the GUI workspace before creating projects** — do not invent
+`workspace/projects/` paths. The Electron app reads
+`~/.actoviq/actoviq-circuit-agent-workspaces.json` and defaults to
+`<repo>/workspace/workspaces/default/projects/`.
+
 ```bash
-python scripts/circuit_project.py create \
-  --projects-root <workspace-root>/projects \
-  --name "<project name>"
+python scripts/circuit_project.py workspace-active
+python scripts/circuit_project.py workspace-list
+python scripts/circuit_project.py workspace-use --workspace-id default
+
+# create uses the active workspace projectsDir when --projects-root is omitted
+python scripts/circuit_project.py create --name "<project name>"
 
 python scripts/circuit_project.py agent-context \
-  --project-root <workspace-root>/projects/<project-id>
+  --project-root <projectsDir>/<project-id>
 
 python scripts/circuit_project.py apply \
-  --project-root <workspace-root>/projects/<project-id> \
+  --project-root <projectsDir>/<project-id> \
   --command-file <command.json>
 
 python scripts/circuit_project.py compile --project-root <project-root>
@@ -105,6 +113,7 @@ error table:
 
 | Script | Role |
 |---|---|
+| `circuit_project.py workspace-*` | Resolve GUI workspace / projectsDir |
 | `normalize_spec.py` | Spec normalization |
 | `validate_netlist_primitives.py` | Primitive-only gate |
 | `strict_param_check.py` | Parameter sanity |
