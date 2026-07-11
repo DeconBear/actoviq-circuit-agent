@@ -3,9 +3,12 @@
 ## Source Of Truth
 
 An Actoviq project is a revisioned CircuitDocument stored by
-`project.circuit.json`, `modules/<id>/module.circuit.json`, and each module's
-netlist notebook. Design, Netlist, document SVG, netlistsvg export, simulation,
-and report are projections of that document. Never edit `build/` artifacts.
+`project.circuit.json`, `modules/<id>/module.circuit.json` (`actoviq.module.v2`),
+and each module's netlist notebook. Design and document SVG render the same
+`actoviq.schematic-document.v1` projection of that module; Netlist, netlistsvg
+export, simulation probes, and report are also projections of the current
+revision. Never edit `build/` artifacts, and never attach probe vectors from
+another revision.
 
 ## Required Loop
 

@@ -6,6 +6,7 @@
   "compatibility": {
     "project": ["actoviq.project.v1", "actoviq.project.v2"],
     "module": ["actoviq.module.v1", "actoviq.module.v2"],
+    "schematic_document": ["actoviq.schematic-document.v1"],
     "command": ["actoviq.command.v1"],
     "simulation": ["actoviq.simulation.v2"]
   }

@@ -1,5 +1,12 @@
 # AI grid-layout schematic — prototype
 
+> **Status:** research / historical prototype. The desktop GUI no longer treats
+> `render_grid` / netlistsvg `schematic.svg` as the editable Design/SVG source
+> of truth. Production editing uses `actoviq.module.v2` projected to
+> `actoviq.schematic-document.v1`; netlistsvg and grid renders remain
+> compatibility / quality-check exports. Keep this directory for layout
+> experiments; do not assume its SVG path is what the GUI editor saves.
+
 Proves a method for AI-authored analog schematics that beats both current
 renderers (netlistsvg/ELK and the schemdraw `build_layout` path).
 
@@ -76,15 +83,16 @@ Unrecognised devices fall back to a spare row so the drawing always closes.
 
 ## Integrated into the skill
 
-The production version lives in the skill as
+A production-oriented grid renderer still lives in the skill as
 `skills/circuit-design-ngspice/scripts/render_grid.py` (self-contained:
 netlist parse + idiom auto-layout + schemdraw draw). `circuit_project.py`
-`compile-module` now calls it for **transistor/active** modules (any netlist
-with `M`/`Q` devices) and keeps **netlistsvg** for passive ones, writing the
-same `build/modules/<id>/schematic.svg` the GUI already reads — so the Design
-and SVG tabs show the clean schematic automatically, no GUI changes needed.
-schemdraw is an optional dependency: if it is missing, `render_grid` returns
-`{"ok": false}` and the caller falls back to netlistsvg.
+`compile-module` may still call it for **transistor/active** modules and keep
+**netlistsvg** for passives when building compatibility SVGs under
+`build/modules/<id>/`. That path is an export/quality check — the desktop
+Design and SVG tabs render the shared `SchematicDocument` from
+`module.circuit.json`, not by parsing those build SVGs back into an editor
+model. schemdraw is an optional dependency: if it is missing, `render_grid`
+returns `{"ok": false}` and the caller falls back to netlistsvg.
 
 ## Status / next steps
 

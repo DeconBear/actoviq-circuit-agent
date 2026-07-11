@@ -33,6 +33,12 @@ npm run electron:dev
 
 This compiles the Electron main process, starts Vite, and opens the window.
 
+**App icon**
+
+- Canonical assets: `assets/icon.png` (cross-platform) and `assets/icon.ico` (Windows multi-size).
+- Runtime/packaging: Windows window/taskbar prefers `.ico` and sets `AppUserModelId` to `com.actoviq.circuit-agent`; macOS packaging uses `assets/icon.png`.
+- When replacing branding, update both files and keep `electron-builder.yml` `win.icon` / `mac.icon` pointed at them. Do not ship draft `assets/icon-scheme-*.png` candidates as the packaged icon.
+
 **Tabs**
 
 - **Design** — each module opens in a lightweight grid-based schematic editor backed by `actoviq.module.v2`. Select and left-drag symbols, place primitive R/C/L/D/M/Q/V/I devices or custom-pin blocks, draw orthogonal wires, edit values, delete items, and undo/redo. Pins and ports reference stable electrical `net_id` values; visible names, aliases, rail symbols, and labels are explicit properties, so joining two MOS pins cannot silently duplicate a `VIN` label or rename unrelated networks. A completed gesture is committed as one revisioned transaction.

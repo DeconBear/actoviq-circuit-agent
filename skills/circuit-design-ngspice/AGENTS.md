@@ -10,10 +10,11 @@ python -c "import ast, pathlib; [ast.parse(pathlib.Path(p).read_text()) for p in
 ```
 
 Changes that affect the Electron GUI, schematic editor, canvas interactions,
-SVG/netlistsvg rendering, layout/routing behavior, or user-visible workflows
-must also be verified with Playwright from the repository root:
+SVG/netlistsvg rendering, layout/routing behavior, design-memory UI, or
+user-visible workflows must also be verified from the repository root:
 
 ```bash
+npm run test:schematic-document
 npm run test:e2e:schematic-editor
 npm run test:e2e:electron
 ```
@@ -25,7 +26,7 @@ verified.
 
 ## Layout Rules
 
-- `SKILL.md` is the agent-facing instruction manual. Keep it in sync with the scripts.
+- `SKILL.md` is the agent-facing instruction manual. Keep it in sync with the scripts and with the desktop schematic-document model (`actoviq.module.v2` → `actoviq.schematic-document.v1`).
 - `agents/openai.yaml` is the platform integration shim for OpenAI Codex.
 - `tool_paths.json` is a user-editable config file — always keep the default `""` value.
 - References in `references/` are documentation for the agent, not executable code.

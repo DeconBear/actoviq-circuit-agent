@@ -1,17 +1,18 @@
 ---
 name: circuit-design-ngspice
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
   protocol_version: "actoviq.project-agent.v2"
 description: >
   Design, simulate, and render primitive-based SPICE circuits with ngspice and
-  netlistsvg. Given a natural-language circuit requirement, run the full
-  workflow: requirements analysis, specification normalization, template
-  selection, architecture planning, primitive-only netlist design, AC+power
-  simulation, schematic rendering, and summary reporting. Supports single-block
-  and partitioned (multi-module) designs. Use this skill when the user asks to
-  design a circuit, create a SPICE netlist, run ngspice simulation, or render
-  a schematic from a netlist.
+  netlistsvg for the Actoviq project canvas. Given a natural-language circuit
+  requirement, run the full workflow: requirements analysis, specification
+  normalization, template selection, architecture planning, primitive-only
+  netlist design, multi-analysis simulation, schematic-document rendering, and
+  summary reporting. Supports single-block and partitioned (multi-module)
+  designs on `actoviq.module.v2` / `actoviq.schematic-document.v1`. Use this
+  skill when the user asks to design a circuit, create a SPICE netlist, run
+  ngspice simulation, or render a schematic from a netlist.
 ---
 
 # Circuit Design Ngspice
@@ -143,29 +144,35 @@ and document SVG all render the block from module data.
 
 Schemas live under `schemas/`.
 
-The desktop module canvas, document SVG, and netlistsvg compatibility export
-are projections of the same revisioned CircuitDocument. The GUI Editor mode
-can save components, ports, wires, and annotations through
-`set_module_schematic`; the background build coordinator regenerates the SPICE
-module netlist and previews. The SVG preview mode also supports
-layout-only user edits: moving a rendered symbol or terminal writes
-`modules/<id>/schematic.overrides.json`, and `compile-module` applies those
-positions before re-routing wires. These overrides are not electrical edits.
-Preserve the override file when regenerating a module, and do not edit generated
-`build/` SVGs directly. After changing a module netlist, run `compile-module`
-(or project `compile`) and inspect ERC; this preserves the
-`netlist -> netlist_to_json -> netlistsvg SVG` flow and refreshes the GUI
-preview. Read `notes` on the module reference before editing. Users may address
-a module directly by its stable `id`.
+Editable truth is each `modules/<id>/module.circuit.json` (`actoviq.module.v2`)
+inside a revisioned CircuitDocument. Design and SVG both render the same
+`actoviq.schematic-document.v1` projection (symbols, semantic pin anchors such
+as MOS `D/G/S/B`, orthogonal wires, junctions, explicit labels, and view
+bounds). Save electrical and layout edits through `set_module_schematic` (or
+netlist notebook upserts); one completed gesture is one revisioned transaction.
+The background build coordinator regenerates the SPICE module netlist and
+previews from that revision. Do not treat document SVG as a second editable
+model, and do not edit generated `build/` artifacts.
+
+`render/netlistsvg.svg` and module compatibility builds remain the AI/netlist
+→ `netlist_to_json` → netlistsvg export path with independent geometry checks.
+Legacy `modules/<id>/schematic.overrides.json` is still readable for historical
+projects and netlistsvg-only placement; it is not the desktop editor's primary
+write path. Preserve an existing override file when regenerating a module if
+present. After changing a module netlist, run `compile-module` (or project
+`compile`) and inspect ERC so the GUI preview refreshes. Read `notes` on the
+module reference before editing. Users may address a module directly by its
+stable `id`.
 
 The GUI can save reusable design memory under the active workspace's
-`references/design-memory/` folder. `templates/<id>/` contains
-`template.json`, `agent-guide.md`, `template.cir` when the source project was
-compiled, `project.circuit.json`, and module files. `flows/<id>/` contains
-`flow.json`, `design-flow.md`, and applied command logs when present. In future
-designs, inspect these saved templates and flows during asset reuse before
-inventing a new topology; treat them as reusable guidance that still requires
-fresh simulation and schematic verification.
+`references/design-memory/` folder (*Save template* / *Save flow*).
+`templates/<id>/` contains `template.json`, `agent-guide.md`, `template.cir`
+when the source project was compiled, `project.circuit.json`, and module files.
+`flows/<id>/` contains `flow.json`, `design-flow.md`, and applied command logs
+when present. Prefer validated memories during asset reuse, but still run fresh
+ERC and simulation. Deleted projects move to `.trash/projects/`; do not treat
+trash as a normal projects directory. Restoring history creates a new revision
+(see `references/project-agent-protocol.md`).
 
 In schematic view, bench-only voltage/current sources are intentionally hidden.
 If a hidden source drives a visible non-rail control or bias node, the renderer
@@ -240,16 +247,16 @@ output stages separate when they have independent electrical responsibilities.
 Modify one module per command when practical, keep its external ports stable,
 compile after structural edits, and simulate before declaring completion.
 
-The GUI surfaces a project through five tabs: Design (the module canvas),
-Netlist (the selected module's notebook), SVG (the selected module's shared
-document preview), Sim, and Report. Sim supports dataset selection plus
-Cartesian, Bode, polar, Smith, and table diagrams. `compile` and `simulate` write
-`build/system/report.md` (modules, interfaces, system networks, simulation
-metrics, and the system netlist), which the Report tab renders. `simulate` also writes
-`build/system/simulation/result.json`; its `metrics` feed the Sim tab and the
-Design inspector. Module-level metrics from `simulate-module` appear in the
-Design inspector. There is no separate publish step for the canvas model —
-writing these build files is what refreshes the GUI.
+The GUI surfaces a project through Design (module canvas / schematic editor),
+Netlist (selected module notebook), SVG (shared `SchematicDocument` preview),
+Sim, Report, plus Design memory actions for templates/flows. Sim supports
+dataset selection plus Cartesian, Bode, polar, Smith, and table diagrams.
+`compile` and `simulate` write `build/system/report.md` (modules, interfaces,
+system networks, simulation metrics, and the system netlist), which the Report
+tab renders. `simulate` also writes `build/system/simulation/result.json`; its
+`metrics` feed the Sim tab and the Design inspector. Module-level metrics from
+`simulate-module` appear in the Design inspector. There is no separate publish
+step for the canvas model — writing these build files is what refreshes the GUI.
 
 The older `<workspace-root>/jobs/` manifest workflow remains available only
 for compatibility with existing result bundles. Do not call the legacy
@@ -540,6 +547,11 @@ stage uses a pull-up/pull-down resistor network (not an ideal model).
 ### Step 7: Schematic Rendering
 
 **Goal**: Generate an SVG schematic from the validated netlist.
+
+This step is the **jobs / compatibility export** path (`netlist → JSON →
+netlistsvg`). Desktop Design/SVG editing still uses
+`actoviq.schematic-document.v1` projected from `module.circuit.json`; do not
+treat this SVG as the editor source of truth.
 
 1. Convert the netlist to JSON:
    ```bash

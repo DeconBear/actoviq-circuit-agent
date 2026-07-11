@@ -35,6 +35,12 @@ npm run electron:dev
 
 该命令会先编译 Electron 主进程，启动 Vite，并打开窗口。
 
+**应用图标**
+
+- 正式资源：`assets/icon.png`（全平台）与 `assets/icon.ico`（Windows 多尺寸）。
+- 开发与打包：Windows 窗口/任务栏优先使用 `.ico`，并设置 `AppUserModelId` 为 `com.actoviq.circuit-agent`；macOS 打包使用 `assets/icon.png`。
+- 更换品牌图时请同时更新这两个文件，并保持 `electron-builder.yml` 的 `win.icon` / `mac.icon` 指向它们。不要用 `assets/icon-scheme-*.png` 候选稿作为打包图标。
+
 **标签页**
 
 - **Design**——每个模块都可在基于 `actoviq.module.v2` 的轻量网格原理图编辑器中打开。可以选中并用鼠标左键拖动符号，放置 R/C/L/D/M/Q/V/I 器件或自定义引脚 Block，绘制正交导线，编辑参数，删除对象并撤销/重做。引脚和端口引用稳定的电气 `net_id`；网络名称、别名、电源符号和标签都是显式属性，因此连接两个 MOS 引脚不会再复制 `VIN` 标签或重命名无关网络。一次完整手势只提交一个带版本的事务。
@@ -187,6 +193,17 @@ npm run dev -- --legacy-cli
 
 ```powershell
 npm run dev -- --auto-approve --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and netlistsvg schematic."
+```
+
+原理图编辑器相关改动必须通过文档、Playwright 与兼容渲染回归：
+
+```powershell
+npm run test:schematic-document
+npm run test:e2e:schematic-editor
+npm run test:e2e:electron
+npm test
+npm run test:schematic-quality
+npm run test:simulation-regression
 ```
 
 ## 本地可编辑 CLI
