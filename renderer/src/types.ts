@@ -340,13 +340,25 @@ export interface SimulationRunMetric {
   unit: string;
   pass?: boolean;
   measurement_status?: 'measured' | 'failed';
-  specification_status?: 'not_evaluated' | 'pass' | 'fail';
+  specification_status?: 'not_evaluated' | 'passed' | 'failed' | 'missing';
+  specification?: { minimum: number | null; maximum: number | null; unit: string };
   source?: string;
 }
 
 export interface SimulationAnalysisSummary {
   id: string;
-  type: 'op' | 'dc' | 'ac' | 'tran' | 'sparameter' | string;
+  type:
+    | 'op'
+    | 'dc'
+    | 'ac'
+    | 'tran'
+    | 'sparameter'
+    | 'noise'
+    | 'pz'
+    | 'fft'
+    | 'parameter_sweep'
+    | 'monte_carlo'
+    | string;
   directive: string;
   status: 'completed' | 'failed' | 'configuration_error' | string;
   execution_status: string;
@@ -375,6 +387,16 @@ export interface SimulationRun {
   execution_status?: string;
   measurement_status?: string;
   specification_status?: string;
+  verified?: boolean;
+  specifications?: Array<{
+    metric: string;
+    minimum: number | null;
+    maximum: number | null;
+    unit: string;
+    value: number | null;
+    status: 'passed' | 'failed' | 'missing';
+  }>;
+  specification_diagnostics?: string[];
   analysis_count?: number;
   analyses?: SimulationAnalysisSummary[];
   metrics?: SimulationRunMetric[];

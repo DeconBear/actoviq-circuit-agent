@@ -1044,7 +1044,9 @@ try {
   await page.getByTestId('simulation-diagram-table').click();
   await page.getByTestId('simulation-dataset-table').waitFor();
   assert.ok(await page.getByTestId('simulation-dataset-table').getByRole('row').count() > 10);
+  await page.getByRole('columnheader', { name: 'Target', exact: true }).waitFor();
   await page.getByText('not evaluated', { exact: true }).first().waitFor();
+  await page.screenshot({ path: path.resolve(outputRoot, 'simulation-workbench.png') });
   await page.getByRole('button', { name: 'Design', exact: true }).click();
   await waitForWorkbenchProject(page, projectId);
 
@@ -1251,6 +1253,7 @@ try {
       'output/playwright/module-summary-mode.png',
       'output/playwright/module-document-editor.png',
       'output/playwright/module-document-svg.png',
+      'output/playwright/simulation-workbench.png',
       'output/playwright/saved-design-memory.png',
       'output/playwright/imported-template-project.png',
       'output/playwright/light-netlist-notebook.png',

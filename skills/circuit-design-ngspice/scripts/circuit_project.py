@@ -8,8 +8,11 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
+import shlex
 import shutil
+import statistics
 import struct
 import subprocess
 import sys
@@ -62,7 +65,7 @@ ANALYSIS_DIRECTIVE_PREFIXES = (
     ".ac", ".dc", ".tran", ".op", ".sp", ".noise", ".pz", ".disto",
     ".sens", ".tf", ".four", ".meas", ".measure", ".print", ".plot",
     ".probe", ".save", ".ic", ".nodeset", ".options", ".option",
-    ".temp", ".control", ".endc",
+    ".temp", ".control", ".endc", ".actoviq",
 )
 
 
@@ -1992,7 +1995,7 @@ def build_report_markdown(
                 )
     lines.extend(["", "## Simulation", ""])
     if simulation is None:
-        lines.append("_Not simulated yet. Run \"Simulate system\" to populate AC metrics._")
+        lines.append("_Not simulated yet. Run \"Simulate system\" to populate analyses and metrics._")
     else:
         execution_status = simulation.get("execution_status") or (
             "success" if simulation.get("ok") else "failed"
@@ -2015,8 +2018,8 @@ def build_report_markdown(
             lines.extend([
                 "### Analyses",
                 "",
-                "| Analysis | Type | Execution | Measurements | Dataset |",
-                "| --- | --- | --- | --- | --- |",
+                "| Analysis | Type | Directive | Execution | Measurements | Specifications | Dataset |",
+                "| --- | --- | --- | --- | --- | --- | --- |",
             ])
             for analysis in analyses:
                 dataset = analysis.get("dataset") or {}
@@ -2028,8 +2031,10 @@ def build_report_markdown(
                     )
                 lines.append(
                     f"| {analysis.get('id', '')} | {analysis.get('type', '')} | "
+                    f"`{analysis.get('directive', '')}` | "
                     f"{analysis.get('execution_status', analysis.get('status', 'unknown'))} | "
-                    f"{analysis.get('measurement_status', 'unknown')} | {dataset_summary} |"
+                    f"{analysis.get('measurement_status', 'unknown')} | "
+                    f"{analysis.get('specification_status', 'not_evaluated')} | {dataset_summary} |"
                 )
                 for diagnostic in analysis.get("diagnostics") or []:
                     lines.append(f"- `{analysis.get('id', '')}`: {diagnostic}")
@@ -2057,6 +2062,25 @@ def build_report_markdown(
                 )
         else:
             lines.append("_No measurements were produced._")
+        specifications = simulation.get("specifications") or []
+        if specifications:
+            lines.extend([
+                "",
+                "### Specification Results",
+                "",
+                "| Metric | Minimum | Maximum | Actual | Unit | Status |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ])
+            for specification in specifications:
+                lines.append(
+                    f"| {specification.get('metric', '')} | "
+                    f"{specification.get('minimum', '') if specification.get('minimum') is not None else ''} | "
+                    f"{specification.get('maximum', '') if specification.get('maximum') is not None else ''} | "
+                    f"{specification.get('value', '') if specification.get('value') is not None else 'missing'} | "
+                    f"{specification.get('unit', '')} | {specification.get('status', '')} |"
+                )
+        for diagnostic in simulation.get("specification_diagnostics") or []:
+            lines.append(f"- Specification configuration: {diagnostic}")
     lines.extend(["", "## System netlist", "", "```spice", netlist_text.strip(), "```", ""])
     return "\n".join(lines)
 
@@ -2619,17 +2643,33 @@ def parse_measurements(netlist_text: str, log_text: str) -> list[dict[str, Any]]
     return metrics
 
 
-ANALYSIS_LINE = re.compile(r"^\s*\.(op|dc|ac|tran|sp)\b", re.IGNORECASE)
+ANALYSIS_LINE = re.compile(r"^\s*\.(op|dc|ac|tran|sp|noise|pz)\b", re.IGNORECASE)
 ANALYSIS_OUTPUT_LINE = re.compile(
-    r"^\s*\.(?:meas(?:ure)?|print|plot|probe)\s+(op|dc|ac|tran|sp)\b",
+    r"^\s*\.(?:meas(?:ure)?|print|plot|probe)\s+(op|dc|ac|tran|sp|noise|pz)\b",
     re.IGNORECASE,
 )
 
 
-def split_analysis_decks(netlist_text: str) -> list[dict[str, str]]:
+def advanced_directive_parts(directive: str) -> tuple[str, list[str], dict[str, str]]:
+    tokens = shlex.split(directive)
+    if len(tokens) < 2 or tokens[0].lower() != ".actoviq":
+        raise ValueError(f"invalid Actoviq analysis directive: {directive}")
+    positional: list[str] = []
+    options: dict[str, str] = {}
+    for token in tokens[2:]:
+        if "=" in token:
+            key, value = token.split("=", 1)
+            options[key.lower()] = value
+        else:
+            positional.append(token)
+    return tokens[1].lower(), positional, options
+
+
+def split_analysis_decks(netlist_text: str) -> list[dict[str, Any]]:
     lines = netlist_text.splitlines()
     title = lines[0] if lines and lines[0].strip() else "* Actoviq simulation"
     analyses: list[tuple[str, str]] = []
+    advanced_directives: list[str] = []
     base_lines: list[str] = [title]
     output_lines: list[tuple[str, str]] = []
     for index, raw in enumerate(lines):
@@ -2638,6 +2678,9 @@ def split_analysis_decks(netlist_text: str) -> list[dict[str, str]]:
         stripped = raw.strip()
         low = stripped.lower()
         if low == ".end":
+            continue
+        if low.startswith(".actoviq "):
+            advanced_directives.append(stripped)
             continue
         analysis_match = ANALYSIS_LINE.match(stripped)
         if analysis_match:
@@ -2651,10 +2694,12 @@ def split_analysis_decks(netlist_text: str) -> list[dict[str, str]]:
     if not analyses:
         analyses.append(("op", ".op"))
     counts: dict[str, int] = {}
-    decks: list[dict[str, str]] = []
+    decks: list[dict[str, Any]] = []
+    ordinary_by_type: dict[str, dict[str, Any]] = {}
     for analysis_type, directive in analyses:
         counts[analysis_type] = counts.get(analysis_type, 0) + 1
-        analysis_id = f"{'sparameter' if analysis_type == 'sp' else analysis_type}-{counts[analysis_type]}"
+        normalized_type = "sparameter" if analysis_type == "sp" else analysis_type
+        analysis_id = f"{normalized_type}-{counts[analysis_type]}"
         related = [line for line_type, line in output_lines if line_type == analysis_type]
         if not any(re.match(r"(?i)^\s*\.print\b", line) for line in related):
             probes = []
@@ -2663,12 +2708,95 @@ def split_analysis_decks(netlist_text: str) -> list[dict[str, str]]:
             if probes:
                 related.append(f".print {analysis_type} {' '.join(dict.fromkeys(probes))}")
         deck = "\n".join([*base_lines, directive, *related, ".end", ""])
-        decks.append({
+        analysis = {
             "id": analysis_id,
-            "type": "sparameter" if analysis_type == "sp" else analysis_type,
+            "type": normalized_type,
             "directive_type": analysis_type,
             "directive": directive,
             "deck": deck,
+        }
+        decks.append(analysis)
+        ordinary_by_type.setdefault(analysis_type, analysis)
+
+    advanced_counts: dict[str, int] = {}
+    for directive in advanced_directives:
+        kind, positional, options = advanced_directive_parts(directive)
+        if kind == "spec":
+            continue
+        advanced_counts[kind] = advanced_counts.get(kind, 0) + 1
+        analysis_id = f"{'parameter-sweep' if kind == 'sweep' else kind}-{advanced_counts[kind]}"
+        if kind == "fft":
+            trace = positional[0] if positional else ""
+            window = options.get("window", "blackman")
+            transient = ordinary_by_type.get("tran")
+            error = None
+            if not transient:
+                error = "FFT requires a transient analysis in the same netlist."
+            elif not trace or not re.fullmatch(r"[A-Za-z0-9_#().:+,\-]+", trace):
+                error = "FFT requires a valid transient vector such as v(out)."
+            elif window not in {
+                "none", "rectangular", "bartlet", "hanning", "hann", "blackman",
+                "blackmanharris", "hamming", "gaussian", "flattop",
+            }:
+                error = f"Unsupported FFT window: {window}"
+            tran_command = transient["directive"].lstrip(".") if transient else "tran 1n 1u"
+            deck = "\n".join([
+                *base_lines,
+                ".control",
+                tran_command,
+                f"linearize {trace or 'v(out)'}",
+                f"set specwindow={window}",
+                f"fft {trace or 'v(out)'}",
+                f"write vectors.raw {trace or 'v(out)'}",
+                "quit",
+                ".endc",
+                ".end",
+                "",
+            ])
+            decks.append({
+                "id": analysis_id,
+                "type": "fft",
+                "directive_type": "fft",
+                "directive": directive,
+                "deck": deck,
+                "configuration_error": error,
+            })
+            continue
+        if kind in {"sweep", "montecarlo"}:
+            required = 4 if kind == "sweep" else 4
+            requested_type = options.get("analysis", "ac").lower()
+            inner = ordinary_by_type.get(requested_type)
+            error = None
+            if len(positional) < required:
+                error = (
+                    ".actoviq sweep requires TARGET START STOP COUNT."
+                    if kind == "sweep"
+                    else ".actoviq montecarlo requires TARGET NOMINAL RELATIVE_SIGMA RUNS."
+                )
+            elif inner is None:
+                error = f"{kind} requires a .{requested_type} analysis in the same netlist."
+            decks.append({
+                "id": analysis_id,
+                "type": "parameter_sweep" if kind == "sweep" else "monte_carlo",
+                "directive_type": kind,
+                "directive": directive,
+                "deck": inner["deck"] if inner else "\n".join([*base_lines, ".op", ".end", ""]),
+                "inner_type": inner["type"] if inner else requested_type,
+                "target": positional[0] if positional else "",
+                "start": positional[1] if len(positional) > 1 else "",
+                "stop": positional[2] if len(positional) > 2 else "",
+                "count": positional[3] if len(positional) > 3 else "",
+                "seed": options.get("seed", "1"),
+                "configuration_error": error,
+            })
+            continue
+        decks.append({
+            "id": analysis_id,
+            "type": kind,
+            "directive_type": kind,
+            "directive": directive,
+            "deck": "\n".join([*base_lines, ".op", ".end", ""]),
+            "configuration_error": f"Unsupported Actoviq analysis: {kind}",
         })
     return decks
 
@@ -2779,6 +2907,10 @@ def variable_unit(kind: str, name: str) -> str:
         return "Hz"
     if low_kind == "time" or low_name == "time":
         return "s"
+    if "pole(" in low_name or "zero(" in low_name:
+        return "rad/s"
+    if "noise" in low_name:
+        return "V/sqrt(Hz)"
     if low_kind == "voltage" or low_name.startswith("v("):
         return "V"
     if low_kind == "current" or low_name.startswith("i("):
@@ -2789,9 +2921,20 @@ def variable_unit(kind: str, name: str) -> str:
 def plot_to_dataset(plot: dict[str, Any], analysis_id: str, analysis_type: str) -> dict[str, Any]:
     variables = plot["variables"]
     values = plot["values"]
-    scale_values = values[0] if values else []
+    if analysis_type == "pz":
+        scale_name = "root"
+        scale_unit = ""
+        scale_values = [0.0]
+        trace_variables = variables
+        trace_values = values
+    else:
+        scale_name = variables[0]["name"] if variables else "index"
+        scale_unit = variable_unit(variables[0]["kind"], variables[0]["name"]) if variables else ""
+        scale_values = [value.real for value in values[0]] if values else []
+        trace_variables = variables[1:]
+        trace_values = values[1:]
     traces: list[dict[str, Any]] = []
-    for variable, variable_values in zip(variables[1:], values[1:]):
+    for variable, variable_values in zip(trace_variables, trace_values):
         real = [value.real for value in variable_values]
         imaginary = [value.imag for value in variable_values]
         trace: dict[str, Any] = {
@@ -2816,9 +2959,9 @@ def plot_to_dataset(plot: dict[str, Any], analysis_id: str, analysis_type: str) 
         "plotname": plot["plotname"],
         "point_count": plot["point_count"],
         "x": {
-            "name": variables[0]["name"] if variables else "index",
-            "unit": variable_unit(variables[0]["kind"], variables[0]["name"]) if variables else "",
-            "values": [value.real for value in scale_values],
+            "name": scale_name,
+            "unit": scale_unit,
+            "values": scale_values,
         },
         "traces": traces,
     }
@@ -2916,7 +3059,330 @@ def derived_metrics(dataset: dict[str, Any]) -> list[dict[str, Any]]:
     elif analysis_type == "sparameter" and trace.get("magnitude"):
         return_loss = [-20 * math.log10(max(float(value), 1e-300)) for value in trace["magnitude"]]
         metrics.append(measured_metric("minimum_return_loss", min(return_loss), "dB"))
+    elif analysis_type == "noise":
+        for noise_trace in dataset.get("traces", []):
+            values = [abs(float(value)) for value in noise_trace.get("real", [])]
+            if not values:
+                continue
+            index = min(range(len(x)), key=lambda item: abs(x[item] - 1_000.0))
+            metrics.append(measured_metric(f"{noise_trace['name']}_at_1khz", values[index], noise_trace.get("unit", "")))
+    elif analysis_type == "fft":
+        magnitude = [float(value) for value in trace.get("magnitude", trace.get("real", []))]
+        candidates = [index for index, frequency in enumerate(x) if frequency > 0 and index < len(magnitude)]
+        if candidates:
+            dominant = max(candidates, key=lambda index: magnitude[index])
+            metrics.append(measured_metric("dominant_frequency", x[dominant], "Hz"))
+            metrics.append(measured_metric("dominant_magnitude", magnitude[dominant], trace.get("unit", "")))
+    elif analysis_type == "pz":
+        pole_count = sum("pole" in str(item.get("name", "")).lower() for item in dataset.get("traces", []))
+        zero_count = sum("zero" in str(item.get("name", "")).lower() for item in dataset.get("traces", []))
+        metrics.append(measured_metric("pole_count", float(pole_count), ""))
+        metrics.append(measured_metric("zero_count", float(zero_count), ""))
     return metrics
+
+
+SPICE_NUMBER_SUFFIXES = {
+    "t": 1e12,
+    "g": 1e9,
+    "meg": 1e6,
+    "k": 1e3,
+    "m": 1e-3,
+    "u": 1e-6,
+    "n": 1e-9,
+    "p": 1e-12,
+    "f": 1e-15,
+}
+
+
+def parse_spice_number(value: str) -> float:
+    match = re.fullmatch(
+        r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*([A-Za-z]+)?\s*",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        raise ValueError(f"invalid SPICE scalar: {value}")
+    number = float(match.group(1))
+    suffix = (match.group(2) or "").lower()
+    if not suffix:
+        return number
+    multiplier = next(
+        (factor for name, factor in sorted(SPICE_NUMBER_SUFFIXES.items(), key=lambda item: -len(item[0])) if suffix.startswith(name)),
+        None,
+    )
+    if multiplier is None:
+        raise ValueError(f"unsupported SPICE scalar suffix: {value}")
+    return number * multiplier
+
+
+def parse_simulation_specifications(netlist_text: str) -> tuple[list[dict[str, Any]], list[str]]:
+    specifications: list[dict[str, Any]] = []
+    diagnostics: list[str] = []
+    for line_number, raw in enumerate(netlist_text.splitlines(), start=1):
+        stripped = raw.strip()
+        if not re.match(r"(?i)^\.actoviq\s+spec\b", stripped):
+            continue
+        try:
+            _kind, positional, options = advanced_directive_parts(stripped)
+            if not positional:
+                raise ValueError("spec requires a metric name")
+            if "min" not in options and "max" not in options:
+                raise ValueError("spec requires min=, max=, or both")
+            minimum = parse_spice_number(options["min"]) if "min" in options else None
+            maximum = parse_spice_number(options["max"]) if "max" in options else None
+            if minimum is not None and maximum is not None and minimum > maximum:
+                raise ValueError("spec min cannot be greater than max")
+            specifications.append({
+                "metric": positional[0],
+                "minimum": minimum,
+                "maximum": maximum,
+                "unit": options.get("unit", ""),
+                "directive": stripped,
+                "line": line_number,
+            })
+        except ValueError as exc:
+            diagnostics.append(f"line {line_number}: {exc}")
+    return specifications, diagnostics
+
+
+def evaluate_simulation_specifications(
+    metrics: list[dict[str, Any]],
+    specifications: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    if not specifications:
+        return "not_evaluated", []
+    outcomes: list[dict[str, Any]] = []
+    for specification in specifications:
+        matching = [metric for metric in metrics if metric.get("name") == specification["metric"]]
+        measured = next(
+            (
+                metric for metric in matching
+                if isinstance(metric.get("value"), (int, float)) and math.isfinite(float(metric["value"]))
+            ),
+            None,
+        )
+        value = float(measured["value"]) if measured else None
+        passed = bool(
+            value is not None
+            and (specification["minimum"] is None or value >= specification["minimum"])
+            and (specification["maximum"] is None or value <= specification["maximum"])
+        )
+        status = "passed" if passed else "failed" if measured else "missing"
+        target = {
+            "minimum": specification["minimum"],
+            "maximum": specification["maximum"],
+            "unit": specification["unit"],
+        }
+        if measured:
+            measured["specification_status"] = status
+            measured["specification"] = target
+        outcomes.append({
+            **specification,
+            "value": value,
+            "status": status,
+        })
+    return (
+        "passed" if all(outcome["status"] == "passed" for outcome in outcomes) else "failed",
+        outcomes,
+    )
+
+
+def replace_sweep_target(deck: str, target: str, value: float) -> tuple[str, bool]:
+    formatted = f"{value:.12g}"
+    if target.lower().startswith("param:"):
+        parameter = target.split(":", 1)[1]
+        pattern = re.compile(rf"(?i)(\b{re.escape(parameter)}\s*=\s*)([^\s)]+)")
+        replaced, count = pattern.subn(lambda match: f"{match.group(1)}{formatted}", deck, count=1)
+        return replaced, count == 1
+    output: list[str] = []
+    changed = False
+    for raw in deck.splitlines():
+        tokens = raw.split()
+        if tokens and tokens[0].lower() == target.lower() and tokens[0][:1].upper() in {"R", "C", "L"}:
+            if len(tokens) < 4:
+                return deck, False
+            tokens[3] = formatted
+            output.append(" ".join(tokens))
+            changed = True
+        else:
+            output.append(raw)
+    return "\n".join(output) + ("\n" if deck.endswith("\n") else ""), changed
+
+
+def select_analysis_plot(plots: list[dict[str, Any]], analysis_type: str) -> dict[str, Any] | None:
+    if not plots:
+        return None
+    if analysis_type == "noise":
+        return max(plots, key=lambda plot: int(plot.get("point_count", 0)))
+    if analysis_type == "pz":
+        return next(
+            (plot for plot in plots if "pole" in str(plot.get("plotname", "")).lower()),
+            plots[-1],
+        )
+    return plots[-1]
+
+
+def configuration_error_result(
+    analysis: dict[str, Any],
+    analysis_root: Path,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "id": analysis["id"],
+        "type": analysis["type"],
+        "directive": analysis["directive"],
+        "status": "configuration_error",
+        "execution_status": "not_run",
+        "measurement_status": "not_requested",
+        "specification_status": "not_evaluated",
+        "diagnostics": [message],
+        "metrics": [],
+        "dataset": None,
+        "deck_path": str(analysis_root / "deck.cir"),
+        "log_path": str(analysis_root / "ngspice.log"),
+    }
+
+
+def run_ensemble_analysis(
+    executable: str,
+    run_root: Path,
+    analysis: dict[str, Any],
+) -> dict[str, Any]:
+    analysis_root = run_root / analysis["id"]
+    analysis_root.mkdir(parents=True, exist_ok=True)
+    deck_path = analysis_root / "deck.cir"
+    atomic_write_text(deck_path, analysis["deck"])
+    try:
+        count = int(analysis["count"])
+        if analysis["type"] == "parameter_sweep":
+            if count < 2 or count > 101:
+                raise ValueError("parameter sweep count must be between 2 and 101")
+            start = parse_spice_number(str(analysis["start"]))
+            stop = parse_spice_number(str(analysis["stop"]))
+            values = [start + (stop - start) * index / (count - 1) for index in range(count)]
+        else:
+            if count < 2 or count > 200:
+                raise ValueError("Monte Carlo run count must be between 2 and 200")
+            nominal = parse_spice_number(str(analysis["start"]))
+            relative_sigma = float(analysis["stop"])
+            if relative_sigma <= 0 or relative_sigma > 1:
+                raise ValueError("Monte Carlo relative sigma must be within 0..1")
+            generator = random.Random(int(analysis.get("seed", 1)))
+            values = [generator.gauss(nominal, abs(nominal) * relative_sigma) for _ in range(count)]
+    except (TypeError, ValueError) as exc:
+        return configuration_error_result(analysis, analysis_root, str(exc))
+
+    members_root = analysis_root / "members"
+    datasets: list[tuple[float, dict[str, Any]]] = []
+    member_summaries: list[dict[str, Any]] = []
+    diagnostics: list[str] = []
+    for index, value in enumerate(values):
+        member_deck, changed = replace_sweep_target(analysis["deck"], analysis["target"], value)
+        if not changed:
+            return configuration_error_result(
+                analysis,
+                analysis_root,
+                f"Sweep target {analysis['target']} was not found or is not a supported R/C/L device or param.",
+            )
+        member_id = f"member-{index + 1:03d}"
+        member = run_analysis(executable, members_root, {
+            "id": member_id,
+            "type": analysis["inner_type"],
+            "directive_type": analysis["inner_type"],
+            "directive": analysis["directive"],
+            "deck": member_deck,
+        })
+        member_summaries.append({
+            "id": member_id,
+            "value": value,
+            "status": member.get("status"),
+        })
+        member_dataset_path = members_root / member_id / "dataset.json"
+        if member.get("status") == "completed" and member_dataset_path.exists():
+            datasets.append((value, read_json(member_dataset_path)))
+        else:
+            diagnostics.extend(str(item) for item in member.get("diagnostics", []))
+
+    if not datasets:
+        return {
+            **configuration_error_result(analysis, analysis_root, "No ensemble member produced a dataset."),
+            "status": "failed",
+            "execution_status": "failed",
+            "members": member_summaries,
+            "diagnostics": diagnostics or ["No ensemble member produced a dataset."],
+        }
+
+    first_dataset = datasets[0][1]
+    point_count = min(int(dataset.get("point_count", 0)) for _, dataset in datasets)
+    x_values = list(first_dataset["x"]["values"][:point_count])
+    aggregate_traces: list[dict[str, Any]] = []
+    samples: list[float] = []
+    for value, dataset in datasets:
+        trace = primary_trace(dataset)
+        if trace is None:
+            continue
+        next_trace = {
+            key: (list(field[:point_count]) if isinstance(field, list) else field)
+            for key, field in trace.items()
+        }
+        next_trace["name"] = f"{trace['name']} [{analysis['target']}={value:.6g}]"
+        aggregate_traces.append(next_trace)
+        series = next_trace.get("magnitude") or next_trace.get("real") or []
+        if series:
+            samples.append(float(series[-1]))
+
+    dataset = {
+        "schema": "actoviq.simulation-dataset.v1",
+        "id": f"{analysis['id']}-dataset-1",
+        "analysis_id": analysis["id"],
+        "analysis_type": analysis["type"],
+        "plotname": "Parameter sweep" if analysis["type"] == "parameter_sweep" else "Monte Carlo",
+        "point_count": point_count,
+        "x": {**first_dataset["x"], "values": x_values},
+        "traces": aggregate_traces,
+        "members": [{"value": value} for value, _dataset in datasets],
+    }
+    dataset_path = analysis_root / "dataset.json"
+    atomic_write_json(dataset_path, dataset)
+    metrics = [measured_metric("ensemble_member_count", float(len(datasets)), "")]
+    if samples:
+        metrics.extend([
+            measured_metric("ensemble_output_min", min(samples), aggregate_traces[0].get("unit", "")),
+            measured_metric("ensemble_output_max", max(samples), aggregate_traces[0].get("unit", "")),
+            measured_metric("ensemble_output_mean", statistics.fmean(samples), aggregate_traces[0].get("unit", "")),
+            measured_metric(
+                "ensemble_output_stddev",
+                statistics.pstdev(samples) if len(samples) > 1 else 0.0,
+                aggregate_traces[0].get("unit", ""),
+            ),
+        ])
+    status = "completed" if len(datasets) == len(values) else "partial"
+    return {
+        "id": analysis["id"],
+        "type": analysis["type"],
+        "directive": analysis["directive"],
+        "status": status,
+        "execution_status": "success" if status == "completed" else "partial",
+        "measurement_status": "success",
+        "specification_status": "not_evaluated",
+        "diagnostics": diagnostics,
+        "metrics": metrics,
+        "members": member_summaries,
+        "dataset": {
+            "path": str(dataset_path.relative_to(run_root.parent.parent)).replace("\\", "/"),
+            "id": dataset["id"],
+            "plotname": dataset["plotname"],
+            "point_count": point_count,
+            "x_name": dataset["x"]["name"],
+            "x_unit": dataset["x"]["unit"],
+            "traces": [
+                {"name": trace["name"], "unit": trace.get("unit", ""), "complex": "imag" in trace}
+                for trace in aggregate_traces
+            ],
+        },
+        "deck_path": str(deck_path),
+        "log_path": str(analysis_root / "ngspice.log"),
+    }
 
 
 def has_sparameter_ports(deck: str) -> bool:
@@ -2930,7 +3396,7 @@ def has_sparameter_ports(deck: str) -> bool:
 def run_analysis(
     executable: str,
     run_root: Path,
-    analysis: dict[str, str],
+    analysis: dict[str, Any],
 ) -> dict[str, Any]:
     analysis_root = run_root / analysis["id"]
     analysis_root.mkdir(parents=True, exist_ok=True)
@@ -2938,21 +3404,20 @@ def run_analysis(
     raw_path = analysis_root / "vectors.raw"
     log_path = analysis_root / "ngspice.log"
     atomic_write_text(deck_path, analysis["deck"])
+    if analysis.get("configuration_error"):
+        return configuration_error_result(
+            analysis,
+            analysis_root,
+            str(analysis["configuration_error"]),
+        )
+    if analysis["type"] in {"parameter_sweep", "monte_carlo"}:
+        return run_ensemble_analysis(executable, run_root, analysis)
     if analysis["type"] == "sparameter" and not has_sparameter_ports(analysis["deck"]):
-        return {
-            "id": analysis["id"],
-            "type": analysis["type"],
-            "directive": analysis["directive"],
-            "status": "configuration_error",
-            "execution_status": "not_run",
-            "measurement_status": "not_requested",
-            "specification_status": "not_evaluated",
-            "diagnostics": ["S-parameter analysis requires at least two consecutive VSRC portnum ports with Z0."],
-            "metrics": [],
-            "dataset": None,
-            "deck_path": str(deck_path),
-            "log_path": str(log_path),
-        }
+        return configuration_error_result(
+            analysis,
+            analysis_root,
+            "S-parameter analysis requires at least two consecutive VSRC portnum ports with Z0.",
+        )
     try:
         # Windows rejects long working-directory paths before ngspice starts.
         # Execute from a short temporary directory, then persist every artifact
@@ -2963,16 +3428,12 @@ def run_analysis(
             execution_raw_path = execution_root / "vectors.raw"
             execution_log_path = execution_root / "ngspice.log"
             execution_deck_path.write_text(analysis["deck"], encoding="utf-8")
+            command = [executable, "-b"]
+            if analysis["type"] != "fft":
+                command.extend(["-r", str(execution_raw_path)])
+            command.extend(["-o", str(execution_log_path), str(execution_deck_path)])
             completed = subprocess.run(
-                [
-                    executable,
-                    "-b",
-                    "-r",
-                    str(execution_raw_path),
-                    "-o",
-                    str(execution_log_path),
-                    str(execution_deck_path),
-                ],
+                command,
                 cwd=str(execution_root),
                 text=True,
                 capture_output=True,
@@ -3005,7 +3466,11 @@ def run_analysis(
                     if execution_measurement_path.exists() else ""
                 )
                 atomic_write_text(measurement_log_path, measurement_log_text)
-        dataset = plot_to_dataset(plots[-1], analysis["id"], analysis["type"]) if plots else None
+        selected_plot = select_analysis_plot(plots, analysis["type"])
+        dataset = (
+            plot_to_dataset(selected_plot, analysis["id"], analysis["type"])
+            if selected_plot else None
+        )
         dataset_path = analysis_root / "dataset.json"
         if dataset:
             atomic_write_json(dataset_path, dataset)
@@ -3081,6 +3546,17 @@ def execute_simulation_run(
     run_root.mkdir(parents=True, exist_ok=False)
     analyses = [run_analysis(executable, run_root, analysis) for analysis in split_analysis_decks(netlist_text)]
     metrics = [metric for analysis in analyses for metric in analysis.get("metrics", [])]
+    specifications, specification_diagnostics = parse_simulation_specifications(netlist_text)
+    specification_status, specification_results = evaluate_simulation_specifications(metrics, specifications)
+    if specification_diagnostics:
+        specification_status = "invalid"
+    for analysis in analyses:
+        metric_names = {metric.get("name") for metric in analysis.get("metrics", [])}
+        relevant = [result for result in specification_results if result["metric"] in metric_names]
+        analysis["specification_status"] = (
+            "not_evaluated" if not relevant else
+            "passed" if all(result["status"] == "passed" for result in relevant) else "failed"
+        )
     completed = [analysis for analysis in analyses if analysis.get("status") == "completed"]
     failed = [analysis for analysis in analyses if analysis.get("status") != "completed"]
     result = {
@@ -3095,7 +3571,10 @@ def execute_simulation_run(
             "not_requested" if not metrics else
             "success" if all(metric.get("measurement_status") == "measured" for metric in metrics) else "partial"
         ),
-        "specification_status": "not_evaluated",
+        "specification_status": specification_status,
+        "verified": specification_status == "passed",
+        "specifications": specification_results,
+        "specification_diagnostics": specification_diagnostics,
         "analysis_count": len(analyses),
         "analyses": analyses,
         "metrics": metrics,

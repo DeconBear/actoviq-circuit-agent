@@ -25,6 +25,12 @@ and report are projections of that document. Never edit `build/` artifacts.
 8. Write the report only from simulation runs whose source revision and hash
    match the current document.
 
+Native project analyses are `.op`, `.dc`, `.ac`, `.tran`, `.sp`, `.noise`, and
+`.pz`. Use `.actoviq fft`, `.actoviq sweep`, and `.actoviq montecarlo` for
+derived/ensemble runs and `.actoviq spec` for numeric acceptance limits. The
+exact syntax and constraints are documented in `SKILL.md` under the GUI
+project contract.
+
 ## Netlist First Creation
 
 Use `upsert_module_netlist` to turn an AI-generated netlist directly into the

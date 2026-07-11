@@ -197,6 +197,27 @@ endpoint (sweep slightly past the point you measure). Simulation v2 reports
 execution, measurement, and specification status independently. A measured
 value is not a specification pass unless an explicit target evaluated it.
 
+Project simulation isolates each analysis in its own deck and stores raw
+vectors under the source revision. Native `.op`, `.dc`, `.ac`, `.tran`, `.sp`,
+`.noise`, and `.pz` directives are supported. Actoviq metadata directives add
+analyses that are not single native ngspice deck statements:
+
+```spice
+.actoviq fft v(out) window=blackman
+.actoviq sweep R1 800 1200 9 analysis=dc
+.actoviq montecarlo R1 1k 0.05 40 seed=42 analysis=op
+.actoviq spec bandwidth_3db min=900 max=1100 unit=Hz
+```
+
+FFT requires a `.tran` directive. Sweep targets are an R/C/L instance name or
+`param:<name>` and require a native inner analysis selected by `analysis=`.
+Monte Carlo uses a nominal value, relative sigma, run count, and deterministic
+optional seed. A specification accepts `min=`, `max=`, or both; thresholds may
+use SPICE scalar suffixes. A run may have `execution_status: success` while
+`specification_status: failed`. Treat a design as verified only when ERC is
+non-blocking, build/simulation hashes match the current revision, required
+analyses completed, and every declared specification passed.
+
 Every inter-module electrical network must have one explicit system name.
 Pass `network` when using `connect_ports`, or use
 `set_connection_network` with a stable `connection_id`. Renaming one
@@ -212,8 +233,9 @@ Modify one module per command when practical, keep its external ports stable,
 compile after structural edits, and simulate before declaring completion.
 
 The GUI surfaces a project through five tabs: Design (the module canvas),
-Netlist (the selected module's notebook), SVG (the selected module's
-netlistsvg), Sim, and Report. `compile` and `simulate` write
+Netlist (the selected module's notebook), SVG (the selected module's shared
+document preview), Sim, and Report. Sim supports dataset selection plus
+Cartesian, Bode, polar, Smith, and table diagrams. `compile` and `simulate` write
 `build/system/report.md` (modules, interfaces, system networks, simulation
 metrics, and the system netlist), which the Report tab renders. `simulate` also writes
 `build/system/simulation/result.json`; its `metrics` feed the Sim tab and the
@@ -245,7 +267,7 @@ python scripts/install_skill.py --agent all --scope user --force
 Use `--scope project --project-root <path>` for a repository-local install.
 Pass `--force` only when replacing an installed copy.
 
-**Scope**: schematic-level SPICE design, AC/power simulation, and SVG
+**Scope**: schematic-level SPICE design, waveform/sweep simulation, and SVG
 rendering. Not for PCB layout, IC mask layout, or production signoff.
 
 **Key constraints enforced by validation scripts**:

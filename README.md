@@ -35,15 +35,17 @@ This compiles the Electron main process, starts Vite, and opens the window.
 
 **Tabs**
 
-- **Design** — each circuit module is an asset card showing its schematic preview (or a function/parameter summary), its `IN` / `OUT` / `GND` system-network names, a copyable module ID, and an Agent note field. `Ctrl`+scroll zooms, the middle mouse button pans, right-click adds or edits a module, and the corner handle resizes a card. Double-click a card to open its schematic workspace. **Editable model** is a lightweight grid-based semantic SVG editor backed by `module.circuit.json`: select and left-drag components, place primitive R/C/L/D/M/Q/V/I devices, draw orthogonal wires, edit component values, delete items, undo/redo, then apply changes to the module JSON, notebook netlist, and refreshed build artifact. **SVG** uses the same `SchematicDocument` renderer as the editor, so the preview and editable surface share one geometry source. The legacy netlistsvg pipeline is still available through *Build netlistsvg* and compile/export checks, but it is no longer parsed back into the editor.
-- **Design memory** — from the Design toolbar, *Save template* stores the current project as a reusable Agent template under `references/design-memory/templates/`; *Save flow* stores the applied design process under `references/design-memory/flows/`. The Design inspector lists recent saved templates and flows, can open their folders, and can create a new project directly from a saved template. Future workflow runs expose these saved items through the Agent asset-reuse tools.
-- **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Saving re-renders the module SVG.
+- **Design** — each module opens in a lightweight grid-based schematic editor backed by `actoviq.module.v2`. Select and left-drag symbols, place primitive R/C/L/D/M/Q/V/I devices or custom-pin blocks, draw orthogonal wires, edit values, delete items, and undo/redo. Pins and ports reference stable electrical `net_id` values; visible names, aliases, rail symbols, and labels are explicit properties, so joining two MOS pins cannot silently duplicate a `VIN` label or rename unrelated networks. A completed gesture is committed as one revisioned transaction.
+- **Design memory** — *Save template* and *Save flow* store revision, document hash, circuit family, simulation coverage, and validation status under `references/design-memory/`. Agent reuse prioritizes validated memories and still requires fresh ERC and simulation.
+- **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Supported devices become native editable symbols; `.model`, `.param`, analyses, measurements, and unknown legal statements survive round trips. Saving commits the document and rebuilds previews from the same revision.
 - **SVG** — the selected module's `SchematicDocument` preview, matching the editable module view.
-- **Schematic document source of truth** — the module editor and module SVG preview render from `actoviq.schematic-document.v1`, derived from `actoviq.module.v1`. Pin anchors, including MOS `D/G/S/B`, are computed from semantic pin ids/names. Wires are materialized from `pin.net` / `port.net` membership plus explicit user-created wires, and those explicit wires survive `compile-module`.
-- **Sim** — system AC metrics from ngspice (status badge, table, chart) after *Simulate system*.
-- **Report** — a generated Markdown report (modules, interfaces, system networks, simulation metrics, and the system netlist).
+- **Schematic document source of truth** — Design and SVG render the same `actoviq.schematic-document.v1` projection of `actoviq.module.v2`. Semantic pin anchors, including MOS `D/G/S/B`, explicit wires, labels, and layout are shared. The netlistsvg path remains a compatibility/export build with independent geometry checks, not a second editable model.
+- **Sim** — revision-bound ngspice runs for OP, DC sweep, AC, transient, S-parameter, noise, pole-zero, FFT, parameter sweep, and Monte Carlo. The workbench separates execution, measurement, and specification status and displays Cartesian, Bode, polar, Smith, and table views. Large datasets are read through a bounded, viewport-aware IPC path.
+- **Report** — a generated Markdown report containing source revision/hash, ERC, models, analyses, metrics, specification results, diagnostics, and the system netlist.
 
 **Workspaces** — create multiple isolated workspaces, each with its own `projects/`, `jobs/`, and `references/`. The workspace root is user-selectable and defaults inside the repo under `workspace/` (git-ignored). Drop reference PDFs/images into `references/` and optionally run them through a configurable Yunzhisheng-compatible OCR endpoint (set in Settings).
+
+**Project lifecycle** — project deletion moves items to `.trash/projects/`; the Trash view can restore or permanently purge them. The project list supports context-menu deletion and multi-select. Every user or Agent transaction produces a restorable revision with actor, parent, content hash, normalized netlist, document snapshot, build provenance, and netlist diff.
 
 **How the agent drives it** — Claude Code / Codex use the `circuit-design-ngspice` skill to create and edit projects under the active workspace; the GUI watches those files and refreshes the affected card. See the *GUI Project Canvas Contract* in [SKILL.md](./skills/circuit-design-ngspice/SKILL.md).
 
@@ -193,6 +195,7 @@ npm run test:e2e:schematic-editor
 npm run test:e2e:electron
 npm test
 npm run test:schematic-quality
+npm run test:simulation-regression
 ```
 
 ## Linked Local CLI
@@ -235,17 +238,18 @@ Large designs are partitioned by function during the design stage. The workflow 
 
 ## Rendering
 
-The workflow generates schematics via the netlistsvg backend:
+Desktop projects use one semantic document for both editing and SVG display:
 
-- `render/netlistsvg.svg`: primary schematic output for all circuits.
+- `modules/<id>/module.circuit.json` is the revisioned electrical and editable source. Stable net IDs carry connectivity; labels and aliases do not alter topology.
+- Design and SVG create the same `SchematicDocument`, including symbols, pin anchors, orthogonal routes, junctions, explicit labels, and view bounds.
+- `render/netlistsvg.svg` and module compatibility builds preserve the established AI/netlist-to-netlistsvg export path. They are checked against the same topology but are not parsed back into the editor.
 - In schematic view, bench-only voltage/current sources are hidden to keep the
   drawing readable. When one of those hidden sources drives a visible
   non-rail control or bias node, the renderer exposes a named terminal such as
   `GATE`, `VREF`, `ITAIL`, or `VB` and routes it as a real net connection.
-- Module schematic layout edits from the GUI are saved separately in
-  `modules/<id>/schematic.overrides.json`. They move rendered cells before the
-  router runs, so wires reconnect to the moved anchors while the module netlist
-  remains the electrical source of truth.
+- User electrical/layout edits are committed to the module document in one
+  transaction. Legacy `schematic.overrides.json` files remain readable for
+  compatibility and netlistsvg-only positioning.
 - Reusable project templates and process notes saved from the GUI live under
   the active workspace's `references/design-memory/` folder. The Agent asset
   reuse stage lists those saved templates and flows alongside bundled starter
@@ -360,6 +364,11 @@ Contract*.
 
 ```powershell
 npm test
+npm run test:schematic-document
+npm run test:schematic-quality
+npm run test:simulation-regression
+npm run test:e2e:schematic-editor
+npm run test:e2e:electron
 npm run build
 npm run pack:dry-run
 ```

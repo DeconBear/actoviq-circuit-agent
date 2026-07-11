@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/simulation.schema.json",
+  "title": "Actoviq Simulation Run",
+  "type": "object",
+  "required": [
+    "schema",
+    "run_id",
+    "source_revision",
+    "document_hash",
+    "ok",
+    "execution_status",
+    "measurement_status",
+    "specification_status",
+    "analyses",
+    "metrics"
+  ],
+  "properties": {
+    "schema": { "const": "actoviq.simulation.v2" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "scope": { "type": "string" },
+    "source_revision": { "type": "integer", "minimum": 0 },
+    "document_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "ok": { "type": "boolean" },
+    "verified": { "type": "boolean" },
+    "execution_status": { "enum": ["success", "partial", "failed"] },
+    "measurement_status": { "enum": ["not_requested", "success", "partial"] },
+    "specification_status": { "enum": ["not_evaluated", "passed", "failed", "invalid"] },
+    "analyses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "directive", "status", "execution_status"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "type": {
+            "enum": [
+              "op", "dc", "ac", "tran", "sparameter", "noise", "pz", "fft",
+              "parameter_sweep", "monte_carlo"
+            ]
+          },
+          "directive": { "type": "string" },
+          "status": { "enum": ["completed", "partial", "failed", "configuration_error"] },
+          "execution_status": { "type": "string" },
+          "measurement_status": { "type": "string" },
+          "specification_status": { "type": "string" },
+          "diagnostics": { "type": "array", "items": { "type": "string" } },
+          "dataset": {
+            "anyOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "required": ["path", "id", "point_count", "traces"],
+                "properties": {
+                  "path": { "type": "string", "minLength": 1 },
+                  "id": { "type": "string", "minLength": 1 },
+                  "point_count": { "type": "integer", "minimum": 1 },
+                  "traces": { "type": "array" }
+                },
+                "additionalProperties": true
+              }
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "metrics": { "type": "array" },
+    "specifications": { "type": "array" },
+    "specification_diagnostics": { "type": "array", "items": { "type": "string" } },
+    "simulated_at": { "type": "string" }
+  },
+  "additionalProperties": true
+}

@@ -46,6 +46,7 @@ export function SimulationTab() {
 function defaultDiagram(analysis?: SimulationAnalysisSummary): DiagramMode {
   if (analysis?.type === 'ac') return 'bode';
   if (analysis?.type === 'sparameter') return 'smith';
+  if (analysis?.type === 'pz') return 'polar';
   if (analysis?.type === 'op') return 'table';
   return 'cartesian';
 }
@@ -282,7 +283,7 @@ function Diagram({
           <XAxis
             dataKey="x"
             type="number"
-            scale={dataset.analysis_type === 'ac' ? 'log' : 'auto'}
+            scale={['ac', 'noise'].includes(dataset.analysis_type) ? 'log' : 'auto'}
             domain={['auto', 'auto']}
             tick={{ fontSize: 10 }}
             label={{ value: `${dataset.x.name} (${dataset.x.unit})`, position: 'insideBottom', offset: -8 }}
@@ -363,6 +364,7 @@ function MetricTable({ metrics }: { metrics: SimulationRunMetric[] }) {
           <tr>
             <th style={styles.th}>Metric</th>
             <th style={styles.th}>Value</th>
+            <th style={styles.th}>Target</th>
             <th style={styles.th}>Measurement</th>
             <th style={styles.th}>Specification</th>
           </tr>
@@ -372,6 +374,7 @@ function MetricTable({ metrics }: { metrics: SimulationRunMetric[] }) {
             <tr key={`${metric.name}-${index}`} style={styles.tr}>
               <td style={styles.td}>{metric.name}</td>
               <td style={styles.tdMono}>{formatNumber(metric.value)} {metric.unit}</td>
+              <td style={styles.tdMono}>{formatSpecification(metric)}</td>
               <td style={styles.td}>{metric.measurement_status ?? (metric.pass ? 'measured' : 'failed')}</td>
               <td style={styles.td}>{metric.specification_status ?? 'not evaluated'}</td>
             </tr>
@@ -380,6 +383,18 @@ function MetricTable({ metrics }: { metrics: SimulationRunMetric[] }) {
       </table>
     </div>
   );
+}
+
+function formatSpecification(metric: SimulationRunMetric): string {
+  const target = metric.specification;
+  if (!target) return '-';
+  const unit = target.unit || metric.unit;
+  if (target.minimum !== null && target.maximum !== null) {
+    return `${formatNumber(target.minimum)} to ${formatNumber(target.maximum)} ${unit}`.trim();
+  }
+  if (target.minimum !== null) return `>= ${formatNumber(target.minimum)} ${unit}`.trim();
+  if (target.maximum !== null) return `<= ${formatNumber(target.maximum)} ${unit}`.trim();
+  return '-';
 }
 
 function formatNumber(value: number | null | undefined): string {

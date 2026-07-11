@@ -46,6 +46,7 @@ R1 in out 1k
 C1 out 0 100n
 .ac dec 30 10 1meg
 .meas ac gain_1khz_db find vdb(out) at=1k
+.actoviq spec bandwidth_3db min=1400 max=1800 unit=Hz
 .end
 """,
     "rectifier-tran": """* Diode rectifier transient
@@ -91,6 +92,65 @@ R1 in out 50
 .sp dec 20 1meg 1gig
 .end
 """,
+    "rc-noise": """* RC output noise
+V1 in 0 DC 0 AC 1
+R1 in out 1k
+C1 out 0 100n
+.noise v(out) V1 dec 20 10 1meg
+.end
+""",
+    "rc-pz": """* RC pole-zero analysis
+V1 in 0 DC 0 AC 1
+R1 in out 1k
+C1 out 0 100n
+.pz in 0 out 0 vol pz
+.end
+""",
+    "sine-fft": """* Deterministic FFT
+V1 out 0 SIN(0 1 1k)
+R1 out 0 1k
+.tran 10u 10m
+.actoviq fft v(out) window=blackman
+.end
+""",
+    "divider-parameter-sweep": """* Divider parameter sweep
+.param RVAL=1k
+V1 in 0 DC 10
+R1 in out {RVAL}
+R2 out 0 1k
+.dc V1 0 10 1
+.actoviq sweep param:RVAL 800 1200 5 analysis=dc
+.end
+""",
+    "divider-monte-carlo": """* Divider Monte Carlo
+V1 in 0 DC 10
+R1 in out 1k
+R2 out 0 1k
+.op
+.actoviq montecarlo R1 1k 0.05 8 seed=42 analysis=op
+.end
+""",
+    "spec-fail-separation": """* Executable design with an intentionally failing specification
+V1 in 0 DC 0
+R1 in out 1k
+R2 out 0 1k
+.dc V1 0 10 1
+.actoviq spec dc_output_max min=6 unit=V
+.end
+""",
+    "ldo-startup": (
+        ROOT / "skills" / "circuit-design-ngspice" / "assets" / "templates" / "ldo_mos_series_bench.cir"
+    ).read_text(encoding="utf-8"),
+    "buck-transient": (
+        ROOT / "skills" / "circuit-design-ngspice" / "assets" / "templates" / "buck_mos_power_bench.cir"
+    ).read_text(encoding="utf-8"),
+}
+
+
+TARGET_ANALYSIS = {
+    "sine-fft": "fft",
+    "divider-parameter-sweep": "parameter_sweep",
+    "divider-monte-carlo": "monte_carlo",
 }
 
 
@@ -118,6 +178,7 @@ def validate(case_id: str, run: dict, dataset: dict) -> None:
     elif case_id == "rc-ac":
         assert -1.0 > metric(run, "gain_1khz_db") > -2.0
         assert 1400 < metric(run, "bandwidth_3db") < 1800
+        assert run["specification_status"] == "passed"
     elif case_id == "rectifier-tran":
         output = trace(dataset, "v(out)")["real"]
         assert max(output) > 3.5 and min(output[-100:]) > 0
@@ -132,6 +193,39 @@ def validate(case_id: str, run: dict, dataset: dict) -> None:
     elif case_id == "two-port-sp":
         assert dataset["analysis_type"] == "sparameter"
         assert any(item.get("imag") for item in dataset["traces"])
+    elif case_id == "rc-noise":
+        assert dataset["analysis_type"] == "noise"
+        assert metric(run, "onoise_spectrum_at_1khz") > 0
+        assert all(item["unit"] == "V/sqrt(Hz)" for item in dataset["traces"])
+    elif case_id == "rc-pz":
+        assert dataset["analysis_type"] == "pz"
+        assert metric(run, "pole_count") >= 1
+        assert any("pole" in item["name"].lower() for item in dataset["traces"])
+    elif case_id == "sine-fft":
+        assert dataset["analysis_type"] == "fft"
+        assert 900 < metric(run, "dominant_frequency") < 1100
+        assert metric(run, "dominant_magnitude") > 0.5
+    elif case_id == "divider-parameter-sweep":
+        assert dataset["analysis_type"] == "parameter_sweep"
+        assert len(dataset["traces"]) == 5
+        assert metric(run, "ensemble_output_min") < 4.6
+        assert metric(run, "ensemble_output_max") > 5.5
+    elif case_id == "divider-monte-carlo":
+        assert dataset["analysis_type"] == "monte_carlo"
+        assert len(dataset["traces"]) == 8
+        assert metric(run, "ensemble_output_stddev") > 0
+        assert math.isclose(metric(run, "ensemble_output_mean"), 5.0, rel_tol=0.05)
+    elif case_id == "spec-fail-separation":
+        assert run["ok"]
+        assert run["execution_status"] == "success"
+        assert run["specification_status"] == "failed"
+        assert not run["verified"]
+    elif case_id == "ldo-startup":
+        assert 4.5 < metric(run, "vout_nom") < 5.2
+        assert metric(run, "line_regulation_pct") < 1.0
+    elif case_id == "buck-transient":
+        assert 2.5 < metric(run, "vout_avg") < 4.0
+        assert metric(run, "efficiency_pct") > 30
 
 
 def main() -> int:
@@ -160,7 +254,11 @@ def main() -> int:
                 digest,
                 f"regression:{case_id}",
             )
-            analysis = run["analyses"][0]
+            target_type = TARGET_ANALYSIS.get(case_id)
+            analysis = next(
+                item for item in run["analyses"]
+                if target_type is None or item["type"] == target_type
+            )
             dataset_path = case_root / "simulation" / analysis["dataset"]["path"]
             dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
             validate(case_id, run, dataset)
