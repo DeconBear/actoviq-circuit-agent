@@ -24,7 +24,7 @@ extraResources:
 win:
   target:
     - nsis
-  icon: assets/icon.png
+  icon: assets/icon.ico
 mac:
   target:
     - dmg

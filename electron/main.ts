@@ -15,19 +15,22 @@ let mainWindow: BrowserWindow | null = null;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function appIconPath(): string {
+  // Windows taskbar/window chrome prefer .ico; other platforms use PNG.
+  const fileName = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
   return app.isPackaged
-    ? path.join(process.resourcesPath, 'assets', 'icon.png')
-    : path.join(app.getAppPath(), 'assets', 'icon.png');
+    ? path.join(process.resourcesPath, 'assets', fileName)
+    : path.join(app.getAppPath(), 'assets', fileName);
 }
 
 function createWindow(): void {
+  const iconPath = appIconPath();
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 960,
     minHeight: 640,
     title: 'Actoviq Circuit Agent',
-    icon: appIconPath(),
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -35,6 +38,11 @@ function createWindow(): void {
       sandbox: false,
     },
   });
+
+  // Ensure taskbar icon updates even if the shell cached an older asset.
+  if (process.platform === 'win32') {
+    mainWindow.setIcon(iconPath);
+  }
 
   const menu = buildMenu(mainWindow);
   Menu.setApplicationMenu(menu);
@@ -64,6 +72,9 @@ function registerIpcHandlers(): void {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.actoviq.circuit-agent');
+  }
   registerIpcHandlers();
   void inspectCircuitSkillStatus().catch((error) => {
     console.warn('Circuit skill version check failed:', error);
