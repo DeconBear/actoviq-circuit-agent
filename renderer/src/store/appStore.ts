@@ -7,6 +7,7 @@ import type {
   ConversationSummary,
   ModuleManifest,
   ReferenceDocument,
+  SimulationProbeRequest,
   StageState,
   ToolCallEntry,
   WorkspaceSummary,
@@ -63,6 +64,7 @@ interface AppState {
   svgContent: string;
   reportContent: string;
   simulationData: SimulationMetric[] | null;
+  simulationProbeRequest: SimulationProbeRequest | null;
   moduleManifest: ModuleManifest | null;
 
   // Settings
@@ -102,6 +104,7 @@ interface AppState {
   setSvgContent: (content: string) => void;
   setReportContent: (content: string) => void;
   setSimulationData: (data: SimulationMetric[] | null) => void;
+  setSimulationProbeRequest: (request: SimulationProbeRequest | null) => void;
   setModuleManifest: (manifest: ModuleManifest | null) => void;
   resetWorkflow: (options?: { preserveMessages?: boolean }) => void;
   setConversationId: (id: string) => void;
@@ -142,6 +145,7 @@ export const useAppStore = create<AppState>((set) => ({
   svgContent: '',
   reportContent: '',
   simulationData: null,
+  simulationProbeRequest: null,
   moduleManifest: null,
   approvalPolicy: 'execution',
 
@@ -216,6 +220,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSvgContent: (content) => set({ svgContent: content }),
   setReportContent: (content) => set({ reportContent: content }),
   setSimulationData: (data) => set({ simulationData: data }),
+  setSimulationProbeRequest: (request) => set({ simulationProbeRequest: request }),
   setModuleManifest: (manifest) => set({ moduleManifest: manifest }),
   resetWorkflow: (options) =>
     set({
@@ -225,6 +230,7 @@ export const useAppStore = create<AppState>((set) => ({
       svgContent: '',
       reportContent: '',
       simulationData: null,
+      simulationProbeRequest: null,
       moduleManifest: null,
       ...(options?.preserveMessages ? {} : { messages: [] }),
       stages: [],

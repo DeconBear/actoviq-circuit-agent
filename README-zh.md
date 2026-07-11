@@ -42,7 +42,7 @@ npm run electron:dev
 - **Netlist**——每个模块一份可编辑的 Markdown 笔记本：`spice` 代码块是网表，代码块之外是说明。受支持器件会映射为原生可编辑符号；`.model`、`.param`、分析、测量以及未知但合法的 SPICE 语句会在往返转换中保留。保存会提交统一文档并从同一 revision 重建预览。
 - **SVG**——当前模块的 `SchematicDocument` 预览，与 Design 编辑器使用完全相同的几何结果。
 - **统一原理图真源**——Design 和 SVG 都渲染 `actoviq.module.v2` 投影出的 `actoviq.schematic-document.v1`。MOS `D/G/S/B` 等语义引脚锚点、显式导线、标签和布局完全共享。netlistsvg 继续用于兼容导出和独立几何质量检查，但不再是第二份可编辑模型。
-- **Sim**——按 revision 运行 ngspice，支持 OP、DC Sweep、AC、Transient、S 参数、Noise、Pole-Zero、FFT、参数扫描和 Monte Carlo。工作台分别显示执行、测量和规格状态，并提供 Cartesian、Bode、Polar、Smith 和表格视图；长波形通过限制点数且支持视口范围的 IPC 读取。
+- **Sim**——按 revision 运行 ngspice，支持 OP、DC Sweep、AC、Transient、S 参数、Noise、Pole-Zero、FFT、参数扫描和 Monte Carlo。工作台分别显示执行、测量和规格状态，并提供 Cartesian、Bode、Polar、Smith 和表格视图；在原理图中选中引脚/导线或器件，可添加经 source-map 映射的节点电压或真实器件电流 trace；长波形通过限制点数且支持视口范围的 IPC 读取。
 - **Report**——自动生成包含来源 revision/hash、ERC、模型、分析条件、指标、规格结果、失败诊断和系统网表的 Markdown 报告。
 
 **工作空间**——可创建多个相互隔离的工作空间，每个都有独立的 `projects/`、`jobs/` 和 `references/`。工作空间根目录可由用户选择，默认在仓库内 `workspace/`（已被 git 忽略）。把参考 PDF / 图片放进 `references/`，可选地通过可配置的云知声兼容 OCR 接口识别（在设置中配置）。

@@ -1351,6 +1351,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
     const simulationPath = path.resolve(root, 'build', 'system', 'simulation', 'result.json');
     const ercPath = path.resolve(root, 'build', 'erc.json');
+    const sourceMapPath = path.resolve(root, 'build', 'system', 'source-map.json');
     const reportPath = path.resolve(root, 'build', 'system', 'report.md');
     return {
       manifest,
@@ -1359,6 +1360,9 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
         : null,
       simulation: await exists(simulationPath)
         ? JSON.parse(await readFile(simulationPath, 'utf8')) as Record<string, unknown>
+        : null,
+      sourceMap: await exists(sourceMapPath)
+        ? JSON.parse(await readFile(sourceMapPath, 'utf8')) as Record<string, unknown>
         : null,
       report: await exists(reportPath) ? await readFile(reportPath, 'utf8') : '',
     };

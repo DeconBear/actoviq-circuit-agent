@@ -331,7 +331,20 @@ export interface CircuitBuildState {
   };
   erc?: CircuitErcResult | null;
   simulation: SimulationRun | null;
+  sourceMap?: {
+    components?: Record<string, { module_id?: string; component_id?: string }>;
+    nodes?: Record<string, { module_id?: string; local_net?: string }>;
+  } | null;
   report?: string;
+}
+
+export interface SimulationProbeRequest {
+  id: number;
+  projectId: string;
+  moduleId: string;
+  kind: 'voltage' | 'current';
+  label: string;
+  candidates: string[];
 }
 
 export interface SimulationRunMetric {

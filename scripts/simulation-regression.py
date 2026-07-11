@@ -179,6 +179,16 @@ def validate(case_id: str, run: dict, dataset: dict) -> None:
         assert -1.0 > metric(run, "gain_1khz_db") > -2.0
         assert 1400 < metric(run, "bandwidth_3db") < 1800
         assert run["specification_status"] == "passed"
+        resistor_current = trace(dataset, "i(@r1[i])")
+        assert resistor_current["source"] == "derived_from_ac_node_voltages"
+        assert 9e-4 < resistor_current["magnitude"][-1] < 1.1e-3
+        capacitor_current = trace(dataset, "i(@c1[i])")
+        assert capacitor_current["source"] == "derived_from_ac_node_voltages"
+        assert math.isclose(
+            resistor_current["magnitude"][-1],
+            capacitor_current["magnitude"][-1],
+            rel_tol=1e-6,
+        )
     elif case_id == "rectifier-tran":
         output = trace(dataset, "v(out)")["real"]
         assert max(output) > 3.5 and min(output[-100:]) > 0
@@ -196,7 +206,10 @@ def validate(case_id: str, run: dict, dataset: dict) -> None:
     elif case_id == "rc-noise":
         assert dataset["analysis_type"] == "noise"
         assert metric(run, "onoise_spectrum_at_1khz") > 0
-        assert all(item["unit"] == "V/sqrt(Hz)" for item in dataset["traces"])
+        noise_traces = [item for item in dataset["traces"] if "noise" in item["name"]]
+        current_traces = [item for item in dataset["traces"] if item["name"].startswith("i(@")]
+        assert noise_traces and all(item["unit"] == "V/sqrt(Hz)" for item in noise_traces)
+        assert current_traces and all(item["unit"] == "A" for item in current_traces)
     elif case_id == "rc-pz":
         assert dataset["analysis_type"] == "pz"
         assert metric(run, "pole_count") >= 1

@@ -98,6 +98,26 @@ interface Props {
   buildBusy?: boolean;
   onSave: (module: CircuitModule) => Promise<void>;
   onBuild: () => void;
+  onProbe?: (probe: SchematicProbeSelection) => void;
+}
+
+export interface SchematicProbeSelection {
+  kind: 'voltage' | 'current';
+  label: string;
+  candidates: string[];
+  net?: string;
+  componentId?: string;
+  componentType?: CircuitComponent['type'];
+}
+
+function componentCurrentCandidates(component: CircuitComponent): string[] {
+  const parameter = ({
+    R: 'i', C: 'i', L: 'i', D: 'id', M: 'id', Q: 'ic', I: 'current',
+  } as Partial<Record<CircuitComponent['type'], string>>)[component.type];
+  return [
+    ...(parameter ? [`i(@${component.name}[${parameter}])`] : []),
+    `i(${component.name})`,
+  ];
 }
 
 interface DragState {
@@ -159,7 +179,7 @@ interface ContextMenuState {
 
 type DraftUpdate = (current: CircuitModule) => CircuitModule;
 
-export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBuild }: Props) {
+export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBuild, onProbe }: Props) {
   const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
@@ -1596,6 +1616,26 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
                   <option value="270">270</option>
                 </select>
               </label>
+              {onProbe && selectedComponent.type !== 'BLOCK' ? (
+                <div style={styles.probeActions}>
+                  <button
+                    type="button"
+                    style={styles.smallButton}
+                    onClick={() => onProbe({
+                      kind: 'current',
+                      label: `Current through ${selectedComponent.name}`,
+                      candidates: componentCurrentCandidates(selectedComponent),
+                      componentId: selectedComponent.id,
+                      componentType: selectedComponent.type,
+                    })}
+                    disabled={busy || dirty}
+                    title={dirty ? 'Apply schematic changes before probing' : `Plot current through ${selectedComponent.name}`}
+                    data-testid="schematic-editor-probe-current"
+                  >
+                    Plot current
+                  </button>
+                </div>
+              ) : null}
               {selectedComponent.type === 'BLOCK' ? (
                 <>
                   <div style={styles.fieldGrid}>
@@ -1694,7 +1734,27 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
                   {selectedComponent.pins.map((pin) => (
                     <div key={pin.id} style={styles.pinRow}>
                       <span>{pin.name}</span>
-                      <code>{pin.net}</code>
+                      <span style={styles.pinProbeGroup}>
+                        <code>{pin.net}</code>
+                        {onProbe ? (
+                          <button
+                            type="button"
+                            style={styles.probeIconButton}
+                            onClick={() => onProbe({
+                              kind: 'voltage',
+                              label: `Voltage at ${pin.net}`,
+                              candidates: [`v(${pin.net})`],
+                              net: pin.net,
+                            })}
+                            disabled={busy || dirty}
+                            aria-label={`Plot voltage at ${pin.net}`}
+                            title={dirty ? 'Apply schematic changes before probing' : `Plot voltage at ${pin.net}`}
+                            data-testid={`schematic-editor-probe-pin-${pin.id}`}
+                          >
+                            V
+                          </button>
+                        ) : null}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1720,6 +1780,23 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
                 <span>Points</span>
                 <code data-testid="schematic-editor-wire-point-count">{selectedWire.points.length}</code>
               </div>
+              {onProbe && selectedWire.net ? (
+                <button
+                  type="button"
+                  style={styles.smallButton}
+                  onClick={() => onProbe({
+                    kind: 'voltage',
+                    label: `Voltage at ${selectedWire.net}`,
+                    candidates: [`v(${selectedWire.net})`],
+                    net: selectedWire.net,
+                  })}
+                  disabled={busy || dirty}
+                  title={dirty ? 'Apply schematic changes before probing' : `Plot voltage at ${selectedWire.net}`}
+                  data-testid="schematic-editor-probe-wire"
+                >
+                  Plot voltage
+                </button>
+              ) : null}
             </div>
           ) : (
             <div style={styles.emptyText}>No item selected</div>
@@ -2548,6 +2625,19 @@ const styles: Record<string, CSSProperties> = {
     background: '#ffffff',
   },
   pinList: { display: 'grid', gap: 6, marginTop: 12 },
+  probeActions: { display: 'flex', justifyContent: 'flex-end', margin: '2px 0 10px' },
+  pinProbeGroup: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
+  probeIconButton: {
+    width: 26,
+    height: 26,
+    border: '1px solid #b8c6d8',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#1f5f96',
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: 800,
+  },
   pinRow: {
     display: 'flex',
     alignItems: 'center',

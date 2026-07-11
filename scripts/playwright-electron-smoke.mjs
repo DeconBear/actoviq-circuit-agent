@@ -243,6 +243,24 @@ async function clickEnabledTestId(page, testId) {
   await locator.click();
 }
 
+async function clickSchematicComponent(page, componentId) {
+  const point = await page.getByTestId('schematic-editor-svg').locator(
+    `g[data-component-id="${componentId}"] [data-testid="schematic-symbol-body"]`,
+  ).evaluate((node) => {
+    if (!(node instanceof SVGGraphicsElement)) throw new Error('schematic symbol body is not SVG geometry');
+    const box = node.getBBox();
+    const matrix = node.getScreenCTM();
+    if (!matrix) throw new Error('schematic symbol body has no screen transform');
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    return {
+      x: matrix.a * x + matrix.c * y + matrix.e,
+      y: matrix.b * x + matrix.d * y + matrix.f,
+    };
+  });
+  await page.mouse.click(point.x, point.y);
+}
+
 async function clickApplicationMenuPath(electronApp, labels) {
   await electronApp.evaluate(({ BrowserWindow, Menu }, menuLabels) => {
     let items = Menu.getApplicationMenu()?.items ?? [];
@@ -1049,6 +1067,55 @@ try {
   await page.screenshot({ path: path.resolve(outputRoot, 'simulation-workbench.png') });
   await page.getByRole('button', { name: 'Design', exact: true }).click();
   await waitForWorkbenchProject(page, projectId);
+  await page.getByTestId('module-card-filter').dblclick();
+  const probeEditor = page.getByTestId('schematic-editor');
+  await probeEditor.waitFor();
+  const probeResistorId = await probeEditor.evaluate((node) => {
+    const components = JSON.parse(node.getAttribute('data-components') ?? '[]');
+    return components.find((component) => component.type === 'R')?.id ?? '';
+  });
+  assert.ok(probeResistorId, 'filter schematic should expose a resistor for current probing');
+  await clickSchematicComponent(page, probeResistorId);
+  await page.getByTestId('schematic-editor-probe-current').click();
+  const currentProbeStatus = page.getByTestId('simulation-probe-status');
+  await currentProbeStatus.getByText(/^Added i\(.+\) from filter$/).waitFor({ timeout: 30_000 });
+  const currentProbeText = await currentProbeStatus.textContent();
+  const currentTraceName = currentProbeText?.match(/^Added (.+) from filter$/)?.[1] ?? '';
+  assert.ok(currentTraceName, 'current probe should resolve a simulation trace');
+  const currentTraceChoice = page.locator('label').filter({ hasText: currentTraceName }).first().locator('input');
+  assert.equal(await currentTraceChoice.isChecked(), true, 'current probe trace should be selected');
+  assert.equal(
+    await page.getByTestId('simulation-trace-panel').locator('input:checked').count(),
+    1,
+    'current probing should isolate the requested ampere trace',
+  );
+  assert.doesNotMatch(
+    await page.getByTestId('simulation-bode-chart').innerText(),
+    /-6000/,
+    'current probe Bode plot should not contain a synthetic zero-vector floor',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'simulation-probe-current.png') });
+
+  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await waitForWorkbenchProject(page, projectId);
+  await page.getByTestId('module-card-filter').dblclick();
+  await clickSchematicComponent(page, probeResistorId);
+  await page.getByTestId(/^schematic-editor-probe-pin-/).last().click();
+  const voltageProbeStatus = page.getByTestId('simulation-probe-status');
+  await voltageProbeStatus.getByText(/^Added v\(.+\) from filter$/).waitFor({ timeout: 30_000 });
+  const voltageProbeText = await voltageProbeStatus.textContent();
+  const voltageTraceName = voltageProbeText?.match(/^Added (.+) from filter$/)?.[1] ?? '';
+  assert.ok(voltageTraceName, 'voltage probe should resolve a simulation trace');
+  const voltageTraceChoice = page.locator('label').filter({ hasText: voltageTraceName }).first().locator('input');
+  assert.equal(await voltageTraceChoice.isChecked(), true, 'voltage probe trace should be selected');
+  assert.doesNotMatch(
+    await page.getByTestId('simulation-bode-chart').innerText(),
+    /-6000/,
+    'default voltage traces should omit unexcited rails that collapse the Bode scale',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'simulation-probe-voltage.png') });
+  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await waitForWorkbenchProject(page, projectId);
 
   await waitForWorkbenchProject(page, projectId);
   await clickEnabledTestId(page, 'save-design-template');
@@ -1254,6 +1321,8 @@ try {
       'output/playwright/module-document-editor.png',
       'output/playwright/module-document-svg.png',
       'output/playwright/simulation-workbench.png',
+      'output/playwright/simulation-probe-current.png',
+      'output/playwright/simulation-probe-voltage.png',
       'output/playwright/saved-design-memory.png',
       'output/playwright/imported-template-project.png',
       'output/playwright/light-netlist-notebook.png',

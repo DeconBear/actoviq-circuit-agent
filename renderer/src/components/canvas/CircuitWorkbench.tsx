@@ -22,7 +22,7 @@ import type {
   SchematicOverrides,
   SimulationRun,
 } from '../../types';
-import { SchematicEditor } from './SchematicEditor';
+import { SchematicEditor, type SchematicProbeSelection } from './SchematicEditor';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import { createSchematicDocument } from '../../schematic/schematicDocument';
 
@@ -49,6 +49,16 @@ interface EmptyProjectFormState {
 }
 
 const BOARD_MARGIN = 1200;
+
+function currentVectorCandidates(instance: string, type?: CircuitModule['components'][number]['type']): string[] {
+  const parameter = ({
+    R: 'i', C: 'i', L: 'i', D: 'id', M: 'id', Q: 'ic', I: 'current',
+  } as Partial<Record<CircuitModule['components'][number]['type'], string>>)[type ?? 'BLOCK'];
+  return [
+    ...(parameter ? [`i(@${instance}[${parameter}])`] : []),
+    `i(${instance})`,
+  ];
+}
 const BOARD_MIN_WIDTH = 3600;
 const BOARD_MIN_HEIGHT = 2600;
 
@@ -326,6 +336,8 @@ export function CircuitWorkbench({
   const setBusy = useAppStore((state) => state.setCircuitBusy);
   const setError = useAppStore((state) => state.setCircuitError);
   const setBuild = useAppStore((state) => state.setCircuitBuild);
+  const setActiveTab = useAppStore((state) => state.setActiveTab);
+  const setSimulationProbeRequest = useAppStore((state) => state.setSimulationProbeRequest);
   const [view, setView] = useState<'board' | 'module'>('board');
   const [zoom, setZoom] = useState(65);
   const [notice, setNotice] = useState('');
@@ -390,6 +402,35 @@ export function CircuitWorkbench({
 
   function isActiveProject(projectId: string): boolean {
     return useAppStore.getState().activeProjectId === projectId;
+  }
+
+  function openSimulationProbe(moduleId: string, probe: SchematicProbeSelection) {
+    if (!currentProjectId) return;
+    const mapped: string[] = [];
+    if (probe.net) {
+      for (const [node, source] of Object.entries(build?.sourceMap?.nodes ?? {})) {
+        if (source.module_id === moduleId && source.local_net === probe.net) mapped.push(`v(${node})`);
+      }
+    }
+    if (probe.componentId) {
+      for (const [instance, source] of Object.entries(build?.sourceMap?.components ?? {})) {
+        if (source.module_id === moduleId && source.component_id === probe.componentId) {
+          mapped.push(...currentVectorCandidates(instance, probe.componentType));
+        }
+      }
+    }
+    const candidates = [...new Map(
+      [...mapped, ...probe.candidates].map((candidate) => [candidate.toLowerCase(), candidate]),
+    ).values()];
+    setSimulationProbeRequest({
+      id: Date.now(),
+      projectId: currentProjectId,
+      moduleId,
+      kind: probe.kind,
+      label: probe.label,
+      candidates,
+    });
+    setActiveTab('simulation');
   }
 
   useEffect(() => {
@@ -1543,6 +1584,7 @@ export function CircuitWorkbench({
               onMoveItem={(itemId, x, y) => moveSchematicItem(selectedRef.id, itemId, x, y)}
               onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
+              onProbe={(probe) => openSimulationProbe(selectedRef.id, probe)}
             />
           ) : null}
         </div>
@@ -1968,6 +2010,7 @@ function ModuleSchematic({
   onMoveItem,
   onResetItem,
   onResetLayout,
+  onProbe,
 }: {
   module: CircuitModuleRef;
   moduleData?: CircuitModule;
@@ -1980,6 +2023,7 @@ function ModuleSchematic({
   onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
+  onProbe: (probe: SchematicProbeSelection) => void;
 }) {
   const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
   const [editLayout, setEditLayout] = useState(false);
@@ -2384,6 +2428,7 @@ function ModuleSchematic({
             buildBusy={previewBusy}
             onSave={onSaveSchematic}
             onBuild={onBuild}
+            onProbe={onProbe}
           />
         ) : schematicDocument ? (
           <div

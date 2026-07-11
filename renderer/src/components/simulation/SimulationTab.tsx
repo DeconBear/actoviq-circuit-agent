@@ -24,6 +24,26 @@ type DiagramMode = 'cartesian' | 'bode' | 'polar' | 'smith' | 'table';
 
 const traceColors = ['#176b4d', '#b43b48', '#2368a2', '#7a4f9a', '#9a6a15', '#237d82'];
 
+function matchingTraceName(
+  traces: Array<{ name: string }>,
+  candidates: string[],
+): string | undefined {
+  const normalized = new Map(traces.map((trace) => [trace.name.replaceAll(' ', '').toLowerCase(), trace.name]));
+  return candidates
+    .map((candidate) => normalized.get(candidate.replaceAll(' ', '').toLowerCase()))
+    .find((name): name is string => Boolean(name));
+}
+
+function defaultTraceNames(dataset: SimulationDataset): string[] {
+  const meaningful = dataset.traces.filter((trace) => {
+    const values = trace.magnitude ?? trace.real;
+    return values.some((value) => Number.isFinite(value) && Math.abs(value) > 1e-18);
+  });
+  const candidates = meaningful.length > 0 ? meaningful : dataset.traces;
+  const voltages = candidates.filter((trace) => trace.unit === 'V');
+  return (voltages.length > 0 ? voltages : candidates).slice(0, 4).map((trace) => trace.name);
+}
+
 export function SimulationTab() {
   const legacyData = useAppStore((state) => state.simulationData);
   const projectId = useAppStore((state) => state.activeProjectId);
@@ -69,6 +89,10 @@ function ProjectSimulation({
   const [datasetError, setDatasetError] = useState('');
   const [selectedTraces, setSelectedTraces] = useState<string[]>([]);
   const [diagram, setDiagram] = useState<DiagramMode>('cartesian');
+  const [probeMessage, setProbeMessage] = useState('');
+  const probeRequest = useAppStore((state) => state.simulationProbeRequest);
+  const setProbeRequest = useAppStore((state) => state.setSimulationProbeRequest);
+  const activeProbe = probeRequest?.projectId === projectId ? probeRequest : null;
 
   const selectedAnalysis = analyses.find((analysis) => analysis.id === analysisId) ?? analyses[0];
 
@@ -77,6 +101,15 @@ function ProjectSimulation({
     setAnalysisId(next?.id ?? '');
     setDiagram(defaultDiagram(next));
   }, [simulation?.run_id]);
+
+  useEffect(() => {
+    if (!activeProbe) return;
+    setProbeMessage(`Finding ${activeProbe.label}...`);
+    const target = analyses.find((analysis) => (
+      matchingTraceName(analysis.dataset?.traces ?? [], activeProbe.candidates)
+    ));
+    if (target) setAnalysisId(target.id);
+  }, [activeProbe?.id, simulation?.run_id]);
 
   useEffect(() => {
     if (!selectedAnalysis) return;
@@ -96,7 +129,7 @@ function ProjectSimulation({
     }).then((nextDataset) => {
       if (cancelled) return;
       setDataset(nextDataset);
-      setSelectedTraces(nextDataset.traces.slice(0, 4).map((trace) => trace.name));
+      setSelectedTraces(defaultTraceNames(nextDataset));
     }).catch((error) => {
       if (!cancelled) setDatasetError(error instanceof Error ? error.message : String(error));
     }).finally(() => {
@@ -105,11 +138,31 @@ function ProjectSimulation({
     return () => { cancelled = true; };
   }, [projectId, selectedAnalysis?.dataset, selectedAnalysis?.id, simulation?.run_id]);
 
+  useEffect(() => {
+    if (!activeProbe || !dataset) return;
+    const probedTrace = matchingTraceName(dataset.traces, activeProbe.candidates);
+    if (probedTrace) {
+      setSelectedTraces((current) => (
+        activeProbe.kind === 'current'
+          ? [probedTrace]
+          : [...new Set([...current, probedTrace])]
+      ));
+      setProbeMessage(`Added ${probedTrace} from ${activeProbe.moduleId}`);
+      setProbeRequest(null);
+    } else {
+      setProbeMessage(`${activeProbe.label} is not present in this run. Simulate the current revision to capture it.`);
+    }
+  }, [activeProbe?.id, dataset, setProbeRequest]);
+
   if (!simulation) {
     return (
       <div style={styles.empty}>
         <div style={styles.emptyTitle}>No simulation run</div>
-        <div style={styles.emptyMeta}>{status ? `Build status: ${status}` : 'Project is not compiled'}</div>
+        <div style={styles.emptyMeta}>
+          {activeProbe
+            ? `${activeProbe.label} requested. Simulate the current revision to capture it.`
+            : status ? `Build status: ${status}` : 'Project is not compiled'}
+        </div>
       </div>
     );
   }
@@ -132,6 +185,10 @@ function ProjectSimulation({
           <Status label="Specifications" value={simulation.specification_status ?? 'not_evaluated'} />
         </div>
       </div>
+
+      {probeMessage ? (
+        <div style={styles.probeStatus} data-testid="simulation-probe-status">{probeMessage}</div>
+      ) : null}
 
       <div style={styles.analysisBar}>
         <label style={styles.fieldLabel}>
@@ -166,7 +223,7 @@ function ProjectSimulation({
       </div>
 
       <div style={styles.content}>
-        <aside style={styles.tracePanel}>
+        <aside style={styles.tracePanel} data-testid="simulation-trace-panel">
           <div style={styles.panelTitle}>Traces</div>
           {dataset?.traces.map((trace, index) => (
             <label key={trace.name} style={styles.traceChoice}>
@@ -430,6 +487,7 @@ const styles: Record<string, CSSProperties> = {
   workbench: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: '#f5f6f8', color: '#2d3540' },
   runHeader: { minHeight: 54, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '8px 14px', borderBottom: '1px solid #d9dee4', background: '#fff' },
   runIdentity: { minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11, color: '#737d88' },
+  probeStatus: { minHeight: 30, display: 'flex', alignItems: 'center', padding: '4px 14px', borderBottom: '1px solid #cddbea', background: '#eef5fb', color: '#275f8a', fontSize: 11 },
   stale: { color: '#a32d38', fontWeight: 700 },
   statusGroup: { display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'flex-end' },
   statusItem: { display: 'flex', gap: 6, fontSize: 10, color: '#7a838e', textTransform: 'capitalize' },

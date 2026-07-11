@@ -2650,6 +2650,29 @@ ANALYSIS_OUTPUT_LINE = re.compile(
 )
 
 
+CURRENT_PROBE_PARAMETER = {
+    "R": "i",
+    "C": "i",
+    "L": "i",
+    "D": "id",
+    "M": "id",
+    "Q": "ic",
+}
+
+
+def current_probe_vectors(lines: list[str]) -> list[str]:
+    vectors: list[str] = []
+    for raw in lines:
+        stripped = strip_spice_comment(raw)
+        if not stripped or stripped.startswith("."):
+            continue
+        instance = stripped.split(maxsplit=1)[0]
+        parameter = CURRENT_PROBE_PARAMETER.get(instance[:1].upper())
+        if parameter and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:+\-]*", instance):
+            vectors.append(f"@{instance}[{parameter}]")
+    return list(dict.fromkeys(vectors))
+
+
 def advanced_directive_parts(directive: str) -> tuple[str, list[str], dict[str, str]]:
     tokens = shlex.split(directive)
     if len(tokens) < 2 or tokens[0].lower() != ".actoviq":
@@ -2693,6 +2716,9 @@ def split_analysis_decks(netlist_text: str) -> list[dict[str, Any]]:
         base_lines.append(raw)
     if not analyses:
         analyses.append(("op", ".op"))
+    probe_vectors = current_probe_vectors(base_lines)
+    if probe_vectors:
+        base_lines.append(f".save all {' '.join(probe_vectors)}")
     counts: dict[str, int] = {}
     decks: list[dict[str, Any]] = []
     ordinary_by_type: dict[str, dict[str, Any]] = {}
@@ -3115,6 +3141,130 @@ def parse_spice_number(value: str) -> float:
     return number * multiplier
 
 
+def simple_spice_parameters(deck: str) -> dict[str, float]:
+    raw_values: dict[str, str] = {}
+    for raw in deck.splitlines():
+        stripped = strip_spice_comment(raw)
+        if not re.match(r"(?i)^\s*\.param\b", stripped):
+            continue
+        declaration = re.sub(r"(?i)^\s*\.param\b", "", stripped, count=1)
+        for match in re.finditer(r"([A-Za-z_]\w*)\s*=\s*(\{[^}]+\}|[^\s]+)", declaration):
+            raw_values[match.group(1).lower()] = match.group(2)
+
+    resolved: dict[str, float] = {}
+
+    def resolve(name: str, resolving: set[str]) -> float:
+        key = name.lower()
+        if key in resolved:
+            return resolved[key]
+        if key in resolving or key not in raw_values:
+            raise ValueError(f"unresolved SPICE parameter: {name}")
+        token = raw_values[key].strip()
+        reference = token[1:-1].strip() if token.startswith("{") and token.endswith("}") else token
+        try:
+            value = parse_spice_number(reference)
+        except ValueError:
+            value = resolve(reference, {*resolving, key})
+        resolved[key] = value
+        return value
+
+    for parameter in raw_values:
+        try:
+            resolve(parameter, set())
+        except ValueError:
+            continue
+    return resolved
+
+
+def passive_ac_current_specs(deck: str) -> list[tuple[str, str, str, str, float]]:
+    parameters = simple_spice_parameters(deck)
+    specs: list[tuple[str, str, str, str, float]] = []
+    for raw in deck.splitlines():
+        stripped = strip_spice_comment(raw)
+        if not stripped or stripped.startswith("."):
+            continue
+        tokens = stripped.split()
+        if len(tokens) < 4 or tokens[0][:1].upper() not in {"R", "C", "L"}:
+            continue
+        value_token = tokens[3].strip()
+        reference = (
+            value_token[1:-1].strip().lower()
+            if value_token.startswith("{") and value_token.endswith("}")
+            else ""
+        )
+        try:
+            value = parameters[reference] if reference else parse_spice_number(value_token)
+        except (KeyError, ValueError):
+            continue
+        if value > 0:
+            specs.append((tokens[0], tokens[0][0].upper(), tokens[1], tokens[2], value))
+    return specs
+
+
+def add_passive_ac_currents(dataset: dict[str, Any], deck: str) -> None:
+    if dataset.get("analysis_type") != "ac":
+        return
+    frequencies = [float(value) for value in dataset.get("x", {}).get("values", [])]
+    if not frequencies:
+        return
+    traces = dataset.get("traces", [])
+    by_name = {
+        str(trace.get("name", "")).replace(" ", "").lower(): trace
+        for trace in traces
+    }
+
+    def node_values(node: str) -> list[complex] | None:
+        if node.lower() in {"0", "gnd!"}:
+            return [0j] * len(frequencies)
+        trace = by_name.get(f"v({node})".replace(" ", "").lower())
+        if not trace:
+            return None
+        real = trace.get("real", [])
+        imaginary = trace.get("imag", [0.0] * len(real))
+        if len(real) != len(frequencies) or len(imaginary) != len(real):
+            return None
+        return [complex(float(real_value), float(imag_value)) for real_value, imag_value in zip(real, imaginary)]
+
+    for instance, kind, positive_node, negative_node, value in passive_ac_current_specs(deck):
+        positive = node_values(positive_node)
+        negative = node_values(negative_node)
+        if positive is None or negative is None:
+            continue
+        voltage = [left - right for left, right in zip(positive, negative)]
+        if kind == "R":
+            current = [item / value for item in voltage]
+        elif kind == "C":
+            current = [item * complex(0.0, 2.0 * math.pi * frequency * value) for item, frequency in zip(voltage, frequencies)]
+        else:
+            current = [
+                item / complex(0.0, 2.0 * math.pi * frequency * value)
+                for item, frequency in zip(voltage, frequencies)
+            ]
+        magnitude = [abs(item) for item in current]
+        replacement = {
+            "name": f"i(@{instance}[i])",
+            "unit": "A",
+            "real": [item.real for item in current],
+            "imag": [item.imag for item in current],
+            "magnitude": magnitude,
+            "db": [20 * math.log10(max(item, 1e-300)) for item in magnitude],
+            "phase_deg": [math.degrees(math.atan2(item.imag, item.real)) for item in current],
+            "source": "derived_from_ac_node_voltages",
+        }
+        existing = next(
+            (
+                index for index, trace in enumerate(traces)
+                if str(trace.get("name", "")).replace(" ", "").lower()
+                == replacement["name"].replace(" ", "").lower()
+            ),
+            None,
+        )
+        if existing is None:
+            traces.append(replacement)
+        else:
+            traces[existing] = replacement
+
+
 def parse_simulation_specifications(netlist_text: str) -> tuple[list[dict[str, Any]], list[str]]:
     specifications: list[dict[str, Any]] = []
     diagnostics: list[str] = []
@@ -3473,6 +3623,7 @@ def run_analysis(
         )
         dataset_path = analysis_root / "dataset.json"
         if dataset:
+            add_passive_ac_currents(dataset, analysis["deck"])
             atomic_write_json(dataset_path, dataset)
         metrics = parse_measurements(analysis["deck"], measurement_log_text)
         if dataset:

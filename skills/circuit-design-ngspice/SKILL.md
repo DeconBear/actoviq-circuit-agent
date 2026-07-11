@@ -218,6 +218,14 @@ use SPICE scalar suffixes. A run may have `execution_status: success` while
 non-blocking, build/simulation hashes match the current revision, required
 analyses completed, and every declared specification passed.
 
+The simulator saves native device-current vectors alongside node voltages. For
+R/C/L AC analyses, ngspice's zero-valued internal placeholders are replaced by
+the exact complex currents derived from node voltages and component values. In
+the desktop editor, a pin/wire voltage probe or component current probe is
+resolved through `build/system/source-map.json`, then opens Sim and selects the
+matching vector. If the current run predates the probe vectors or belongs to
+another revision, rerun simulation; never substitute a fabricated trace.
+
 Every inter-module electrical network must have one explicit system name.
 Pass `network` when using `connect_ports`, or use
 `set_connection_network` with a stable `connection_id`. Renaming one
