@@ -1,5 +1,8 @@
 ---
 name: circuit-design-ngspice
+metadata:
+  version: "2.0.0"
+  protocol_version: "actoviq.project-agent.v2"
 description: >
   Design, simulate, and render primitive-based SPICE circuits with ngspice and
   netlistsvg. Given a natural-language circuit requirement, run the full
@@ -19,6 +22,19 @@ This skill turns natural-language circuit requirements into verified SPICE
 designs and SVG schematics. It wraps a suite of Python CLI scripts for
 ngspice simulation, netlist validation, and netlistsvg rendering into a
 step-by-step workflow that any AI coding agent can execute.
+
+## Protocol Version
+
+This skill implements `actoviq.project-agent.v2`. Read
+`skill-version.json` and `references/project-agent-protocol.md` before changing
+an Actoviq desktop project. The project transaction protocol is the default;
+the older jobs workflow is import-only compatibility.
+
+Before every project edit, run `agent-context` and use exactly the returned
+`project_id` and `base_revision`. After every edit, inspect the returned ERC,
+then run `compile` and the required simulations. Never retry a stale command by
+changing its revision number without rereading the context and rebuilding the
+operation from the current document.
 
 ## GUI Project Canvas Contract
 
@@ -56,6 +72,10 @@ Inspect before modifying:
 
 ```bash
 python scripts/circuit_project.py summary \
+  --project-root <workspace-root>/projects/<project-id>
+python scripts/circuit_project.py agent-context \
+  --project-root <workspace-root>/projects/<project-id>
+python scripts/circuit_project.py erc \
   --project-root <workspace-root>/projects/<project-id>
 ```
 
@@ -115,24 +135,25 @@ stable `id`, visible `name`, electrical `net`, and optional `side`
 }
 ```
 
-`BLOCK` is deliberately not emitted as a SPICE device. The compiler records
-it as a comment/source-map entry while the underlying simulated behavior must
-still be implemented with primitive R/C/L/D/Q/M/V/I components. The editable
-canvas, module card, and document SVG all render the block from module data.
+`BLOCK` defaults to schematic-only and is reported by ERC as not simulated.
+A block participates in simulation only when it preserves an explicit legal
+SPICE statement in `spice.raw` and declares `spice.simulated: true`. Reports
+must identify every schematic-only block. The editable canvas, module card,
+and document SVG all render the block from module data.
 
 Schemas live under `schemas/`.
 
-The desktop module canvas keeps `module.circuit.json` as the structured manual
-editing source and netlistsvg as the electrical rendering backend. The GUI
-Editor mode can save components, ports, wires, and annotations through
-`set_module_schematic`; after that, run `compile-module` to regenerate the SPICE
-module netlist and netlistsvg preview. The SVG preview mode also supports
+The desktop module canvas, document SVG, and netlistsvg compatibility export
+are projections of the same revisioned CircuitDocument. The GUI Editor mode
+can save components, ports, wires, and annotations through
+`set_module_schematic`; the background build coordinator regenerates the SPICE
+module netlist and previews. The SVG preview mode also supports
 layout-only user edits: moving a rendered symbol or terminal writes
 `modules/<id>/schematic.overrides.json`, and `compile-module` applies those
 positions before re-routing wires. These overrides are not electrical edits.
 Preserve the override file when regenerating a module, and do not edit generated
-`build/` SVGs directly. After changing a module netlist, always run
-`compile-module`; this preserves the
+`build/` SVGs directly. After changing a module netlist, run `compile-module`
+(or project `compile`) and inspect ERC; this preserves the
 `netlist -> netlist_to_json -> netlistsvg SVG` flow and refreshes the GUI
 preview. Read `notes` on the module reference before editing. Users may address
 a module directly by its stable `id`.
@@ -172,10 +193,9 @@ sub-circuit — its local node names are kept verbatim and are not remapped to
 system networks, so keep one self-contained design (or modules that share node
 names intentionally) per project when mixing notebook netlists. Two gotchas:
 ngspice `.meas ... FIND <expr> AT=<x>` cannot evaluate at the exact sweep
-endpoint (sweep slightly past the point you measure), and a metric's `pass`
-flag reports whether ngspice **evaluated** the measurement, not spec
-conformance — a measurement ngspice could not compute is surfaced as a failed
-metric instead of vanishing.
+endpoint (sweep slightly past the point you measure). Simulation v2 reports
+execution, measurement, and specification status independently. A measured
+value is not a specification pass unless an explicit target evaluated it.
 
 Every inter-module electrical network must have one explicit system name.
 Pass `network` when using `connect_ports`, or use
@@ -205,12 +225,21 @@ The older `<workspace-root>/jobs/` manifest workflow remains available only
 for compatibility with existing result bundles. Do not call the legacy
 built-in workflow for a project-canvas design.
 
+For a new AI-generated circuit, prefer one `upsert_module_netlist` operation.
+It accepts module metadata plus `netlist_notebook`, parses supported devices
+into editable symbols, preserves models/directives/unknown legal statements,
+infers ports and stable nets, and commits all outputs as one revision. Use
+`set_module_netlist` for an existing module. Do not construct a parallel SVG-
+only representation.
+
 ## Installation
 
 The same source skill supports Codex and Claude Code:
 
 ```bash
 python scripts/install_skill.py --agent all --scope user
+python scripts/install_skill.py --agent all --scope user --check
+python scripts/install_skill.py --agent all --scope user --force
 ```
 
 Use `--scope project --project-root <path>` for a repository-local install.

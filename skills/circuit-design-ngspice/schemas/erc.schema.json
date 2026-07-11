@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/erc.schema.json",
+  "title": "Actoviq Electrical Rules Check",
+  "type": "object",
+  "required": [
+    "schema",
+    "source_revision",
+    "document_hash",
+    "status",
+    "blocking",
+    "summary",
+    "diagnostics",
+    "checked_at"
+  ],
+  "properties": {
+    "schema": { "const": "actoviq.erc.v1" },
+    "source_revision": { "type": "integer", "minimum": 0 },
+    "document_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "status": { "enum": ["clean", "warning", "error"] },
+    "blocking": { "type": "boolean" },
+    "summary": {
+      "type": "object",
+      "required": ["errors", "warnings", "infos"],
+      "properties": {
+        "errors": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "integer", "minimum": 0 },
+        "infos": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "code", "message"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["error", "warning", "info"] },
+          "code": { "type": "string", "minLength": 1 },
+          "message": { "type": "string", "minLength": 1 },
+          "module_id": { "type": "string" },
+          "component_id": { "type": "string" },
+          "pin_id": { "type": "string" },
+          "port_id": { "type": "string" },
+          "net_id": { "type": "string" },
+          "model": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "checked_at": { "type": "string" }
+  },
+  "additionalProperties": false
+}

@@ -792,7 +792,39 @@ export function App() {
         content: m.content,
       }));
       const activeJobId = currentJobIdRef.current ?? state.activeJobId;
-      const result = await window.electronAPI.sendChatMessage(trimmed, history, { activeJobId });
+      const agentContext = state.activeProjectId
+        ? await window.electronAPI.getCircuitAgentContext(state.activeProjectId).catch(() => null)
+        : null;
+      const activeProject = agentContext ? {
+        protocol_version: agentContext.protocol_version,
+        project_id: agentContext.project_id,
+        base_revision: agentContext.base_revision,
+        document_hash: agentContext.document_hash,
+        project: agentContext.project,
+        modules: Object.fromEntries(Object.entries(agentContext.modules).map(([moduleId, module]) => [
+          moduleId,
+          {
+            module_id: module.module_id,
+            name: module.name,
+            revision: module.revision,
+            ports: module.ports,
+            components: module.components,
+            nets: module.nets,
+            spice: module.spice,
+          },
+        ])),
+        erc: agentContext.erc,
+        build: { state: agentContext.build.state },
+        simulation: {
+          state: agentContext.simulation.state,
+          execution_status: agentContext.simulation.run?.execution_status,
+          measurement_status: agentContext.simulation.run?.measurement_status,
+          specification_status: agentContext.simulation.run?.specification_status,
+        },
+        next_action: agentContext.next_action,
+        transaction: agentContext.transaction,
+      } : null;
+      const result = await window.electronAPI.sendChatMessage(trimmed, history, { activeJobId, activeProject });
 
       // Show the agent's chat response
       useAppStore.getState().addMessage({
@@ -805,6 +837,82 @@ export function App() {
       });
 
       const wantsWorkflow = result.isDesignRequest || result.isRevisionRequest;
+      const projectOperations = result.projectOperations?.filter(
+        (operation): operation is Record<string, unknown> => Boolean(operation && typeof operation.op === 'string'),
+      ) ?? [];
+
+      if (projectOperations.length > 0) {
+        if (workflowWasRunning) {
+          useAppStore.getState().addMessage({
+            id: `project-agent-busy-${Date.now()}`,
+            role: 'system',
+            content: 'A workflow is already running. The project transaction was not applied.',
+            timestamp: Date.now(),
+            conversationId: cid,
+          });
+          return;
+        }
+        const latest = useAppStore.getState();
+        latest.setCircuitBusy(true);
+        latest.setCircuitError('');
+        let targetProjectId = '';
+        try {
+          let baseRevision = 0;
+          if (result.isRevisionRequest && agentContext) {
+            targetProjectId = agentContext.project_id;
+            baseRevision = agentContext.base_revision;
+          } else {
+            const created = await window.electronAPI.createCircuitProject({
+              name: result.projectName?.trim() || `Agent Circuit ${new Date().toLocaleString()}`,
+              demo: false,
+            });
+            targetProjectId = created.project.project_id;
+            baseRevision = created.project.revision;
+          }
+          const applied = await window.electronAPI.applyCircuitCommand(targetProjectId, {
+            schema: 'actoviq.command.v1',
+            command_id: `agent-${Date.now()}`,
+            actor: 'agent',
+            project_id: targetProjectId,
+            base_revision: baseRevision,
+            message: result.revisionRequest || result.formalizedRequirement || trimmed,
+            operations: projectOperations,
+          });
+          if (result.compileAfterApply !== false) {
+            await window.electronAPI.compileCircuitProject(targetProjectId);
+          }
+          if (result.simulateAfterApply) {
+            await window.electronAPI.simulateCircuitProject(targetProjectId);
+          }
+          await loadCircuitProject(targetProjectId);
+          useAppStore.getState().addMessage({
+            id: `project-agent-applied-${Date.now()}`,
+            role: 'system',
+            content: `Applied ${projectOperations.length} project operation${projectOperations.length === 1 ? '' : 's'} at revision ${applied.revision}. ERC: ${applied.erc.summary.errors} errors, ${applied.erc.summary.warnings} warnings.`,
+            timestamp: Date.now(),
+            conversationId: cid,
+          });
+        } catch (projectError) {
+          if (targetProjectId) await loadCircuitProject(targetProjectId, false).catch(() => undefined);
+          const message = projectError instanceof Error ? projectError.message : String(projectError);
+          useAppStore.getState().setCircuitError(message);
+          useAppStore.getState().addMessage({
+            id: `project-agent-error-${Date.now()}`,
+            role: 'system',
+            content: `Project transaction rejected: ${message}`,
+            timestamp: Date.now(),
+            isError: true,
+            conversationId: cid,
+          });
+        } finally {
+          useAppStore.getState().setCircuitBusy(false);
+        }
+        return;
+      }
+
+      if ((result.isRevisionRequest && agentContext) || result.isDesignRequest) {
+        return;
+      }
 
       // If it is a design or revision request, trigger the workflow
       if (wantsWorkflow && workflowWasRunning) {
@@ -879,7 +987,7 @@ export function App() {
     } finally {
       setIsChatPending(false);
     }
-  }, [isChatPending, startWorkflowRun]);
+  }, [isChatPending, loadCircuitProject, startWorkflowRun]);
 
   const handleSelectWorkspace = useCallback(async (id: string) => {
     if (!window.electronAPI) return;

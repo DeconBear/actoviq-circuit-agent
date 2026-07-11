@@ -1095,6 +1095,111 @@ test('canvas project tool creates, revises, and compiles a modular project', asy
   }
 });
 
+test('agent project protocol imports editable netlists and exposes revisioned ERC context', async () => {
+  const projectsRoot = path.resolve(process.cwd(), '.tmp-unit-tests', `agent-project-${Date.now()}`);
+  await mkdir(projectsRoot, { recursive: true });
+  const script = path.resolve(
+    process.cwd(),
+    'skills',
+    'circuit-design-ngspice',
+    'scripts',
+    'circuit_project.py',
+  );
+  const runTool = (args: string[], expectedStatus = 0) => {
+    const result = spawnSync('python', [script, ...args], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, expectedStatus, result.stderr || result.stdout);
+    return JSON.parse(result.stdout.trim()) as Record<string, any>;
+  };
+  try {
+    const created = runTool([
+      'create',
+      '--projects-root', projectsRoot,
+      '--name', 'Agent Project Protocol',
+    ]);
+    const projectRoot = String(created.project_root);
+    const notebook = [
+      '# Agent-generated RC filter',
+      '',
+      '```spice',
+      '* Editable RC filter',
+      'V1 in 0 DC 0 AC 1',
+      'R1 in out 1k',
+      'C1 out 0 100n',
+      '.ac dec 20 10 1meg',
+      '.end',
+      '```',
+      '',
+    ].join('\n');
+    const command = {
+      schema: 'actoviq.command.v1',
+      command_id: 'agent-upsert-netlist',
+      actor: 'agent',
+      project_id: created.project.project_id,
+      base_revision: 0,
+      message: 'Create an editable RC module from the generated netlist',
+      operations: [{
+        op: 'upsert_module_netlist',
+        module_id: 'filter',
+        name: 'RC low-pass filter',
+        kind: 'filter',
+        function: 'First-order low-pass response.',
+        netlist_notebook: notebook,
+      }],
+    };
+    const applied = runTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify(command),
+    ]);
+    assert.equal(applied.revision, 1);
+    assert.equal(applied.erc.source_revision, 1);
+    assert.match(applied.erc.document_hash, /^[a-f0-9]{64}$/);
+    assert.equal(applied.erc.summary.errors, 0);
+
+    const summary = runTool(['summary', '--project-root', projectRoot]);
+    assert.equal(summary.project.modules.length, 1);
+    assert.equal(summary.modules.filter.schema, 'actoviq.module.v2');
+    assert.equal(summary.modules.filter.components.length, 3);
+    assert.match(summary.modules.filter.spice.source, /\.ac dec 20 10 1meg/);
+    assert.ok(summary.modules.filter.nets.every((net: { id?: string }) => Boolean(net.id)));
+
+    const beforeBuild = runTool(['agent-context', '--project-root', projectRoot]);
+    assert.equal(beforeBuild.protocol_version, 'actoviq.project-agent.v2');
+    assert.equal(beforeBuild.base_revision, 1);
+    assert.equal(beforeBuild.build.state, 'missing');
+    assert.equal(beforeBuild.next_action, 'compile');
+    assert.ok(beforeBuild.transaction.allowed_operations.includes('upsert_module_netlist'));
+
+    const compiled = runTool(['compile', '--project-root', projectRoot]);
+    assert.equal(compiled.erc.source_revision, 1);
+    const afterBuild = runTool(['agent-context', '--project-root', projectRoot]);
+    assert.equal(afterBuild.build.state, 'current');
+    assert.equal(afterBuild.next_action, 'simulate');
+
+    const stale = runTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify({
+        ...command,
+        command_id: 'stale-agent-command',
+        operations: [{
+          op: 'set_component_value',
+          module_id: 'filter',
+          component_id: 'r1',
+          value: '2k',
+        }],
+      }),
+    ], 1);
+    assert.equal(stale.ok, false);
+    assert.match(stale.error, /stale revision: expected 1, got 0/);
+  } finally {
+    await rm(projectsRoot, { recursive: true, force: true });
+  }
+});
+
 let failed = 0;
 for (const testCase of tests) {
   try {

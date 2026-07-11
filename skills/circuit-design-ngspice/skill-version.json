@@ -1,0 +1,12 @@
+{
+  "schema": "actoviq.skill-version.v1",
+  "skill": "circuit-design-ngspice",
+  "skill_version": "2.0.0",
+  "protocol_version": "actoviq.project-agent.v2",
+  "compatibility": {
+    "project": ["actoviq.project.v1", "actoviq.project.v2"],
+    "module": ["actoviq.module.v1", "actoviq.module.v2"],
+    "command": ["actoviq.command.v1"],
+    "simulation": ["actoviq.simulation.v2"]
+  }
+}

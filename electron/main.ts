@@ -8,6 +8,7 @@ import { registerFileHandlers } from './ipc/fileTools.js';
 import { registerSettingsHandlers } from './ipc/settings.js';
 import { registerWorkspaceHandlers } from './ipc/workspaces.js';
 import { registerProjectHandlers } from './ipc/projects.js';
+import { inspectCircuitSkillStatus, registerSkillHandlers } from './ipc/skills.js';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -59,10 +60,14 @@ function registerIpcHandlers(): void {
   registerSettingsHandlers(ipcMain);
   registerWorkspaceHandlers(ipcMain);
   registerProjectHandlers(ipcMain);
+  registerSkillHandlers(ipcMain);
 }
 
 app.whenReady().then(() => {
   registerIpcHandlers();
+  void inspectCircuitSkillStatus().catch((error) => {
+    console.warn('Circuit skill version check failed:', error);
+  });
   createWindow();
 
   app.on('activate', () => {

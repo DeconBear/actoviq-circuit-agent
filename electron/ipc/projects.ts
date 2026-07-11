@@ -55,7 +55,12 @@ interface DesignMemoryItem {
   relativePath: string;
   sourceProjectId?: string;
   sourceRevision?: number;
+  sourceDocumentHash?: string;
   createdAt?: string;
+  circuitFamilies?: string[];
+  validationStatus?: string;
+  preferredForAgentReuse?: boolean;
+  simulationCoverage?: string[];
   guidePath?: string;
   templatePath?: string;
   flowPath?: string;
@@ -360,10 +365,42 @@ async function saveDesignTemplate(projectId: string): Promise<SavedDesignMemoryS
     connections?: unknown[];
   }>(path.resolve(projectRoot, 'project.circuit.json'));
   const { workspaceReferencesDir, targetRoot, memoryId } = await designMemoryTargetRoot('templates', project);
+  const agentContext = await runProjectTool(['agent-context', '--project-root', projectRoot]);
+  const erc = agentContext.erc as {
+    status?: string;
+    summary?: { errors?: number; warnings?: number };
+    document_hash?: string;
+  } | undefined;
+  const simulation = agentContext.simulation as {
+    state?: string;
+    run?: {
+      ok?: boolean;
+      specification_status?: string;
+      analyses?: Array<{ type?: string; status?: string }>;
+    } | null;
+  } | undefined;
+  const circuitFamilies = [...new Set((project.modules as Array<{ kind?: string }> | undefined ?? [])
+    .map((module) => module.kind)
+    .filter((kind): kind is string => Boolean(kind)))];
+  const simulationCoverage = [...new Set((simulation?.run?.analyses ?? [])
+    .filter((analysis) => analysis.status === 'completed')
+    .map((analysis) => analysis.type)
+    .filter((type): type is string => Boolean(type)))];
+  const specificationPassed = ['pass', 'passed'].includes(simulation?.run?.specification_status ?? '');
+  const simulationPassed = simulation?.state === 'current' && simulation.run?.ok === true;
+  const ercClean = (erc?.summary?.errors ?? 0) === 0;
+  const validationStatus = specificationPassed && simulationPassed && ercClean
+    ? 'verified'
+    : simulationPassed && ercClean ? 'simulated' : ercClean ? 'erc_clean' : 'unverified';
 
   await copyFile(path.resolve(projectRoot, 'project.circuit.json'), path.resolve(targetRoot, 'project.circuit.json'));
   await copyDirectoryIfExists(path.resolve(projectRoot, 'modules'), path.resolve(targetRoot, 'modules'));
   await copyFileIfExists(path.resolve(projectRoot, 'build', 'build-manifest.json'), path.resolve(targetRoot, 'build-manifest.json'));
+  await copyFileIfExists(path.resolve(projectRoot, 'build', 'erc.json'), path.resolve(targetRoot, 'erc.json'));
+  await copyFileIfExists(
+    path.resolve(projectRoot, 'build', 'system', 'simulation', 'result.json'),
+    path.resolve(targetRoot, 'simulation-result.json'),
+  );
   const hasSystemNetlist = await copyFileIfExists(
     path.resolve(projectRoot, 'build', 'system', 'design.final.cir'),
     path.resolve(targetRoot, 'template.cir'),
@@ -374,12 +411,27 @@ async function saveDesignTemplate(projectId: string): Promise<SavedDesignMemoryS
   );
 
   const manifest = {
-    schema: 'actoviq.design-template.v1',
+    schema: 'actoviq.design-template.v2',
     id: memoryId,
     name: project.name,
     source_project_id: project.project_id,
     source_revision: project.revision,
+    source_document_hash: agentContext.document_hash,
     created_at: new Date().toISOString(),
+    applicability: {
+      circuit_families: circuitFamilies,
+      parameter_summary: (project.modules as Array<{ id?: string; parameters?: Record<string, string> }> | undefined ?? [])
+        .map((module) => ({ module_id: module.id, parameters: module.parameters ?? {} })),
+    },
+    validation: {
+      status: validationStatus,
+      preferred_for_agent_reuse: validationStatus === 'verified',
+      erc_status: erc?.status ?? 'unknown',
+      erc_summary: erc?.summary ?? null,
+      simulation_state: simulation?.state ?? 'missing',
+      simulation_coverage: simulationCoverage,
+      specification_status: simulation?.run?.specification_status ?? 'not_evaluated',
+    },
     files: {
       agent_guide: 'agent-guide.md',
       template_netlist: hasSystemNetlist ? 'template.cir' : null,
@@ -418,18 +470,54 @@ async function saveDesignFlow(projectId: string): Promise<SavedDesignMemorySumma
   }>(path.resolve(projectRoot, 'project.circuit.json'));
   const commands = await readAppliedCommands(projectRoot);
   const { workspaceReferencesDir, targetRoot, memoryId } = await designMemoryTargetRoot('flows', project);
+  const agentContext = await runProjectTool(['agent-context', '--project-root', projectRoot]);
+  const erc = agentContext.erc as { status?: string; summary?: { errors?: number; warnings?: number } } | undefined;
+  const simulation = agentContext.simulation as {
+    state?: string;
+    run?: { ok?: boolean; specification_status?: string; analyses?: Array<{ type?: string; status?: string }> } | null;
+  } | undefined;
+  const simulationCoverage = [...new Set((simulation?.run?.analyses ?? [])
+    .filter((analysis) => analysis.status === 'completed')
+    .map((analysis) => analysis.type)
+    .filter((type): type is string => Boolean(type)))];
+  const specificationPassed = ['pass', 'passed'].includes(simulation?.run?.specification_status ?? '');
+  const simulationPassed = simulation?.state === 'current' && simulation.run?.ok === true;
+  const ercClean = (erc?.summary?.errors ?? 0) === 0;
+  const validationStatus = specificationPassed && simulationPassed && ercClean
+    ? 'verified'
+    : simulationPassed && ercClean ? 'simulated' : ercClean ? 'erc_clean' : 'unverified';
 
   await copyDirectoryIfExists(path.resolve(projectRoot, 'commands', 'applied'), path.resolve(targetRoot, 'commands', 'applied'));
   await copyFileIfExists(path.resolve(projectRoot, 'build', 'build-manifest.json'), path.resolve(targetRoot, 'build-manifest.json'));
+  await copyFileIfExists(path.resolve(projectRoot, 'build', 'erc.json'), path.resolve(targetRoot, 'erc.json'));
+  await copyFileIfExists(
+    path.resolve(projectRoot, 'build', 'system', 'simulation', 'result.json'),
+    path.resolve(targetRoot, 'simulation-result.json'),
+  );
   const flowPath = path.resolve(targetRoot, 'design-flow.md');
   const manifest = {
-    schema: 'actoviq.design-flow.v1',
+    schema: 'actoviq.design-flow.v2',
     id: memoryId,
     name: project.name,
     source_project_id: project.project_id,
     source_revision: project.revision,
+    source_document_hash: agentContext.document_hash,
     created_at: new Date().toISOString(),
     command_count: commands.length,
+    applicability: {
+      circuit_families: [...new Set((project.modules as Array<{ kind?: string }> | undefined ?? [])
+        .map((module) => module.kind)
+        .filter((kind): kind is string => Boolean(kind)))],
+    },
+    validation: {
+      status: validationStatus,
+      preferred_for_agent_reuse: validationStatus === 'verified',
+      erc_status: erc?.status ?? 'unknown',
+      erc_summary: erc?.summary ?? null,
+      simulation_state: simulation?.state ?? 'missing',
+      simulation_coverage: simulationCoverage,
+      specification_status: simulation?.run?.specification_status ?? 'not_evaluated',
+    },
     files: {
       design_flow: 'design-flow.md',
       applied_commands: 'commands/applied/',
@@ -470,8 +558,15 @@ async function listDesignMemoryKind(
         name?: string;
         source_project_id?: string;
         source_revision?: number;
+        source_document_hash?: string;
         created_at?: string;
         files?: Record<string, string | null>;
+        applicability?: { circuit_families?: string[] };
+        validation?: {
+          status?: string;
+          preferred_for_agent_reuse?: boolean;
+          simulation_coverage?: string[];
+        };
       }>(manifestPath);
       const fallbackStat = await stat(targetRoot);
       const files = manifest.files ?? {};
@@ -486,7 +581,12 @@ async function listDesignMemoryKind(
         relativePath: relativeReferencePath(referencesDir, targetRoot),
         sourceProjectId: manifest.source_project_id,
         sourceRevision: manifest.source_revision,
+        sourceDocumentHash: manifest.source_document_hash,
         createdAt: manifest.created_at || fallbackStat.mtime.toISOString(),
+        circuitFamilies: manifest.applicability?.circuit_families ?? [],
+        validationStatus: manifest.validation?.status ?? 'legacy_unverified',
+        preferredForAgentReuse: manifest.validation?.preferred_for_agent_reuse ?? false,
+        simulationCoverage: manifest.validation?.simulation_coverage ?? [],
         guidePath: typeof agentGuide === 'string' ? path.resolve(targetRoot, agentGuide) : undefined,
         templatePath: typeof templateNetlist === 'string' ? path.resolve(targetRoot, templateNetlist) : undefined,
         flowPath: typeof designFlow === 'string' ? path.resolve(targetRoot, designFlow) : undefined,
@@ -1171,6 +1271,14 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     ]);
   });
 
+  ipcMain.handle('project:run-erc', async (_event, projectId: string) => {
+    return runProjectTool(['erc', '--project-root', await resolveProjectRoot(projectId)]);
+  });
+
+  ipcMain.handle('project:agent-context', async (_event, projectId: string) => {
+    return runProjectTool(['agent-context', '--project-root', await resolveProjectRoot(projectId)]);
+  });
+
   ipcMain.handle('project:compile', async (_event, projectId: string) => {
     return runProjectTool(['compile', '--project-root', await resolveProjectRoot(projectId)]);
   });
@@ -1242,9 +1350,13 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     if (!(await exists(manifestPath))) return null;
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
     const simulationPath = path.resolve(root, 'build', 'system', 'simulation', 'result.json');
+    const ercPath = path.resolve(root, 'build', 'erc.json');
     const reportPath = path.resolve(root, 'build', 'system', 'report.md');
     return {
       manifest,
+      erc: await exists(ercPath)
+        ? JSON.parse(await readFile(ercPath, 'utf8')) as Record<string, unknown>
+        : null,
       simulation: await exists(simulationPath)
         ? JSON.parse(await readFile(simulationPath, 'utf8')) as Record<string, unknown>
         : null,

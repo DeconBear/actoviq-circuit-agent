@@ -4,11 +4,14 @@ import type {
   JobSummary,
   ReferenceDocument,
   CircuitBuildState,
+  CircuitAgentContext,
   CircuitCommand,
+  CircuitErcResult,
   CircuitHistoryEntry,
   CircuitProjectBundle,
   CircuitProjectSummary,
   CircuitTrashItem,
+  CircuitSkillStatus,
   DesignMemoryItem,
   SavedDesignMemorySummary,
   SimulationDataset,
@@ -81,7 +84,10 @@ declare global {
         ok: true;
         revision: number;
         changed_modules: string[];
+        erc: CircuitErcResult;
       }>;
+      runCircuitErc(projectId: string): Promise<CircuitErcResult & { ok: true }>;
+      getCircuitAgentContext(projectId: string): Promise<CircuitAgentContext>;
       compileCircuitProject(projectId: string): Promise<{
         ok: true;
         revision: number;
@@ -136,10 +142,12 @@ declare global {
       getSettings(): Promise<AppSettings>;
       saveSettings(settings: AppSettings): Promise<void>;
       getAppVersion(): Promise<string>;
+      getCircuitSkillStatus(): Promise<CircuitSkillStatus>;
+      syncCircuitSkill(): Promise<CircuitSkillStatus>;
       sendChatMessage(
         message: string,
         history?: Array<{ role: string; content: string }>,
-        context?: { activeJobId?: string | null },
+        context?: { activeJobId?: string | null; activeProject?: Record<string, unknown> | null },
       ): Promise<ChatResponse>;
     };
   }

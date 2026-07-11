@@ -360,10 +360,12 @@ export function CircuitWorkbench({
   }>({ templates: [], flows: [] });
   const [designMemoryLoading, setDesignMemoryLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [ercOpen, setErcOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [history, setHistory] = useState<CircuitHistoryEntry[]>([]);
 
   const project = bundle?.project ?? null;
+  const erc = bundle?.erc ?? build?.erc ?? null;
   const currentProjectId = project?.project_id ?? activeProjectId;
   const systemNetworks = useMemo(
     () => resolveSystemNetworks(project?.modules ?? [], project?.connections ?? []),
@@ -1273,6 +1275,7 @@ export function CircuitWorkbench({
             revision {project.revision} | {project.modules.length} modules
             {build ? ` | ${build.manifest.status}` : ''}
             {build && (build.manifest.source_revision ?? build.manifest.revision) !== project.revision ? ' | build stale' : ''}
+            {erc ? ` | ERC ${erc.status}` : ''}
           </div>
         </div>
         <div style={styles.toolbar}>
@@ -1329,8 +1332,27 @@ export function CircuitWorkbench({
             Save flow
           </button>
           <button
+            style={{
+              ...styles.secondaryButton,
+              ...(erc?.status === 'error'
+                ? styles.ercButtonError
+                : erc?.status === 'warning' ? styles.ercButtonWarning : styles.ercButtonClean),
+            }}
+            onClick={() => {
+              setHistoryOpen(false);
+              setErcOpen(true);
+            }}
+            disabled={busy}
+            data-testid="open-project-erc"
+          >
+            ERC {erc ? `${erc.summary.errors}/${erc.summary.warnings}` : '-'}
+          </button>
+          <button
             style={styles.secondaryButton}
-            onClick={() => setHistoryOpen(true)}
+            onClick={() => {
+              setErcOpen(false);
+              setHistoryOpen(true);
+            }}
             disabled={busy}
             data-testid="open-project-history"
           >
@@ -1352,6 +1374,62 @@ export function CircuitWorkbench({
           {error || notice}
         </div>
       )}
+
+      {ercOpen ? (
+        <div style={styles.historyOverlay} data-testid="project-erc-panel">
+          <section style={styles.historyPanel} aria-label="Electrical rules check">
+            <div style={styles.historyHeader}>
+              <div>
+                <div style={styles.historyTitle}>Electrical Rules Check</div>
+                <div style={styles.historySubtitle}>
+                  Revision {erc?.source_revision ?? project.revision} | {erc?.summary.errors ?? 0} errors | {erc?.summary.warnings ?? 0} warnings
+                </div>
+              </div>
+              <button
+                type="button"
+                style={styles.iconButton}
+                onClick={() => setErcOpen(false)}
+                aria-label="Close electrical rules check"
+                data-testid="close-project-erc"
+              >
+                Close
+              </button>
+            </div>
+            <div style={styles.historyList}>
+              {!erc || erc.diagnostics.length === 0 ? (
+                <div style={styles.ercClean} data-testid="erc-clean-state">
+                  No electrical rule violations at this revision.
+                </div>
+              ) : null}
+              {erc?.diagnostics.map((diagnostic) => (
+                <div
+                  key={diagnostic.id}
+                  style={{
+                    ...styles.ercDiagnostic,
+                    ...(diagnostic.severity === 'error'
+                      ? styles.ercDiagnosticError
+                      : diagnostic.severity === 'warning' ? styles.ercDiagnosticWarning : {}),
+                  }}
+                  data-testid={`erc-diagnostic-${diagnostic.code}`}
+                >
+                  <div style={styles.ercDiagnosticHeader}>
+                    <strong>{diagnostic.code.replaceAll('_', ' ')}</strong>
+                    <span>{diagnostic.severity}</span>
+                  </div>
+                  <div style={styles.ercDiagnosticMessage}>{diagnostic.message}</div>
+                  {diagnostic.module_id ? (
+                    <div style={styles.ercDiagnosticLocation}>
+                      {[diagnostic.module_id, diagnostic.component_id, diagnostic.pin_id ?? diagnostic.port_id]
+                        .filter(Boolean)
+                        .join(' / ')}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {historyOpen ? (
         <div style={styles.historyOverlay} data-testid="project-history-panel">
@@ -2592,6 +2670,8 @@ function MemoryList({
           <code style={styles.memoryPath}>{item.relativePath}</code>
           <div style={styles.memoryMeta}>
             {item.sourceRevision !== undefined ? `rev ${item.sourceRevision}` : item.id}
+            {' | '}{item.validationStatus ?? 'legacy_unverified'}
+            {item.simulationCoverage?.length ? ` | ${item.simulationCoverage.join(', ')}` : ''}
           </div>
           <div style={styles.memoryActions}>
             {item.kind === 'template' ? (
@@ -2698,6 +2778,23 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 10,
     whiteSpace: 'pre-wrap',
   },
+  ercButtonClean: { borderColor: '#8fc5a4', color: '#24633e', background: '#f4fbf6' },
+  ercButtonWarning: { borderColor: '#d8b35d', color: '#75520a', background: '#fffaf0' },
+  ercButtonError: { borderColor: '#d98e96', color: '#8d2632', background: '#fff5f6' },
+  ercClean: { padding: 28, color: '#286744', fontSize: 12, textAlign: 'center' },
+  ercDiagnostic: { padding: '13px 16px', borderBottom: '1px solid #e5e8ec', borderLeft: '3px solid #9ca6b2' },
+  ercDiagnosticError: { borderLeftColor: '#b83242', background: '#fff8f8' },
+  ercDiagnosticWarning: { borderLeftColor: '#c18a18', background: '#fffcf4' },
+  ercDiagnosticHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 12,
+    color: '#313a45',
+    fontSize: 11,
+    textTransform: 'uppercase',
+  },
+  ercDiagnosticMessage: { marginTop: 5, color: '#434d58', fontSize: 12, lineHeight: 1.45 },
+  ercDiagnosticLocation: { marginTop: 5, color: '#7a838e', fontFamily: 'Consolas, monospace', fontSize: 10 },
   header: {
     minHeight: 66,
     display: 'flex',

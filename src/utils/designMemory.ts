@@ -8,6 +8,10 @@ export interface SavedDesignTemplateSummary {
   name: string;
   sourceProjectId?: string;
   sourceRevision?: number;
+  sourceDocumentHash?: string;
+  validationStatus: string;
+  preferredForAgentReuse: boolean;
+  simulationCoverage: string[];
   rootPath: string;
   templateNetlistPath: string;
   agentGuidePath: string;
@@ -19,6 +23,10 @@ export interface SavedDesignFlowSummary {
   name: string;
   sourceProjectId?: string;
   sourceRevision?: number;
+  sourceDocumentHash?: string;
+  validationStatus: string;
+  preferredForAgentReuse: boolean;
+  simulationCoverage: string[];
   rootPath: string;
   flowPath: string;
   manifestPath: string;
@@ -62,8 +70,14 @@ export async function listSavedDesignTemplates(
       name?: string;
       source_project_id?: string;
       source_revision?: number;
+      source_document_hash?: string;
+      validation?: {
+        status?: string;
+        preferred_for_agent_reuse?: boolean;
+        simulation_coverage?: string[];
+      };
     }>(manifestPath);
-    if (manifest?.schema !== 'actoviq.design-template.v1') continue;
+    if (!manifest || !['actoviq.design-template.v1', 'actoviq.design-template.v2'].includes(manifest.schema ?? '')) continue;
     const templateNetlistPath = path.resolve(rootPath, 'template.cir');
     const agentGuidePath = path.resolve(rootPath, 'agent-guide.md');
     templates.push({
@@ -71,13 +85,20 @@ export async function listSavedDesignTemplates(
       name: manifest.name ?? entry.name,
       sourceProjectId: manifest.source_project_id,
       sourceRevision: manifest.source_revision,
+      sourceDocumentHash: manifest.source_document_hash,
+      validationStatus: manifest.validation?.status ?? 'legacy_unverified',
+      preferredForAgentReuse: manifest.validation?.preferred_for_agent_reuse ?? false,
+      simulationCoverage: manifest.validation?.simulation_coverage ?? [],
       rootPath,
       templateNetlistPath,
       agentGuidePath,
       manifestPath,
     });
   }
-  return templates.sort((left, right) => left.id.localeCompare(right.id));
+  return templates.sort((left, right) => (
+    Number(right.preferredForAgentReuse) - Number(left.preferredForAgentReuse)
+    || left.id.localeCompare(right.id)
+  ));
 }
 
 export async function listSavedDesignFlows(root = SAVED_FLOW_ROOT): Promise<SavedDesignFlowSummary[]> {
@@ -94,19 +115,32 @@ export async function listSavedDesignFlows(root = SAVED_FLOW_ROOT): Promise<Save
       name?: string;
       source_project_id?: string;
       source_revision?: number;
+      source_document_hash?: string;
+      validation?: {
+        status?: string;
+        preferred_for_agent_reuse?: boolean;
+        simulation_coverage?: string[];
+      };
     }>(manifestPath);
-    if (manifest?.schema !== 'actoviq.design-flow.v1') continue;
+    if (!manifest || !['actoviq.design-flow.v1', 'actoviq.design-flow.v2'].includes(manifest.schema ?? '')) continue;
     flows.push({
       id: manifest.id ?? entry.name,
       name: manifest.name ?? entry.name,
       sourceProjectId: manifest.source_project_id,
       sourceRevision: manifest.source_revision,
+      sourceDocumentHash: manifest.source_document_hash,
+      validationStatus: manifest.validation?.status ?? 'legacy_unverified',
+      preferredForAgentReuse: manifest.validation?.preferred_for_agent_reuse ?? false,
+      simulationCoverage: manifest.validation?.simulation_coverage ?? [],
       rootPath,
       flowPath: path.resolve(rootPath, 'design-flow.md'),
       manifestPath,
     });
   }
-  return flows.sort((left, right) => left.id.localeCompare(right.id));
+  return flows.sort((left, right) => (
+    Number(right.preferredForAgentReuse) - Number(left.preferredForAgentReuse)
+    || left.id.localeCompare(right.id)
+  ));
 }
 
 export async function resolveSavedTemplateNetlist(
@@ -129,10 +163,23 @@ export async function resolveSavedTemplateNetlist(
   if (!isPathInside(root, directPath) || !(await exists(directPath))) return null;
   const ownerRoot = path.dirname(directPath);
   const manifestPath = path.resolve(ownerRoot, 'template.json');
-  const manifest = await readJsonFile<{ id?: string; name?: string }>(manifestPath);
+  const manifest = await readJsonFile<{
+    id?: string;
+    name?: string;
+    source_document_hash?: string;
+    validation?: {
+      status?: string;
+      preferred_for_agent_reuse?: boolean;
+      simulation_coverage?: string[];
+    };
+  }>(manifestPath);
   return {
     id: manifest?.id ?? path.basename(ownerRoot),
     name: manifest?.name ?? path.basename(ownerRoot),
+    sourceDocumentHash: manifest?.source_document_hash,
+    validationStatus: manifest?.validation?.status ?? 'legacy_unverified',
+    preferredForAgentReuse: manifest?.validation?.preferred_for_agent_reuse ?? false,
+    simulationCoverage: manifest?.validation?.simulation_coverage ?? [],
     rootPath: ownerRoot,
     templateNetlistPath: directPath,
     agentGuidePath: path.resolve(ownerRoot, 'agent-guide.md'),

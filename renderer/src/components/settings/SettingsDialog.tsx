@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AppSettings } from '../../types';
+import type { AppSettings, CircuitSkillStatus } from '../../types';
 
 interface Props {
   onClose: () => void;
@@ -12,6 +12,8 @@ export function SettingsDialog({ onClose }: Props) {
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [skillStatus, setSkillStatus] = useState<CircuitSkillStatus | null>(null);
+  const [skillSyncing, setSkillSyncing] = useState(false);
 
   useEffect(() => {
     if (!window.electronAPI) {
@@ -19,15 +21,32 @@ export function SettingsDialog({ onClose }: Props) {
       setLoading(false);
       return;
     }
-    window.electronAPI.getSettings()
-      .then((s) => {
+    Promise.all([
+      window.electronAPI.getSettings(),
+      window.electronAPI.getCircuitSkillStatus().catch(() => null),
+    ])
+      .then(([s, nextSkillStatus]) => {
         setSettings(s);
+        setSkillStatus(nextSkillStatus);
         setLoading(false);
       })
       .catch((err) => {
         setError(`Failed to load settings: ${err?.message ?? String(err)}`);
         setLoading(false);
       });
+  }, []);
+
+  const syncSkill = useCallback(async () => {
+    setSkillSyncing(true);
+    setError(null);
+    try {
+      setSkillStatus(await window.electronAPI.syncCircuitSkill());
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`Failed to sync circuit skill: ${message}`);
+    } finally {
+      setSkillSyncing(false);
+    }
   }, []);
 
   const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -92,6 +111,38 @@ export function SettingsDialog({ onClose }: Props) {
               <section style={styles.section}>
                 <h3 style={styles.sectionTitle}>Tool Paths</h3>
                 <Field label="ngspice Binary" value={settings.ngspiceBin} onChange={(v) => update('ngspiceBin', v)} placeholder="e.g. E:/Program/ngspice/bin/ngspice.exe" />
+              </section>
+
+              <section style={styles.section} data-testid="circuit-skill-status">
+                <div style={styles.skillHeader}>
+                  <h3 style={styles.sectionTitle}>Circuit Agent Skill</h3>
+                  <button
+                    type="button"
+                    style={styles.syncBtn}
+                    onClick={() => { void syncSkill(); }}
+                    disabled={skillSyncing || skillStatus?.current}
+                    data-testid="sync-circuit-skill"
+                  >
+                    {skillSyncing ? 'Syncing...' : skillStatus?.current ? 'Current' : 'Sync skill'}
+                  </button>
+                </div>
+                {skillStatus ? (
+                  <>
+                    <div style={styles.skillVersion}>
+                      Version {skillStatus.sourceVersion} | {skillStatus.protocolVersion}
+                    </div>
+                    {skillStatus.targets.map((target) => (
+                      <div key={target.agent} style={styles.skillTarget} data-testid={`skill-target-${target.agent}`}>
+                        <span>{target.agent}</span>
+                        <strong style={{ color: target.status === 'current' ? '#267047' : '#9a5b10' }}>
+                          {target.status}
+                        </strong>
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  <div style={styles.skillVersion}>Status unavailable</div>
+                )}
               </section>
 
               <section style={styles.section}>
@@ -226,6 +277,26 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     textTransform: 'uppercase',
     letterSpacing: '0.5px',
+  },
+  skillHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  skillVersion: { color: '#68727e', fontSize: 11, marginBottom: 7 },
+  skillTarget: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    padding: '6px 0',
+    borderTop: '1px solid #e8ebef',
+    color: '#49535f',
+    fontSize: 12,
+    textTransform: 'capitalize',
+  },
+  syncBtn: {
+    border: '1px solid #b9c1cb',
+    borderRadius: 4,
+    background: '#fff',
+    color: '#35404b',
+    padding: '5px 9px',
+    cursor: 'pointer',
+    fontSize: 11,
   },
   footer: {
     display: 'flex',

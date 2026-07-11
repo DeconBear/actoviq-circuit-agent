@@ -25,6 +25,8 @@ MODULE_SCHEMA = "actoviq.module.v2"
 LEGACY_PROJECT_SCHEMAS = {"actoviq.project.v1", PROJECT_SCHEMA}
 LEGACY_MODULE_SCHEMAS = {"actoviq.module.v1", MODULE_SCHEMA}
 COMMAND_SCHEMA = "actoviq.command.v1"
+ERC_SCHEMA = "actoviq.erc.v1"
+AGENT_PROTOCOL_VERSION = "actoviq.project-agent.v2"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
 ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK"}
 BLOCK_PIN_SIDES = {"left", "right", "top", "bottom"}
@@ -617,6 +619,298 @@ def project_document_hash(project: dict[str, Any], modules: dict[str, dict[str, 
     return digest.hexdigest()
 
 
+def erc_diagnostic(
+    diagnostics: list[dict[str, Any]],
+    severity: str,
+    code: str,
+    message: str,
+    **location: Any,
+) -> None:
+    target = ".".join(
+        str(location[key]) for key in ("module_id", "component_id", "pin_id", "port_id")
+        if location.get(key)
+    ) or "project"
+    diagnostics.append({
+        "id": f"{code}:{target}",
+        "severity": severity,
+        "code": code,
+        "message": message,
+        **{key: value for key, value in location.items() if value is not None},
+    })
+
+
+def component_model_name(component: dict[str, Any]) -> str:
+    component_type = str(component.get("type", "")).upper()
+    raw = str((component.get("spice") or {}).get("raw", "")).strip()
+    tokens = raw.split()
+    token_index = {"D": 3, "Q": 4, "M": 5}.get(component_type)
+    if token_index is not None and len(tokens) > token_index:
+        return tokens[token_index]
+    value = str(component.get("value", "")).strip()
+    return value.split()[0] if value else ""
+
+
+def module_spice_text(module: dict[str, Any]) -> str:
+    spice = module.get("spice") or {}
+    source = str(spice.get("source", "")).strip()
+    if source:
+        return source
+    lines: list[str] = []
+    for component in module.get("components", []):
+        if component.get("type") == "BLOCK":
+            continue
+        pins = " ".join(str(pin.get("net", "")) for pin in component.get("pins", []))
+        lines.append(
+            f"{component.get('name', component.get('id', 'X'))} {pins} {component.get('value', '')}".strip()
+        )
+    lines.extend(str(line) for line in spice.get("models", []))
+    lines.extend(str(line) for line in spice.get("directives", []))
+    lines.extend(str(line) for line in spice.get("opaque", []))
+    return "\n".join(lines)
+
+
+def evaluate_erc(
+    project: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    diagnostics: list[dict[str, Any]] = []
+    any_components = any(module.get("components") for module in modules.values())
+    has_ground = False
+    endpoint_adjacency: dict[str, set[str]] = {}
+    port_lookup: dict[str, dict[str, Any]] = {}
+
+    for module_ref in project.get("modules", []):
+        module_id = str(module_ref.get("id", ""))
+        for port in module_ref.get("ports", []):
+            endpoint = f"{module_id}:{port.get('id', '')}"
+            port_lookup[endpoint] = port
+            endpoint_adjacency.setdefault(endpoint, set())
+            if port.get("signal_type") == "ground" or str(port.get("net", "")).lower() in {"0", "gnd"}:
+                has_ground = True
+    for connection in project.get("connections", []):
+        left = connection.get("from", {})
+        right = connection.get("to", {})
+        left_key = f"{left.get('module_id', '')}:{left.get('port_id', '')}"
+        right_key = f"{right.get('module_id', '')}:{right.get('port_id', '')}"
+        endpoint_adjacency.setdefault(left_key, set()).add(right_key)
+        endpoint_adjacency.setdefault(right_key, set()).add(left_key)
+
+    output_endpoints = {
+        endpoint for endpoint, port in port_lookup.items()
+        if port.get("direction") in {"output", "bidirectional"}
+    }
+
+    for module_id, module in modules.items():
+        net_usage: dict[str, list[dict[str, str]]] = {}
+        local_driven_nets: set[str] = set()
+        net_names: dict[str, str] = {}
+        critical_candidates: list[tuple[dict[str, Any], dict[str, Any], str, str]] = []
+        for net in module.get("nets", []):
+            net_id = str(net.get("id", ""))
+            net_name = str(net.get("name", ""))
+            net_names[net_id] = net_name
+            if net_name.lower() in {"0", "gnd"} or net.get("kind") == "ground":
+                has_ground = True
+            if net.get("conflict"):
+                erc_diagnostic(
+                    diagnostics,
+                    "error",
+                    "conflicting_net_labels",
+                    f"Net {net_name or net_id} has conflicting labels: {', '.join(net.get('aliases') or [])}.",
+                    module_id=module_id,
+                    net_id=net_id,
+                )
+        for port in module.get("ports", []):
+            net_id = str(port.get("net_id") or stable_net_token(str(port.get("net", ""))))
+            net_usage.setdefault(net_id, []).append({"kind": "port", "id": str(port.get("id", ""))})
+            net_names.setdefault(net_id, str(port.get("net", "")))
+            if port.get("signal_type") == "ground" or str(port.get("net", "")).lower() in {"0", "gnd"}:
+                has_ground = True
+        for component in module.get("components", []):
+            component_id = str(component.get("id", ""))
+            component_type = str(component.get("type", "")).upper()
+            for index, pin in enumerate(component.get("pins", [])):
+                net_id = str(pin.get("net_id") or stable_net_token(str(pin.get("net", ""))))
+                net_usage.setdefault(net_id, []).append({
+                    "kind": "pin",
+                    "id": f"{component_id}.{pin.get('id', '')}",
+                })
+                net_names.setdefault(net_id, str(pin.get("net", "")))
+                if str(pin.get("net", "")).lower() in {"0", "gnd"}:
+                    has_ground = True
+                if component_type in {"V", "I"} and index == 0:
+                    local_driven_nets.add(net_id)
+
+            critical_pins = {
+                "M": {"g": "error", "d": "warning", "s": "warning", "b": "warning"},
+                "Q": {"b": "error", "c": "warning", "e": "warning"},
+            }.get(component_type, {})
+            for pin in component.get("pins", []):
+                pin_id = str(pin.get("id", "")).lower()
+                severity = critical_pins.get(pin_id)
+                net_id = str(pin.get("net_id") or stable_net_token(str(pin.get("net", ""))))
+                if severity:
+                    critical_candidates.append((component, pin, net_id, severity))
+
+            if component_type == "BLOCK":
+                block_spice = component.get("spice") or {}
+                if not block_spice.get("raw") or not block_spice.get("simulated"):
+                    erc_diagnostic(
+                        diagnostics,
+                        "warning",
+                        "block_not_simulated",
+                        f"Block {component.get('name', component_id)} is schematic-only and does not participate in simulation.",
+                        module_id=module_id,
+                        component_id=component_id,
+                    )
+
+        for component, pin, net_id, severity in critical_candidates:
+            if len(net_usage.get(net_id, [])) <= 1:
+                erc_diagnostic(
+                    diagnostics,
+                    severity,
+                    "floating_critical_pin",
+                    f"{component.get('name', component.get('id'))} pin {pin.get('name', pin.get('id'))} is not connected.",
+                    module_id=module_id,
+                    component_id=component.get("id"),
+                    pin_id=pin.get("id"),
+                    net_id=net_id,
+                )
+
+        model_names = {
+            match.group(1).lower()
+            for line in (module.get("spice") or {}).get("models", [])
+            if (match := re.match(r"(?i)^\s*\.model\s+(\S+)", str(line)))
+        }
+        for component in module.get("components", []):
+            component_type = str(component.get("type", "")).upper()
+            if component_type not in {"D", "Q", "M"}:
+                continue
+            model_name = component_model_name(component)
+            if not model_name or "=" in model_name or model_name.lower() not in model_names:
+                erc_diagnostic(
+                    diagnostics,
+                    "error",
+                    "missing_device_model",
+                    f"{component.get('name', component.get('id'))} references model {model_name or '(missing)'}, but no matching .model is preserved.",
+                    module_id=module_id,
+                    component_id=component.get("id"),
+                    model=model_name or None,
+                )
+
+        for port in module.get("ports", []):
+            if port.get("direction") != "input" or port.get("signal_type") == "ground":
+                continue
+            net_id = str(port.get("net_id") or stable_net_token(str(port.get("net", ""))))
+            if net_id in local_driven_nets:
+                continue
+            endpoint = f"{module_id}:{port.get('id', '')}"
+            visited = {endpoint}
+            pending = [endpoint]
+            externally_driven = False
+            while pending:
+                current = pending.pop()
+                if current != endpoint and current in output_endpoints:
+                    externally_driven = True
+                    break
+                for neighbor in endpoint_adjacency.get(current, set()):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        pending.append(neighbor)
+            if not externally_driven:
+                erc_diagnostic(
+                    diagnostics,
+                    "warning",
+                    "undriven_input",
+                    f"Input {port.get('name', port.get('id'))} has no local source or connected output driver.",
+                    module_id=module_id,
+                    port_id=port.get("id"),
+                    net_id=net_id,
+                )
+
+    if any_components and not has_ground:
+        erc_diagnostic(
+            diagnostics,
+            "error",
+            "missing_ground",
+            "The circuit has components but no explicit SPICE ground node 0.",
+        )
+
+    spice_text = "\n".join(module_spice_text(module) for module in modules.values())
+    directives = [
+        line.strip() for line in spice_text.splitlines()
+        if line.strip().startswith(".")
+    ]
+    source_names = {
+        tokens[0].lower()
+        for raw in spice_text.splitlines()
+        if (tokens := raw.strip().split()) and tokens[0][:1].upper() in {"V", "I"}
+    }
+    for directive in directives:
+        lowered = directive.lower()
+        if lowered.startswith(".ac") and not re.search(
+            r"(?im)^\s*[vi]\S+\s+\S+\s+\S+.*\bac(?:\s+|=)(?!0(?:\.0*)?(?:\s|$))",
+            spice_text,
+        ):
+            erc_diagnostic(
+                diagnostics,
+                "error",
+                "missing_ac_excitation",
+                "AC analysis is configured, but no independent source has a non-zero AC value.",
+            )
+        elif lowered.startswith(".dc"):
+            tokens = directive.split()
+            if len(tokens) > 1 and tokens[1].lower() not in source_names:
+                erc_diagnostic(
+                    diagnostics,
+                    "error",
+                    "invalid_dc_source",
+                    f"DC sweep references missing source {tokens[1]}.",
+                )
+        elif lowered.startswith(".tran") and not re.search(
+            r"(?i)\b(?:pulse|sin|pwl|exp|sffm)\s*\(", spice_text
+        ):
+            erc_diagnostic(
+                diagnostics,
+                "warning",
+                "missing_transient_excitation",
+                "Transient analysis has no time-varying independent source.",
+            )
+        elif lowered.startswith(".sp") and not has_sparameter_ports(spice_text):
+            erc_diagnostic(
+                diagnostics,
+                "error",
+                "missing_sparameter_ports",
+                "S-parameter analysis requires consecutive VSRC portnum ports with Z0.",
+            )
+
+    severity_order = {"error": 0, "warning": 1, "info": 2}
+    diagnostics.sort(key=lambda item: (severity_order.get(item["severity"], 9), item["id"]))
+    errors = sum(item["severity"] == "error" for item in diagnostics)
+    warnings = sum(item["severity"] == "warning" for item in diagnostics)
+    infos = sum(item["severity"] == "info" for item in diagnostics)
+    return {
+        "schema": ERC_SCHEMA,
+        "source_revision": project["revision"],
+        "document_hash": project_document_hash(project, modules),
+        "status": "error" if errors else "warning" if warnings else "clean",
+        "blocking": errors > 0,
+        "summary": {"errors": errors, "warnings": warnings, "infos": infos},
+        "diagnostics": diagnostics,
+        "checked_at": utc_now(),
+    }
+
+
+def write_erc_result(
+    root: Path,
+    project: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    result = evaluate_erc(project, modules)
+    atomic_write_json(root / "build" / "erc.json", result)
+    return result
+
+
 def find_module_ref(project: dict[str, Any], module_id: str) -> dict[str, Any]:
     for module in project["modules"]:
         if module["id"] == module_id:
@@ -667,6 +961,34 @@ def find_component(module: dict[str, Any], component_id: str) -> dict[str, Any]:
         if component["id"] == component_id:
             return component
     raise ValueError(f"unknown component: {module['module_id']}.{component_id}")
+
+
+def module_from_netlist_notebook(
+    module_id: str,
+    notebook: str,
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    netlist_text = extract_notebook_netlist(notebook)
+    parsed_components = parse_editable_netlist_components(module_id, netlist_text, current)
+    parsed_ids = {str(component.get("id")) for component in parsed_components}
+    schematic_blocks = [
+        component for component in current.get("components", [])
+        if component.get("type") == "BLOCK" and str(component.get("id")) not in parsed_ids
+    ]
+    components = [*parsed_components, *schematic_blocks]
+    if not components:
+        raise ValueError("netlist contains no editable or preserved components")
+    ports = infer_editable_ports(list(current.get("ports", [])), components)
+    next_module = upgrade_module_document({
+        **current,
+        "schema": MODULE_SCHEMA,
+        "module_id": module_id,
+        "components": components,
+        "ports": ports,
+        "spice": parse_spice_source(module_id, netlist_text, components),
+    })
+    validate_module(next_module)
+    return next_module
 
 
 def apply_operation(
@@ -850,6 +1172,55 @@ def apply_operation(
         component["position"] = {"x": float(operation["x"]), "y": float(operation["y"])}
         changed_modules.add(module_id)
         return
+    if op == "upsert_module_netlist":
+        module_id = str(operation.get("module_id", "")).strip()
+        if not module_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", module_id):
+            raise ValueError("upsert_module_netlist requires a stable module_id")
+        notebook = operation.get("netlist_notebook")
+        if not isinstance(notebook, str):
+            raise ValueError("upsert_module_netlist netlist_notebook must be text")
+        existing = modules.get(module_id, {
+            "schema": MODULE_SCHEMA,
+            "module_id": module_id,
+            "name": str(operation.get("name") or module_id),
+            "revision": 0,
+            "ports": [],
+            "components": [],
+            "nets": [],
+            "wires": [],
+            "annotations": [],
+        })
+        existing = {
+            **existing,
+            "name": str(operation.get("name") or existing.get("name") or module_id).strip(),
+        }
+        next_module = module_from_netlist_notebook(module_id, notebook, existing)
+        modules[module_id] = next_module
+        previous_ref = next(
+            (entry for entry in project.get("modules", []) if entry.get("id") == module_id),
+            None,
+        )
+        module_ref = {
+            **(previous_ref or {}),
+            "id": module_id,
+            "name": next_module["name"],
+            "kind": str(operation.get("kind") or (previous_ref or {}).get("kind") or "circuit"),
+            "function": str(operation.get("function") or (previous_ref or {}).get("function") or ""),
+            "parameters": dict(operation.get("parameters") or (previous_ref or {}).get("parameters") or {}),
+            "notes": str(operation.get("notes") or (previous_ref or {}).get("notes") or ""),
+            "preview_enabled": bool(operation.get("preview_enabled", (previous_ref or {}).get("preview_enabled", True))),
+            "source": f"modules/{module_id}/module.circuit.json",
+            "position": dict(operation.get("position") or (previous_ref or {}).get("position") or {"x": 100, "y": 100}),
+            "size": dict(operation.get("size") or (previous_ref or {}).get("size") or {"width": 360, "height": 280}),
+            "ports": next_module["ports"],
+        }
+        project["modules"] = [
+            entry for entry in project.get("modules", []) if entry.get("id") != module_id
+        ]
+        project["modules"].append(module_ref)
+        notebook_writes[module_id] = notebook
+        changed_modules.add(module_id)
+        return
     if op == "set_module_schematic":
         module_id = operation["module_id"]
         module = modules[module_id]
@@ -903,26 +1274,9 @@ def apply_operation(
         notebook = operation.get("netlist_notebook")
         if not isinstance(notebook, str):
             raise ValueError("set_module_netlist netlist_notebook must be text")
-        netlist_text = extract_notebook_netlist(notebook)
-        parsed_components = parse_editable_netlist_components(module_id, netlist_text, module)
-        parsed_ids = {str(component.get("id")) for component in parsed_components}
-        schematic_blocks = [
-            component for component in module.get("components", [])
-            if component.get("type") == "BLOCK" and str(component.get("id")) not in parsed_ids
-        ]
-        components = [*parsed_components, *schematic_blocks]
-        if not components:
-            raise ValueError("netlist contains no editable or preserved components")
-        ports = infer_editable_ports(list(module.get("ports", [])), components)
-        next_module = upgrade_module_document({
-            **module,
-            "components": components,
-            "ports": ports,
-            "spice": parse_spice_source(module_id, netlist_text, components),
-        })
-        validate_module(next_module)
+        next_module = module_from_netlist_notebook(module_id, notebook, module)
         modules[module_id] = next_module
-        find_module_ref(project, module_id)["ports"] = ports
+        find_module_ref(project, module_id)["ports"] = next_module["ports"]
         notebook_writes[module_id] = notebook
         changed_modules.add(module_id)
         return
@@ -1151,12 +1505,19 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
     applied_path = root / "commands" / "applied" / f"{command_id}.json"
     atomic_write_json(applied_path, {**command, "applied_revision": project["revision"], "applied_at": utc_now()})
     write_revision_result(revision_root, project, modules, notebook_writes)
+    erc = write_erc_result(root, project, modules)
+    revision_metadata_path = revision_root / "metadata.json"
+    revision_metadata = read_json(revision_metadata_path)
+    revision_metadata["erc_status"] = erc["status"]
+    revision_metadata["erc_summary"] = erc["summary"]
+    atomic_write_json(revision_metadata_path, revision_metadata)
     return {
         "ok": True,
         "project_id": project["project_id"],
         "revision": project["revision"],
         "changed_modules": sorted(changed_modules),
         "command_path": str(applied_path),
+        "erc": erc,
     }
 
 
@@ -1547,6 +1908,7 @@ def build_report_markdown(
     modules: dict[str, dict[str, Any]],
     netlist_text: str,
     simulation: dict[str, Any] | None,
+    erc: dict[str, Any] | None = None,
 ) -> str:
     lines: list[str] = [
         f"# {project['name']}",
@@ -1599,7 +1961,36 @@ def build_report_markdown(
             )
         lines.append("")
 
-    lines.extend(["## Simulation", ""])
+    lines.extend(["## Electrical rules", ""])
+    if erc is None:
+        lines.append("_ERC was not available for this report._")
+    else:
+        summary = erc.get("summary") or {}
+        lines.extend([
+            f"- Source revision: `{erc.get('source_revision', 'unknown')}`",
+            f"- Document hash: `{erc.get('document_hash', 'unknown')}`",
+            f"- Status: **{erc.get('status', 'unknown')}**",
+            f"- Errors: {summary.get('errors', 0)}",
+            f"- Warnings: {summary.get('warnings', 0)}",
+        ])
+        diagnostics = erc.get("diagnostics") or []
+        if diagnostics:
+            lines.extend([
+                "",
+                "| Severity | Code | Location | Diagnostic |",
+                "| --- | --- | --- | --- |",
+            ])
+            for diagnostic in diagnostics:
+                location = ".".join(
+                    str(diagnostic.get(key))
+                    for key in ("module_id", "component_id", "pin_id", "port_id")
+                    if diagnostic.get(key)
+                ) or "project"
+                lines.append(
+                    f"| {diagnostic.get('severity', '')} | {diagnostic.get('code', '')} | "
+                    f"{location} | {diagnostic.get('message', '')} |"
+                )
+    lines.extend(["", "## Simulation", ""])
     if simulation is None:
         lines.append("_Not simulated yet. Run \"Simulate system\" to populate AC metrics._")
     else:
@@ -1679,8 +2070,10 @@ def write_project_report(
 ) -> Path:
     report_path = root / "build" / "system" / "report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
+    erc_path = root / "build" / "erc.json"
+    erc = read_json(erc_path) if erc_path.exists() else None
     report_path.write_text(
-        build_report_markdown(project, modules, netlist_text, simulation),
+        build_report_markdown(project, modules, netlist_text, simulation, erc),
         encoding="utf-8",
     )
     return report_path
@@ -1688,6 +2081,7 @@ def write_project_report(
 
 def compile_project(root: Path) -> dict[str, Any]:
     project, modules = load_project(root)
+    erc = write_erc_result(root, project, modules)
     union = UnionFind()
     port_lookup: dict[tuple[str, str], dict[str, Any]] = {}
     for module_ref in project["modules"]:
@@ -1885,6 +2279,9 @@ def compile_project(root: Path) -> dict[str, Any]:
         "status": "compiling",
         "netlist": "system/design.final.cir",
         "source_map": "system/source-map.json",
+        "erc": "erc.json",
+        "erc_status": erc["status"],
+        "erc_summary": erc["summary"],
         "modules": {},
     }
     atomic_write_json(root / "build" / "build-manifest.json", manifest)
@@ -1922,6 +2319,7 @@ def compile_project(root: Path) -> dict[str, Any]:
         "netlist_path": str(netlist_path),
         "manifest_path": str(root / "build" / "build-manifest.json"),
         "primary_output_node": source_map.get("primary_output_node"),
+        "erc": erc,
         "modules": {
             result["module_id"]: result for result in module_results
         },
@@ -2046,6 +2444,7 @@ def render_module_schematic(
 
 def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> dict[str, Any]:
     project, modules = load_project(root)
+    erc = write_erc_result(root, project, modules)
     if module_id not in modules:
         raise ValueError(f"unknown module: {module_id}")
     module = modules[module_id]
@@ -2142,6 +2541,9 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
         "renderer": render_result.get("renderer", "netlistsvg"),
         "render_ok": bool(render_result.get("ok")),
     }
+    manifest["erc"] = "erc.json"
+    manifest["erc_status"] = erc["status"]
+    manifest["erc_summary"] = erc["summary"]
     atomic_write_json(manifest_path, manifest)
     return {
         "ok": True,
@@ -2151,6 +2553,7 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
         "netlist_path": str(netlist_path),
         "schematic_path": render_result.get("svg_path", ""),
         "render": render_result,
+        "erc": erc,
     }
 
 
@@ -2760,6 +3163,7 @@ def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, A
 
 def project_summary(root: Path) -> dict[str, Any]:
     project, modules = load_project(root)
+    erc = evaluate_erc(project, modules)
     modules = {
         module_id: hydrated_summary_module(root, module_id, module)
         for module_id, module in modules.items()
@@ -2772,7 +3176,88 @@ def project_summary(root: Path) -> dict[str, Any]:
         "ok": True,
         "project": project,
         "modules": modules,
+        "erc": erc,
         "project_root": str(root.resolve()),
+    }
+
+
+def agent_context(root: Path) -> dict[str, Any]:
+    project, modules = load_project(root)
+    erc = write_erc_result(root, project, modules)
+    document_hash = project_document_hash(project, modules)
+    manifest_path = root / "build" / "build-manifest.json"
+    manifest = read_json(manifest_path) if manifest_path.exists() else None
+    simulation_path = root / "build" / "system" / "simulation" / "result.json"
+    simulation = read_json(simulation_path) if simulation_path.exists() else None
+    build_current = bool(
+        manifest
+        and int(manifest.get("source_revision", manifest.get("revision", -1))) == project["revision"]
+        and str(manifest.get("document_hash", "")) == document_hash
+    )
+    simulation_current = bool(
+        simulation
+        and int(simulation.get("source_revision", -1)) == project["revision"]
+        and str(simulation.get("document_hash", "")) == document_hash
+    )
+    if erc["blocking"]:
+        next_action = "fix_erc"
+    elif not build_current:
+        next_action = "compile"
+    elif not simulation_current:
+        next_action = "simulate"
+    elif simulation and simulation.get("specification_status") == "not_evaluated":
+        next_action = "evaluate_specifications"
+    else:
+        next_action = "ready"
+    return {
+        "ok": True,
+        "protocol_version": AGENT_PROTOCOL_VERSION,
+        "compatibility": {
+            "project_schema": PROJECT_SCHEMA,
+            "module_schema": MODULE_SCHEMA,
+            "command_schema": COMMAND_SCHEMA,
+            "erc_schema": ERC_SCHEMA,
+            "simulation_schema": "actoviq.simulation.v2",
+        },
+        "workspace_root": str(root.parent.parent.resolve()),
+        "project_root": str(root.resolve()),
+        "project_id": project["project_id"],
+        "base_revision": project["revision"],
+        "document_hash": document_hash,
+        "project": project,
+        "modules": modules,
+        "erc": erc,
+        "build": {
+            "state": "current" if build_current else "stale" if manifest else "missing",
+            "manifest": manifest,
+        },
+        "simulation": {
+            "state": "current" if simulation_current else "stale" if simulation else "missing",
+            "run": simulation,
+        },
+        "next_action": next_action,
+        "transaction": {
+            "schema": COMMAND_SCHEMA,
+            "project_id": project["project_id"],
+            "base_revision": project["revision"],
+            "allowed_operations": [
+                "upsert_module_netlist",
+                "set_module_netlist",
+                "set_module_schematic",
+                "upsert_module",
+                "remove_module",
+                "add_component",
+                "remove_component",
+                "add_port",
+                "connect_pins",
+                "connect_ports",
+                "set_connection_network",
+                "set_component_value",
+                "move_component",
+                "set_module_metadata",
+                "set_module_note",
+            ],
+        },
     }
 
 
@@ -2797,6 +3282,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     summary = subparsers.add_parser("summary")
     summary.add_argument("--project-root", required=True)
+
+    erc_parser = subparsers.add_parser("erc")
+    erc_parser.add_argument("--project-root", required=True)
+
+    agent_context_parser = subparsers.add_parser("agent-context")
+    agent_context_parser.add_argument("--project-root", required=True)
 
     apply_parser = subparsers.add_parser("apply")
     apply_parser.add_argument("--project-root", required=True)
@@ -2839,6 +3330,12 @@ def main() -> int:
             result = project_summary(root)
         elif args.command == "summary":
             result = project_summary(Path(args.project_root).resolve())
+        elif args.command == "erc":
+            root = Path(args.project_root).resolve()
+            result = write_erc_result(root, *load_project(root))
+            result = {"ok": True, **result}
+        elif args.command == "agent-context":
+            result = agent_context(Path(args.project_root).resolve())
         elif args.command == "apply":
             result = apply_command(Path(args.project_root).resolve(), parse_command(args))
         elif args.command == "compile":

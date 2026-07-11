@@ -30,6 +30,7 @@
               "set_connection_network",
               "connect_pins",
               "upsert_module",
+              "upsert_module_netlist",
               "remove_module",
               "add_component",
               "remove_component",

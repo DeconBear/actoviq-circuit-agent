@@ -10,28 +10,35 @@ interface ChatResponse {
   isRevisionRequest?: boolean;
   revisionRequest?: string;
   targetStage?: string;
+  projectName?: string;
+  projectOperations?: Array<Record<string, unknown>>;
+  compileAfterApply?: boolean;
+  simulateAfterApply?: boolean;
   isError?: boolean;
 }
 
 interface ChatContext {
   activeJobId?: string | null;
+  activeProject?: Record<string, unknown> | null;
 }
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 const MAX_CONTEXT_MESSAGES = 20;
-const MAX_CONTEXT_CHARS = 8000;
+const MAX_CONTEXT_CHARS = 16000;
 
 const INTENT_SYSTEM_PROMPT = `You are Actoviq Circuit Agent, an AI assistant specialized in electronic circuit design.
 
 Rules:
 1. If the user's message is a simple greeting, casual chat, question about your capabilities, or anything NOT related to designing a specific circuit, respond naturally and briefly as a helpful assistant. Set isDesignRequest and isRevisionRequest to false.
-2. If the user asks to modify, revise, tune, fix, optimize, rerun, or validate the currently selected/existing design, set isRevisionRequest to true. Also provide a revisionRequest - a concise but specific instruction for a revision workflow.
+2. If the user asks to modify, revise, tune, fix, optimize, rerun, or validate the currently selected/existing design, set isRevisionRequest to true. Also provide a concise revisionRequest.
 3. If they mention a workflow step, artifact, netlist, simulation, schematic, rendering, report, or summary, include targetStage with the closest stage key: solution-analyst, doc-writer, librarian, architect, netlist-designer, simulation-verifier, netlistsvg-renderer, workflow-lead.
 4. If the user describes a brand-new circuit they want designed, set isDesignRequest to true and provide formalizedRequirement - a detailed requirement suitable for the design workflow.
-5. Never set both isDesignRequest and isRevisionRequest to true. Prefer isRevisionRequest when desktop context has activeJobId and the user refers to changing "this", "current", "existing", "the design", or a completed workflow.
-6. If the user asks to revise but desktop context has no activeJobId, ask them to select a job first and set both booleans to false.
-7. Be conversational and helpful. If the request is ambiguous, ask one concise clarifying question.
+5. Never set both isDesignRequest and isRevisionRequest to true. Prefer isRevisionRequest when desktop context has activeProject and the user refers to changing "this", "current", "existing", or "the design".
+6. Project transactions are the default design path. When enough information exists, include projectOperations using only operations listed in activeProject.transaction.allowed_operations. For a new design, use one or more upsert_module_netlist operations whose netlist_notebook contains a fenced spice block. For an existing design, use stable IDs from activeProject and do not invent IDs for items being modified.
+7. Do not include project_id, base_revision, generated SVG, or build files inside projectOperations; the application wraps operations in the current revisioned transaction. Set compileAfterApply true after electrical changes. Set simulateAfterApply true only when the netlist contains a valid analysis and stimulus.
+8. If an existing project request cannot be translated safely from the supplied context, return no projectOperations and ask one concise clarification question. Never silently route a Project edit to a legacy job.
+9. Be conversational and helpful. Keep text concise because the structured transaction carries the implementation.
 
 Respond ONLY with valid JSON in this exact format:
 {
@@ -40,7 +47,11 @@ Respond ONLY with valid JSON in this exact format:
   "text": "Your natural language response to the user",
   "formalizedRequirement": "Only include if isDesignRequest is true: a detailed circuit design requirement",
   "revisionRequest": "Only include if isRevisionRequest is true: a detailed change request for the selected existing job",
-  "targetStage": "Optional closest workflow stage key for a revision"
+  "targetStage": "Optional legacy workflow stage key",
+  "projectName": "For a new project transaction only",
+  "projectOperations": [{"op": "A supported project transaction operation"}],
+  "compileAfterApply": boolean,
+  "simulateAfterApply": boolean
 }`;
 
 function buildContextMessages(
@@ -71,6 +82,9 @@ function buildContextMessages(
     content: [
       'Desktop context:',
       `- activeJobId: ${context?.activeJobId ?? '(none)'}`,
+      `- activeProject: ${context?.activeProject
+        ? JSON.stringify(context.activeProject).slice(0, MAX_CONTEXT_CHARS)
+        : '(none)'}`,
       '',
       'User message:',
       currentMessage,
@@ -117,7 +131,7 @@ async function callLLM(
     },
     body: JSON.stringify({
       model,
-      max_tokens: 1024,
+      max_tokens: 4096,
       system: systemPrompt,
       messages,
     }),
@@ -178,6 +192,10 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
           isRevisionRequest,
           revisionRequest: parsed.revisionRequest,
           targetStage: parsed.targetStage,
+          projectName: parsed.projectName,
+          projectOperations: Array.isArray(parsed.projectOperations) ? parsed.projectOperations : undefined,
+          compileAfterApply: parsed.compileAfterApply,
+          simulateAfterApply: parsed.simulateAfterApply,
         };
       }
 

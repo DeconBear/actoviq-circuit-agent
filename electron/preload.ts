@@ -231,6 +231,14 @@ const electronAPI = {
     return ipcRenderer.invoke('project:apply-command', projectId, command);
   },
 
+  runCircuitErc(projectId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:run-erc', projectId);
+  },
+
+  getCircuitAgentContext(projectId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:agent-context', projectId);
+  },
+
   compileCircuitProject(projectId: string): Promise<unknown> {
     return ipcRenderer.invoke('project:compile', projectId);
   },
@@ -311,10 +319,18 @@ const electronAPI = {
     return ipcRenderer.invoke('app:version');
   },
 
+  getCircuitSkillStatus(): Promise<unknown> {
+    return ipcRenderer.invoke('skill:circuit-status');
+  },
+
+  syncCircuitSkill(): Promise<unknown> {
+    return ipcRenderer.invoke('skill:circuit-sync');
+  },
+
   sendChatMessage(
     message: string,
     history?: Array<{ role: string; content: string }>,
-    context?: { activeJobId?: string | null },
+    context?: { activeJobId?: string | null; activeProject?: Record<string, unknown> | null },
   ): Promise<ChatResponse> {
     return ipcRenderer.invoke('chat:send', message, history, context);
   },
@@ -327,6 +343,10 @@ export interface ChatResponse {
   isRevisionRequest?: boolean;
   revisionRequest?: string;
   targetStage?: string;
+  projectName?: string;
+  projectOperations?: Array<Record<string, unknown>>;
+  compileAfterApply?: boolean;
+  simulateAfterApply?: boolean;
   isError?: boolean;
 }
 

@@ -40,6 +40,10 @@ export interface ChatResponse {
   isRevisionRequest?: boolean;
   revisionRequest?: string;
   targetStage?: string;
+  projectName?: string;
+  projectOperations?: Array<Record<string, unknown>>;
+  compileAfterApply?: boolean;
+  simulateAfterApply?: boolean;
   isError?: boolean;
 }
 
@@ -248,6 +252,30 @@ export interface CircuitHistoryEntry {
   netlistDiff: { added: string[]; removed: string[] };
 }
 
+export interface CircuitErcDiagnostic {
+  id: string;
+  severity: 'error' | 'warning' | 'info';
+  code: string;
+  message: string;
+  module_id?: string;
+  component_id?: string;
+  pin_id?: string;
+  port_id?: string;
+  net_id?: string;
+  model?: string;
+}
+
+export interface CircuitErcResult {
+  schema: 'actoviq.erc.v1';
+  source_revision: number;
+  document_hash: string;
+  status: 'clean' | 'warning' | 'error';
+  blocking: boolean;
+  summary: { errors: number; warnings: number; infos: number };
+  diagnostics: CircuitErcDiagnostic[];
+  checked_at: string;
+}
+
 export interface SchematicOverrideItem {
   x: number;
   y: number;
@@ -266,6 +294,7 @@ export interface CircuitProjectBundle {
   ok: true;
   project: CircuitProject;
   modules: Record<string, CircuitModule>;
+  erc: CircuitErcResult;
   module_previews: Record<string, {
     svg: string;
     svgPath: string;
@@ -300,6 +329,7 @@ export interface CircuitBuildState {
     status: string;
     netlist?: string;
   };
+  erc?: CircuitErcResult | null;
   simulation: SimulationRun | null;
   report?: string;
 }
@@ -352,6 +382,28 @@ export interface SimulationRun {
   simulated_at?: string;
 }
 
+export interface CircuitAgentContext {
+  ok: true;
+  protocol_version: 'actoviq.project-agent.v2';
+  project_id: string;
+  project_root: string;
+  workspace_root: string;
+  base_revision: number;
+  document_hash: string;
+  project: CircuitProject;
+  modules: Record<string, CircuitModule>;
+  erc: CircuitErcResult;
+  build: { state: 'current' | 'stale' | 'missing'; manifest: Record<string, unknown> | null };
+  simulation: { state: 'current' | 'stale' | 'missing'; run: SimulationRun | null };
+  next_action: 'fix_erc' | 'compile' | 'simulate' | 'evaluate_specifications' | 'ready';
+  transaction: {
+    schema: 'actoviq.command.v1';
+    project_id: string;
+    base_revision: number;
+    allowed_operations: string[];
+  };
+}
+
 export interface SimulationDatasetTrace {
   name: string;
   unit: string;
@@ -382,7 +434,12 @@ export interface DesignMemoryItem {
   relativePath: string;
   sourceProjectId?: string;
   sourceRevision?: number;
+  sourceDocumentHash?: string;
   createdAt?: string;
+  circuitFamilies?: string[];
+  validationStatus?: string;
+  preferredForAgentReuse?: boolean;
+  simulationCoverage?: string[];
   guidePath?: string;
   templatePath?: string;
   flowPath?: string;
@@ -412,4 +469,18 @@ export interface AppSettings {
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;
+}
+
+export interface CircuitSkillStatus {
+  sourcePath: string;
+  sourceVersion: string;
+  protocolVersion: string;
+  current: boolean;
+  targets: Array<{
+    agent: 'codex' | 'claude';
+    path: string;
+    effectivePath: string;
+    status: 'current' | 'outdated' | 'missing';
+    installedVersion?: string;
+  }>;
 }

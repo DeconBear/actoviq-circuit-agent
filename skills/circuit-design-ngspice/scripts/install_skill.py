@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 
@@ -17,6 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scope", choices=["user", "project"], default="user")
     parser.add_argument("--project-root", default=".", help="Project root for project installs")
     parser.add_argument("--force", action="store_true", help="Replace an installed copy")
+    parser.add_argument("--check", action="store_true", help="Check protocol versions without copying")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -40,18 +42,49 @@ def main() -> int:
     args = build_parser().parse_args()
     source = Path(__file__).resolve().parents[1]
     project_root = Path(args.project_root).resolve()
+    source_manifest = json.loads((source / "skill-version.json").read_text(encoding="utf-8"))
+    outdated = False
+    written_targets: set[Path] = set()
 
     for target in target_roots(args.agent, args.scope, project_root):
-        print(f"{source} -> {target}")
+        effective_target = target.resolve() if target.is_symlink() else target
+        installed_manifest_path = effective_target / "skill-version.json"
+        installed_manifest = None
+        if installed_manifest_path.exists():
+            try:
+                installed_manifest = json.loads(installed_manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                installed_manifest = None
+        current = bool(
+            installed_manifest
+            and installed_manifest.get("skill_version") == source_manifest.get("skill_version")
+            and installed_manifest.get("protocol_version") == source_manifest.get("protocol_version")
+        )
+        print(json.dumps({
+            "source": str(source),
+            "target": str(target),
+            "effective_target": str(effective_target),
+            "status": "current" if current else "outdated" if effective_target.exists() else "missing",
+            "source_version": source_manifest.get("skill_version"),
+            "installed_version": (installed_manifest or {}).get("skill_version"),
+            "protocol_version": source_manifest.get("protocol_version"),
+        }))
+        outdated = outdated or not current
+        if args.check:
+            continue
         if args.dry_run:
             continue
-        if target.exists():
+        normalized_target = effective_target.resolve()
+        if normalized_target in written_targets:
+            continue
+        written_targets.add(normalized_target)
+        if effective_target.exists():
             if not args.force:
                 raise SystemExit(f"target exists: {target}; pass --force to replace it")
-            shutil.rmtree(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, target, ignore=ignore_file)
-    return 0
+            shutil.rmtree(effective_target)
+        effective_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, effective_target, ignore=ignore_file)
+    return 1 if args.check and outdated else 0
 
 
 if __name__ == "__main__":
