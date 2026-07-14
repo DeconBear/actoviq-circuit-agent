@@ -1,7 +1,7 @@
 ---
 name: circuit-design-ngspice
 metadata:
-  version: "2.1.0"
+  version: "2.3.0"
   protocol_version: "actoviq.project-agent.v2"
 description: >
   Design, simulate, and render primitive-based SPICE circuits with ngspice and
@@ -82,6 +82,7 @@ python scripts/circuit_project.py apply \
 
 python scripts/circuit_project.py compile --project-root <project-root>
 python scripts/circuit_project.py simulate --project-root <project-root>
+python scripts/circuit_project.py export-eda --project-root <project-root> --source-revision <revision>
 ```
 
 Prefer one `upsert_module_netlist` for a new AI-generated circuit. Prefer
@@ -121,7 +122,9 @@ error table:
 | `patch_netlist.py` | Parameter patches |
 | `validate_module_interfaces.py` / `compose_modules.py` / `repair_module_interfaces.py` | Partitioned jobs |
 | `netlist_to_json.py` / `render_netlistsvg.py` / `check_svg_geometry.py` | Compat SVG export |
+| `view_schematic_for_layout` / `review-schematic-layout-vision` | Vision-only PNG review and constrained layout-patch proposals; text-only models must not call this tool |
 | `circuit_project.py` | Desktop project transactions |
+| `eda_export.py` / `circuit_project.py export-eda` | Connectivity-preserving EDA IR, layout scoring, and KiCad/Altium/OrCAD/Virtuoso packages |
 
 Ngspice path order: `--ngspice-bin` → `NGSPICE_BIN` → `tool_paths.json` → `PATH`.
 
@@ -137,8 +140,11 @@ Use `--scope project --project-root <path>` for a repo-local install.
 
 ## References and Assets
 
+- [references/vision-layout-review.md](references/vision-layout-review.md) - vision-only layout review contract
+
 - [references/project-agent-protocol.md](references/project-agent-protocol.md) — revisioned project loop
 - [references/gui-project-canvas.md](references/gui-project-canvas.md) — desktop GUI contract
+- [references/eda-export.md](references/eda-export.md) — multi-EDA schematic export contract
 - [references/jobs-workflow.md](references/jobs-workflow.md) — jobs 8-step workflow
 - [references/tool-contracts.md](references/tool-contracts.md) — CLI contracts and errors
 - [references/module-plan-schema.md](references/module-plan-schema.md) — module-plan schema

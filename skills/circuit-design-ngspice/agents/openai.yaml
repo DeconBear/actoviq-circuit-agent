@@ -1,4 +1,4 @@
 interface:
   display_name: "Circuit Design Ngspice"
   short_description: "Plan, simulate, and render primitive-based SPICE circuits with ngspice and netlistsvg."
-  default_prompt: "Use the Actoviq project-agent v2 transaction protocol to create an editable circuit document, pass ERC, compile, simulate with ngspice, evaluate specifications, and export the matching schematic."
+  default_prompt: "Use the Actoviq project-agent v2 transaction protocol to create an editable circuit document, pass ERC, compile, simulate with ngspice, evaluate specifications, and export the matching schematic. Only a vision-capable model may call view_schematic_for_layout; a text-only model must use layout-quality JSON and must never call that tool."

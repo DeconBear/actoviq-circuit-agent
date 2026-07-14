@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/layout-quality.schema.json",
+  "title": "Actoviq Layout Quality Report",
+  "type": "object",
+  "required": ["schema", "connectivity_hash", "lexicographic_cost", "readability_score", "issues"],
+  "properties": {
+    "schema": { "const": "actoviq.layout-quality.v1" },
+    "connectivity_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "lexicographic_cost": { "type": "array", "minItems": 8, "maxItems": 8, "items": { "type": "number", "minimum": 0 } },
+    "readability_score": { "type": "number", "minimum": 0, "maximum": 100 },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "severity", "component_ids", "net_ids", "fix_category"],
+        "properties": {
+          "category": { "type": "string" },
+          "severity": { "enum": ["error", "warning", "info"] },
+          "component_ids": { "type": "array", "items": { "type": "string" } },
+          "net_ids": { "type": "array", "items": { "type": "string" } },
+          "bounds": { "type": ["object", "null"] },
+          "fix_category": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -28,6 +28,7 @@ from workspace_paths import (
     resolve_projects_root,
     select_workspace,
 )
+from eda_export import export_eda
 
 
 PROJECT_SCHEMA = "actoviq.project.v2"
@@ -3985,6 +3986,20 @@ def build_parser() -> argparse.ArgumentParser:
     simulate_module_parser.add_argument("--project-root", required=True)
     simulate_module_parser.add_argument("--module-id", required=True)
     simulate_module_parser.add_argument("--ngspice-bin", default="")
+
+    export_parser = subparsers.add_parser(
+        "export-eda",
+        help="Export editable schematic packages from the current structured project revision.",
+    )
+    export_parser.add_argument("--project-root", required=True)
+    export_parser.add_argument("--scope", choices=["project", "module"], default="project")
+    export_parser.add_argument("--module-id", default="")
+    export_parser.add_argument("--targets", default="kicad,altium,orcad,virtuoso")
+    export_parser.add_argument("--view", choices=["design", "simulation"], default="design")
+    export_parser.add_argument("--mapping-file", default="")
+    export_parser.add_argument("--native-convert", choices=["auto", "never", "required"], default="auto")
+    export_parser.add_argument("--strict-layout", action="store_true")
+    export_parser.add_argument("--source-revision", type=int, default=None)
     return parser
 
 
@@ -4038,6 +4053,26 @@ def main() -> int:
                 Path(args.project_root).resolve(),
                 args.module_id,
                 args.ngspice_bin,
+            )
+        elif args.command == "export-eda":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            erc = evaluate_erc(project, modules)
+            requested_targets = [target.strip().lower() for target in args.targets.split(",") if target.strip()]
+            result = export_eda(
+                root,
+                project,
+                modules,
+                erc,
+                project_document_hash(project, modules),
+                scope=args.scope,
+                module_id=args.module_id or None,
+                targets=requested_targets,
+                view=args.view,
+                mapping_file=args.mapping_file,
+                native_convert=args.native_convert,
+                strict_layout=bool(args.strict_layout),
+                source_revision=args.source_revision,
             )
         else:
             raise ValueError(f"unknown command: {args.command}")

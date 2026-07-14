@@ -1,0 +1,107 @@
+.av-workbench-header {
+  flex-wrap: nowrap;
+}
+
+.av-workbench-header__title {
+  flex: 1 1 190px;
+  max-width: 360px;
+  overflow: hidden;
+}
+
+.av-workbench-header__title > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-workbench-toolbar {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.av-workbench-toolbar__group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--av-stroke, #d7dce3);
+  border-radius: var(--av-radius-md, 7px);
+  background: var(--av-surface-sunken, #f6f7f9);
+}
+
+.av-workbench-toolbar__group .av-icon-button--outline {
+  border-color: transparent;
+}
+
+.av-workbench-zoom {
+  display: inline-flex;
+  align-items: center;
+  height: var(--av-control-md, 32px);
+  overflow: hidden;
+  border-left: 1px solid var(--av-stroke, #d7dce3);
+}
+
+.av-workbench-zoom__value {
+  min-width: 38px;
+  color: var(--av-text-tertiary, #69727d);
+  font-family: var(--av-font-mono, Consolas, monospace);
+  font-size: var(--av-font-size-xs, 10px);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.av-workbench-erc {
+  min-width: 68px;
+  padding-inline: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.av-workbench-erc--clean {
+  border-color: color-mix(in srgb, var(--av-success, #2f855a) 35%, var(--av-stroke, #d7dce3));
+  color: var(--av-success, #28734a);
+}
+
+.av-workbench-erc--warning {
+  border-color: color-mix(in srgb, var(--av-warning, #b7791f) 40%, var(--av-stroke, #d7dce3));
+  background: var(--av-warning-subtle, #fffaf0);
+  color: var(--av-warning, #8a5c13);
+}
+
+.av-workbench-erc--error {
+  border-color: color-mix(in srgb, var(--av-danger, #c53030) 40%, var(--av-stroke, #d7dce3));
+  background: var(--av-danger-subtle, #fff5f5);
+  color: var(--av-danger, #b83242);
+}
+
+@media (max-width: 760px) {
+  .av-workbench-header {
+    gap: 8px !important;
+    padding-inline: 10px !important;
+  }
+
+  .av-workbench-header__title {
+    flex-basis: 120px;
+  }
+
+  .av-workbench-toolbar {
+    gap: 4px;
+  }
+
+  .av-workbench-erc {
+    min-width: var(--av-control-md, 32px);
+  }
+
+  .av-workbench-erc .av-icon-button__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+}

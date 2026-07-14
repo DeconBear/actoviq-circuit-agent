@@ -81,6 +81,7 @@
         "direction": { "enum": ["input", "output", "bidirectional"] },
         "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
         "net": { "type": "string", "minLength": 1 },
+        "position": { "$ref": "#/$defs/position" },
         "net_id": { "type": "string", "minLength": 1 },
         "inferred": { "type": "boolean" },
         "network": { "type": "string", "minLength": 1 }

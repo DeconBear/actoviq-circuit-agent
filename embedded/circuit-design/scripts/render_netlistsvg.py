@@ -942,6 +942,12 @@ def placement_for_ldo_component(component: dict[str, object], input_node: str, o
         return 120.0, 300.0
     if ctype == "current_source" and has_ground:
         return 320.0, 330.0
+    # Single-BJT error amp (collector drives gate, base sees vref, emitter on fb).
+    # Place it in the error column before the generic MOS diff-pair heuristics.
+    if ctype == "bjt" and has_any_node(component, "vref", "ref") and has_any_node(component, "fb"):
+        return 360.0, 230.0
+    if name.startswith(("qerr", "merr")):
+        return 360.0, 230.0
     if ctype in {"bjt", "mosfet"} and len(lower_nodes) >= 3:
         drain, gate, source = lower_nodes[:3]
         if drain == output_node.lower() and (source == input_node.lower() or rail_symbol_for_format(source) == "vcc" or source.startswith("vin")):
@@ -954,8 +960,8 @@ def placement_for_ldo_component(component: dict[str, object], input_node: str, o
             return 260.0, 110.0
         if source == input_node.lower() or rail_symbol_for_format(source) == "vcc" or source.startswith("vin"):
             return 380.0, 110.0
-    if name.startswith(("qerr", "merr")) or (ctype in {"bjt", "mosfet"} and has_any_node(component, "vref", "fb")):
-        return 320.0, 215.0
+    if ctype in {"bjt", "mosfet"} and has_any_node(component, "vref", "fb"):
+        return 360.0, 230.0
     if name.startswith(("mpass", "m_pass", "qpass", "q_pass")) or (ctype == "mosfet" and has_any_node(component, "gate", "vin", "out")):
         return 500.0, 128.0
     if name.startswith(("rpu", "rgate")) or (has_any_node(component, "gate") and has_power_like):
@@ -1711,16 +1717,37 @@ def apply_ldo_placements(root: ET.Element, payload: dict[str, object]) -> None:
             set_group_xy(group, placement[0], placement[1])
 
     if "IN" in groups:
-        set_group_xy(groups["IN"], 24.0, 185.0)
+        set_group_xy(groups["IN"], 24.0, 160.0)
     if "OUT" in groups:
-        set_group_xy(groups["OUT"], 880.0, 210.0)
-    vref_anchor = (360.0, 240.0)
-    for component in components if isinstance(components, list) else []:
-        if isinstance(component, dict) and component_type(component) == "bjt" and has_any_node(component, "vref", "ref"):
-            vref_anchor = (220.0, 240.0)
-            break
+        set_group_xy(groups["OUT"], 860.0, 210.0)
+    has_bjt_error_amp = any(
+        isinstance(component, dict)
+        and component_type(component) == "bjt"
+        and has_any_node(component, "vref", "ref")
+        for component in (components if isinstance(components, list) else [])
+    )
+    vref_anchor = (280.0, 246.0) if has_bjt_error_amp else (360.0, 240.0)
     set_terminal_group_anchor(groups, ("VREF", "REF"), vref_anchor)
     set_terminal_group_anchor(groups, ("ITAIL", "TAIL", "IBIAS"), (330.0, 315.0))
+    if has_bjt_error_amp:
+        # BJT-EA boards keep the PMOS pass to the right of the error amp so the
+        # left-facing MOSFET gate can reach the gate bus without crossing the body.
+        for pass_name in ("MPASS", "MP", "M_PASS", "QPASS"):
+            if pass_name in groups:
+                set_group_xy(groups[pass_name], 500.0, 128.0)
+                break
+        if "RPU" in groups:
+            set_group_xy(groups["RPU"], 100.0, 90.0)
+        if "RFB1" in groups:
+            set_group_xy(groups["RFB1"], 620.0, 220.0)
+        if "RFB2" in groups:
+            set_group_xy(groups["RFB2"], 620.0, 304.0)
+        if "COUT" in groups:
+            set_group_xy(groups["COUT"], 730.0, 304.0)
+        if "RLOAD" in groups or "RLOAD_DC" in groups:
+            load = groups.get("RLOAD") or groups.get("RLOAD_DC")
+            if load is not None:
+                set_group_xy(load, 800.0, 304.0)
 
     for name, group in groups.items():
         if name.startswith("vcc_"):
@@ -1728,7 +1755,8 @@ def apply_ldo_placements(root: ET.Element, payload: dict[str, object]) -> None:
         elif name.startswith("vee_"):
             set_group_xy(group, 360.0, 420.0)
         elif name.startswith("gnd_"):
-            set_group_xy(group, 410.0, 430.0)
+            # Park grounds under the feedback/output column for BJT-EA boards.
+            set_group_xy(group, 615.0 if has_bjt_error_amp else 410.0, 420.0)
 
 
 def apply_baseband_detail_placements(root: ET.Element, payload: dict[str, object]) -> None:
@@ -2990,6 +3018,7 @@ def add_ldo_custom_net(
     input_node: str = "",
     output_node: str = "",
     gate_nodes: set[str] | None = None,
+    compact_feedback: bool = False,
 ) -> int | None:
     lower = node.lower()
     gate_nodes = {item.lower() for item in (gate_nodes or set())}
@@ -3040,9 +3069,18 @@ def add_ldo_custom_net(
         return line_count
 
     if lower == "fb":
-        left_x = min(point[0] for point in raw_points) - 25.0
-        right_x = max(point[0] for point in raw_points) - 35.0
-        lower_y = max(point[1] for point in raw_points) + 130.0
+        xs = [point[0] for point in raw_points]
+        ys = [point[1] for point in raw_points]
+        x_span = max(xs) - min(xs)
+        y_span = max(ys) - min(ys)
+        # Compact feedback (BJT EA emitter near divider, or short MOS tap):
+        # use a mid-height horizontal bus instead of the deep U-detour.
+        if compact_feedback and y_span <= 120.0 and x_span <= 480.0:
+            bus_y = (min(ys) + max(ys)) / 2.0
+            return add_inline_horizontal_net(root, net_class, raw_points, junction_counts, bus_y)
+        left_x = min(xs) - 25.0
+        right_x = max(xs) - 35.0
+        lower_y = max(ys) + 130.0
         for point in raw_points:
             if point[0] < (left_x + right_x) / 2:
                 side_point = (left_x, point[1])
@@ -3157,6 +3195,14 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
         for node in aliases.get("ldo_gate", [])
         if isinstance(node, (str, int, float))
     }
+    components = payload.get("components", [])
+    compact_ldo_feedback = any(
+        isinstance(component, dict)
+        and component_type(component) == "bjt"
+        and has_any_node(component, "vref", "ref")
+        and has_any_node(component, "fb")
+        for component in (components if isinstance(components, list) else [])
+    )
     profile = schematic_profile(payload)
 
     remove_existing_net_artifacts(root)
@@ -3232,6 +3278,7 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 input_node=input_node,
                 output_node=output_node,
                 gate_nodes=ldo_gate_nodes,
+                compact_feedback=compact_ldo_feedback,
             )
             if custom_line_count is not None:
                 line_count += custom_line_count
@@ -3402,7 +3449,7 @@ def ensure_white_background(root: ET.Element) -> dict[str, object]:
     return {"updated": True}
 
 
-def profile_stage_annotations(profile: str) -> list[dict[str, object]]:
+def profile_stage_annotations(profile: str, payload: dict[str, object] | None = None) -> list[dict[str, object]]:
     if profile == "signal_chain_comparator":
         return [
             {"label": "INPUT", "x": 12, "y": 74, "w": 130, "h": 300},
@@ -3430,6 +3477,19 @@ def profile_stage_annotations(profile: str) -> list[dict[str, object]]:
             {"label": "OUTPUT LOAD", "x": 456, "y": 68, "w": 210, "h": 330},
         ]
     if profile == "ldo_regulator":
+        components = payload.get("components", []) if isinstance(payload, dict) else []
+        has_bjt_error_amp = any(
+            isinstance(component, dict)
+            and component_type(component) == "bjt"
+            and has_any_node(component, "vref", "ref")
+            for component in (components if isinstance(components, list) else [])
+        )
+        if has_bjt_error_amp:
+            return [
+                {"label": "INPUT / ERROR", "x": 12, "y": 70, "w": 340, "h": 330},
+                {"label": "PASS", "x": 364, "y": 70, "w": 220, "h": 330},
+                {"label": "FEEDBACK / OUTPUT", "x": 596, "y": 70, "w": 280, "h": 330},
+            ]
         return [
             {"label": "INPUT / PASS", "x": 12, "y": 70, "w": 270, "h": 330},
             {"label": "ERROR + FEEDBACK", "x": 294, "y": 70, "w": 250, "h": 330},
@@ -3456,7 +3516,7 @@ def module_stage_annotations(payload: dict[str, object]) -> list[dict[str, objec
 def add_stage_annotations(root: ET.Element, profile: str, payload: dict[str, object] | None = None) -> dict[str, object]:
     annotations = module_stage_annotations(payload) if payload else []
     if not annotations:
-        annotations = profile_stage_annotations(profile)
+        annotations = profile_stage_annotations(profile, payload)
     if not annotations:
         return {"updated": False, "reason": "no_annotations_for_profile"}
 
@@ -3517,7 +3577,7 @@ def format_signal_chain_schematic(
     schematic_overrides = apply_schematic_overrides(root, overrides)
     nets = add_formatted_nets(root, payload)
     resize_svg_to_cells(root)
-    annotations = add_stage_annotations(root, profile, payload if blockwise.get("updated") else None)
+    annotations = add_stage_annotations(root, profile, payload)
     background = ensure_white_background(root)
     tree.write(svg_path, encoding="utf-8", xml_declaration=False)
     return {

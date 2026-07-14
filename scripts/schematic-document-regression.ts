@@ -40,6 +40,12 @@ const ldoPorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const pmosLdoBenchPorts: CircuitPort[] = [
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'vin' },
+  { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+];
+
 const differentialPairPorts: CircuitPort[] = [
   { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
   { id: 'inp', name: 'IN+', direction: 'input', signal_type: 'analog', net: 'inp' },
@@ -293,6 +299,29 @@ const fixtures: CircuitModule[] = [
     component('rload', 'R', '330', 860, 420, [['a', '1', 'vout'], ['b', '2', '0']]),
     component('cout', 'C', '1u', 990, 420, [['a', '1', 'vout'], ['b', '2', '0']]),
   ], ldoPorts),
+  moduleFixture('pmos_ldo_bench', [
+    component('vin', 'V', 'DC {VIN_NOM} AC 0', 100, 220, [['p', '+', 'vin'], ['n', '-', '0']]),
+    component('vref_src', 'V', 'DC {VREF} AC 1', 340, 420, [['p', '+', 'vref'], ['n', '-', '0']]),
+    component('rpu', 'R', '47k', 200, 120, [['a', '1', 'vin'], ['b', '2', 'gate']]),
+    component('qerr', 'Q', 'QNPN', 480, 320, [
+      ['c', 'C', 'gate'],
+      ['b', 'B', 'vref'],
+      ['e', 'E', 'fb'],
+    ]),
+    component('mpass', 'M', 'PMOSPASS W=20m L=1u', 320, 180, [
+      ['d', 'D', 'out'],
+      ['g', 'G', 'gate'],
+      ['s', 'S', 'vin'],
+      ['b', 'B', 'vin'],
+    ]),
+    component('rfb1', 'R', '{RTOP}', 680, 220, [['a', '1', 'out'], ['b', '2', 'fb']]),
+    component('rfb2', 'R', '{RBOT}', 680, 400, [['a', '1', 'fb'], ['b', '2', '0']]),
+    component('cout', 'C', '{COUTVAL}', 860, 300, [['a', '1', 'out'], ['b', '2', '0']]),
+    component('iload', 'I', 'DC 0 PULSE(0 {ILOAD_STEP} 0.5m 1u 1u 0.5m 5m)', 980, 300, [
+      ['p', '+', 'out'],
+      ['n', '-', '0'],
+    ]),
+  ], pmosLdoBenchPorts),
   moduleFixture('baseband_conditioning', [
     component('rdec', 'R', '10', 70, 60, [['a', '1', 'vdd'], ['b', '2', 'bb_vdd']]),
     component('cdec', 'C', '100n', 120, 320, [['a', '1', 'bb_vdd'], ['b', '2', '0']]),
@@ -417,6 +446,7 @@ for (const fixture of fixtures) {
   assertRailLabels(document.module, document.netLabels, document.wires);
   assertNoMosBodyRailLabels(document.module, document.netLabels);
   assertLdoInternalLabels(document);
+  assertPmosLdoBenchWiring(document);
   assertCustomBlock(document);
   assertCmosRingConnections(document);
   assertCurrentMirrorDiodeConnection(document);
@@ -426,6 +456,19 @@ for (const fixture of fixtures) {
   assertGeneratedWireSimplicity(document);
   assertGeneratedWireCrossings(document);
 }
+
+const positionedPortModule = moduleFixture('positioned_port', [
+  component('r1', 'R', '1k', 260, 220, [['a', '1', 'in'], ['b', '2', 'out']]),
+]);
+positionedPortModule.ports.find((port) => port.id === 'input')!.position = { x: 80, y: 360 };
+const positionedPortDocument = createSchematicDocument(positionedPortModule);
+assert.deepEqual(positionedPortDocument.portPositions.get('input'), { x: 80, y: 360 }, 'stored port position should override auto placement');
+assert.ok(
+  positionedPortDocument.wires.some((wire) => (
+    [wire.from, wire.to].some((endpoint) => endpoint?.port_id === 'input' && endpoint.x === 80 && endpoint.y === 360)
+  )),
+  'stored port position should be used by generated wiring',
+);
 
 const mosWireModule = moduleFixture('mos_wire_merge', [
   component('m3', 'M', 'PMOS1 W=40u L=1u', 220, 220, [
@@ -746,6 +789,19 @@ function assertReadableLayout(module: CircuitModule) {
     assertPinAbove(outputLoad, 'vout', '0', module.module_id);
     assertPinAbove(outputCap, 'vout', '0', module.module_id);
     assertNoComponentOverlap(module, ['m1', 'm2', 'm3', 'm4', 'mp', 'vin', 'vref', 'itail', 'rtop', 'rbot', 'rload', 'cout']);
+  }
+  if (module.module_id === 'pmos_ldo_bench') {
+    const errorAmplifier = mustComponent(module, 'qerr');
+    const pass = mustComponent(module, 'mpass');
+    const pullup = mustComponent(module, 'rpu');
+    const topDivider = mustComponent(module, 'rfb1');
+    const bottomDivider = mustComponent(module, 'rfb2');
+    assert.ok(pass.position.x > errorAmplifier.position.x, 'PMOS LDO pass device should sit to the right of the error amplifier');
+    assert.ok(pullup.position.y < pass.position.y, 'PMOS LDO gate pull-up should sit above the pass device');
+    assert.ok(topDivider.position.x > pass.position.x, 'PMOS LDO feedback divider should sit on the output side');
+    assert.ok(Math.abs(topDivider.position.x - bottomDivider.position.x) <= 1, 'PMOS LDO feedback divider should align vertically');
+    assert.ok(topDivider.position.y < bottomDivider.position.y, 'PMOS LDO feedback divider should flow from output toward ground');
+    assertNoComponentOverlap(module, module.components.map((component) => component.id));
   }
   if (module.module_id === 'current_mirror') {
     const reference = mustComponent(module, 'm_ref');
@@ -1096,6 +1152,26 @@ function assertGeneratedWireCrossings(document: ReturnType<typeof createSchemati
       }
     }
   }
+}
+
+function assertPmosLdoBenchWiring(document: ReturnType<typeof createSchematicDocument>) {
+  if (document.module.module_id !== 'pmos_ldo_bench') return;
+  const pullup = mustComponent(document.module, 'rpu');
+  const pinIndex = pullup.pins.findIndex((pin) => pin.id === 'a');
+  const pin = pullup.pins[pinIndex];
+  assert.ok(pin, 'pmos_ldo_bench.rpu.a missing');
+  const wire = document.wires.find((entry) => (
+    entry.net === 'vin' && [entry.from, entry.to].some((endpoint) => endpoint?.component_id === 'rpu' && endpoint.pin_id === 'a')
+  ));
+  assert.ok(wire, 'PMOS LDO pull-up VIN pin should have a generated wire');
+  const fromPullup = wire.from?.component_id === 'rpu' && wire.from.pin_id === 'a';
+  const endpointPoint = fromPullup ? wire.points[0] : wire.points.at(-1);
+  const adjacentPoint = fromPullup ? wire.points[1] : wire.points.at(-2);
+  assert.ok(endpointPoint && adjacentPoint, 'PMOS LDO pull-up VIN wire should have an endpoint segment');
+  const pinPoint = pinWorld(pullup, pin, pinIndex);
+  const outward = { x: pinPoint.x - pullup.position.x, y: pinPoint.y - pullup.position.y };
+  const route = { x: adjacentPoint.x - endpointPoint.x, y: adjacentPoint.y - endpointPoint.y };
+  assert.ok(outward.x * route.x + outward.y * route.y >= 0, 'PMOS LDO pull-up VIN wire must leave the pin away from the resistor body');
 }
 
 function mustComponent(module: CircuitModule, id: string): CircuitComponent {

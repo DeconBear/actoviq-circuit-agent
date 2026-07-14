@@ -3,10 +3,20 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import type { ToolExecutionContext } from 'actoviq-agent-sdk';
+import type {
+  ModelApi,
+  ModelRequest,
+  ModelStreamHandle,
+  ToolExecutionContext,
+} from 'actoviq-agent-sdk';
 
 import { parseCliOptions } from '../app.js';
 import { createWorkspaceFileTools } from '../tools/fileTools.js';
+import { createSchematicVisionImageTool } from '../tools/renderTools.js';
+import { registerCircuitTools } from '../tools/registerCircuitTools.js';
+import { getWorkflowSkills } from '../skills/index.js';
+import { createOpenAiVisionModelApi } from '../vision/openAiVisionModelApi.js';
+import { createVisionLayoutReviewHost } from '../vision/visionLayoutReviewHost.js';
 import { parseTuiCommand } from '../tui/commandParser.js';
 import { TuiStateStore } from '../tui/TuiState.js';
 import { classifyError } from '../utils/errors.js';
@@ -107,6 +117,259 @@ function createTestJobPaths(jobRoot: string): JobPaths {
     workflowStatePath: path.resolve(reportsDir, 'workflow-state.json'),
   };
 }
+
+test('vision layout tool is isolated from text runs and returns a PNG image block for explicit vision runs', async () => {
+  const root = path.resolve(process.cwd(), '.tmp-unit-tests', `vision-layout-${Date.now()}`);
+  const svgPath = path.resolve(root, 'schematic.svg');
+  await mkdir(root, { recursive: true });
+  await writeFile(svgPath, [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">',
+    '<rect width="320" height="180" fill="white"/>',
+    '<rect x="100" y="60" width="120" height="60" fill="white" stroke="#a00020" stroke-width="3"/>',
+    '<path d="M20 90H100M220 90H300" fill="none" stroke="#188038" stroke-width="4"/>',
+    '<text x="134" y="96" font-size="18">R1 47k</text>',
+    '</svg>',
+  ].join(''), 'utf8');
+  try {
+    const visionTool = createSchematicVisionImageTool();
+    assert.match(visionTool.description, /VISION-MODEL ONLY/);
+    assert.equal(
+      registerCircuitTools(root).some((entry) => entry.name === 'view_schematic_for_layout'),
+      false,
+      'the default/text workflow tool catalog must not expose the vision-only tool',
+    );
+    const unspecified = await visionTool.validateInput?.(
+      { svg_path: svgPath },
+      createToolContext(root),
+    );
+    assert.deepEqual(unspecified, {
+      result: false,
+      message: 'view_schematic_for_layout requires an explicitly vision-capable run; text-only or unspecified models cannot call it.',
+    });
+    const denied = await visionTool.validateInput?.(
+      { svg_path: svgPath },
+      { ...createToolContext(root), metadata: { vision_capable: false } },
+    );
+    assert.deepEqual(denied, {
+      result: false,
+      message: 'view_schematic_for_layout requires an explicitly vision-capable run; text-only or unspecified models cannot call it.',
+    });
+    await assert.rejects(
+      async () => visionTool.execute({ svg_path: svgPath }, createToolContext(root)),
+      /requires an explicitly vision-capable run/,
+    );
+    await assert.rejects(
+      async () => visionTool.execute(
+        { svg_path: svgPath },
+        { ...createToolContext(root), metadata: { vision_capable: false } },
+      ),
+      /requires an explicitly vision-capable run/,
+    );
+    const output = await visionTool.execute(
+      { svg_path: svgPath },
+      { ...createToolContext(root), metadata: { model_capabilities: ['vision'] } },
+    );
+    assert.equal(output.schema, 'actoviq.vision-layout-image.v1');
+    assert.equal(output.mediaType, 'image/png');
+    assert.ok(Number(output.width) > 0 && Number(output.height) > 0);
+    const png = Buffer.from(String(output.imageBase64), 'base64');
+    assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    const content = visionTool.serialize?.(output) as Array<Record<string, unknown>>;
+    assert.equal(content[0]?.type, 'text');
+    assert.equal(content[1]?.type, 'image');
+    assert.equal((content[1]?.source as Record<string, unknown>).media_type, 'image/png');
+
+    const visionSkill = getWorkflowSkills().find((entry) => entry.name === 'review-schematic-layout-vision');
+    assert.ok(visionSkill);
+    assert.equal(visionSkill.metadata?.required_modality, 'vision');
+    assert.equal(visionSkill.disableModelInvocation, true);
+    assert.equal(visionSkill.inheritDefaultTools, false);
+    assert.deepEqual(visionSkill.allowedTools, ['view_schematic_for_layout']);
+    assert.equal(visionSkill.tools?.some((entry) => entry.name === 'view_schematic_for_layout'), true);
+    assert.match(visionSkill.prompt ?? '', /text-only model, do NOT call view_schematic_for_layout/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('OpenAI vision ModelApi promotes tool-result images for create and stream requests', async () => {
+  const pngBase64 = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64');
+  const request: ModelRequest = {
+    model: 'vision-test',
+    max_tokens: 100,
+    messages: [{
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: 'vision-call',
+        content: [{ type: 'text', text: '{"ok":true}' }, {
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/png', data: pngBase64 },
+        }],
+      }],
+    }],
+  };
+  const captured: ModelRequest[] = [];
+  const finalMessage = {
+    id: 'vision-final',
+    type: 'message' as const,
+    role: 'assistant' as const,
+    model: 'vision-test',
+    content: [{ type: 'text', text: 'done' }],
+    stop_reason: 'end_turn',
+  };
+  const streamHandle: ModelStreamHandle = {
+    finalMessage: async () => finalMessage,
+    async *[Symbol.asyncIterator]() {
+      yield { type: 'message_stop' as const };
+    },
+  };
+  const baseModelApi: ModelApi = {
+    createMessage: async (next) => {
+      captured.push(next);
+      return finalMessage;
+    },
+    streamMessage: (next) => {
+      captured.push(next);
+      return streamHandle;
+    },
+  };
+  const wrapped = createOpenAiVisionModelApi(baseModelApi);
+  await wrapped.createMessage(request);
+  wrapped.streamMessage(request);
+
+  assert.equal(captured.length, 2);
+  for (const promoted of captured) {
+    assert.equal(promoted.messages.length, 2);
+    const toolResult = promoted.messages[0]?.content;
+    assert.ok(Array.isArray(toolResult));
+    assert.equal(toolResult[0]?.type, 'tool_result');
+    assert.equal(
+      Array.isArray(toolResult[0]?.content)
+        && toolResult[0].content.some((entry) => entry.type === 'image'),
+      false,
+    );
+    const imageMessage = promoted.messages[1];
+    assert.equal(imageMessage?.role, 'user');
+    assert.ok(Array.isArray(imageMessage?.content));
+    assert.equal(imageMessage.content[0]?.type, 'image');
+    assert.equal(
+      (imageMessage.content[0] as Record<string, any>).source.data,
+      pngBase64,
+    );
+  }
+});
+
+test('trusted vision host runs the isolated skill through SDK and forwards the rendered PNG', async () => {
+  const root = path.resolve(process.cwd(), '.tmp-unit-tests', `vision-host-${Date.now()}`);
+  const svgPath = path.resolve(root, 'schematic.svg');
+  const qualityPath = path.resolve(root, 'layout-quality.json');
+  await mkdir(root, { recursive: true });
+  await writeFile(svgPath, [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100" viewBox="0 0 160 100">',
+    '<rect width="160" height="100" fill="white"/>',
+    '<path d="M10 50H150" stroke="#188038" stroke-width="4"/>',
+    '</svg>',
+  ].join(''), 'utf8');
+  await writeFile(qualityPath, JSON.stringify({
+    schema: 'actoviq.layout-quality.v1',
+    readability_score: 82,
+  }), 'utf8');
+
+  const requests: ModelRequest[] = [];
+  const fakeModelApi: ModelApi = {
+    createMessage: async (request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        return {
+          id: 'vision-tool-request',
+          type: 'message',
+          role: 'assistant',
+          model: 'vision-test',
+          content: [{
+            type: 'tool_use',
+            id: 'vision-call',
+            name: 'view_schematic_for_layout',
+            input: { svg_path: svgPath },
+          }],
+          stop_reason: 'tool_use',
+        };
+      }
+      return {
+        id: 'vision-complete',
+        type: 'message',
+        role: 'assistant',
+        model: 'vision-test',
+        content: [{ type: 'text', text: '{"schema":"actoviq.layout-patch.v1","candidates":[]}' }],
+        stop_reason: 'end_turn',
+      };
+    },
+    streamMessage: () => {
+      throw new Error('The non-streaming host test must not call streamMessage.');
+    },
+  };
+
+  let host: Awaited<ReturnType<typeof createVisionLayoutReviewHost>> | undefined;
+  try {
+    await assert.rejects(
+      () => createVisionLayoutReviewHost({
+        provider: 'openai',
+        model: 'text-test',
+        modelCapabilities: ['text'],
+        workDir: root,
+        homeDir: path.resolve(root, '.actoviq-text'),
+        modelApi: fakeModelApi,
+      }),
+      /trusted vision-capable model configuration is required/,
+    );
+    assert.equal(requests.length, 0);
+
+    host = await createVisionLayoutReviewHost({
+      provider: 'openai',
+      model: 'vision-test',
+      modelCapabilities: ['vision'],
+      workDir: root,
+      homeDir: path.resolve(root, '.actoviq'),
+      modelApi: fakeModelApi,
+    });
+    const result = await host.review({
+      svgPath,
+      layoutQualityReportPath: qualityPath,
+      moduleId: 'filter',
+      sourceRevision: 7,
+      connectivityHash: 'a'.repeat(64),
+    });
+
+    assert.equal(result.toolCalls.length, 1);
+    assert.equal(result.toolCalls[0]?.publicName, 'view_schematic_for_layout');
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[0]?.tools?.map((entry) => entry.name), ['view_schematic_for_layout']);
+    const firstRequestContent = requests[0]?.messages[0]?.content;
+    assert.ok(Array.isArray(firstRequestContent));
+    const stagePrompt = String(firstRequestContent.find((entry) => entry.type === 'text')?.text ?? '');
+    assert.match(
+      stagePrompt,
+      /"layout_quality_report":\{"schema":"actoviq\.layout-quality\.v1","readability_score":82\}/,
+    );
+    const secondMessages = requests[1]?.messages ?? [];
+    const resultIndex = secondMessages.findIndex((message) => (
+      Array.isArray(message.content)
+      && message.content.some((entry) => entry.type === 'tool_result')
+    ));
+    assert.ok(resultIndex >= 0);
+    const imageMessage = secondMessages[resultIndex + 1];
+    assert.equal(imageMessage?.role, 'user');
+    assert.ok(Array.isArray(imageMessage?.content));
+    const image = imageMessage.content.find((entry) => entry.type === 'image') as Record<string, any> | undefined;
+    assert.ok(image);
+    assert.equal(image.source.media_type, 'image/png');
+    const png = Buffer.from(String(image.source.data), 'base64');
+    assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  } finally {
+    await host?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function prepareJobDirs(paths: JobPaths): Promise<void> {
   await Promise.all([
@@ -453,11 +716,12 @@ test('netlistsvg renderer keeps the partitioned timeout fallback path wired', as
   assert.match(script, /check_geometry/);
 });
 
-test('netlistsvg analog planner renders LDO without hard geometry errors', async () => {
+test('netlistsvg analog planner defaults LDO renders to schematic view without hard geometry errors', async () => {
   const root = path.resolve(process.cwd(), '.tmp-unit-tests', `netlistsvg-planner-${Date.now()}`);
   await mkdir(root, { recursive: true });
   const netlistPath = path.resolve(root, 'ldo.cir');
   const jsonPath = path.resolve(root, 'ldo.design.json');
+  const fullJsonPath = path.resolve(root, 'ldo.full.json');
   const svgPath = path.resolve(root, 'ldo.svg');
   const netlistToJsonPath = path.resolve(
     process.cwd(),
@@ -503,11 +767,39 @@ test('netlistsvg analog planner renders LDO without hard geometry errors', async
       netlistToJsonPath,
       '--netlist-path', netlistPath,
       '--json-path', jsonPath,
-      '--view', 'schematic',
       '--input-node', 'vin',
       '--output-node', 'vout',
     ], { cwd: process.cwd(), encoding: 'utf8' });
     assert.equal(converted.status, 0, converted.stderr || converted.stdout);
+    const schematicDesign = JSON.parse(await readFile(jsonPath, 'utf8')) as {
+      view?: string;
+      components?: Array<{ name?: string }>;
+    };
+    assert.equal(schematicDesign.view, 'schematic');
+    const schematicComponentNames = new Set((schematicDesign.components ?? []).map((component) => component.name));
+    for (const hiddenSource of ['Vin', 'Vref', 'Itail']) {
+      assert.equal(schematicComponentNames.has(hiddenSource), false);
+    }
+
+    const fullConverted = spawnSync('python', [
+      netlistToJsonPath,
+      '--netlist-path', netlistPath,
+      '--json-path', fullJsonPath,
+      '--view', 'full',
+      '--input-node', 'vin',
+      '--output-node', 'vout',
+    ], { cwd: process.cwd(), encoding: 'utf8' });
+    assert.equal(fullConverted.status, 0, fullConverted.stderr || fullConverted.stdout);
+    const fullDesign = JSON.parse(await readFile(fullJsonPath, 'utf8')) as {
+      view?: string;
+      components?: Array<{ name?: string }>;
+    };
+    assert.equal(fullDesign.view, 'full');
+    const fullComponentNames = new Set((fullDesign.components ?? []).map((component) => component.name));
+    for (const visibleSource of ['Vin', 'Vref', 'Itail']) {
+      assert.equal(fullComponentNames.has(visibleSource), true);
+    }
+
     const rendered = spawnSync('python', [
       renderPath,
       '--json-path', jsonPath,

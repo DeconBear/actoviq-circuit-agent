@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/eda-export-manifest.schema.json",
+  "title": "Actoviq EDA Export Manifest",
+  "type": "object",
+  "required": ["schema", "export_id", "source", "coordinate_transform", "layout", "targets", "files"],
+  "properties": {
+    "schema": { "const": "actoviq.eda-export-manifest.v1" },
+    "export_id": { "type": "string" },
+    "source": { "type": "object", "required": ["project_id", "revision", "document_hash", "connectivity_hash", "scope", "view"] },
+    "coordinate_transform": { "type": "object" },
+    "layout": { "type": "object" },
+    "targets": { "type": "object" },
+    "files": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+  },
+  "additionalProperties": true
+}

@@ -7,13 +7,17 @@ import {
   componentBounds,
   isPmosComponent,
   isGroundPort,
+  isSchematicPortVisible,
   pinWorld,
+  portInteractionBounds,
+  portRenderSide,
   routePoints,
   SCHEMATIC_GRID,
   type EndpointHit,
   type SchematicDocument,
   type SchematicBounds,
   type SchematicNetLabel,
+  type SchematicPortSide,
   type SchematicSelection,
 } from './schematicDocument';
 
@@ -31,8 +35,6 @@ const WIRE_STROKE = 3;
 const SYMBOL_STROKE = 2.4;
 const WIRE_SELECTION_COLOR = '#0ea5e9';
 const COMPONENT_SELECTION_COLOR = '#f59e0b';
-
-type PortSide = 'left' | 'right' | 'top' | 'bottom';
 
 export interface RenderedJunction {
   point: CircuitPosition;
@@ -202,12 +204,12 @@ export function SchematicDocumentSvg({
           const position = document.portPositions.get(port.id);
           if (!position) return null;
           const connected = document.connectedPortIds.has(port.id);
-          if (!connected) return null;
-          const isRailPort = isGroundPort(port) || port.signal_type === 'power';
-          const hasLocalRailLabel = isRailPort && document.netLabels.some((label) => label.net === port.net);
-          if (hasLocalRailLabel) return null;
+          if (!isSchematicPortVisible(document, port)) return null;
           const portSide = portRenderSide(document, port, position);
           const labelPosition = portNamePosition(position, portSide);
+          const interactionBounds = portInteractionBounds(position, portSide);
+          const selected = selection?.kind === 'port' && selection.id === port.id;
+          const hovered = hoverSelection?.kind === 'port' && hoverSelection.id === port.id && !selected;
           return (
             <g
               key={port.id}
@@ -215,8 +217,37 @@ export function SchematicDocumentSvg({
               data-net={port.net}
               data-connected={connected ? 'true' : 'false'}
               data-port-side={portSide}
+              data-selected={selected ? 'true' : 'false'}
               opacity={connected ? 1 : 0.38}
             >
+              <rect
+                x={interactionBounds.minX}
+                y={interactionBounds.minY}
+                width={interactionBounds.maxX - interactionBounds.minX}
+                height={interactionBounds.maxY - interactionBounds.minY}
+                fill="transparent"
+                pointerEvents="all"
+                data-testid="schematic-port-hit-target"
+                data-port-id={port.id}
+              />
+              {selected || hovered ? (
+                <rect
+                  x={interactionBounds.minX}
+                  y={interactionBounds.minY}
+                  width={interactionBounds.maxX - interactionBounds.minX}
+                  height={interactionBounds.maxY - interactionBounds.minY}
+                  rx="4"
+                  fill={selected ? '#f59e0b' : '#d97706'}
+                  fillOpacity={selected ? 0.07 : 0.045}
+                  stroke={selected ? COMPONENT_SELECTION_COLOR : '#d97706'}
+                  strokeWidth={selected ? 1.8 : 1.5}
+                  strokeDasharray={selected ? '8 6' : undefined}
+                  pointerEvents="none"
+                  data-testid={selected ? 'schematic-selected-port-frame' : 'schematic-hover-port-frame'}
+                  data-selection-kind="port"
+                  data-port-id={port.id}
+                />
+              ) : null}
               {isGroundPort(port) ? (
                 <GroundSymbol position={position} />
               ) : port.signal_type === 'power' ? (
@@ -630,7 +661,7 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
 
 type TextAnchor = 'start' | 'middle' | 'end';
 
-function portNamePosition(position: CircuitPosition, side: PortSide): CircuitPosition & { anchor: TextAnchor } {
+function portNamePosition(position: CircuitPosition, side: SchematicPortSide): CircuitPosition & { anchor: TextAnchor } {
   if (side === 'right') {
     return { x: position.x + 50, y: position.y - 4, anchor: 'start' };
   }
@@ -1049,32 +1080,6 @@ function PortSymbol({ position, side }: { position: CircuitPosition; side: 'left
         `${position.x} ${position.y + 18}`,
       ];
   return <polygon points={points.join(' ')} fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2" pointerEvents="none" />;
-}
-
-function portRenderSide(document: SchematicDocument, port: SchematicDocument['module']['ports'][number], position: CircuitPosition): PortSide {
-  if (isGroundPort(port)) return 'bottom';
-  if (port.signal_type === 'power') return 'top';
-  if (port.direction === 'output') return 'right';
-  const pinPoints = document.module.components.flatMap((component) => (
-    component.pins
-      .flatMap((pin, index) => (pin.net === port.net ? [pinWorld(component, pin, index)] : []))
-  ));
-  if (pinPoints.length === 0) return 'left';
-  const first = pinPoints[0];
-  if (!first) return 'left';
-  const nearest = pinPoints.slice(1).reduce((best, point) => (
-    distanceSquared(position, point) < distanceSquared(position, best) ? point : best
-  ), first);
-  const dx = position.x - nearest.x;
-  const dy = position.y - nearest.y;
-  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
-  return dy >= 0 ? 'bottom' : 'top';
-}
-
-function distanceSquared(left: CircuitPosition, right: CircuitPosition): number {
-  const dx = left.x - right.x;
-  const dy = left.y - right.y;
-  return dx * dx + dy * dy;
 }
 
 function PowerFlagSymbol({ position }: { position: CircuitPosition }) {

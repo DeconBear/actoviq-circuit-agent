@@ -345,7 +345,8 @@ try {
   assert.equal(await page.getByTestId('sidebar-collapse').getAttribute('aria-label'), 'Collapse sidebar');
   assert.equal((await page.getByTestId('sidebar-collapse').textContent())?.trim(), '<');
   assert.equal(await page.getByTestId('topbar-settings').getAttribute('aria-label'), 'Settings');
-  assert.equal((await page.getByTestId('topbar-settings').textContent())?.trim(), 'Settings');
+  assert.equal((await page.getByTestId('topbar-settings').textContent())?.trim(), '');
+  assert.equal(await page.getByTestId('topbar-settings').locator('svg').count(), 1);
   await page.getByTestId('sidebar-refresh-jobs').click();
   await page.getByTestId('sidebar-collapse').click();
   await page.getByTestId('sidebar-expand').waitFor({ timeout: 10_000 });
@@ -367,9 +368,9 @@ try {
   await page.getByTestId('settings-dialog-close').click();
   await page.getByTestId('settings-dialog').waitFor({ state: 'detached', timeout: 10_000 });
   await clickApplicationMenuPath(electronApp, ['File', 'New Design']);
-  await page.getByText('Chat Workflow', { exact: true }).waitFor({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Close' }).click();
-  await page.getByText('Chat Workflow', { exact: true }).waitFor({ state: 'detached', timeout: 10_000 });
+  await page.getByTestId('chat-close').waitFor({ timeout: 10_000 });
+  await page.getByTestId('chat-close').click();
+  await page.getByTestId('chat-close').waitFor({ state: 'detached', timeout: 10_000 });
   const fixtureJobOpenFolder = page.getByTestId(`sidebar-job-open-folder-${fixtureJob.jobId}`);
   const fixtureJobExport = page.getByTestId(`sidebar-job-export-${fixtureJob.jobId}`);
   await page.getByText(fixtureJob.jobId, { exact: true }).waitFor({ timeout: 20_000 });
@@ -608,6 +609,24 @@ try {
   await clickEnabledTestId(page, 'open-project-folder');
   await page.getByText(/^Opened project folder: /).waitFor({ timeout: 20_000 });
 
+  await clickEnabledTestId(page, 'open-eda-export');
+  await page.getByTestId('eda-export-dialog').waitFor();
+  await page.getByTestId('eda-export-native-convert').selectOption('never');
+  await clickEnabledTestId(page, 'run-eda-export');
+  await page.getByTestId('eda-export-result').waitFor({ timeout: 60_000 });
+  for (const target of ['kicad', 'altium', 'orcad', 'virtuoso']) {
+    await page.getByTestId(`eda-export-status-${target}`).getByText('import_ready', { exact: true }).waitFor();
+  }
+  const exportNotice = await page.locator('[role="status"]').textContent();
+  const exportId = exportNotice?.match(/EDA export (\S+) complete/)?.[1] ?? '';
+  assert.match(exportId, /^\d{8}T\d{6}Z-[0-9a-f]{8}$/);
+  const exportManifest = JSON.parse(await readFile(path.resolve(projectRoot, 'build', 'exports', exportId, 'manifest.json'), 'utf8'));
+  assert.equal(exportManifest.schema, 'actoviq.eda-export-manifest.v1');
+  assert.equal(new Set(Object.values(exportManifest.targets).map((target) => target.connectivity_hash)).size, 1);
+  await clickEnabledTestId(page, 'open-eda-export-folder');
+  await page.getByTestId('close-eda-export').click();
+  await page.getByTestId('eda-export-dialog').waitFor({ state: 'detached' });
+
   assert.equal(await page.getByTestId('system-canvas').count(), 1);
   assert.equal(await page.locator('[data-testid^="module-card-"]').count(), 3);
   assert.equal(await page.getByTestId('module-preview-power').locator('svg').count(), 1);
@@ -648,7 +667,7 @@ try {
   );
 
   await filterCard.click();
-  await page.getByRole('button', { name: 'Netlist', exact: true }).click();
+  await page.getByTestId('topbar-tab-netlist').click();
   await page.getByTestId('netlist-notebook').waitFor();
   await page.getByText('RC low-pass filter · Design module', { exact: true }).waitFor();
   const notebookPreview = page.getByTestId('netlist-notebook-preview');
@@ -709,7 +728,7 @@ try {
     .waitFor();
   await page.screenshot({ path: path.resolve(outputRoot, 'light-netlist-notebook.png') });
 
-  await page.getByRole('button', { name: 'SVG', exact: true }).click();
+  await page.getByTestId('topbar-tab-svg').click();
   await page.getByTestId('svg-context-label').getByText(/RC low-pass filter/).waitFor();
   assert.equal(await page.getByTestId('schematic-svg-viewport').locator('svg').count(), 1);
   assert.equal(await page.getByTestId('module-netlistsvg').getAttribute('data-schematic-source'), 'document');
@@ -728,9 +747,9 @@ try {
     };
   });
   assert.match(lightTheme.appBackground, /rgb\(243,\s*245,\s*247\)/);
-  assert.match(lightTheme.tabBarBackground, /rgb\(255,\s*255,\s*255\)/);
+  assert.match(lightTheme.tabBarBackground, /rgb\(233,\s*237,\s*242\)/);
 
-  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await page.getByTestId('topbar-tab-design').click();
   await page.getByTestId('system-canvas').waitFor();
 
   const systemFit = await page.evaluate(() => {
@@ -1041,7 +1060,7 @@ try {
   assert.equal(menuBuildManifest.status, 'compiled');
   await page.getByTestId('module-netlistsvg').locator('svg').waitFor({ timeout: 30_000 });
   assert.equal(await page.getByTestId('module-netlistsvg').getAttribute('data-schematic-source'), 'document');
-  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await page.getByTestId('topbar-tab-design').click();
   await waitForWorkbenchProject(page, projectId);
   await clickEnabledTestId(page, 'build-project');
   const buildManifest = await waitForCompiledBuildManifest(
@@ -1065,7 +1084,7 @@ try {
   await page.getByRole('columnheader', { name: 'Target', exact: true }).waitFor();
   await page.getByText('not evaluated', { exact: true }).first().waitFor();
   await page.screenshot({ path: path.resolve(outputRoot, 'simulation-workbench.png') });
-  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await page.getByTestId('topbar-tab-design').click();
   await waitForWorkbenchProject(page, projectId);
   await page.getByTestId('module-card-filter').dblclick();
   const probeEditor = page.getByTestId('schematic-editor');
@@ -1096,7 +1115,7 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'simulation-probe-current.png') });
 
-  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await page.getByTestId('topbar-tab-design').click();
   await waitForWorkbenchProject(page, projectId);
   await page.getByTestId('module-card-filter').dblclick();
   await clickSchematicComponent(page, probeResistorId);
@@ -1114,7 +1133,7 @@ try {
     'default voltage traces should omit unexcited rails that collapse the Bode scale',
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'simulation-probe-voltage.png') });
-  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await page.getByTestId('topbar-tab-design').click();
   await waitForWorkbenchProject(page, projectId);
 
   await waitForWorkbenchProject(page, projectId);
@@ -1197,6 +1216,10 @@ try {
   await page.getByTestId('module-editor-function').fill(
     'Conditions and protects the sensor signal before amplification.',
   );
+  await page.waitForFunction(() => {
+    const button = document.querySelector('[data-testid="save-module-editor"]');
+    return button instanceof HTMLButtonElement && !button.disabled;
+  });
   assert.equal(await page.getByTestId('save-module-editor').isDisabled(), false);
   const projectBeforeSensorEdit = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'));
   await page.getByTestId('save-module-editor').click();
@@ -1206,10 +1229,10 @@ try {
     { exact: true },
   ).first().waitFor();
 
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
-  await page.getByText('Chat Workflow', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Close', exact: true }).click();
-  assert.equal(await page.getByText('Chat Workflow', { exact: true }).count(), 0);
+  await page.getByTestId('topbar-chat').click();
+  await page.getByTestId('chat-close').waitFor();
+  await page.getByTestId('chat-close').click();
+  assert.equal(await page.getByTestId('chat-close').count(), 0);
 
   const staleCommand = { ...externalCommand, command_id: 'stale-command-check', base_revision: 0 };
   let staleRejected = false;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AppSettings, CircuitSkillStatus } from '../../types';
+import type { ActoviqProviderPreset, AppSettings, CircuitSkillStatus, ProviderTestResult } from '../../types';
 
 interface Props {
   onClose: () => void;
@@ -14,6 +14,8 @@ export function SettingsDialog({ onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [skillStatus, setSkillStatus] = useState<CircuitSkillStatus | null>(null);
   const [skillSyncing, setSkillSyncing] = useState(false);
+  const [testingProvider, setTestingProvider] = useState(false);
+  const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
 
   useEffect(() => {
     if (!window.electronAPI) {
@@ -50,17 +52,95 @@ export function SettingsDialog({ onClose }: Props) {
   }, []);
 
   const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setSettings((prev) => (prev ? {
+      ...prev,
+      [key]: value,
+      ...(key === 'actoviqAuthToken' ? { clearActoviqAuthToken: false } : {}),
+    } : prev));
     setSaved(false);
     setDirty(true);
+    setProviderTest(null);
   }, []);
+
+  const applyProviderPreset = useCallback((preset: ActoviqProviderPreset) => {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      if (preset === 'anthropic') {
+        return {
+          ...prev,
+          actoviqProviderPreset: preset,
+          actoviqProvider: 'anthropic',
+          actoviqBaseUrl: 'https://api.anthropic.com',
+          chatModel: 'claude-sonnet-4-6',
+          reasoningModel: 'claude-opus-4-7',
+        };
+      }
+      if (preset === 'deepseek') {
+        return {
+          ...prev,
+          actoviqProviderPreset: preset,
+          actoviqProvider: 'openai',
+          actoviqBaseUrl: 'https://api.deepseek.com',
+          chatModel: 'deepseek-chat',
+          reasoningModel: 'deepseek-reasoner',
+        };
+      }
+      const wasKnownPreset = prev.actoviqProviderPreset !== 'openai-compatible';
+      return {
+        ...prev,
+        actoviqProviderPreset: preset,
+        actoviqProvider: 'openai',
+        actoviqBaseUrl: wasKnownPreset ? 'https://api.openai.com' : prev.actoviqBaseUrl,
+        chatModel: wasKnownPreset ? 'gpt-4.1-mini' : prev.chatModel,
+        reasoningModel: wasKnownPreset ? 'o3' : prev.reasoningModel,
+      };
+    });
+    setSaved(false);
+    setDirty(true);
+    setProviderTest(null);
+  }, []);
+
+  const clearProviderKey = useCallback(() => {
+    setSettings((prev) => prev ? {
+      ...prev,
+      actoviqAuthToken: '',
+      hasActoviqAuthToken: false,
+      maskedActoviqAuthToken: '',
+      clearActoviqAuthToken: true,
+    } : prev);
+    setSaved(false);
+    setDirty(true);
+    setProviderTest(null);
+  }, []);
+
+  const handleTestProvider = useCallback(async () => {
+    if (!settings || !window.electronAPI) return;
+    setTestingProvider(true);
+    setProviderTest(null);
+    setError(null);
+    try {
+      setProviderTest(await window.electronAPI.testProviderSettings(settings));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setProviderTest({
+        ok: false,
+        provider: settings.actoviqProvider,
+        model: settings.chatModel,
+        latencyMs: 0,
+        error: message,
+      });
+    } finally {
+      setTestingProvider(false);
+    }
+  }, [settings]);
 
   const handleSave = useCallback(async () => {
     if (!settings || !window.electronAPI) return;
     setSaving(true);
     setError(null);
     try {
-      await window.electronAPI.saveSettings(settings);
+      const nextSettings = await window.electronAPI.saveSettings(settings);
+      setSettings(nextSettings);
       setSaved(true);
       setDirty(false);
       setTimeout(() => setSaved(false), 2000);
@@ -100,12 +180,77 @@ export function SettingsDialog({ onClose }: Props) {
           {settings && (
             <>
               <section style={styles.section}>
-                <h3 style={styles.sectionTitle}>Actoviq Provider (Anthropic-compatible)</h3>
+                <h3 style={styles.sectionTitle}>Built-in agent provider</h3>
+                <div style={fieldStyles.wrapper}>
+                  <label style={fieldStyles.label}>Provider preset</label>
+                  <select
+                    value={settings.actoviqProviderPreset}
+                    onChange={(event) => applyProviderPreset(event.target.value as ActoviqProviderPreset)}
+                    style={fieldStyles.input}
+                    data-testid="settings-provider-preset"
+                  >
+                    <option value="anthropic">Anthropic</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="openai-compatible">Custom OpenAI-compatible</option>
+                  </select>
+                </div>
                 <Field label="Base URL" value={settings.actoviqBaseUrl} onChange={(v) => update('actoviqBaseUrl', v)} />
-                <Field label="Auth Token" value={settings.actoviqAuthToken} onChange={(v) => update('actoviqAuthToken', v)} type="password" />
-                <Field label="Opus Model" value={settings.opusModel} onChange={(v) => update('opusModel', v)} />
-                <Field label="Sonnet Model" value={settings.sonnetModel} onChange={(v) => update('sonnetModel', v)} />
-                <Field label="Haiku Model" value={settings.haikuModel} onChange={(v) => update('haikuModel', v)} />
+                <Field
+                  label="API key"
+                  value={settings.actoviqAuthToken}
+                  onChange={(v) => update('actoviqAuthToken', v)}
+                  type="password"
+                  placeholder={settings.hasActoviqAuthToken
+                    ? `${settings.maskedActoviqAuthToken} — leave blank to keep`
+                    : 'Enter the provider API key'}
+                />
+                <div style={styles.secretStatus}>
+                  <span>
+                    {settings.hasActoviqAuthToken
+                      ? settings.actoviqAuthTokenStorage === 'encrypted'
+                        ? 'A key is saved in OS-protected storage.'
+                        : 'A key is configured; secure storage is unavailable on this system.'
+                      : 'No saved API key.'}
+                  </span>
+                  {settings.hasActoviqAuthToken && (
+                    <button type="button" style={styles.linkBtn} onClick={clearProviderKey}>Clear saved key</button>
+                  )}
+                </div>
+                <Field label="Chat model" value={settings.chatModel} onChange={(v) => update('chatModel', v)} />
+                <Field label="Reasoning model" value={settings.reasoningModel} onChange={(v) => update('reasoningModel', v)} />
+                <div style={styles.providerActions}>
+                  <span style={styles.providerKind}>
+                    SDK adapter: {settings.actoviqProvider === 'anthropic' ? 'Anthropic' : 'OpenAI-compatible'}
+                  </span>
+                  <button
+                    type="button"
+                    style={styles.testBtn}
+                    onClick={() => { void handleTestProvider(); }}
+                    disabled={testingProvider}
+                    data-testid="settings-test-provider"
+                  >
+                    {testingProvider ? 'Testing…' : 'Test connection'}
+                  </button>
+                </div>
+                {providerTest && (
+                  <div
+                    style={providerTest.ok ? styles.testSuccess : styles.testError}
+                    role="status"
+                    data-testid="settings-provider-test-result"
+                  >
+                    {providerTest.ok
+                      ? `Connected to ${providerTest.model} in ${providerTest.latencyMs} ms.`
+                      : providerTest.error ?? 'Connection test failed.'}
+                  </div>
+                )}
+                <details style={styles.legacyDetails}>
+                  <summary style={styles.legacySummary}>Legacy workflow model tiers</summary>
+                  <div style={styles.legacyFields}>
+                    <Field label="Opus / max" value={settings.opusModel} onChange={(v) => update('opusModel', v)} />
+                    <Field label="Sonnet / medium" value={settings.sonnetModel} onChange={(v) => update('sonnetModel', v)} />
+                    <Field label="Haiku / min" value={settings.haikuModel} onChange={(v) => update('haikuModel', v)} />
+                  </div>
+                </details>
               </section>
 
               <section style={styles.section}>
@@ -278,6 +423,67 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: 'uppercase',
     letterSpacing: '0.5px',
   },
+  secretStatus: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    color: '#68727e',
+    fontSize: 11,
+    marginTop: -4,
+    marginBottom: 12,
+  },
+  linkBtn: {
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    color: '#b42318',
+    cursor: 'pointer',
+    fontSize: 11,
+    whiteSpace: 'nowrap',
+  },
+  providerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 4,
+  },
+  providerKind: { color: '#68727e', fontSize: 11 },
+  testBtn: {
+    border: '1px solid #99a4b1',
+    borderRadius: 5,
+    background: '#fff',
+    color: '#35404b',
+    padding: '6px 10px',
+    cursor: 'pointer',
+    fontSize: 11,
+  },
+  testSuccess: {
+    marginTop: 9,
+    padding: '7px 9px',
+    borderRadius: 5,
+    background: '#edf8f2',
+    border: '1px solid #aad7bd',
+    color: '#267047',
+    fontSize: 11,
+  },
+  testError: {
+    marginTop: 9,
+    padding: '7px 9px',
+    borderRadius: 5,
+    background: '#fff0f2',
+    border: '1px solid #e7b8be',
+    color: '#a32d38',
+    fontSize: 11,
+  },
+  legacyDetails: {
+    borderTop: '1px solid #e8ebef',
+    marginTop: 14,
+    paddingTop: 10,
+  },
+  legacySummary: { color: '#59636e', cursor: 'pointer', fontSize: 11 },
+  legacyFields: { paddingTop: 10 },
   skillHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   skillVersion: { color: '#68727e', fontSize: 11, marginBottom: 7 },
   skillTarget: {

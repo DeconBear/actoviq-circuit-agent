@@ -58,9 +58,21 @@ export interface ReferenceDocument {
   ocrTextPath?: string;
 }
 
+export type ActoviqProvider = 'anthropic' | 'openai';
+export type ActoviqProviderPreset = 'anthropic' | 'deepseek' | 'openai-compatible';
+export type SecretStorageMode = 'encrypted' | 'plaintext-fallback' | 'environment' | 'none';
+
 export interface AppSettings {
+  actoviqProvider: ActoviqProvider;
+  actoviqProviderPreset: ActoviqProviderPreset;
   actoviqBaseUrl: string;
   actoviqAuthToken: string;
+  hasActoviqAuthToken: boolean;
+  maskedActoviqAuthToken: string;
+  clearActoviqAuthToken?: boolean;
+  actoviqAuthTokenStorage: SecretStorageMode;
+  chatModel: string;
+  reasoningModel: string;
   opusModel: string;
   sonnetModel: string;
   haikuModel: string;
@@ -69,6 +81,44 @@ export interface AppSettings {
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;
+}
+
+export interface ProviderTestResult {
+  ok: boolean;
+  provider: ActoviqProvider;
+  model: string;
+  latencyMs: number;
+  error?: string;
+}
+
+export interface DesktopAgentEvent {
+  type:
+    | 'run-started'
+    | 'status'
+    | 'text-progress'
+    | 'thinking-delta'
+    | 'tool-call'
+    | 'tool-result'
+    | 'compacted'
+    | 'model-fallback'
+    | 'retry'
+    | 'usage'
+    | 'completed'
+    | 'cancelled'
+    | 'error';
+  conversationId: string;
+  sequence: number;
+  timestamp: number;
+  runId?: string;
+  sessionId?: string;
+  model?: string;
+  text?: string;
+  delta?: string;
+  label?: string;
+  iteration?: number;
+  toolName?: string;
+  toolUseId?: string;
+  usage?: Record<string, unknown>;
 }
 
 const electronAPI = {
@@ -243,8 +293,29 @@ const electronAPI = {
     return ipcRenderer.invoke('project:compile', projectId);
   },
 
+  exportCircuitEda(projectId: string, input: {
+    scope: 'project' | 'module';
+    moduleId?: string;
+    targets: Array<'kicad' | 'altium' | 'orcad' | 'virtuoso'>;
+    view: 'design' | 'simulation';
+    mappingFile?: string;
+    nativeConvert: 'auto' | 'never' | 'required';
+    strictLayout: boolean;
+    sourceRevision: number;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:export-eda', projectId, input);
+  },
+
+  chooseCircuitEdaMapping(): Promise<string | null> {
+    return ipcRenderer.invoke('project:choose-eda-mapping');
+  },
+
   simulateCircuitProject(projectId: string): Promise<unknown> {
     return ipcRenderer.invoke('project:simulate', projectId);
+  },
+
+  generateCircuitTechnicalReport(projectId: string, sourceRevision: number): Promise<unknown> {
+    return ipcRenderer.invoke('project:generate-technical-report', projectId, sourceRevision);
   },
 
   compileCircuitModule(projectId: string, moduleId: string): Promise<unknown> {
@@ -307,12 +378,20 @@ const electronAPI = {
     return ipcRenderer.invoke('project:open-folder', projectId);
   },
 
+  openCircuitEdaExportFolder(projectId: string, exportId: string): Promise<string> {
+    return ipcRenderer.invoke('project:open-export-folder', projectId, exportId);
+  },
+
   getSettings(): Promise<AppSettings> {
     return ipcRenderer.invoke('settings:get');
   },
 
-  saveSettings(settings: AppSettings): Promise<void> {
+  saveSettings(settings: AppSettings): Promise<AppSettings> {
     return ipcRenderer.invoke('settings:save', settings);
+  },
+
+  testProviderSettings(settings: AppSettings): Promise<ProviderTestResult> {
+    return ipcRenderer.invoke('settings:test-provider', settings);
   },
 
   getAppVersion(): Promise<string> {
@@ -329,10 +408,25 @@ const electronAPI = {
 
   sendChatMessage(
     message: string,
-    history?: Array<{ role: string; content: string }>,
-    context?: { activeJobId?: string | null; activeProject?: Record<string, unknown> | null },
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+    context?: {
+      conversationId?: string;
+      activeJobId?: string | null;
+      activeProject?: Record<string, unknown> | null;
+      workspaceRoot?: string;
+    },
   ): Promise<ChatResponse> {
     return ipcRenderer.invoke('chat:send', message, history, context);
+  },
+
+  stopChat(conversationId?: string): Promise<boolean> {
+    return ipcRenderer.invoke('chat:stop', conversationId);
+  },
+
+  onChatEvent(callback: (event: DesktopAgentEvent) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, data: DesktopAgentEvent): void => callback(data);
+    ipcRenderer.on('chat:event', handler);
+    return () => ipcRenderer.removeListener('chat:event', handler);
   },
 };
 
@@ -348,6 +442,10 @@ export interface ChatResponse {
   compileAfterApply?: boolean;
   simulateAfterApply?: boolean;
   isError?: boolean;
+  runId?: string;
+  sessionId?: string;
+  model?: string;
+  usage?: Record<string, unknown>;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

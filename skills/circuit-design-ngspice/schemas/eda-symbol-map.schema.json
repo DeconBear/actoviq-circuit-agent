@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/eda-symbol-map.schema.json",
+  "title": "Actoviq EDA Symbol Map",
+  "type": "object",
+  "required": ["schema", "targets"],
+  "properties": {
+    "schema": { "const": "actoviq.eda-symbol-map.v1" },
+    "targets": {
+      "type": "object",
+      "propertyNames": { "enum": ["kicad", "altium", "orcad", "virtuoso"] },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "components": { "$ref": "#/$defs/mapTable" },
+          "models": { "$ref": "#/$defs/mapTable" },
+          "types": { "$ref": "#/$defs/mapTable" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "$defs": {
+    "mapTable": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["pin_map"],
+        "properties": {
+          "library": { "type": "string" },
+          "cell": { "type": "string" },
+          "view": { "type": "string" },
+          "pin_map": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

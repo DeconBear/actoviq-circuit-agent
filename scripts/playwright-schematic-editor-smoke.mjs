@@ -850,6 +850,11 @@ async function componentPositions(page) {
   return JSON.parse(raw || '{}');
 }
 
+async function portPositions(page) {
+  const raw = await page.getByTestId('schematic-editor').getAttribute('data-port-positions');
+  return JSON.parse(raw || '{}');
+}
+
 async function componentRotations(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-rotations');
   return JSON.parse(raw || '{}');
@@ -975,6 +980,14 @@ async function componentScreenPoint(page, componentId, offset = { x: 0, y: 0 }) 
   return worldToScreen({ x: position.x + offset.x, y: position.y + offset.y }, viewBox, svgBox);
 }
 
+async function portScreenPoint(page, portId) {
+  const box = await page.getByTestId('schematic-editor-svg').locator(
+    `g[data-port-id="${portId}"] [data-testid="schematic-port-hit-target"]`,
+  ).boundingBox();
+  assert.ok(box, `Port ${portId} has no visible SVG hit target`);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
 async function selectedComponentFrameScreenPoint(page, componentId, offset = { x: 0, y: 0 }) {
   return page.getByTestId('schematic-editor-svg').locator(
     `g[data-component-id="${componentId}"] [data-testid="schematic-selected-component-frame"]`,
@@ -1082,6 +1095,19 @@ function assertWiresOrthogonal(wires, label) {
   }
 }
 
+function assertPortWireEndpoints(wires, portId, position, label) {
+  const connected = wires.filter((wire) => wire.from?.port_id === portId || wire.to?.port_id === portId);
+  assert.ok(connected.length > 0, `${label}: no wire is connected to port ${portId}`);
+  for (const wire of connected) {
+    if (wire.from?.port_id === portId) {
+      assertPositionEqual(wire.points?.[0], position, `${label}: ${wire.id}.from does not follow port ${portId}`);
+    }
+    if (wire.to?.port_id === portId) {
+      assertPositionEqual(wire.points?.[wire.points.length - 1], position, `${label}: ${wire.id}.to does not follow port ${portId}`);
+    }
+  }
+}
+
 function assertUnrelatedWireRoutesStable(beforeWires, duringWires, draggedComponentIds, label) {
   const draggedIds = new Set(draggedComponentIds);
   const duringById = new Map(duringWires.map((wire) => [wire.id, wire]));
@@ -1132,6 +1158,8 @@ async function wireScreenPointAwayFromComponents(page, wireId) {
       throw new Error(`wire ${id} points not found`);
     }
     const componentPositions = Object.values(JSON.parse(editor?.getAttribute('data-component-positions') ?? '{}'));
+    const portPositions = Object.values(JSON.parse(editor?.getAttribute('data-port-positions') ?? '{}'));
+    const interactionPositions = [...componentPositions, ...portPositions];
     let best = null;
     for (let index = 1; index < wire.points.length; index += 1) {
       const start = wire.points[index - 1];
@@ -1143,13 +1171,13 @@ async function wireScreenPointAwayFromComponents(page, wireId) {
           x: start.x + (end.x - start.x) * ratio,
           y: start.y + (end.y - start.y) * ratio,
         };
-        const nearestComponent = componentPositions.reduce((nearest, position) => {
+        const nearestInteractionTarget = interactionPositions.reduce((nearest, position) => {
           const dx = point.x - Number(position.x);
           const dy = point.y - Number(position.y);
           return Math.min(nearest, Math.hypot(dx, dy));
         }, Number.POSITIVE_INFINITY);
-        if (!best || nearestComponent > best.nearestComponent) {
-          best = { point, nearestComponent };
+        if (!best || nearestInteractionTarget > best.nearestInteractionTarget) {
+          best = { point, nearestInteractionTarget };
         }
       }
     }
@@ -1670,11 +1698,13 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
   ));
   const rFilterScreenPoint = await componentScreenPoint(page, 'r_filter');
-  const cFilterScreenPoint = await componentScreenPoint(page, 'c_filter');
   await page.mouse.click(rFilterScreenPoint.x, rFilterScreenPoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r_filter'
   ));
+  // Selecting a component changes the inspector height and therefore the SVG
+  // client rect. Re-read the screen coordinate before the next pointer action.
+  let cFilterScreenPoint = await componentScreenPoint(page, 'c_filter');
   await page.keyboard.down('Shift');
   await page.mouse.click(cFilterScreenPoint.x, cFilterScreenPoint.y);
   await page.keyboard.up('Shift');
@@ -1683,6 +1713,7 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
   ));
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 2, 'Shift-click multi-selection should show two component frames');
+  cFilterScreenPoint = await componentScreenPoint(page, 'c_filter');
   await page.keyboard.down('Shift');
   await page.mouse.click(cFilterScreenPoint.x, cFilterScreenPoint.y);
   await page.keyboard.up('Shift');
@@ -1690,12 +1721,14 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r_filter' &&
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '1'
   ));
+  cFilterScreenPoint = await componentScreenPoint(page, 'c_filter');
   await page.keyboard.down('Shift');
   await page.mouse.click(cFilterScreenPoint.x, cFilterScreenPoint.y);
   await page.keyboard.up('Shift');
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'components:r_filter,c_filter'
   ));
+  cFilterScreenPoint = await componentScreenPoint(page, 'c_filter');
   await page.mouse.move(cFilterScreenPoint.x, cFilterScreenPoint.y);
   await page.mouse.down();
   await page.mouse.move(cFilterScreenPoint.x + 90, cFilterScreenPoint.y + 30, { steps: 8 });
@@ -2882,6 +2915,72 @@ try {
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-custom-block.png') });
   console.log('[e2e] custom block placement and pin editing isolated');
 
+  await waitForEditorIdle(page);
+  const componentPositionsBeforePortMoves = await componentPositions(page);
+  const portPositionsBeforeMoves = await portPositions(page);
+  const wiresBeforePortMoves = await editorWires(page);
+  const unrelatedStoredWireBeforePortMoves = wiresBeforePortMoves.find((wire) => (
+    wire.source === 'stored' &&
+    !['input', 'output'].includes(wire.from?.port_id) &&
+    !['input', 'output'].includes(wire.to?.port_id)
+  ));
+  assert.ok(portPositionsBeforeMoves.input, 'input port position is not exposed');
+  assert.ok(portPositionsBeforeMoves.output, 'output port position is not exposed');
+  assert.ok(unrelatedStoredWireBeforePortMoves, 'port move regression requires an unrelated stored wire');
+
+  const inputPortPoint = await portScreenPoint(page, 'input');
+  await page.mouse.click(inputPortPoint.x, inputPortPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'port:input'
+  ));
+  await page.getByTestId('schematic-selected-port-frame').waitFor();
+  const inputPortDragPoint = await portScreenPoint(page, 'input');
+  await page.mouse.move(inputPortDragPoint.x, inputPortDragPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(inputPortDragPoint.x + 40, inputPortDragPoint.y + 40, { steps: 4 });
+  await page.waitForFunction((before) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-port-positions');
+    const current = JSON.parse(raw ?? '{}').input;
+    return current && (current.x !== before.x || current.y !== before.y);
+  }, portPositionsBeforeMoves.input);
+  await page.mouse.move(inputPortDragPoint.x + 80, inputPortDragPoint.y + 60, { steps: 4 });
+  await page.mouse.up();
+
+  const outputPortPoint = await portScreenPoint(page, 'output');
+  await page.mouse.click(outputPortPoint.x, outputPortPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'port:output'
+  ));
+  await page.keyboard.press('ArrowDown');
+  await page.waitForFunction((before) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-port-positions');
+    const current = JSON.parse(raw ?? '{}').output;
+    return current && current.y === before.y + 20;
+  }, portPositionsBeforeMoves.output);
+
+  const savedPortPositions = await portPositions(page);
+  assertPositionChanged(savedPortPositions.input, portPositionsBeforeMoves.input, 'dragging IN did not move its port position');
+  assertPositionChanged(savedPortPositions.output, portPositionsBeforeMoves.output, 'nudging OUT did not move its port position');
+  assert.equal(savedPortPositions.input.x % 20, 0, 'dragged IN port x should remain on the schematic grid');
+  assert.equal(savedPortPositions.input.y % 20, 0, 'dragged IN port y should remain on the schematic grid');
+  const wiresAfterPortMoves = await editorWires(page);
+  assertPortWireEndpoints(wiresAfterPortMoves, 'input', savedPortPositions.input, 'after dragging IN');
+  assertPortWireEndpoints(wiresAfterPortMoves, 'output', savedPortPositions.output, 'after nudging OUT');
+  assert.deepEqual(
+    wiresAfterPortMoves.find((wire) => wire.id === unrelatedStoredWireBeforePortMoves.id)?.points,
+    unrelatedStoredWireBeforePortMoves.points,
+    'moving ports changed an unrelated stored wire route',
+  );
+  const componentPositionsAfterPortMoves = await componentPositions(page);
+  for (const [componentId, position] of Object.entries(componentPositionsBeforePortMoves)) {
+    assertPositionEqual(
+      componentPositionsAfterPortMoves[componentId],
+      position,
+      `moving a port moved component ${componentId}`,
+    );
+  }
+  console.log('[e2e] IN and OUT ports selected and moved independently');
+
   assert.equal(await editor.getAttribute('data-dirty'), 'true', 'Ctrl/Cmd+S persistence check requires a dirty schematic');
   await editor.focus();
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
@@ -2905,6 +3004,16 @@ try {
   assert.equal(savedManualBlock?.type, 'BLOCK');
   assert.equal(savedManualBlock?.value, 'ADC + DSP');
   assert.equal(savedManualBlock?.pins.length, 6);
+  assertPositionEqual(
+    moduleData.ports.find((port) => port.id === 'input')?.position,
+    savedPortPositions.input,
+    'saved module did not persist the moved IN port position',
+  );
+  assertPositionEqual(
+    moduleData.ports.find((port) => port.id === 'output')?.position,
+    savedPortPositions.output,
+    'saved module did not persist the moved OUT port position',
+  );
   assert.deepEqual(
     savedManualBlock?.pins.map((pin) => [pin.name, pin.net, pin.side]),
     [
@@ -3004,6 +3113,7 @@ try {
   ));
   assert.equal(await page.getByTestId('schematic-editor').getAttribute('data-schematic-source'), 'document');
   const reopenedFilterPositions = await componentPositions(page);
+  const reopenedFilterPortPositions = await portPositions(page);
   const reopenedFilterWires = await editorWires(page);
   assertWiresOrthogonal(reopenedFilterWires, 'reopened editor wires should remain orthogonal');
   await assertRenderedWirePolylinesOrthogonal(page, 'after reopening editor');
@@ -3011,6 +3121,16 @@ try {
     reopenedFilterPositions.r1,
     savedR1?.position,
     'reopened editor did not preserve the applied Rtrim position',
+  );
+  assertPositionEqual(
+    reopenedFilterPortPositions.input,
+    savedPortPositions.input,
+    'reopened editor did not preserve the moved IN port position',
+  );
+  assertPositionEqual(
+    reopenedFilterPortPositions.output,
+    savedPortPositions.output,
+    'reopened editor did not preserve the moved OUT port position',
   );
   assert.ok(
     reopenedFilterWires.some((wire) => wire.id === drawnWire.id && wire.source === 'stored'),

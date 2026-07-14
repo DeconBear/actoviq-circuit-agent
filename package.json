@@ -44,8 +44,10 @@
     "test:unit": "tsx src/tests/runTests.ts",
     "test:schematic-document": "tsx scripts/schematic-document-regression.ts",
     "test:e2e:electron": "npm run build:electron && node scripts/playwright-electron-smoke.mjs",
+    "test:e2e:agent-flow": "npm run build:electron && node scripts/playwright-agent-flow.mjs",
     "test:e2e:schematic-editor": "npm run build:electron && node scripts/playwright-schematic-editor-smoke.mjs",
     "test:schematic-quality": "node scripts/schematic-quality-regression.mjs",
+    "test:eda-export": "python scripts/eda-export-regression.py",
     "test:simulation-regression": "python scripts/simulation-regression.py",
     "typecheck": "npm run typecheck:src && npm run typecheck:electron && npm run typecheck:renderer",
     "typecheck:src": "tsc -p tsconfig.json --noEmit",
@@ -61,8 +63,9 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
-    "actoviq-agent-sdk": "^0.3.0",
+    "actoviq-agent-sdk": "^0.4.7",
     "highlight.js": "^11.11.1",
+    "lucide-react": "^0.468.0",
     "marked": "^18.0.3",
     "monaco-editor": "^0.55.1",
     "netlistsvg": "^1.0.2",
@@ -89,6 +92,6 @@
     "wait-on": "^8.0.5"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   }
 }

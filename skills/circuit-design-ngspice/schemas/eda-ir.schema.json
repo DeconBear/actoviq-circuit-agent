@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/eda-ir.schema.json",
+  "title": "Actoviq EDA Intermediate Representation",
+  "type": "object",
+  "required": ["schema", "source", "coordinate_system", "project", "pages", "connectivity"],
+  "properties": {
+    "schema": { "const": "actoviq.eda-ir.v1" },
+    "source": { "type": "object", "required": ["project_id", "revision", "document_hash", "scope", "view"] },
+    "coordinate_system": {
+      "type": "object",
+      "required": ["unit", "grid", "mm_per_unit"],
+      "properties": {
+        "unit": { "const": "actoviq" },
+        "grid": { "const": 20 },
+        "mm_per_unit": { "const": 0.127 }
+      }
+    },
+    "project": { "type": "object" },
+    "pages": { "type": "array", "items": { "type": "object", "required": ["id", "components", "ports", "nets", "wires"] } },
+    "connectivity": { "type": "object", "required": ["records", "hash"] }
+  },
+  "additionalProperties": true
+}

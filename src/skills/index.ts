@@ -12,6 +12,7 @@ import { createRenderNetlistsvgSkill } from './renderNetlistsvgSkill.js';
 import { createRenderSchemdrawSkill } from './renderSchemdrawSkill.js';
 import { createRequirementsToSpecSkill } from './requirementsToSpecSkill.js';
 import { createTechnicalDocSkill } from './technicalDocSkill.js';
+import { createVisionLayoutReviewSkill } from './visionLayoutReviewSkill.js';
 
 export function getWorkflowSkills(): ActoviqSkillDefinition[] {
   return [
@@ -26,6 +27,7 @@ export function getWorkflowSkills(): ActoviqSkillDefinition[] {
     createRenderNetlistsvgSkill(),
     createRenderSchemdrawSkill(),
     createRenderAgentSvgSkill(),
+    createVisionLayoutReviewSkill(),
     createHandoffSummarySkill(),
   ];
 }

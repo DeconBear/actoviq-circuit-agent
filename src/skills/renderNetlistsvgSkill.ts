@@ -9,6 +9,7 @@ export function createRenderNetlistsvgSkill(): ActoviqSkillDefinition {
     prompt: [
       'You are executing /render-schematic-netlistsvg.',
       'Prepare any missing intermediate JSON, render the SVG through netlistsvg, and write a short rendering note.',
+      'Call netlist_to_json with view set to schematic so bench-only sources stay out of the user-facing diagram while required control and bias nodes remain connected terminals.',
       'When module-manifest.json is listed in the stage packet and exists, pass it to netlist_to_json as module_manifest_path so module sheets and block order come from the design-stage manifest.',
       'For large partitioned circuits, the final SVG must be a single partitioned sheet: every partition embeds direct netlistsvg output, and partitions connect by matching net labels only with no cross-partition signal or rail wires.',
       'Prefer improving the netlistsvg input partitioning over hand-drawn SVG post-processing.',

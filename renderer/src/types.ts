@@ -1,10 +1,14 @@
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   timestamp: number;
   isError?: boolean;
   conversationId?: string;
+  runId?: string;
+  sessionId?: string;
+  model?: string;
+  usage?: Record<string, unknown>;
 }
 
 export interface ConversationSummary {
@@ -45,6 +49,40 @@ export interface ChatResponse {
   compileAfterApply?: boolean;
   simulateAfterApply?: boolean;
   isError?: boolean;
+  runId?: string;
+  sessionId?: string;
+  model?: string;
+  usage?: Record<string, unknown>;
+}
+
+export interface DesktopAgentEvent {
+  type:
+    | 'run-started'
+    | 'status'
+    | 'text-progress'
+    | 'thinking-delta'
+    | 'tool-call'
+    | 'tool-result'
+    | 'compacted'
+    | 'model-fallback'
+    | 'retry'
+    | 'usage'
+    | 'completed'
+    | 'cancelled'
+    | 'error';
+  conversationId: string;
+  sequence: number;
+  timestamp: number;
+  runId?: string;
+  sessionId?: string;
+  model?: string;
+  text?: string;
+  delta?: string;
+  label?: string;
+  iteration?: number;
+  toolName?: string;
+  toolUseId?: string;
+  usage?: Record<string, unknown>;
 }
 
 export interface WorkflowEvent {
@@ -108,6 +146,7 @@ export interface CircuitPort {
   direction: PortDirection;
   signal_type: SignalType;
   net: string;
+  position?: CircuitPosition;
   net_id?: string;
   inferred?: boolean;
   network?: string;
@@ -336,6 +375,24 @@ export interface CircuitBuildState {
     nodes?: Record<string, { module_id?: string; local_net?: string }>;
   } | null;
   report?: string;
+  technicalReport?: Record<string, unknown> | null;
+}
+
+export interface TechnicalReportResult {
+  ok: true;
+  report: string;
+  metadata: {
+    schema: 'actoviq.technical-report.v1';
+    project_id: string;
+    source_revision: number;
+    document_hash?: string;
+    generated_at: string;
+    generator: 'actoviq-agent-sdk';
+    model: string;
+    run_id: string;
+    report_sha256: string;
+    usage?: Record<string, unknown>;
+  };
 }
 
 export interface SimulationProbeRequest {
@@ -484,6 +541,34 @@ export interface SavedDesignMemorySummary extends DesignMemoryItem {
   ok: true;
 }
 
+export type EdaExportTarget = 'kicad' | 'altium' | 'orcad' | 'virtuoso';
+
+export interface EdaExportRequest {
+  scope: 'project' | 'module';
+  moduleId?: string;
+  targets: EdaExportTarget[];
+  view: 'design' | 'simulation';
+  mappingFile?: string;
+  nativeConvert: 'auto' | 'never' | 'required';
+  strictLayout: boolean;
+  sourceRevision: number;
+}
+
+export interface EdaExportResult {
+  ok: true;
+  export_id: string;
+  export_root: string;
+  layout_quality: {
+    readability_score: number;
+    lexicographic_cost: number[];
+  };
+  targets: Partial<Record<EdaExportTarget, {
+    status: 'native' | 'import_ready' | 'warning' | 'failed';
+    connectivity_hash: string;
+    files: string[];
+  }>>;
+}
+
 export interface ReferenceDocument {
   name: string;
   relativePath: string;
@@ -493,9 +578,22 @@ export interface ReferenceDocument {
   ocrTextPath?: string;
 }
 
+export type ActoviqProvider = 'anthropic' | 'openai';
+export type ActoviqProviderPreset = 'anthropic' | 'deepseek' | 'openai-compatible';
+export type SecretStorageMode = 'encrypted' | 'plaintext-fallback' | 'environment' | 'none';
+
 export interface AppSettings {
+  actoviqProvider: ActoviqProvider;
+  actoviqProviderPreset: ActoviqProviderPreset;
   actoviqBaseUrl: string;
+  /** New API key input only; saved values are never returned to the renderer. */
   actoviqAuthToken: string;
+  hasActoviqAuthToken: boolean;
+  maskedActoviqAuthToken: string;
+  clearActoviqAuthToken?: boolean;
+  actoviqAuthTokenStorage: SecretStorageMode;
+  chatModel: string;
+  reasoningModel: string;
   opusModel: string;
   sonnetModel: string;
   haikuModel: string;
@@ -504,6 +602,14 @@ export interface AppSettings {
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;
+}
+
+export interface ProviderTestResult {
+  ok: boolean;
+  provider: ActoviqProvider;
+  model: string;
+  latencyMs: number;
+  error?: string;
 }
 
 export interface CircuitSkillStatus {

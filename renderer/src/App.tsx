@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChatView } from './components/chat/ChatView';
+import { ChatView, type ChatRunView } from './components/chat/ChatView';
 import { NetlistEditor } from './components/netlist/NetlistEditor';
 import { SvgViewer } from './components/schematic/SvgViewer';
 import { SimulationTab } from './components/simulation/SimulationTab';
@@ -12,16 +12,28 @@ import { StageConfirmDialog } from './components/common/StageConfirmDialog';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { SetupWizard } from './components/settings/SetupWizard';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { AppToolbar, type AppToolbarAction } from './components/layout/AppToolbar';
 import { useAppStore, type SimulationMetric, type TabKey } from './store/appStore';
-import type { CircuitTrashItem, ModuleManifest, StageDef } from './types';
+import type { CircuitTrashItem, DesktopAgentEvent, ModuleManifest, StageDef } from './types';
+import {
+  CircuitBoard,
+  FileCode2,
+  FileText,
+  FolderOpen,
+  Image,
+  MessageSquare,
+  Settings,
+  Square,
+  Waves,
+} from 'lucide-react';
 
-const tabLabels: Record<TabKey, string> = {
-  design: 'Design',
-  netlist: 'Netlist',
-  svg: 'SVG',
-  simulation: 'Sim',
-  report: 'Report',
-};
+const toolbarTabs = [
+  { value: 'design', label: 'Design', icon: <CircuitBoard size={15} />, testId: 'topbar-tab-design' },
+  { value: 'netlist', label: 'Netlist', icon: <FileCode2 size={15} />, testId: 'topbar-tab-netlist' },
+  { value: 'svg', label: 'SVG', icon: <Image size={15} />, testId: 'topbar-tab-svg' },
+  { value: 'simulation', label: 'Sim', icon: <Waves size={15} />, testId: 'topbar-tab-simulation' },
+  { value: 'report', label: 'Report', icon: <FileText size={15} />, testId: 'topbar-tab-report' },
+] satisfies Array<{ value: TabKey; label: string; icon: React.ReactNode; testId: string }>;
 
 type WorkflowStartParams = Parameters<Window['electronAPI']['startWorkflow']>[0];
 type MenuAction = Parameters<Parameters<Window['electronAPI']['onMenuAction']>[0]>[0];
@@ -70,6 +82,67 @@ function normalizeWorkflowStage(stage?: string): string | undefined {
   return workflowStageKeys.find((key) => key === normalized);
 }
 
+function reduceDesktopAgentEvent(current: ChatRunView | null, event: DesktopAgentEvent): ChatRunView {
+  const base: ChatRunView = current ?? { status: 'starting', text: '' };
+  switch (event.type) {
+    case 'run-started':
+      return {
+        ...base,
+        status: 'starting',
+        label: 'Starting Actoviq agent',
+        runId: event.runId,
+        sessionId: event.sessionId,
+        model: event.model,
+      };
+    case 'status':
+      return { ...base, status: 'streaming', label: event.label || 'Generating response', runId: event.runId ?? base.runId };
+    case 'text-progress':
+      return { ...base, status: 'streaming', text: event.text ?? base.text, label: 'Responding' };
+    case 'thinking-delta':
+      return { ...base, status: 'streaming', thinking: `${base.thinking ?? ''}${event.delta ?? ''}`.slice(-12_000) };
+    case 'tool-call': {
+      const id = event.toolUseId ?? `${event.toolName ?? 'tool'}-${event.sequence}`;
+      const tools = [
+        ...(base.tools ?? []).filter((tool) => tool.id !== id),
+        { id, name: event.toolName ?? 'Tool', status: 'running' as const, label: event.label },
+      ];
+      return { ...base, status: 'streaming', tools, label: event.label || `Running ${event.toolName ?? 'tool'}` };
+    }
+    case 'tool-result': {
+      const id = event.toolUseId ?? `${event.toolName ?? 'tool'}-${event.sequence}`;
+      return {
+        ...base,
+        tools: (base.tools ?? []).map((tool) => tool.id === id ? { ...tool, status: 'done' as const } : tool),
+      };
+    }
+    case 'retry':
+      return { ...base, status: 'repairing', text: '', label: event.label || 'Validating structured response' };
+    case 'compacted':
+      return { ...base, label: event.label || 'Conversation context compacted' };
+    case 'model-fallback':
+      return { ...base, model: event.model ?? base.model, label: event.label || 'Using fallback model' };
+    case 'usage':
+      return { ...base, usage: event.usage ?? base.usage };
+    case 'completed':
+      return {
+        ...base,
+        status: 'completed',
+        text: event.text ?? base.text,
+        label: 'Response complete',
+        runId: event.runId ?? base.runId,
+        sessionId: event.sessionId ?? base.sessionId,
+        model: event.model ?? base.model,
+        usage: event.usage ?? base.usage,
+      };
+    case 'cancelled':
+      return { ...base, status: 'cancelled', label: event.label || 'Stopped' };
+    case 'error':
+      return { ...base, status: 'error', label: event.label || 'Agent request failed' };
+    default:
+      return base;
+  }
+}
+
 export function App() {
   const store = useAppStore();
   const [confirmState, setConfirmState] = useState<{
@@ -79,10 +152,13 @@ export function App() {
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const currentJobIdRef = useRef<string | null>(null);
   const [isChatPending, setIsChatPending] = useState(false);
+  const [chatRun, setChatRun] = useState<ChatRunView | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const [stagePanelWidth, setStagePanelWidth] = useState(280);
+  const [chatWidth, setChatWidth] = useState(460);
   const [trashProjects, setTrashProjects] = useState<CircuitTrashItem[]>([]);
-  const resizing = useRef<'sidebar' | 'stage' | null>(null);
+  const resizing = useRef<'sidebar' | 'stage' | 'chat' | null>(null);
+  const activeChatConversationRef = useRef<string | null>(null);
   const workflowConversationIdRef = useRef<string | null>(null);
   const suppressAutoLoadRef = useRef(false);
   const latestDiscoveredJobRef = useRef<string | null>(null);
@@ -280,6 +356,16 @@ export function App() {
     });
 
     return cleanup;
+  }, []);
+
+  // The desktop agent uses the SDK's typed stream; keep transient run state
+  // separate from persisted conversation messages until the response validates.
+  useEffect(() => {
+    if (!window.electronAPI?.onChatEvent) return undefined;
+    return window.electronAPI.onChatEvent((event) => {
+      if (event.conversationId !== activeChatConversationRef.current) return;
+      setChatRun((current) => reduceDesktopAgentEvent(current, event));
+    });
   }, []);
 
   // Load workspace state on first mount. Provider API keys are optional.
@@ -510,6 +596,8 @@ export function App() {
         setSidebarWidth(Math.max(160, Math.min(400, e.clientX)));
       } else if (resizing.current === 'stage') {
         setStagePanelWidth(Math.max(180, Math.min(500, window.innerWidth - e.clientX)));
+      } else if (resizing.current === 'chat') {
+        setChatWidth(Math.max(340, Math.min(760, window.innerWidth - e.clientX)));
       }
     };
     const handleMouseUp = () => {
@@ -648,7 +736,6 @@ export function App() {
     if (!cid) {
       cid = state.newConversation();
     }
-
     if (!jobId) {
       state.addMessage({
         id: `validate-no-job-${Date.now()}`,
@@ -784,6 +871,8 @@ export function App() {
       return;
     }
 
+    activeChatConversationRef.current = cid;
+    setChatRun({ status: 'starting', text: '', label: 'Connecting to Actoviq agent' });
     setIsChatPending(true);
     try {
       // Build conversation history for context
@@ -824,16 +913,25 @@ export function App() {
         next_action: agentContext.next_action,
         transaction: agentContext.transaction,
       } : null;
-      const result = await window.electronAPI.sendChatMessage(trimmed, history, { activeJobId, activeProject });
+      const result = await window.electronAPI.sendChatMessage(trimmed, history, {
+        conversationId: cid,
+        activeJobId,
+        activeProject,
+        workspaceRoot: state.activeWorkspace?.root,
+      });
 
       // Show the agent's chat response
       useAppStore.getState().addMessage({
         id: `agent-${Date.now()}`,
-        role: 'system',
+        role: 'assistant',
         content: result.text,
         timestamp: Date.now(),
         isError: result.isError,
         conversationId: cid,
+        runId: result.runId,
+        sessionId: result.sessionId,
+        model: result.model,
+        usage: result.usage,
       });
 
       const wantsWorkflow = result.isDesignRequest || result.isRevisionRequest;
@@ -855,6 +953,7 @@ export function App() {
         const latest = useAppStore.getState();
         latest.setCircuitBusy(true);
         latest.setCircuitError('');
+        setChatRun((current) => current ? { ...current, status: 'streaming', label: 'Applying revisioned project transaction' } : current);
         let targetProjectId = '';
         try {
           let baseRevision = 0;
@@ -878,11 +977,52 @@ export function App() {
             message: result.revisionRequest || result.formalizedRequirement || trimmed,
             operations: projectOperations,
           });
+          if (applied.erc.blocking) {
+            await loadCircuitProject(targetProjectId);
+            useAppStore.getState().addMessage({
+              id: `project-agent-erc-${Date.now()}`,
+              role: 'system',
+              content: `The project transaction was saved at revision ${applied.revision}, but compile and simulation were blocked by ${applied.erc.summary.errors} ERC error${applied.erc.summary.errors === 1 ? '' : 's'}. Fix the listed diagnostics before continuing.`,
+              timestamp: Date.now(),
+              isError: true,
+              conversationId: cid,
+            });
+            return;
+          }
           if (result.compileAfterApply !== false) {
+            setChatRun((current) => current ? { ...current, label: 'Compiling the validated circuit' } : current);
             await window.electronAPI.compileCircuitProject(targetProjectId);
           }
           if (result.simulateAfterApply) {
+            setChatRun((current) => current ? { ...current, label: 'Running ngspice simulation' } : current);
             await window.electronAPI.simulateCircuitProject(targetProjectId);
+          }
+          if (result.compileAfterApply !== false) {
+            setChatRun((current) => current ? { ...current, label: 'Writing revision-bound technical report' } : current);
+            try {
+              const technicalReport = await window.electronAPI.generateCircuitTechnicalReport(
+                targetProjectId,
+                applied.revision,
+              );
+              useAppStore.getState().setReportContent(technicalReport.report);
+              useAppStore.getState().addMessage({
+                id: `project-agent-report-${Date.now()}`,
+                role: 'system',
+                content: `Technical report generated for revision ${applied.revision} with ${technicalReport.metadata.model}.`,
+                timestamp: Date.now(),
+                conversationId: cid,
+              });
+            } catch (reportError) {
+              const reportMessage = reportError instanceof Error ? reportError.message : String(reportError);
+              useAppStore.getState().addMessage({
+                id: `project-agent-report-warning-${Date.now()}`,
+                role: 'system',
+                content: `The circuit build completed, but the AI technical report could not be generated: ${reportMessage}. The deterministic build report remains available.`,
+                timestamp: Date.now(),
+                conversationId: cid,
+                isError: true,
+              });
+            }
           }
           await loadCircuitProject(targetProjectId);
           useAppStore.getState().addMessage({
@@ -899,7 +1039,7 @@ export function App() {
           useAppStore.getState().addMessage({
             id: `project-agent-error-${Date.now()}`,
             role: 'system',
-            content: `Project transaction rejected: ${message}`,
+            content: `Project transaction failed: ${message}`,
             timestamp: Date.now(),
             isError: true,
             conversationId: cid,
@@ -986,8 +1126,16 @@ export function App() {
       });
     } finally {
       setIsChatPending(false);
+      activeChatConversationRef.current = null;
+      setChatRun(null);
     }
   }, [isChatPending, loadCircuitProject, startWorkflowRun]);
+
+  const handleStopChat = useCallback(() => {
+    const conversationId = activeChatConversationRef.current ?? useAppStore.getState().conversationId;
+    void window.electronAPI?.stopChat(conversationId || undefined);
+    setChatRun((current) => current ? { ...current, status: 'cancelled', label: 'Stopping response' } : current);
+  }, []);
 
   const handleSelectWorkspace = useCallback(async (id: string) => {
     if (!window.electronAPI) return;
@@ -1020,6 +1168,58 @@ export function App() {
     setJobId(null);
     await refreshWorkspaces();
   }, [refreshWorkspaces, setJobId]);
+
+  const toolbarUtilityActions: AppToolbarAction[] = [{
+    id: 'chat',
+    label: store.chatOpen ? 'Hide chat' : 'Open chat',
+    icon: <MessageSquare size={16} />,
+    onClick: store.toggleChatOpen,
+    selected: store.chatOpen,
+    badge: isChatPending ? '●' : undefined,
+    testId: 'topbar-chat',
+    shortcut: 'Ctrl+L',
+  }];
+  if (store.isRunning) {
+    toolbarUtilityActions.push({
+      id: 'stop',
+      label: 'Stop workflow',
+      icon: <Square size={14} fill="currentColor" />,
+      onClick: () => {
+        window.electronAPI?.stopWorkflow();
+        store.setIsRunning(false);
+      },
+      variant: 'danger',
+      testId: 'topbar-stop-workflow',
+    });
+  }
+  if (currentJobId || store.activeProjectId) {
+    toolbarUtilityActions.push({
+      id: 'folder',
+      label: 'Open working directory',
+      icon: <FolderOpen size={16} />,
+      onClick: () => {
+        if (currentJobId) window.electronAPI?.openJobFolder(currentJobId);
+        else if (store.activeProjectId) void window.electronAPI?.openCircuitProjectFolder(store.activeProjectId);
+      },
+      testId: 'topbar-open-folder',
+    });
+  }
+  toolbarUtilityActions.push({
+    id: 'settings',
+    label: 'Settings',
+    icon: <Settings size={16} />,
+    onClick: () => store.setSettingsOpen(true),
+    testId: 'topbar-settings',
+    shortcut: 'Ctrl+,',
+  });
+
+  const toolbarStatus = store.circuitBusy
+    ? { label: 'Circuit operation running', tone: 'active' as const }
+    : store.isRunning
+      ? { label: 'Agent workflow running', tone: 'active' as const }
+      : store.circuitError
+        ? { label: 'Action required', tone: 'danger' as const }
+        : { label: 'Ready', tone: 'success' as const };
 
   return (
     <ErrorBoundary>
@@ -1061,74 +1261,31 @@ export function App() {
         )}
 
         <div style={styles.mainContent}>
-          <div style={styles.tabBar}>
-            {(Object.keys(tabLabels) as TabKey[]).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => store.setActiveTab(tab)}
-                style={{
-                  ...styles.tab,
-                  ...(store.activeTab === tab ? styles.tabActive : {}),
-                }}
-              >
-                {tabLabels[tab]}
-              </button>
-            ))}
-            <div style={styles.tabBarRight}>
-              <button
-                onClick={store.toggleChatOpen}
-                style={{
-                  ...styles.chatToggleBtn,
-                  ...(store.chatOpen ? styles.chatToggleBtnActive : {}),
-                }}
-                title={store.chatOpen ? 'Hide chat' : 'Open chat'}
-              >
-                {store.chatOpen ? 'Hide Chat' : 'Chat'}
-              </button>
-              {store.isRunning && (
-                <button
-                  onClick={() => {
-                    window.electronAPI?.stopWorkflow();
-                    store.setIsRunning(false);
-                  }}
-                  style={styles.stopBtn}
-                  title="Stop workflow"
-                  aria-label="Stop workflow"
-                >
-                  Stop
-                </button>
-              )}
+          <AppToolbar
+            appName="Actoviq"
+            contextLabel={store.circuitProject?.project.name || store.activeWorkspace?.name || 'Circuit workspace'}
+            mark={<CircuitBoard size={17} />}
+            tabs={toolbarTabs}
+            activeTab={store.activeTab}
+            onTabChange={store.setActiveTab}
+            utilityActions={toolbarUtilityActions}
+            status={toolbarStatus}
+            endContent={(
               <select
                 value={store.approvalPolicy}
-                onChange={(e) => store.setApprovalPolicy(e.target.value as typeof store.approvalPolicy)}
+                onChange={(event) => store.setApprovalPolicy(event.target.value as typeof store.approvalPolicy)}
                 style={styles.policySelect}
                 disabled={store.isRunning}
+                aria-label="Agent approval policy"
+                title="Agent approval policy"
+                data-testid="topbar-approval-policy"
               >
                 <option value="manual">Manual</option>
                 <option value="execution">Execution</option>
-                <option value="all">All Auto</option>
+                <option value="all">All auto</option>
               </select>
-              {currentJobId && (
-                <button
-                  onClick={() => window.electronAPI?.openJobFolder(currentJobId)}
-                  style={styles.folderBtn}
-                  title="Open working directory"
-                  aria-label="Open working directory"
-                >
-                  Folder
-                </button>
-              )}
-              <button
-                onClick={() => store.setSettingsOpen(true)}
-                style={styles.settingsBtn}
-                title="Settings"
-                aria-label="Settings"
-                data-testid="topbar-settings"
-              >
-                Settings
-              </button>
-            </div>
-          </div>
+            )}
+          />
 
           <div style={styles.tabContent}>
             {store.activeTab === 'design' && (
@@ -1171,13 +1328,28 @@ export function App() {
         />
 
         {store.chatOpen && (
-          <div style={styles.chatDrawer}>
-            <div style={styles.chatDrawerHeader}>
-              <span style={styles.chatDrawerTitle}>Chat Workflow</span>
-              <button onClick={() => store.setChatOpen(false)} style={styles.chatCloseBtn}>Close</button>
-            </div>
+          <div
+            className="av-chat-drawer"
+            style={{ ...styles.chatDrawer, '--av-chat-width': `${chatWidth}px` } as React.CSSProperties}
+          >
+            <div
+              style={styles.chatResizeHandle}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                resizing.current = 'chat';
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+              }}
+              aria-hidden="true"
+            />
             <div style={styles.chatDrawerBody}>
-              <ChatView onSend={handleSendMessage} isPending={isChatPending} />
+              <ChatView
+                onSend={handleSendMessage}
+                onStop={handleStopChat}
+                onClose={() => store.setChatOpen(false)}
+                isPending={isChatPending}
+                run={chatRun}
+              />
             </div>
           </div>
         )}
@@ -1322,11 +1494,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chatDrawer: {
     position: 'absolute',
-    top: 0,
+    top: 'var(--av-toolbar-height)',
     right: 0,
-    width: 'min(420px, calc(100vw - 64px))',
     minWidth: 0,
-    height: '100%',
+    height: 'calc(100% - var(--av-toolbar-height))',
     backgroundColor: '#ffffff',
     borderLeft: '1px solid #dfe3e8',
     display: 'flex',
@@ -1334,29 +1505,14 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: '-8px 0 24px rgba(32,42,56,0.12)',
     zIndex: 20,
   },
-  chatDrawerHeader: {
-    height: 36,
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '0 10px 0 14px',
-    borderBottom: '1px solid #dfe3e8',
-    backgroundColor: '#ffffff',
-  },
-  chatDrawerTitle: {
-    fontSize: 12,
-    color: '#69727d',
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px',
-  },
-  chatCloseBtn: {
-    background: 'transparent',
-    border: 'none',
-    color: '#2563eb',
-    cursor: 'pointer',
-    fontSize: 12,
-    fontWeight: 700,
+  chatResizeHandle: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: -3,
+    width: 6,
+    cursor: 'col-resize',
+    zIndex: 2,
   },
   chatDrawerBody: {
     flex: 1,

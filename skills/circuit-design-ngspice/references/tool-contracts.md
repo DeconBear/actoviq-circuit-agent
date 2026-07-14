@@ -93,6 +93,7 @@ python scripts/netlist_to_json.py \
   --input-node <in_node> \
   --output-node <out_node> \
   --module-manifest-path design/module-manifest.json \
+  --view schematic \
   --format netlistsvg
 ```
 Writes a netlistsvg-compatible JSON with: components, params, interfaces,
@@ -120,6 +121,31 @@ Output JSON keys: `ok`, `svg_path`, `skin_path`, `geometry`, `layout`,
 python scripts/check_svg_geometry.py --svg-path render/netlistsvg.svg --json-path render/design.json --report-path render/netlistsvg.geometry.json
 ```
 Output JSON keys: `ok`, `summary { pins_checked, net_segments, missing_pin_connections, wire_crossings, component_overlaps, readability_score }`.
+
+### `view_schematic_for_layout` (vision-only)
+
+This is a read-only agent tool, not a command-line script. A vision-capable
+model may call it with an existing generated schematic inside the project or
+workflow workspace:
+
+```json
+{"svg_path": "<project>/build/.../preview.svg"}
+```
+
+It rasterizes the SVG with Electron and returns a short
+`actoviq.vision-layout-image.v1` metadata block followed by an actual
+`image/png` content block. The tool accepts SVG files only, rejects paths
+outside allowed workspace roots, and does not edit the SVG, module, netlist,
+or schematic document.
+
+**Capability gate:** text-only models must not call this tool. They must make
+layout decisions from `actoviq.layout-quality.v1` and other structured data.
+The tool is absent from the default/text tool catalog and is injected only by
+the host-invoked vision skill. Calls without explicit vision-capability metadata
+are rejected.
+The returned image is visual evidence only; it never authorizes changing
+components, pins, nets, values, models, or SPICE data. See
+[vision-layout-review.md](vision-layout-review.md).
 
 ## Analysis Execution Caveat
 

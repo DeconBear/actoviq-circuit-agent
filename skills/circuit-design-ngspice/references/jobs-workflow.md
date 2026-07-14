@@ -266,7 +266,7 @@ treat this SVG as the editor source of truth.
 
 1. Convert the netlist to JSON:
    ```bash
-   python scripts/netlist_to_json.py --netlist-path design/design.final.cir --json-path render/design.json --input-node <in> --output-node <out>
+   python scripts/netlist_to_json.py --netlist-path design/design.final.cir --json-path render/design.json --input-node <in> --output-node <out> --view schematic
    ```
    If a `module-manifest.json` exists, pass `--module-manifest-path design/module-manifest.json`.
 

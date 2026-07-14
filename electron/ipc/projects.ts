@@ -1,11 +1,13 @@
-import { app, BrowserWindow, type IpcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, type IpcMain, shell } from 'electron';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { access, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
-import { loadSettings } from './settings.js';
+import { loadSettings, loadSettingsWithSecrets } from './settings.js';
 import { getActiveWorkspace } from '../workspaceState.js';
+import { generateDesktopTechnicalReport } from '../agent/desktopAgentService.js';
 
 interface ProjectSummary {
   projectId: string;
@@ -47,6 +49,17 @@ interface SavedDesignMemorySummary {
   flowPath?: string;
 }
 
+interface EdaExportRequest {
+  scope: 'project' | 'module';
+  moduleId?: string;
+  targets: Array<'kicad' | 'altium' | 'orcad' | 'virtuoso'>;
+  view: 'design' | 'simulation';
+  mappingFile?: string;
+  nativeConvert: 'auto' | 'never' | 'required';
+  strictLayout: boolean;
+  sourceRevision: number;
+}
+
 interface DesignMemoryItem {
   id: string;
   kind: 'template' | 'flow';
@@ -71,7 +84,37 @@ let watchedProjectId = '';
 let watchTimer: NodeJS.Timeout | null = null;
 let watchPollTimer: NodeJS.Timeout | null = null;
 let watchedProjectRevision: number | null = null;
+let watchPauseDepth = 0;
 const legacyArchivePromises = new Map<string, Promise<void>>();
+
+function pauseProjectWatcher(): void {
+  watchPauseDepth += 1;
+  if (watchPauseDepth === 1) {
+    try {
+      activeWatcher?.close();
+    } catch {
+      // ignore
+    }
+    activeWatcher = null;
+  }
+}
+
+async function resumeProjectWatcher(): Promise<void> {
+  watchPauseDepth = Math.max(0, watchPauseDepth - 1);
+  if (watchPauseDepth > 0 || !watchedProjectId) return;
+  await watchProject(watchedProjectId);
+}
+
+async function withProjectWatchPaused<T>(work: () => Promise<T>): Promise<T> {
+  pauseProjectWatcher();
+  try {
+    return await work();
+  } finally {
+    await resumeProjectWatcher().catch((error) => {
+      console.warn('project watcher resume failed:', error);
+    });
+  }
+}
 
 async function exists(targetPath: string): Promise<boolean> {
   try {
@@ -746,6 +789,96 @@ function runProjectTool(args: string[]): Promise<Record<string, unknown>> {
   });
 }
 
+async function readOptionalJson(targetPath: string): Promise<Record<string, unknown> | null> {
+  if (!(await exists(targetPath))) return null;
+  try {
+    return JSON.parse(await readFile(targetPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+async function readOptionalText(targetPath: string): Promise<string> {
+  return await exists(targetPath) ? readFile(targetPath, 'utf8') : '';
+}
+
+async function generateProjectTechnicalReport(projectId: string, sourceRevision: number): Promise<{
+  ok: true;
+  report: string;
+  metadata: Record<string, unknown>;
+}> {
+  const projectRoot = await resolveProjectRoot(projectId);
+  const project = await readJsonFile<Record<string, unknown>>(path.resolve(projectRoot, 'project.circuit.json'));
+  const currentRevision = Number(project.revision);
+  if (!Number.isInteger(sourceRevision) || sourceRevision < 0 || currentRevision !== sourceRevision) {
+    throw new Error(`Stale report request: expected project revision ${currentRevision}, received ${sourceRevision}.`);
+  }
+
+  const buildRoot = path.resolve(projectRoot, 'build');
+  const manifest = await readOptionalJson(path.resolve(buildRoot, 'build-manifest.json'));
+  if (!manifest) throw new Error('Compile the project before generating a technical report.');
+  const buildRevision = Number(manifest.source_revision ?? manifest.revision);
+  if (buildRevision !== currentRevision) {
+    throw new Error(`Build is stale: project revision ${currentRevision}, build revision ${buildRevision}.`);
+  }
+
+  const [agentContext, erc, simulation, sourceMap, netlist, baselineReport] = await Promise.all([
+    runProjectTool(['agent-context', '--project-root', projectRoot]),
+    readOptionalJson(path.resolve(buildRoot, 'erc.json')),
+    readOptionalJson(path.resolve(buildRoot, 'system', 'simulation', 'result.json')),
+    readOptionalJson(path.resolve(buildRoot, 'system', 'source-map.json')),
+    readOptionalText(path.resolve(buildRoot, 'system', 'design.final.cir')),
+    readOptionalText(path.resolve(buildRoot, 'system', 'report.md')),
+  ]);
+  const documentHash = typeof agentContext.document_hash === 'string'
+    ? agentContext.document_hash
+    : typeof manifest.document_hash === 'string' ? manifest.document_hash : undefined;
+  const settings = await loadSettingsWithSecrets();
+  if (!settings.actoviqAuthToken) {
+    throw new Error('Configure an API key before generating an AI technical report.');
+  }
+
+  const generated = await generateDesktopTechnicalReport({
+    provider: settings.actoviqProvider,
+    apiKey: settings.actoviqAuthToken,
+    baseURL: settings.actoviqBaseUrl,
+    model: settings.reasoningModel || settings.chatModel,
+    workDir: projectRoot,
+  }, {
+    projectId,
+    sourceRevision,
+    documentHash,
+    evidence: {
+      project,
+      build_manifest: manifest,
+      agent_context: agentContext,
+      erc,
+      simulation,
+      source_map: sourceMap,
+      compiled_netlist: netlist,
+      deterministic_report: baselineReport,
+    },
+  });
+  const reportPath = path.resolve(buildRoot, 'system', 'technical-report.md');
+  const metadataPath = path.resolve(buildRoot, 'system', 'technical-report.json');
+  const metadata = {
+    schema: 'actoviq.technical-report.v1',
+    project_id: projectId,
+    source_revision: sourceRevision,
+    document_hash: documentHash,
+    generated_at: new Date().toISOString(),
+    generator: 'actoviq-agent-sdk',
+    model: generated.model,
+    run_id: generated.runId,
+    report_sha256: createHash('sha256').update(generated.report).digest('hex'),
+    usage: generated.usage,
+  };
+  await mkdir(path.dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, `${generated.report.trim()}\n`, 'utf8');
+  await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+  return { ok: true, report: generated.report, metadata };
+}
+
 async function readProjectSummary(projectRoot: string): Promise<ProjectSummary> {
   const project = JSON.parse(
     await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8'),
@@ -1122,9 +1255,7 @@ async function enrichProjectBundle(
       notebook,
       notebookPath,
       builtRevision: manifestModules[moduleId]?.revision,
-      schematicOverrides: await exists(overridesPath)
-        ? JSON.parse(await readFile(overridesPath, 'utf8')) as Record<string, unknown>
-        : undefined,
+      schematicOverrides: await readOptionalJson(overridesPath) ?? undefined,
     };
   }
   return { ...bundle, module_previews: previews };
@@ -1147,6 +1278,10 @@ function normalizeAtomicSourcePath(relativePath: string): string {
 }
 
 async function watchProject(projectId: string): Promise<void> {
+  if (watchPauseDepth > 0) {
+    watchedProjectId = projectId;
+    return;
+  }
   if (activeWatcher && watchedProjectId === projectId) return;
   activeWatcher?.close();
   activeWatcher = null;
@@ -1161,12 +1296,37 @@ async function watchProject(projectId: string): Promise<void> {
     watchedProjectRevision = null;
   }
   activeWatcher = watch(root, { recursive: true }, (_eventType, filename) => {
-    const relative = normalizeAtomicSourcePath(String(filename ?? '').replace(/\\/g, '/'));
-    if (!relative || relative.startsWith('build/') || relative.startsWith('commands/') ||
-        relative.startsWith('revisions/') || relative.startsWith('logs/')) return;
-    if (relative !== 'project.circuit.json' &&
-        !/modules\/[^/]+\/(?:module\.circuit\.json|netlist-notebook\.md|schematic\.overrides\.json)$/.test(relative)) return;
-    notifyProjectChanged(projectId);
+    try {
+      const relative = normalizeAtomicSourcePath(String(filename ?? '').replace(/\\/g, '/'));
+      if (!relative || relative.startsWith('build/') || relative.startsWith('commands/') ||
+          relative.startsWith('revisions/') || relative.startsWith('logs/')) return;
+      if (relative !== 'project.circuit.json' &&
+          !/modules\/[^/]+\/(?:module\.circuit\.json|netlist-notebook\.md|schematic\.overrides\.json)$/.test(relative)) return;
+      notifyProjectChanged(projectId);
+    } catch (error) {
+      // Keep the desktop alive if a watcher callback fails mid-compile/reload.
+      console.warn(`project watch callback failed for ${projectId}:`, error);
+    }
+  });
+  // Windows recursive watchers can emit 'error' when compile writes many build/
+  // artifacts quickly (buffer overflow / EPERM on synced disks). Unhandled
+  // EventEmitter errors would otherwise terminate the Electron main process.
+  activeWatcher.on('error', (error) => {
+    console.warn(`project watcher error for ${projectId}:`, error);
+    if (watchedProjectId !== projectId) return;
+    try {
+      activeWatcher?.close();
+    } catch {
+      // ignore close failures while recovering
+    }
+    activeWatcher = null;
+    // Best-effort resubscribe after the burst of filesystem activity settles.
+    setTimeout(() => {
+      if (watchedProjectId !== projectId || activeWatcher || watchPauseDepth > 0) return;
+      void watchProject(projectId).catch((restartError) => {
+        console.warn(`project watcher restart failed for ${projectId}:`, restartError);
+      });
+    }, 1_000);
   });
   watchPollTimer = setInterval(() => {
     void (async () => {
@@ -1238,7 +1398,9 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
           operations: [{ op: 'restore_revision', revision }],
         }),
       ]);
-      const build = await runProjectTool(['compile', '--project-root', root]);
+      const build = await withProjectWatchPaused(async () => (
+        runProjectTool(['compile', '--project-root', root])
+      ));
       return { ...result, build };
     },
   );
@@ -1280,25 +1442,71 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   });
 
   ipcMain.handle('project:compile', async (_event, projectId: string) => {
-    return runProjectTool(['compile', '--project-root', await resolveProjectRoot(projectId)]);
+    return withProjectWatchPaused(async () => (
+      runProjectTool(['compile', '--project-root', await resolveProjectRoot(projectId)])
+    ));
+  });
+
+  ipcMain.handle('project:export-eda', async (_event, projectId: string, input: EdaExportRequest) => {
+    const root = await resolveProjectRoot(projectId);
+    if (input.scope === 'module') assertModuleId(input.moduleId ?? '');
+    const allowedTargets = new Set(['kicad', 'altium', 'orcad', 'virtuoso']);
+    if (!Array.isArray(input.targets) || input.targets.length === 0 || input.targets.some((target) => !allowedTargets.has(target))) {
+      throw new Error('Select at least one supported EDA target.');
+    }
+    if (!Number.isInteger(input.sourceRevision) || input.sourceRevision < 0) {
+      throw new Error(`Invalid source revision: ${input.sourceRevision}`);
+    }
+    const args = [
+      'export-eda', '--project-root', root,
+      '--scope', input.scope,
+      '--targets', [...new Set(input.targets)].join(','),
+      '--view', input.view,
+      '--native-convert', input.nativeConvert,
+      '--source-revision', String(input.sourceRevision),
+    ];
+    if (input.scope === 'module') args.push('--module-id', input.moduleId ?? '');
+    if (input.mappingFile?.trim()) args.push('--mapping-file', path.resolve(input.mappingFile.trim()));
+    if (input.strictLayout) args.push('--strict-layout');
+    return runProjectTool(args);
+  });
+
+  ipcMain.handle('project:choose-eda-mapping', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select Actoviq EDA symbol mapping',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON mapping', extensions: ['json'] }],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
   ipcMain.handle('project:simulate', async (_event, projectId: string) => {
     const settings = await loadSettings();
-    return runProjectTool([
-      'simulate',
-      '--project-root', await resolveProjectRoot(projectId),
-      '--ngspice-bin', settings.ngspiceBin,
-    ]);
+    return withProjectWatchPaused(async () => (
+      runProjectTool([
+        'simulate',
+        '--project-root', await resolveProjectRoot(projectId),
+        '--ngspice-bin', settings.ngspiceBin,
+      ])
+    ));
   });
+
+  ipcMain.handle(
+    'project:generate-technical-report',
+    async (_event, projectId: string, sourceRevision: number) => (
+      generateProjectTechnicalReport(projectId, sourceRevision)
+    ),
+  );
 
   ipcMain.handle('project:compile-module', async (_event, projectId: string, moduleId: string) => {
     assertModuleId(moduleId);
-    return runProjectTool([
-      'compile-module',
-      '--project-root', await resolveProjectRoot(projectId),
-      '--module-id', moduleId,
-    ]);
+    return withProjectWatchPaused(async () => (
+      runProjectTool([
+        'compile-module',
+        '--project-root', await resolveProjectRoot(projectId),
+        '--module-id', moduleId,
+      ])
+    ));
   });
 
   ipcMain.handle(
@@ -1325,23 +1533,27 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
           operations: [{ op: 'set_module_netlist', module_id: moduleId, netlist_notebook: markdown }],
         }),
       ]);
-      return runProjectTool([
-        'compile-module',
-        '--project-root', root,
-        '--module-id', moduleId,
-      ]);
+      return withProjectWatchPaused(async () => (
+        runProjectTool([
+          'compile-module',
+          '--project-root', root,
+          '--module-id', moduleId,
+        ])
+      ));
     },
   );
 
   ipcMain.handle('project:simulate-module', async (_event, projectId: string, moduleId: string) => {
     assertModuleId(moduleId);
     const settings = await loadSettings();
-    return runProjectTool([
-      'simulate-module',
-      '--project-root', await resolveProjectRoot(projectId),
-      '--module-id', moduleId,
-      '--ngspice-bin', settings.ngspiceBin,
-    ]);
+    return withProjectWatchPaused(async () => (
+      runProjectTool([
+        'simulate-module',
+        '--project-root', await resolveProjectRoot(projectId),
+        '--module-id', moduleId,
+        '--ngspice-bin', settings.ngspiceBin,
+      ])
+    ));
   });
 
   ipcMain.handle('project:read-build', async (_event, projectId: string) => {
@@ -1353,6 +1565,12 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     const ercPath = path.resolve(root, 'build', 'erc.json');
     const sourceMapPath = path.resolve(root, 'build', 'system', 'source-map.json');
     const reportPath = path.resolve(root, 'build', 'system', 'report.md');
+    const technicalReportPath = path.resolve(root, 'build', 'system', 'technical-report.md');
+    const technicalReportMetadataPath = path.resolve(root, 'build', 'system', 'technical-report.json');
+    const technicalReportMetadata = await readOptionalJson(technicalReportMetadataPath);
+    const manifestRevision = Number(manifest.source_revision ?? manifest.revision);
+    const technicalReportCurrent = technicalReportMetadata?.source_revision === manifestRevision
+      && (!manifest.document_hash || technicalReportMetadata.document_hash === manifest.document_hash);
     return {
       manifest,
       erc: await exists(ercPath)
@@ -1364,7 +1582,10 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       sourceMap: await exists(sourceMapPath)
         ? JSON.parse(await readFile(sourceMapPath, 'utf8')) as Record<string, unknown>
         : null,
-      report: await exists(reportPath) ? await readFile(reportPath, 'utf8') : '',
+      report: technicalReportCurrent && await exists(technicalReportPath)
+        ? await readFile(technicalReportPath, 'utf8')
+        : await exists(reportPath) ? await readFile(reportPath, 'utf8') : '',
+      technicalReport: technicalReportCurrent ? technicalReportMetadata : null,
     };
   });
 
@@ -1403,5 +1624,21 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       if (error) throw new Error(error);
     }
     return projectRoot;
+  });
+
+  ipcMain.handle('project:open-export-folder', async (_event, projectId: string, exportId: string) => {
+    if (!/^[A-Za-z0-9_-]+$/.test(exportId)) throw new Error(`Invalid export id: ${exportId}`);
+    const projectRoot = await resolveProjectRoot(projectId);
+    const exportRoot = path.resolve(projectRoot, 'build', 'exports', exportId);
+    const exportsRoot = path.resolve(projectRoot, 'build', 'exports');
+    const relative = path.relative(exportsRoot, exportRoot);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !(await exists(exportRoot))) {
+      throw new Error(`EDA export not found: ${exportId}`);
+    }
+    if (process.env.ACTOVIQ_E2E !== '1') {
+      const error = await shell.openPath(exportRoot);
+      if (error) throw new Error(error);
+    }
+    return exportRoot;
   });
 }

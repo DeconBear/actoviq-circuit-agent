@@ -1,0 +1,137 @@
+:root {
+  color-scheme: light;
+
+  /* Existing renderer aliases. Keep these stable while components migrate. */
+  --ui-bg: #f4f6f8;
+  --ui-panel: #ffffff;
+  --ui-panel-muted: #f7f8fa;
+  --ui-border: #dfe3e8;
+  --ui-border-strong: #c5ccd5;
+  --ui-text: #202833;
+  --ui-text-muted: #606b78;
+  --ui-text-soft: #87909c;
+  --ui-accent: #2468d8;
+  --ui-accent-soft: #e9f1ff;
+  --ui-success: #267346;
+  --ui-danger: #a32d38;
+  --ui-warning: #a26108;
+
+  /* Semantic surface and interaction tokens. */
+  --av-surface-canvas: #eef2f5;
+  --av-surface-raised: #ffffff;
+  --av-surface-subtle: #f7f9fb;
+  --av-surface-sunken: #e9edf2;
+  --av-surface-overlay: rgba(255, 255, 255, 0.96);
+  --av-text-primary: #202833;
+  --av-text-secondary: #5f6a77;
+  --av-text-tertiary: #828c99;
+  --av-text-on-accent: #ffffff;
+  --av-stroke: #d9dfe6;
+  --av-stroke-strong: #bdc6d1;
+  --av-focus: #3277e6;
+  --av-accent: #2468d8;
+  --av-accent-hover: #1859c1;
+  --av-accent-active: #124da9;
+  --av-accent-subtle: #e7f0ff;
+  --av-danger: #b3313c;
+  --av-danger-subtle: #fff0f2;
+  --av-warning: #a26108;
+  --av-warning-subtle: #fff7e8;
+  --av-success: #267346;
+  --av-success-subtle: #eaf7ef;
+
+  /* Circuit semantics remain readable independently of the app accent. */
+  --av-circuit-passive: #5a6572;
+  --av-circuit-active: #2367d1;
+  --av-circuit-source: #8c4ab5;
+  --av-circuit-ground: #29805a;
+  --av-circuit-port: #b05b16;
+  --av-circuit-wire: #277c4b;
+
+  --av-font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --av-font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --av-font-size-xs: 11px;
+  --av-font-size-sm: 12px;
+  --av-font-size-md: 13px;
+  --av-font-size-lg: 15px;
+  --av-font-size-xl: 18px;
+
+  --av-space-1: 4px;
+  --av-space-2: 8px;
+  --av-space-3: 12px;
+  --av-space-4: 16px;
+  --av-space-5: 20px;
+  --av-space-6: 24px;
+
+  --av-radius-xs: 4px;
+  --av-radius-sm: 6px;
+  --av-radius-md: 9px;
+  --av-radius-lg: 12px;
+  --av-radius-pill: 999px;
+
+  --av-control-sm: 28px;
+  --av-control-md: 34px;
+  --av-control-lg: 40px;
+  --av-toolbar-height: 48px;
+
+  --av-shadow-xs: 0 1px 2px rgba(23, 32, 44, 0.08);
+  --av-shadow-sm: 0 4px 14px rgba(23, 32, 44, 0.11);
+  --av-shadow-md: 0 12px 32px rgba(23, 32, 44, 0.15);
+  --av-focus-ring: 0 0 0 3px rgba(50, 119, 230, 0.22);
+  --av-motion-fast: 120ms;
+  --av-motion-normal: 180ms;
+}
+
+.theme-dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ui-bg: #14181e;
+  --ui-panel: #1b2028;
+  --ui-panel-muted: #202630;
+  --ui-border: #323a46;
+  --ui-border-strong: #46505e;
+  --ui-text: #e7ebf0;
+  --ui-text-muted: #aab3bf;
+  --ui-text-soft: #7e8997;
+  --ui-accent: #78a8ff;
+  --ui-accent-soft: #1d355a;
+  --ui-success: #67c68b;
+  --ui-danger: #ff8791;
+  --ui-warning: #e8b15b;
+
+  --av-surface-canvas: #12161c;
+  --av-surface-raised: #1b2028;
+  --av-surface-subtle: #202630;
+  --av-surface-sunken: #10141a;
+  --av-surface-overlay: rgba(27, 32, 40, 0.96);
+  --av-text-primary: #edf0f4;
+  --av-text-secondary: #b2bbc7;
+  --av-text-tertiary: #828d9a;
+  --av-text-on-accent: #ffffff;
+  --av-stroke: #333b47;
+  --av-stroke-strong: #4a5563;
+  --av-focus: #83afff;
+  --av-accent: #6ea2ff;
+  --av-accent-hover: #8bb5ff;
+  --av-accent-active: #a2c4ff;
+  --av-accent-subtle: #1e3558;
+  --av-danger: #ff818c;
+  --av-danger-subtle: #481f26;
+  --av-warning: #e6ad54;
+  --av-warning-subtle: #412f17;
+  --av-success: #68c88d;
+  --av-success-subtle: #183b29;
+
+  --av-circuit-passive: #c1c8d1;
+  --av-circuit-active: #83afff;
+  --av-circuit-source: #d2a0ee;
+  --av-circuit-ground: #72c998;
+  --av-circuit-port: #f0a968;
+  --av-circuit-wire: #70c994;
+
+  --av-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --av-shadow-sm: 0 5px 18px rgba(0, 0, 0, 0.32);
+  --av-shadow-md: 0 16px 38px rgba(0, 0, 0, 0.42);
+  --av-focus-ring: 0 0 0 3px rgba(131, 175, 255, 0.25);
+}
+

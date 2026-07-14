@@ -1,0 +1,145 @@
+.av-schematic-command-bar {
+  position: relative;
+  z-index: 24;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+  min-height: 42px;
+  gap: var(--av-space-2);
+  padding: 6px var(--av-space-2);
+  border-bottom: 1px solid var(--av-stroke);
+  background: var(--av-surface-overlay);
+}
+
+.av-schematic-command-bar__commands {
+  display: flex;
+  flex: 1 1 410px;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.av-schematic-command-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.av-schematic-command-divider {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
+  background: var(--av-stroke);
+}
+
+.av-schematic-command-bar__status {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  color: var(--av-text-tertiary);
+  font-size: var(--av-font-size-xs);
+}
+
+.av-schematic-command-bar__status-text {
+  overflow: hidden;
+  max-width: min(320px, 28vw);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-schematic-command-bar__zoom {
+  flex: 0 0 auto;
+  min-width: 42px;
+  padding: 3px 7px;
+  border: 1px solid var(--av-stroke);
+  border-radius: var(--av-radius-pill);
+  background: var(--av-surface-sunken);
+  color: var(--av-text-secondary);
+  font-family: var(--av-font-mono);
+  text-align: center;
+}
+
+.av-schematic-component-palette {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  max-width: calc(100% - 24px);
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--av-stroke-strong) 84%, transparent);
+  border-radius: var(--av-radius-md);
+  background: color-mix(in srgb, var(--av-surface-overlay) 96%, transparent);
+  box-shadow: var(--av-shadow-sm);
+  backdrop-filter: blur(12px);
+  user-select: none;
+}
+
+.av-schematic-component-palette:focus-within {
+  border-color: color-mix(in srgb, var(--av-focus) 58%, var(--av-stroke));
+}
+
+.av-schematic-component-palette__drag {
+  cursor: grab;
+  touch-action: none;
+}
+
+.av-schematic-component-palette__drag:active {
+  cursor: grabbing;
+}
+
+.av-schematic-component-palette__tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.av-schematic-component-palette__tools::-webkit-scrollbar {
+  display: none;
+}
+
+.av-schematic-component-palette[data-collapsed="true"] {
+  gap: 0;
+}
+
+@media (max-width: 760px) {
+  .av-schematic-command-bar {
+    align-items: stretch;
+  }
+
+  .av-schematic-command-bar__commands {
+    flex-basis: 100%;
+  }
+
+  .av-schematic-command-bar__status {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .av-schematic-command-bar__status-text {
+    max-width: calc(100% - 58px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .av-schematic-component-palette,
+  .av-schematic-component-palette * {
+    transition: none !important;
+  }
+}

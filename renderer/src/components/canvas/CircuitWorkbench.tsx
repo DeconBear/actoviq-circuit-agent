@@ -19,10 +19,13 @@ import type {
   CircuitModule,
   CircuitModuleRef,
   CircuitPort,
+  EdaExportResult,
+  EdaExportTarget,
   SchematicOverrides,
   SimulationRun,
 } from '../../types';
 import { SchematicEditor, type SchematicProbeSelection } from './SchematicEditor';
+import { WorkbenchToolbar } from './WorkbenchToolbar';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import { createSchematicDocument } from '../../schematic/schematicDocument';
 
@@ -46,6 +49,15 @@ interface ModuleEditorState {
 interface EmptyProjectFormState {
   demo: boolean;
   name: string;
+}
+
+interface EdaExportFormState {
+  scope: 'project' | 'module';
+  targets: EdaExportTarget[];
+  view: 'design' | 'simulation';
+  mappingFile: string;
+  nativeConvert: 'auto' | 'never' | 'required';
+  strictLayout: boolean;
 }
 
 const BOARD_MARGIN = 1200;
@@ -375,6 +387,16 @@ export function CircuitWorkbench({
   const [ercOpen, setErcOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [history, setHistory] = useState<CircuitHistoryEntry[]>([]);
+  const [edaExportOpen, setEdaExportOpen] = useState(false);
+  const [edaExportResult, setEdaExportResult] = useState<EdaExportResult | null>(null);
+  const [edaExportForm, setEdaExportForm] = useState<EdaExportFormState>({
+    scope: 'project',
+    targets: ['kicad', 'altium', 'orcad', 'virtuoso'],
+    view: 'design',
+    mappingFile: '',
+    nativeConvert: 'auto',
+    strictLayout: false,
+  });
 
   const project = bundle?.project ?? null;
   const erc = bundle?.erc ?? build?.erc ?? null;
@@ -451,6 +473,8 @@ export function CircuitWorkbench({
     setModulePreviewPositions({});
     setModulePreviewSizes({});
     setModulePreviewBusy({});
+    setEdaExportOpen(false);
+    setEdaExportResult(null);
     modulePreviewBusyRef.current = new Set();
   }, [activeProjectId]);
 
@@ -793,6 +817,52 @@ export function CircuitWorkbench({
     try {
       const openedPath = await window.electronAPI.openCircuitProjectFolder(currentProjectId);
       setNotice(`Opened project folder: ${openedPath}`);
+    } catch (openError) {
+      setError(openError instanceof Error ? openError.message : String(openError));
+    }
+  }
+
+  async function chooseEdaMapping(): Promise<void> {
+    const selected = await window.electronAPI.chooseCircuitEdaMapping();
+    if (selected) setEdaExportForm((current) => ({ ...current, mappingFile: selected }));
+  }
+
+  async function runEdaExport(): Promise<void> {
+    if (!currentProjectId || !project || edaExportForm.targets.length === 0) return;
+    const operationProjectId = currentProjectId;
+    setBusy(true);
+    setError('');
+    setEdaExportResult(null);
+    setNotice('Exporting editable EDA packages...');
+    try {
+      const result = await window.electronAPI.exportCircuitEda(operationProjectId, {
+        scope: edaExportForm.scope,
+        moduleId: edaExportForm.scope === 'module' ? activeModuleId ?? undefined : undefined,
+        targets: edaExportForm.targets,
+        view: edaExportForm.view,
+        mappingFile: edaExportForm.mappingFile || undefined,
+        nativeConvert: edaExportForm.nativeConvert,
+        strictLayout: edaExportForm.strictLayout,
+        sourceRevision: project.revision,
+      });
+      if (isActiveProject(operationProjectId)) {
+        setEdaExportResult(result);
+        setNotice(`EDA export ${result.export_id} complete`);
+      }
+    } catch (exportError) {
+      if (isActiveProject(operationProjectId)) {
+        setError(exportError instanceof Error ? exportError.message : String(exportError));
+        setNotice('');
+      }
+    } finally {
+      if (isActiveProject(operationProjectId)) setBusy(false);
+    }
+  }
+
+  async function openEdaExportFolder(): Promise<void> {
+    if (!currentProjectId || !edaExportResult) return;
+    try {
+      await window.electronAPI.openCircuitEdaExportFolder(currentProjectId, edaExportResult.export_id);
     } catch (openError) {
       setError(openError instanceof Error ? openError.message : String(openError));
     }
@@ -1306,8 +1376,8 @@ export function CircuitWorkbench({
       data-project-id={project.project_id}
       data-action-project-id={currentProjectId ?? ''}
     >
-      <header style={styles.header}>
-        <div style={styles.titleBlock}>
+      <header style={styles.header} className="av-workbench-header">
+        <div style={styles.titleBlock} className="av-workbench-header__title">
           <div style={styles.eyebrow}>Schematic Module Hub</div>
           <div style={styles.projectTitle} data-testid="project-title" data-project-id={project.project_id}>
             {project.name}
@@ -1319,95 +1389,38 @@ export function CircuitWorkbench({
             {erc ? ` | ERC ${erc.status}` : ''}
           </div>
         </div>
-        <div style={styles.toolbar}>
-          {view === 'module' ? (
-            <button style={styles.secondaryButton} onClick={() => setView('board')} data-testid="back-to-board">
-              Back to canvas
-            </button>
-          ) : (
-            <>
-              <button style={styles.secondaryButton} onClick={arrangeModules} disabled={busy} data-testid="arrange-modules">
-                Arrange
-              </button>
-              <div style={styles.zoomControl}>
-                <button
-                  style={styles.zoomButton}
-                  onClick={() => zoomCanvasAtPanelCenter(zoom - 10)}
-                  title="Zoom out"
-                  data-testid="canvas-zoom-out"
-                >
-                  -
-                </button>
-                <span style={styles.zoomValue} data-testid="canvas-zoom">{zoom}%</span>
-                <button
-                  style={styles.zoomButton}
-                  onClick={() => zoomCanvasAtPanelCenter(zoom + 10)}
-                  title="Zoom in"
-                  data-testid="canvas-zoom-in"
-                >
-                  +
-                </button>
-              </div>
-            </>
-          )}
-          <button style={styles.secondaryButton} onClick={() => runBuild(false)} disabled={busy || anyPreviewBusy} data-testid="build-project">
-            Refresh SVGs
-          </button>
-          <button style={styles.primaryButton} onClick={() => runBuild(true)} disabled={busy || anyPreviewBusy} data-testid="simulate-project">
-            Simulate system
-          </button>
-          <button
-            style={styles.secondaryButton}
-            onClick={() => saveDesignMemory('template')}
-            disabled={busy || anyPreviewBusy}
-            data-testid="save-design-template"
-          >
-            Save template
-          </button>
-          <button
-            style={styles.secondaryButton}
-            onClick={() => saveDesignMemory('flow')}
-            disabled={busy || anyPreviewBusy}
-            data-testid="save-design-flow"
-          >
-            Save flow
-          </button>
-          <button
-            style={{
-              ...styles.secondaryButton,
-              ...(erc?.status === 'error'
-                ? styles.ercButtonError
-                : erc?.status === 'warning' ? styles.ercButtonWarning : styles.ercButtonClean),
-            }}
-            onClick={() => {
-              setHistoryOpen(false);
-              setErcOpen(true);
-            }}
-            disabled={busy}
-            data-testid="open-project-erc"
-          >
-            ERC {erc ? `${erc.summary.errors}/${erc.summary.warnings}` : '-'}
-          </button>
-          <button
-            style={styles.secondaryButton}
-            onClick={() => {
-              setErcOpen(false);
-              setHistoryOpen(true);
-            }}
-            disabled={busy}
-            data-testid="open-project-history"
-          >
-            History
-          </button>
-          <button
-            style={styles.iconButton}
-            onClick={() => { void openProjectFolder(); }}
-            title="Open project folder"
-            data-testid="open-project-folder"
-          >
-            Folder
-          </button>
-        </div>
+        <WorkbenchToolbar
+          view={view}
+          zoom={zoom}
+          busy={busy}
+          previewBusy={anyPreviewBusy}
+          erc={erc ? {
+            status: erc.status,
+            errors: erc.summary.errors,
+            warnings: erc.summary.warnings,
+          } : null}
+          onBackToBoard={() => setView('board')}
+          onArrangeModules={arrangeModules}
+          onZoomOut={() => zoomCanvasAtPanelCenter(zoom - 10)}
+          onZoomIn={() => zoomCanvasAtPanelCenter(zoom + 10)}
+          onBuild={() => { void runBuild(false); }}
+          onSimulate={() => { void runBuild(true); }}
+          onSaveTemplate={() => { void saveDesignMemory('template'); }}
+          onSaveFlow={() => { void saveDesignMemory('flow'); }}
+          onOpenEdaExport={() => {
+            setEdaExportResult(null);
+            setEdaExportOpen(true);
+          }}
+          onOpenErc={() => {
+            setHistoryOpen(false);
+            setErcOpen(true);
+          }}
+          onOpenHistory={() => {
+            setErcOpen(false);
+            setHistoryOpen(true);
+          }}
+          onOpenFolder={() => { void openProjectFolder(); }}
+        />
       </header>
 
       {(error || notice) && (
@@ -1415,6 +1428,133 @@ export function CircuitWorkbench({
           {error || notice}
         </div>
       )}
+
+      {edaExportOpen ? (
+        <div style={styles.historyOverlay} data-testid="eda-export-dialog">
+          <section style={styles.edaExportPanel} aria-label="Export EDA schematic packages">
+            <div style={styles.historyHeader}>
+              <div>
+                <div style={styles.historyTitle}>Export editable EDA packages</div>
+                <div style={styles.historySubtitle}>Revision {project.revision} | connectivity-preserving export</div>
+              </div>
+              <button
+                type="button"
+                style={styles.iconButton}
+                onClick={() => setEdaExportOpen(false)}
+                disabled={busy}
+                data-testid="close-eda-export"
+              >
+                Close
+              </button>
+            </div>
+            <div style={styles.edaExportBody}>
+              <label style={styles.edaExportField}>
+                <span>Scope</span>
+                <select
+                  value={edaExportForm.scope}
+                  onChange={(event) => setEdaExportForm((current) => ({ ...current, scope: event.target.value as 'project' | 'module' }))}
+                  disabled={busy || !activeModuleId}
+                  data-testid="eda-export-scope"
+                >
+                  <option value="project">Entire project</option>
+                  <option value="module">Current module{activeModuleId ? ` (${activeModuleId})` : ''}</option>
+                </select>
+              </label>
+              <label style={styles.edaExportField}>
+                <span>View</span>
+                <select
+                  value={edaExportForm.view}
+                  onChange={(event) => setEdaExportForm((current) => ({ ...current, view: event.target.value as 'design' | 'simulation' }))}
+                  disabled={busy}
+                  data-testid="eda-export-view"
+                >
+                  <option value="design">Design (exclude testbench)</option>
+                  <option value="simulation">Simulation (include sources)</option>
+                </select>
+              </label>
+              <div style={styles.edaExportField}>
+                <span>Targets</span>
+                <div style={styles.edaExportTargets}>
+                  {(['kicad', 'altium', 'orcad', 'virtuoso'] as EdaExportTarget[]).map((target) => (
+                    <label key={target} style={styles.layoutCheck}>
+                      <input
+                        type="checkbox"
+                        checked={edaExportForm.targets.includes(target)}
+                        onChange={(event) => setEdaExportForm((current) => ({
+                          ...current,
+                          targets: event.target.checked
+                            ? [...new Set([...current.targets, target])]
+                            : current.targets.filter((entry) => entry !== target),
+                        }))}
+                        disabled={busy}
+                        data-testid={`eda-export-target-${target}`}
+                      />
+                      {target === 'orcad' ? 'OrCAD' : target === 'kicad' ? 'KiCad' : target.charAt(0).toUpperCase() + target.slice(1)}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <label style={styles.edaExportField}>
+                <span>Native conversion</span>
+                <select
+                  value={edaExportForm.nativeConvert}
+                  onChange={(event) => setEdaExportForm((current) => ({ ...current, nativeConvert: event.target.value as EdaExportFormState['nativeConvert'] }))}
+                  disabled={busy}
+                  data-testid="eda-export-native-convert"
+                >
+                  <option value="auto">Auto detect</option>
+                  <option value="never">Import-ready only</option>
+                  <option value="required">Require native tool</option>
+                </select>
+              </label>
+              <div style={styles.edaExportField}>
+                <span>Symbol mapping</span>
+                <div style={styles.edaMappingRow}>
+                  <input value={edaExportForm.mappingFile} readOnly placeholder="Generic symbols (default)" data-testid="eda-export-mapping" />
+                  <button type="button" style={styles.secondaryButton} onClick={() => void chooseEdaMapping()} disabled={busy}>Choose...</button>
+                  {edaExportForm.mappingFile ? (
+                    <button type="button" style={styles.secondaryButton} onClick={() => setEdaExportForm((current) => ({ ...current, mappingFile: '' }))} disabled={busy}>Clear</button>
+                  ) : null}
+                </div>
+              </div>
+              <label style={styles.layoutCheck}>
+                <input
+                  type="checkbox"
+                  checked={edaExportForm.strictLayout}
+                  onChange={(event) => setEdaExportForm((current) => ({ ...current, strictLayout: event.target.checked }))}
+                  disabled={busy}
+                  data-testid="eda-export-strict-layout"
+                />
+                Fail when readability is below 90
+              </label>
+              {edaExportResult ? (
+                <div style={styles.edaExportResult} data-testid="eda-export-result">
+                  <div>Readability: <strong>{edaExportResult.layout_quality.readability_score.toFixed(1)}</strong></div>
+                  {Object.entries(edaExportResult.targets).map(([target, status]) => (
+                    <div key={target} style={styles.edaExportStatus} data-testid={`eda-export-status-${target}`}>
+                      <span>{target}</span><strong>{status.status}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div style={styles.edaExportActions}>
+              {edaExportResult ? (
+                <button type="button" style={styles.secondaryButton} onClick={() => void openEdaExportFolder()} data-testid="open-eda-export-folder">Open export folder</button>
+              ) : null}
+              <button
+                type="button"
+                style={styles.primaryButton}
+                onClick={() => void runEdaExport()}
+                disabled={busy || edaExportForm.targets.length === 0 || (edaExportForm.scope === 'module' && !activeModuleId)}
+                data-testid="run-eda-export"
+              >
+                {busy ? 'Exporting...' : 'Export'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {ercOpen ? (
         <div style={styles.historyOverlay} data-testid="project-erc-panel">
@@ -2786,6 +2926,23 @@ const styles: Record<string, CSSProperties> = {
     borderLeft: '1px solid #cbd1d8',
     boxShadow: '-10px 0 32px rgba(32, 39, 48, 0.16)',
   },
+  edaExportPanel: {
+    width: 620,
+    maxWidth: 'calc(100vw - 28px)',
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    background: '#ffffff',
+    borderLeft: '1px solid #cbd1d8',
+    boxShadow: '-10px 0 32px rgba(32, 39, 48, 0.16)',
+  },
+  edaExportBody: { minHeight: 0, flex: 1, overflowY: 'auto', padding: 18, display: 'flex', flexDirection: 'column', gap: 16 },
+  edaExportField: { display: 'flex', flexDirection: 'column', gap: 7, color: '#3d4651', fontSize: 12, fontWeight: 700 },
+  edaExportTargets: { display: 'flex', flexWrap: 'wrap', gap: '8px 18px' },
+  edaMappingRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 7 },
+  edaExportResult: { border: '1px solid #ccd7ce', borderRadius: 6, padding: 12, background: '#f5faf6', color: '#34433a', fontSize: 12 },
+  edaExportStatus: { display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 6, textTransform: 'capitalize' },
+  edaExportActions: { display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #dfe3e8' },
   historyHeader: {
     minHeight: 68,
     display: 'flex',
@@ -2823,9 +2980,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 10,
     whiteSpace: 'pre-wrap',
   },
-  ercButtonClean: { borderColor: '#8fc5a4', color: '#24633e', background: '#f4fbf6' },
-  ercButtonWarning: { borderColor: '#d8b35d', color: '#75520a', background: '#fffaf0' },
-  ercButtonError: { borderColor: '#d98e96', color: '#8d2632', background: '#fff5f6' },
   ercClean: { padding: 28, color: '#286744', fontSize: 12, textAlign: 'center' },
   ercDiagnostic: { padding: '13px 16px', borderBottom: '1px solid #e5e8ec', borderLeft: '3px solid #9ca6b2' },
   ercDiagnosticError: { borderLeftColor: '#b83242', background: '#fff8f8' },
@@ -2854,33 +3008,6 @@ const styles: Record<string, CSSProperties> = {
   eyebrow: { fontSize: 10, color: '#7a818b', textTransform: 'uppercase', fontWeight: 750 },
   projectTitle: { fontSize: 18, fontWeight: 760, marginTop: 2 },
   projectMeta: { fontSize: 11, color: '#7a818b', marginTop: 2 },
-  toolbar: { display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' },
-  zoomControl: {
-    height: 32,
-    display: 'flex',
-    alignItems: 'center',
-    border: '1px solid #cbd0d7',
-    borderRadius: 6,
-    overflow: 'hidden',
-    background: '#fff',
-  },
-  zoomButton: {
-    width: 28,
-    height: 30,
-    border: 0,
-    background: '#fff',
-    color: '#525b66',
-    cursor: 'pointer',
-    fontSize: 15,
-  },
-  zoomValue: {
-    minWidth: 42,
-    textAlign: 'center',
-    color: '#525b66',
-    fontSize: 11,
-    borderLeft: '1px solid #e1e4e8',
-    borderRight: '1px solid #e1e4e8',
-  },
   primaryButton: {
     border: '1px solid #2563eb',
     borderRadius: 6,

@@ -20,6 +20,15 @@
           "direction": { "enum": ["input", "output", "bidirectional"] },
           "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
           "net": { "type": "string", "minLength": 1 }
+          ,"position": {
+            "type": "object",
+            "required": ["x", "y"],
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" }
+            },
+            "additionalProperties": false
+          }
           ,"net_id": { "type": "string", "minLength": 1 }
           ,"inferred": { "type": "boolean" }
         }

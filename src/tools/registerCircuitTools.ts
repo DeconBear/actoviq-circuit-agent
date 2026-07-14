@@ -3,7 +3,12 @@ import type { AgentToolDefinition } from 'actoviq-agent-sdk';
 import { PROJECT_ROOT, WORKSPACE_ROOT } from '../config/projectPaths.js';
 import { createWorkspaceFileTools } from './fileTools.js';
 import { createGmidSizeDeviceTool, createListGmidModelsTool } from './gmidTools.js';
-import { createRenderAgentSvgTool, createRenderNetlistsvgTool, createRenderSchemdrawTool, createNetlistToJsonTool } from './renderTools.js';
+import {
+  createNetlistToJsonTool,
+  createRenderAgentSvgTool,
+  createRenderNetlistsvgTool,
+  createRenderSchemdrawTool,
+} from './renderTools.js';
 import { createCopyTemplateTool, createListTemplatesTool, createNormalizeSpecTool } from './specTools.js';
 import {
   createPatchNetlistTool,

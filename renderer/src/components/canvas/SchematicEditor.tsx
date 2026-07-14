@@ -9,8 +9,9 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import type { CircuitComponent, CircuitModule, CircuitPin, CircuitPosition, CircuitWire } from '../../types';
+import type { CircuitComponent, CircuitModule, CircuitPin, CircuitPort, CircuitPosition, CircuitWire } from '../../types';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
+import { EditorCommandToolbar, FloatingComponentPalette } from './toolbars/SchematicToolbars';
 import {
   addWire,
   cloneModule,
@@ -20,6 +21,7 @@ import {
   createSchematicDocument,
   hitComponent,
   hitEndpoint,
+  hitPort,
   hitWire,
   makeId,
   makePlacedBlock,
@@ -46,17 +48,6 @@ import {
 
 type ToolMode = 'select' | 'wire' | 'place' | 'place-block';
 type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
-
-const COMPONENT_TOOL_LABELS: Record<ToolComponentType, string> = {
-  R: 'Place resistor (R)',
-  C: 'Place capacitor (C)',
-  L: 'Place inductor (L)',
-  D: 'Place diode (D)',
-  M: 'Place MOSFET (M)',
-  Q: 'Place BJT (Q)',
-  V: 'Place voltage source (V)',
-  I: 'Place current source (I)',
-};
 
 const AUTOPAN_MARGIN_PX = 44;
 const AUTOPAN_STEP_RATIO = 0.055;
@@ -125,6 +116,16 @@ interface DragState {
   startWorld: CircuitPosition;
   originalPositions: Record<string, CircuitPosition>;
   lastPositions: Record<string, CircuitPosition>;
+  originalModule: CircuitModule;
+  originalDirty: boolean;
+  moved: boolean;
+}
+
+interface PortDragState {
+  portId: string;
+  startWorld: CircuitPosition;
+  originalPosition: CircuitPosition;
+  lastPosition: CircuitPosition;
   originalModule: CircuitModule;
   originalDirty: boolean;
   moved: boolean;
@@ -205,6 +206,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const editorShellRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const portDragRef = useRef<PortDragState | null>(null);
   const wireDragRef = useRef<WireDragState | null>(null);
   const wireSegmentDragRef = useRef<WireSegmentDragState | null>(null);
   const wirePointDragRef = useRef<WirePointDragState | null>(null);
@@ -247,6 +249,9 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const selectedComponentIds = componentIdsForSelection(selection);
   const selectedComponent = selection?.kind === 'component'
     ? draft.components.find((component) => component.id === selection.id) ?? null
+    : null;
+  const selectedPort = selection?.kind === 'port'
+    ? draft.ports.find((port) => port.id === selection.id) ?? null
     : null;
   const selectedWire = selection?.kind === 'wire'
     ? document.wires.find((wire) => wire.id === selection.id) ?? null
@@ -561,6 +566,24 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return;
     }
 
+    const portHit = portFromPointerTarget(document, event.target) ?? hitPort(document, world);
+    if (portHit) {
+      const position = document.portPositions.get(portHit.id);
+      if (!position) return;
+      setSelection({ kind: 'port', id: portHit.id });
+      setInteractionCursor('grabbing');
+      portDragRef.current = {
+        portId: portHit.id,
+        startWorld: world,
+        originalPosition: { ...position },
+        lastPosition: { ...position },
+        originalModule: cloneModule(draft),
+        originalDirty: dirty,
+        moved: false,
+      };
+      return;
+    }
+
     const selectedHandleHit = selectedComponentHandleFromPointerTarget(document, event.target);
     const directComponentHit = componentFromPointerTarget(document, event.target) ?? hitComponent(document, world);
     const selectedFrameHit = selectedHandleHit ?? (!directComponentHit ? hitSelectedComponentFrame(document, selection, world) : null);
@@ -720,6 +743,28 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       autoPanViewport(event.currentTarget, event.clientX, event.clientY);
       return;
     }
+    const portDrag = portDragRef.current;
+    if (portDrag) {
+      setHoverSelection(null);
+      setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
+      const nextPosition = snapPoint({
+        x: portDrag.originalPosition.x + world.x - portDrag.startWorld.x,
+        y: portDrag.originalPosition.y + world.y - portDrag.startWorld.y,
+      });
+      if (samePosition(portDrag.lastPosition, nextPosition)) return;
+      portDrag.lastPosition = { ...nextPosition };
+      portDrag.moved = true;
+      scheduleDraftUpdate((current) => {
+        const next = cloneModule(current);
+        const port = next.ports.find((entry) => entry.id === portDrag.portId);
+        if (port) port.position = { ...nextPosition };
+        next.wires = rerouteStoredWires(next, { portIds: [portDrag.portId] });
+        return next;
+      });
+      markDirty();
+      autoPanViewport(event.currentTarget, event.clientX, event.clientY);
+      return;
+    }
     const marquee = marqueeRef.current;
     if (marquee) {
       setHoverSelection(null);
@@ -795,10 +840,12 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return;
     }
     const drag = dragRef.current;
+    const portDrag = portDragRef.current;
     const wirePointDrag = wirePointDragRef.current;
     const wireSegmentDrag = wireSegmentDragRef.current;
     const marquee = marqueeRef.current;
     dragRef.current = null;
+    portDragRef.current = null;
     wirePointDragRef.current = null;
     wireSegmentDragRef.current = null;
     marqueeRef.current = null;
@@ -819,6 +866,19 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (wireSegmentDrag?.moved) {
       setHistory((items) => [...items, wireSegmentDrag.originalModule].slice(-40));
       setFuture([]);
+      return;
+    }
+    if (portDrag?.moved) {
+      setHistory((items) => [...items, portDrag.originalModule].slice(-40));
+      setFuture([]);
+      setDraft((current) => {
+        const next = cloneModule(current);
+        const port = next.ports.find((entry) => entry.id === portDrag.portId);
+        if (port) port.position = { ...portDrag.lastPosition };
+        next.wires = rerouteStoredWires(next, { portIds: [portDrag.portId] });
+        return next;
+      });
+      setDirty(true);
       return;
     }
     if (!drag?.moved) {
@@ -857,7 +917,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     event.preventDefault();
     event.stopPropagation();
     const activeGesture = Boolean(
-      wireStart || tool !== 'select' || dragRef.current || wireDragRef.current || wirePointDragRef.current || wireSegmentDragRef.current || marqueeRef.current || panRef.current,
+      wireStart || tool !== 'select' || dragRef.current || portDragRef.current || wireDragRef.current || wirePointDragRef.current || wireSegmentDragRef.current || marqueeRef.current || panRef.current,
     );
     const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
     const menuSelection = activeGesture
@@ -887,6 +947,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     cancelPendingDragPreviewUpdate();
     const drag = dragRef.current;
     dragRef.current = null;
+    const portDrag = portDragRef.current;
+    portDragRef.current = null;
     wireDragRef.current = null;
     const wirePointDrag = wirePointDragRef.current;
     wirePointDragRef.current = null;
@@ -909,6 +971,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setDirty(wireSegmentDrag.originalDirty);
       return;
     }
+    if (portDrag?.moved) {
+      setDraft(portDrag.originalModule);
+      setDirty(portDrag.originalDirty);
+      return;
+    }
     if (!drag) return;
     if (drag.moved) {
       setDraft(drag.originalModule);
@@ -917,8 +984,18 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   }
 
   function nudgeSelectedComponents(dx: number, dy: number) {
-    if (selectedComponentIds.length === 0 || busy) return;
+    if (busy) return;
     const next = cloneModule(draft);
+    if (selectedPort) {
+      const port = next.ports.find((entry) => entry.id === selectedPort.id);
+      const position = document.portPositions.get(selectedPort.id);
+      if (!port || !position) return;
+      port.position = snapPoint({ x: position.x + dx, y: position.y + dy });
+      next.wires = rerouteStoredWires(next, { portIds: [selectedPort.id] });
+      commitDraft(next);
+      return;
+    }
+    if (selectedComponentIds.length === 0) return;
     let changed = false;
     for (const componentId of selectedComponentIds) {
       const component = next.components.find((entry) => entry.id === componentId);
@@ -1091,7 +1168,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       fitViewport();
       return;
     }
-    if (event.key.startsWith('Arrow') && selectedComponentIds.length > 0) {
+    if (event.key.startsWith('Arrow') && (selectedComponentIds.length > 0 || selectedPort)) {
       event.preventDefault();
       const step = event.shiftKey ? SCHEMATIC_GRID * 5 : SCHEMATIC_GRID;
       if (event.key === 'ArrowLeft') nudgeSelectedComponents(-step, 0);
@@ -1230,6 +1307,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
 
   function deleteSelection(targetSelection: SchematicSelection = selection) {
     if (!targetSelection || busy) return;
+    if (targetSelection.kind === 'port') return;
     const next = cloneModule(draft);
     const componentIds = componentIdsForSelection(targetSelection);
     if (componentIds.length > 0) {
@@ -1415,6 +1493,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-net-label-count={document.netLabels.length}
       data-drag-preview={dragPreviewPositions ? 'true' : 'false'}
       data-component-positions={JSON.stringify(displayedComponentPositions)}
+      data-port-positions={JSON.stringify(Object.fromEntries(document.portPositions))}
       data-component-rotations={JSON.stringify(Object.fromEntries(
         draft.components.map((component) => [component.id, normalizeRotation(component.rotation)]),
       ))}
@@ -1436,125 +1515,59 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       }}
       tabIndex={0}
     >
-      <div style={styles.toolbar}>
-        <button
-          style={tool === 'select' ? styles.activeToolButton : styles.toolButton}
-          onClick={() => { setTool('select'); setPendingBlock(null); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
-          disabled={busy}
-          aria-label="Select tool (S)"
-          title="Select tool (S)"
-          data-testid="schematic-editor-select"
-        >
-          Select
-        </button>
-        <button
-          style={tool === 'wire' ? styles.activeToolButton : styles.toolButton}
-          onClick={() => { setTool('wire'); setPendingBlock(null); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
-          disabled={busy}
-          aria-label="Wire tool (W)"
-          title="Wire tool (W)"
-          data-testid="schematic-editor-wire"
-        >
-          Wire
-        </button>
-        {COMPONENT_TYPES.map((type) => (
-          <button
-            key={type}
-            style={tool === 'place' && placeType === type ? styles.activeToolButton : styles.toolButton}
-            onClick={() => { setTool('place'); setPendingBlock(null); setPlaceType(type); setWireStart(null); setHoverEndpoint(null); setHoverSelection(null); }}
-            disabled={busy}
-            aria-label={COMPONENT_TOOL_LABELS[type]}
-            title={COMPONENT_TOOL_LABELS[type]}
-            data-testid={`schematic-editor-place-${type}`}
-          >
-            {type}
-          </button>
-        ))}
-        <button
-          style={tool === 'place-block' || blockDialogOpen ? styles.activeToolButton : styles.toolButton}
-          onClick={openBlockDialog}
-          disabled={busy}
-          aria-label="Place custom block (B)"
-          title="Place custom block (B)"
-          data-testid="schematic-editor-place-block"
-        >
-          Block
-        </button>
-        <span style={styles.toolbarDivider} />
-        <button
-          style={styles.toolButton}
-          onClick={undo}
-          disabled={busy || history.length === 0}
-          aria-label="Undo (Ctrl+Z)"
-          title="Undo (Ctrl+Z)"
-          data-testid="schematic-editor-undo"
-        >
-          Undo
-        </button>
-        <button
-          style={styles.toolButton}
-          onClick={redo}
-          disabled={busy || future.length === 0}
-          aria-label="Redo (Ctrl+Y)"
-          title="Redo (Ctrl+Y)"
-          data-testid="schematic-editor-redo"
-        >
-          Redo
-        </button>
-        <button
-          style={styles.toolButton}
-          onClick={() => deleteSelection()}
-          disabled={busy || !selection}
-          aria-label="Delete selected item (Delete/Backspace)"
-          title="Delete selected item (Delete/Backspace)"
-          data-testid="schematic-editor-delete"
-        >
-          Delete
-        </button>
-        <button
-          style={styles.primaryButton}
-          onClick={() => void saveAndRebuild()}
-          disabled={busy || !dirty}
-          aria-label="Apply schematic and rebuild SVG (Ctrl+S)"
-          title="Apply schematic and rebuild SVG (Ctrl+S)"
-          data-testid="schematic-editor-save"
-        >
-          Apply
-        </button>
-        <button
-          style={styles.toolButton}
-          onClick={fitViewport}
-          disabled={busy}
-          aria-label="Fit schematic view (F)"
-          title="Fit schematic view (F)"
-          data-testid="schematic-editor-fit"
-        >
-          Fit
-        </button>
-        <button
-          style={styles.toolButton}
-          onClick={onBuild}
-          disabled={busy || buildBusy}
-          aria-label="Build netlistsvg preview"
-          title="Build netlistsvg preview"
-          data-testid="schematic-editor-rebuild-svg"
-        >
-          {buildBusy ? 'Building...' : 'Build netlistsvg'}
-        </button>
-        <span style={styles.statusText} data-testid="schematic-editor-status">
-          {wireStart
-            ? `Wire from ${wireStart.label}${hoverEndpoint ? ` to ${hoverEndpoint.label}` : ''}`
-            : hoverEndpoint
-              ? `Snap ${hoverEndpoint.label}`
-              : dirty ? 'Unsaved' : 'Saved'}
-        </span>
-        <span style={styles.statusText} data-testid="schematic-editor-zoom">
-          {Math.round(zoom * 100)}%
-        </span>
-      </div>
+      <EditorCommandToolbar
+        selectActive={tool === 'select'}
+        wireActive={tool === 'wire'}
+        disabled={busy}
+        canUndo={history.length > 0}
+        canRedo={future.length > 0}
+        hasSelection={Boolean(selection)}
+        dirty={dirty}
+        buildBusy={buildBusy}
+        status={wireStart
+          ? `Wire from ${wireStart.label}${hoverEndpoint ? ` to ${hoverEndpoint.label}` : ''}`
+          : hoverEndpoint
+            ? `Snap ${hoverEndpoint.label}`
+            : dirty ? 'Unsaved' : 'Saved'}
+        zoom={zoom}
+        onSelect={() => {
+          setTool('select');
+          setPendingBlock(null);
+          setWireStart(null);
+          setHoverEndpoint(null);
+          setHoverSelection(null);
+        }}
+        onWire={() => {
+          setTool('wire');
+          setPendingBlock(null);
+          setWireStart(null);
+          setHoverEndpoint(null);
+          setHoverSelection(null);
+        }}
+        onUndo={undo}
+        onRedo={redo}
+        onDelete={() => deleteSelection()}
+        onSave={() => void saveAndRebuild()}
+        onFit={fitViewport}
+        onBuild={onBuild}
+      />
 
       <div style={styles.content}>
         <div style={styles.stage}>
+          <FloatingComponentPalette
+            activeType={tool === 'place' ? placeType : null}
+            blockActive={tool === 'place-block' || blockDialogOpen}
+            disabled={busy}
+            onSelectType={(type) => {
+              setTool('place');
+              setPendingBlock(null);
+              setPlaceType(type);
+              setWireStart(null);
+              setHoverEndpoint(null);
+              setHoverSelection(null);
+            }}
+            onSelectBlock={openBlockDialog}
+          />
           <SchematicDocumentSvg
             document={document}
             selection={selection}
@@ -1762,6 +1775,25 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             </>
           ) : selection?.kind === 'components' ? (
             <div style={styles.emptyText}>{selection.ids.length} components selected</div>
+          ) : selectedPort ? (
+            <div style={styles.pinList} data-testid="schematic-editor-port-panel">
+              <div style={styles.pinRow}>
+                <span>Port</span>
+                <code>{selectedPort.name}</code>
+              </div>
+              <div style={styles.pinRow}>
+                <span>Net</span>
+                <code data-testid="schematic-editor-port-net">{selectedPort.net}</code>
+              </div>
+              <div style={styles.pinRow}>
+                <span>Position</span>
+                <code data-testid="schematic-editor-port-position">
+                  {document.portPositions.get(selectedPort.id)
+                    ? `${document.portPositions.get(selectedPort.id)?.x}, ${document.portPositions.get(selectedPort.id)?.y}`
+                    : '-'}
+                </code>
+              </div>
+            </div>
           ) : selectedWire ? (
             <div style={styles.pinList} data-testid="schematic-editor-wire-panel">
               <div style={styles.pinRow}>
@@ -2156,6 +2188,7 @@ function cursorForWorld(
   world: CircuitPosition,
 ): EditorCursor {
   if (hitSelectedStoredWirePoint(document.wires, module, selection, world)) return 'move';
+  if (hitPort(document, world)) return 'grab';
   if (hitComponent(document, world)) return 'grab';
   if (hitSelectedComponentFrame(document, selection, world)) return 'grab';
   return hitEditableWireSegment(document.wires, module, world) ? 'move' : 'default';
@@ -2167,6 +2200,10 @@ function hoverSelectionForWorld(
   selection: SchematicSelection,
   world: CircuitPosition,
 ): SchematicSelection {
+  const port = hitPort(document, world);
+  if (port && !(selection?.kind === 'port' && selection.id === port.id)) {
+    return { kind: 'port', id: port.id };
+  }
   const component = hitComponent(document, world);
   if (component && !componentIdsForSelection(selection).includes(component.id)) {
     return { kind: 'component', id: component.id };
@@ -2232,6 +2269,16 @@ function componentFromPointerTarget(
   const componentId = target.closest('[data-component-id]')?.getAttribute('data-component-id');
   if (!componentId) return null;
   return document.module.components.find((component) => component.id === componentId) ?? null;
+}
+
+function portFromPointerTarget(
+  document: ReturnType<typeof createSchematicDocument>,
+  target: EventTarget | null,
+): CircuitPort | null {
+  if (!(target instanceof Element)) return null;
+  const portId = target.closest('[data-port-id]')?.getAttribute('data-port-id');
+  if (!portId) return null;
+  return document.module.ports.find((port) => port.id === portId) ?? null;
 }
 
 function selectedComponentHandleFromPointerTarget(
@@ -2540,15 +2587,6 @@ const styles: Record<string, CSSProperties> = {
     border: '1px solid #93b4ff',
     boxShadow: '0 0 0 2px rgba(37, 99, 235, 0.16)',
   },
-  toolbar: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '8px 10px',
-    borderBottom: '1px solid #d8dee8',
-    flexWrap: 'wrap',
-    background: '#ffffff',
-  },
   toolButton: {
     minWidth: 42,
     height: 32,
@@ -2558,17 +2596,6 @@ const styles: Record<string, CSSProperties> = {
     background: '#ffffff',
     color: '#253041',
     fontWeight: 650,
-    cursor: 'pointer',
-  },
-  activeToolButton: {
-    minWidth: 42,
-    height: 32,
-    padding: '0 10px',
-    border: '1px solid #2563eb',
-    borderRadius: 5,
-    background: '#2563eb',
-    color: '#ffffff',
-    fontWeight: 700,
     cursor: 'pointer',
   },
   primaryButton: {
@@ -2581,14 +2608,6 @@ const styles: Record<string, CSSProperties> = {
     color: '#ffffff',
     fontWeight: 700,
     cursor: 'pointer',
-  },
-  toolbarDivider: { width: 1, height: 24, background: '#d8dee8', margin: '0 2px' },
-  statusText: {
-    marginLeft: 'auto',
-    color: '#526071',
-    fontSize: 12,
-    minWidth: 90,
-    textAlign: 'right',
   },
   content: { display: 'flex', flexDirection: 'column', minHeight: 520, flex: '1 1 520px' },
   stage: {
@@ -2603,8 +2622,11 @@ const styles: Record<string, CSSProperties> = {
     padding: 12,
     overflow: 'auto',
     background: '#fbfcfe',
-    minHeight: 86,
-    maxHeight: 'min(320px, 34vh)',
+    boxSizing: 'border-box',
+    flex: '0 0 min(220px, 28vh)',
+    height: 'min(220px, 28vh)',
+    minHeight: 160,
+    maxHeight: 'min(220px, 28vh)',
   },
   panelTitle: {
     color: '#697386',

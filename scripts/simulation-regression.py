@@ -14,9 +14,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "output" / "playwright"
 PROJECT_TOOL = ROOT / "skills" / "circuit-design-ngspice" / "scripts" / "circuit_project.py"
+SKILL_SCRIPTS = PROJECT_TOOL.parent
 
 
 def load_project_tool():
+    scripts_path = str(SKILL_SCRIPTS)
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
     spec = importlib.util.spec_from_file_location("actoviq_circuit_project", PROJECT_TOOL)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load {PROJECT_TOOL}")

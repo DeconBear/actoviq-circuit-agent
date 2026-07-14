@@ -1,5 +1,7 @@
 import type {
   AppSettings,
+  ProviderTestResult,
+  DesktopAgentEvent,
   ChatResponse,
   JobSummary,
   ReferenceDocument,
@@ -13,9 +15,12 @@ import type {
   CircuitTrashItem,
   CircuitSkillStatus,
   DesignMemoryItem,
+  EdaExportRequest,
+  EdaExportResult,
   SavedDesignMemorySummary,
   SimulationDataset,
   SimulationRun,
+  TechnicalReportResult,
   WorkflowEvent,
   WorkspaceSummary,
 } from './types';
@@ -93,7 +98,10 @@ declare global {
         revision: number;
         netlist_path: string;
       }>;
+      exportCircuitEda(projectId: string, input: EdaExportRequest): Promise<EdaExportResult>;
+      chooseCircuitEdaMapping(): Promise<string | null>;
       simulateCircuitProject(projectId: string): Promise<SimulationRun>;
+      generateCircuitTechnicalReport(projectId: string, sourceRevision: number): Promise<TechnicalReportResult>;
       compileCircuitModule(projectId: string, moduleId: string): Promise<{
         ok: true;
         module_id: string;
@@ -139,16 +147,25 @@ declare global {
         callback: (event: { projectId: string; timestamp: number }) => void,
       ): () => void;
       openCircuitProjectFolder(projectId: string): Promise<string>;
+      openCircuitEdaExportFolder(projectId: string, exportId: string): Promise<string>;
       getSettings(): Promise<AppSettings>;
-      saveSettings(settings: AppSettings): Promise<void>;
+      saveSettings(settings: AppSettings): Promise<AppSettings>;
+      testProviderSettings(settings: AppSettings): Promise<ProviderTestResult>;
       getAppVersion(): Promise<string>;
       getCircuitSkillStatus(): Promise<CircuitSkillStatus>;
       syncCircuitSkill(): Promise<CircuitSkillStatus>;
       sendChatMessage(
         message: string,
-        history?: Array<{ role: string; content: string }>,
-        context?: { activeJobId?: string | null; activeProject?: Record<string, unknown> | null },
+        history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+        context?: {
+          conversationId?: string;
+          activeJobId?: string | null;
+          activeProject?: Record<string, unknown> | null;
+          workspaceRoot?: string;
+        },
       ): Promise<ChatResponse>;
+      stopChat(conversationId?: string): Promise<boolean>;
+      onChatEvent(callback: (event: DesktopAgentEvent) => void): () => void;
     };
   }
 }

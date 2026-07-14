@@ -9,6 +9,7 @@ import { registerSettingsHandlers } from './ipc/settings.js';
 import { registerWorkspaceHandlers } from './ipc/workspaces.js';
 import { registerProjectHandlers } from './ipc/projects.js';
 import { inspectCircuitSkillStatus, registerSkillHandlers } from './ipc/skills.js';
+import { closeDesktopAgentService } from './agent/desktopAgentService.js';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -31,6 +32,7 @@ function createWindow(): void {
     minHeight: 640,
     title: 'Actoviq Circuit Agent',
     icon: iconPath,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -46,6 +48,7 @@ function createWindow(): void {
 
   const menu = buildMenu(mainWindow);
   Menu.setApplicationMenu(menu);
+  mainWindow.setMenuBarVisibility(false);
 
   if (!app.isPackaged) {
     mainWindow.loadURL(process.env.ACTOVIQ_RENDERER_URL ?? 'http://127.0.0.1:5173');
@@ -72,6 +75,13 @@ function registerIpcHandlers(): void {
   registerSkillHandlers(ipcMain);
 }
 
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception in Electron main process:', error);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection in Electron main process:', reason);
+});
+
 app.whenReady().then(() => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.actoviq.circuit-agent');
@@ -87,10 +97,21 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+
+  app.on('render-process-gone', (_event, _webContents, details) => {
+    console.error('Renderer process gone:', details);
+  });
+  app.on('child-process-gone', (_event, details) => {
+    console.error('Child process gone:', details);
+  });
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  void closeDesktopAgentService();
 });

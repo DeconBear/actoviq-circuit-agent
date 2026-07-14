@@ -30,6 +30,33 @@ export function SetupWizard({ onClose }: Props) {
     setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
   }, []);
 
+  const applyProviderPreset = (preset: AppSettings['actoviqProviderPreset']) => {
+    setSettings((current) => {
+      if (!current) return current;
+      if (preset === 'deepseek') {
+        return {
+          ...current,
+          actoviqProviderPreset: preset,
+          actoviqProvider: 'openai',
+          actoviqBaseUrl: 'https://api.deepseek.com',
+          chatModel: 'deepseek-chat',
+          reasoningModel: 'deepseek-reasoner',
+        };
+      }
+      if (preset === 'anthropic') {
+        return {
+          ...current,
+          actoviqProviderPreset: preset,
+          actoviqProvider: 'anthropic',
+          actoviqBaseUrl: 'https://api.anthropic.com',
+          chatModel: current.sonnetModel,
+          reasoningModel: current.opusModel,
+        };
+      }
+      return { ...current, actoviqProviderPreset: preset, actoviqProvider: 'openai' };
+    });
+  };
+
   const handleNext = () => {
     setError(null);
     if (step < STEPS.length - 1) {
@@ -123,15 +150,32 @@ export function SetupWizard({ onClose }: Props) {
 
           {step === 1 && (
             <div>
-              <h3 style={styles.sectionTitle}>Actoviq Provider (optional)</h3>
+              <h3 style={styles.sectionTitle}>Built-in Agent Provider</h3>
               <p style={styles.hint}>
-                Configure this only if you want the built-in chat workflow. Local agent skill usage does not require an API key here.
+                This configures the SDK-based assistant inside the application. External skills use their own credentials.
               </p>
+              <label style={styles.field}>
+                <span style={styles.fieldLabel}>Provider preset</span>
+                <select
+                  value={settings.actoviqProviderPreset}
+                  onChange={(event) => applyProviderPreset(event.target.value as AppSettings['actoviqProviderPreset'])}
+                  style={styles.input}
+                >
+                  <option value="anthropic">Anthropic</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openai-compatible">Custom OpenAI-compatible</option>
+                </select>
+              </label>
               <StepField label="Base URL" value={settings.actoviqBaseUrl} onChange={(v) => update('actoviqBaseUrl', v)} />
-              <StepField label="Auth Token" value={settings.actoviqAuthToken} onChange={(v) => update('actoviqAuthToken', v)} type="password" placeholder="sk-ant-..." />
-              <StepField label="Opus Model" value={settings.opusModel} onChange={(v) => update('opusModel', v)} />
-              <StepField label="Sonnet Model" value={settings.sonnetModel} onChange={(v) => update('sonnetModel', v)} />
-              <StepField label="Haiku Model" value={settings.haikuModel} onChange={(v) => update('haikuModel', v)} />
+              <StepField
+                label={settings.hasActoviqAuthToken ? `API Key (${settings.maskedActoviqAuthToken})` : 'API Key'}
+                value={settings.actoviqAuthToken}
+                onChange={(v) => update('actoviqAuthToken', v)}
+                type="password"
+                placeholder={settings.hasActoviqAuthToken ? 'Leave blank to keep saved key' : 'Enter provider API key'}
+              />
+              <StepField label="Chat Model" value={settings.chatModel} onChange={(v) => update('chatModel', v)} />
+              <StepField label="Reasoning / Report Model" value={settings.reasoningModel} onChange={(v) => update('reasoningModel', v)} />
             </div>
           )}
 
@@ -155,7 +199,7 @@ export function SetupWizard({ onClose }: Props) {
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Auth Token:</span>
                   <span style={styles.summaryValue}>
-                    {settings.actoviqAuthToken ? 'Configured ✓' : 'Not set ✗'}
+                    {settings.actoviqAuthToken || settings.hasActoviqAuthToken ? 'Configured ✓' : 'Not set ✗'}
                   </span>
                 </div>
                 <div style={styles.summaryRow}>

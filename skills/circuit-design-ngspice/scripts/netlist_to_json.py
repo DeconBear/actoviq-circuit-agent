@@ -692,9 +692,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--view",
-        default="full",
+        default="schematic",
         choices=["full", "schematic"],
-        help="Payload view. Use schematic to exclude testbench-only elements from rendered diagrams.",
+        help="Payload view. Defaults to schematic; use full to retain testbench-only elements.",
     )
     return parser
 

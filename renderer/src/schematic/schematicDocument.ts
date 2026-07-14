@@ -27,10 +27,12 @@ export interface BlockDefinition {
 export type SchematicSelection =
   | { kind: 'component'; id: string }
   | { kind: 'components'; ids: string[] }
+  | { kind: 'port'; id: string }
   | { kind: 'wire'; id: string }
   | null;
 
 type SignalPortSide = 'left' | 'right';
+export type SchematicPortSide = 'left' | 'right' | 'top' | 'bottom';
 
 export interface EndpointHit extends CircuitWireEndpoint {
   kind: 'pin' | 'port' | 'point';
@@ -1897,11 +1899,15 @@ function autoLayoutLdoModule(module: CircuitModule, activeComponents: CircuitCom
   });
 
   const twoPinComponents = module.components.filter((component) => component.pins.length === 2 && !placed.has(component.id));
+  const passGateNet = pass?.pins.find((pin) => /gate|\bg\b/i.test(`${pin.id} ${pin.name}`))?.net;
   placeNamedTwoPin(twoPinComponents, placed, /v(in|dd|supply)|input/i, powerNet, groundNet, { x: 130, y: 410 });
   placeNamedTwoPin(twoPinComponents, placed, /vref|reference/i, 'vref', groundNet, { x: 130, y: 650 });
   placeNamedTwoPin(twoPinComponents, placed, /itail|tail|bias/i, 'tail', groundNet, { x: 450, y: 700 });
+  if (passGateNet) {
+    placeNamedTwoPin(twoPinComponents, placed, /rpu|pull.*up/i, powerNet, passGateNet, { x: 700, y: 180 });
+  }
   placeNamedTwoPin(twoPinComponents, placed, /r(top|fb1|upper)|feedback.*top/i, outputNet, 'fb', { x: 1020, y: 445 });
-  placeNamedTwoPin(twoPinComponents, placed, /r(bot|fb2|lower)|feedback.*bot/i, 'fb', groundNet, { x: 1020, y: 635 });
+  placeNamedTwoPin(twoPinComponents, placed, /r(bot|fb2|lower)|feedback.*bot/i, 'fb', groundNet, { x: 1020, y: 680 });
   placeNamedTwoPin(twoPinComponents, placed, /r(load|out)|load/i, outputNet, groundNet, { x: 1160, y: 635 });
   placeNamedTwoPin(twoPinComponents, placed, /c(out|load)|output.*cap/i, outputNet, groundNet, { x: 1290, y: 635 });
 
@@ -2112,7 +2118,7 @@ function isLdoLikeModule(module: CircuitModule, activeComponents: CircuitCompone
   ));
   const hasInputOutputRails = module.ports.some((port) => port.direction === 'input' && !isGroundPort(port)) &&
     module.ports.some((port) => port.direction === 'output' && !isGroundPort(port));
-  return activeComponents.length >= 3 && hasInputOutputRails && (/ldo|regulator/.test(moduleText) || hasNamedPassDevice);
+  return activeComponents.length >= 2 && hasInputOutputRails && (/ldo|regulator/.test(moduleText) || hasNamedPassDevice);
 }
 
 function findPassDevice(activeComponents: CircuitComponent[], powerNet: string, outputNet: string): CircuitComponent | undefined {
@@ -2416,6 +2422,11 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
   };
 
   signalPorts.forEach((port) => {
+    const storedPosition = storedPortPosition(port);
+    if (storedPosition) {
+      map.set(port.id, storedPosition);
+      return;
+    }
     const points = pinPointsByNet.get(port.net) ?? [];
     const activeControlSide = activeControlInputPortSide(module, port);
     const side = activeControlSide ?? signalPortSide(port, points, bounds);
@@ -2445,6 +2456,11 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
     }));
   });
   powers.forEach((port, index) => {
+    const storedPosition = storedPortPosition(port);
+    if (storedPosition) {
+      map.set(port.id, storedPosition);
+      return;
+    }
     const points = pinPointsByNet.get(port.net) ?? [];
     const anchor = topmost(points);
     map.set(port.id, snapPoint(anchor
@@ -2452,6 +2468,11 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
       : { x: bounds.minX + 110 + index * 110, y: bounds.minY - 90 }));
   });
   grounds.forEach((port, index) => {
+    const storedPosition = storedPortPosition(port);
+    if (storedPosition) {
+      map.set(port.id, storedPosition);
+      return;
+    }
     const points = pinPointsByNet.get(port.net) ?? [];
     const anchor = bottommost(points);
     map.set(port.id, snapPoint(anchor
@@ -2459,6 +2480,52 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
       : { x: bounds.minX + 110 + index * 110, y: bounds.maxY + 100 }));
   });
   return map;
+}
+
+function storedPortPosition(port: CircuitPort): CircuitPosition | null {
+  const position = port.position;
+  if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return null;
+  return snapPoint(position);
+}
+
+export function portRenderSide(
+  document: SchematicDocument,
+  port: CircuitPort,
+  position: CircuitPosition,
+): SchematicPortSide {
+  if (isGroundPort(port)) return 'bottom';
+  if (port.signal_type === 'power') return 'top';
+  if (port.direction === 'output') return 'right';
+  const pinPoints = document.module.components.flatMap((component) => (
+    component.pins.flatMap((pin, index) => (
+      pin.net === port.net ? [pinWorld(component, pin, index)] : []
+    ))
+  ));
+  if (pinPoints.length === 0) return 'left';
+  const nearest = pinPoints.reduce((best, point) => {
+    const pointDx = position.x - point.x;
+    const pointDy = position.y - point.y;
+    const bestDx = position.x - best.x;
+    const bestDy = position.y - best.y;
+    return pointDx * pointDx + pointDy * pointDy < bestDx * bestDx + bestDy * bestDy ? point : best;
+  });
+  const dx = position.x - nearest.x;
+  const dy = position.y - nearest.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
+  return dy >= 0 ? 'bottom' : 'top';
+}
+
+export function portInteractionBounds(position: CircuitPosition, side: SchematicPortSide): SchematicBounds {
+  if (side === 'right') return { minX: position.x - 12, minY: position.y - 34, maxX: position.x + 94, maxY: position.y + 34 };
+  if (side === 'left') return { minX: position.x - 94, minY: position.y - 34, maxX: position.x + 12, maxY: position.y + 34 };
+  if (side === 'top') return { minX: position.x - 48, minY: position.y - 70, maxX: position.x + 48, maxY: position.y + 12 };
+  return { minX: position.x - 48, minY: position.y - 12, maxX: position.x + 80, maxY: position.y + 58 };
+}
+
+export function isSchematicPortVisible(document: SchematicDocument, port: CircuitPort): boolean {
+  if (!document.connectedPortIds.has(port.id)) return false;
+  const isRailPort = isGroundPort(port) || port.signal_type === 'power';
+  return !isRailPort || !document.netLabels.some((label) => label.net === port.net);
 }
 
 function signalPortSide(port: CircuitPort, points: CircuitPosition[], bounds: SchematicBounds): SignalPortSide {
@@ -2820,8 +2887,10 @@ function routePointsForModule(
   return candidates
     .filter((points) => routeIsClear(points, obstacles))
     .sort((left, right) => (
-      routeCost(left) + routeCrossingPenalty(left, net, occupiedWires) -
-      routeCost(right) - routeCrossingPenalty(right, net, occupiedWires)
+      routeCost(left) + routeCrossingPenalty(left, net, occupiedWires) +
+        routeEndpointEgressPenalty(module, left, startEndpoint, endEndpoint) -
+      routeCost(right) - routeCrossingPenalty(right, net, occupiedWires) -
+        routeEndpointEgressPenalty(module, right, startEndpoint, endEndpoint)
     ))[0] ?? routePoints(startPoint, endPoint);
 }
 
@@ -3061,6 +3130,39 @@ function routeCost(points: CircuitPosition[]): number {
   return length + points.length * 8;
 }
 
+function routeEndpointEgressPenalty(
+  module: CircuitModule,
+  points: CircuitPosition[],
+  startEndpoint?: CircuitWireEndpoint,
+  endEndpoint?: CircuitWireEndpoint,
+): number {
+  if (points.length < 2) return 0;
+  const start = points[0];
+  const startAdjacent = points[1];
+  const end = points.at(-1);
+  const endAdjacent = points.at(-2);
+  if (!start || !startAdjacent || !end || !endAdjacent) return 0;
+  return endpointBacktrackPenalty(module, startEndpoint, start, startAdjacent) +
+    endpointBacktrackPenalty(module, endEndpoint, end, endAdjacent);
+}
+
+function endpointBacktrackPenalty(
+  module: CircuitModule,
+  endpoint: CircuitWireEndpoint | undefined,
+  endpointPoint: CircuitPosition,
+  adjacentPoint: CircuitPosition,
+): number {
+  if (!endpoint?.component_id || !endpoint.pin_id) return 0;
+  const component = module.components.find((entry) => entry.id === endpoint.component_id);
+  const pinIndex = component?.pins.findIndex((pin) => pin.id === endpoint.pin_id) ?? -1;
+  const pin = pinIndex >= 0 ? component?.pins[pinIndex] : undefined;
+  if (!component || !pin) return 0;
+  const pinPoint = pinWorld(component, pin, pinIndex);
+  const outward = { x: pinPoint.x - component.position.x, y: pinPoint.y - component.position.y };
+  const route = { x: adjacentPoint.x - endpointPoint.x, y: adjacentPoint.y - endpointPoint.y };
+  return outward.x * route.x + outward.y * route.y < 0 ? 10_000_000 : 0;
+}
+
 export function stripEndpoint(point: CircuitPosition, endpoint: EndpointHit): CircuitWireEndpoint {
   const value: CircuitWireEndpoint = { x: point.x, y: point.y };
   if (endpoint.component_id && endpoint.pin_id) {
@@ -3202,12 +3304,14 @@ function syncWireEndpointPoints(
 
 export function rerouteStoredWires(
   module: CircuitModule,
-  options: { componentIds?: Iterable<string> } = {},
+  options: { componentIds?: Iterable<string>; portIds?: Iterable<string> } = {},
 ): CircuitWire[] {
   const portPositions = computePortPositions(module);
   const componentIds = new Set(options.componentIds ?? []);
+  const portIds = new Set(options.portIds ?? []);
+  const filterConnections = componentIds.size > 0 || portIds.size > 0;
   return (module.wires ?? []).map((wire) => (
-    componentIds.size === 0 || wireTouchesAnyComponent(wire, componentIds)
+    !filterConnections || wireTouchesAnyComponent(wire, componentIds) || wireTouchesAnyPort(wire, portIds)
       ? rerouteWire(module, wire, portPositions)
       : wire
   ));
@@ -3257,6 +3361,29 @@ export function hitEndpoint(document: SchematicDocument, world: CircuitPosition)
         label: port.name,
         net: port.net,
       };
+    }
+  }
+  return null;
+}
+
+function wireTouchesAnyPort(wire: CircuitWire, portIds: Set<string>): boolean {
+  const leftPortId = wire.from?.port_id;
+  const rightPortId = wire.to?.port_id;
+  return Boolean(
+    leftPortId && portIds.has(leftPortId) ||
+    rightPortId && portIds.has(rightPortId),
+  );
+}
+
+export function hitPort(document: SchematicDocument, world: CircuitPosition): CircuitPort | null {
+  for (let index = document.module.ports.length - 1; index >= 0; index -= 1) {
+    const port = document.module.ports[index];
+    if (!port || !isSchematicPortVisible(document, port)) continue;
+    const point = document.portPositions.get(port.id);
+    if (!point) continue;
+    const bounds = portInteractionBounds(point, portRenderSide(document, port, point));
+    if (world.x >= bounds.minX && world.x <= bounds.maxX && world.y >= bounds.minY && world.y <= bounds.maxY) {
+      return port;
     }
   }
   return null;
@@ -3643,7 +3770,8 @@ function chooseSpineRouteSpecs(
         failed = true;
         break;
       }
-      const cost = routeCost(points) + routeCrossingPenalty(points, net, occupiedWires);
+      const cost = routeCost(points) + routeCrossingPenalty(points, net, occupiedWires) +
+        routeEndpointEgressPenalty(module, points, root, endpoint);
       specs.push({ endpoint, pairKey, startPoint, endPoint, points, cost });
       totalCost += cost;
     }
