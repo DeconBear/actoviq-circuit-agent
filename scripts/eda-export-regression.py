@@ -23,6 +23,7 @@ from eda_export import (  # noqa: E402
     export_eda,
     validate_layout_patch,
 )
+from eda_symbols import prepare_component  # noqa: E402
 
 
 def port(port_id: str, direction: str, signal_type: str, net: str) -> dict:
@@ -191,6 +192,14 @@ def main() -> int:
     assert rpu["eda"]["device_class"] == "resistor"
     assert mpass["eda"]["subtype"].lower() == "pmos", "PMOS model semantics were not inferred"
     assert rpu["eda"]["refdes"].startswith("R") and mpass["eda"]["refdes"].startswith("M")
+    assert {pin_value["id"]: pin_value["side"] for pin_value in mpass["pins"]} == {
+        "d": "top", "g": "left", "s": "bottom", "b": "right",
+    }, "default MOSFET pin sides must follow terminal roles"
+    custom_sides = prepare_component(component(
+        "rsense", "R", "1k", 0, 0,
+        [pin("a", "n1", "top"), pin("b", "n2", "bottom")],
+    ))
+    assert [pin_value["side"] for pin_value in custom_sides["pins"]] == ["top", "bottom"], "explicit pin sides must be preserved"
     rpu_records = [record for record in ir["connectivity"]["records"] if record.get("component_id") == "rpu"]
     assert len(rpu["pins"]) == 2 and {record["pin_id"] for record in rpu_records} == {"a", "b"}
     assert all(next(port_value for port_value in ldo["ports"] if port_value["id"] == port_id)["position"] for port_id in ("in", "out"))
@@ -277,6 +286,22 @@ def main() -> int:
     assert 'Fixture_Lib:Mapped_Resistor' in custom_kicad, "custom KiCad library/cell mapping was not consumed"
     for target_pin in ("11", "22"):
         assert re.search(rf'\((?:pin|number) "{target_pin}"', custom_kicad), f"custom KiCad pin {target_pin} was not consumed"
+
+    custom_parent = output / "custom-output-parent"
+    custom_parent.mkdir(parents=True, exist_ok=True)
+    output_dir_result = export_eda(
+        output / "default-root-ignored", project, modules,
+        {"blocking": False, "summary": {"errors": 0}}, document_hash,
+        scope="module", module_id="pmos_ldo", targets=["kicad"], view="design",
+        mapping_file="", native_convert="never", strict_layout=False, source_revision=7,
+        output_dir=str(custom_parent),
+    )
+    output_dir_root = Path(output_dir_result["export_root"])
+    assert output_dir_root.parent == custom_parent.resolve(), "optional output_dir must become the export parent"
+    assert output_dir_root.name == output_dir_result["export_id"]
+    assert (output_dir_root / "manifest.json").is_file()
+    assert "kicad" in output_dir_result["targets"]
+    assert output_dir_result["targets"]["kicad"]["status"] == "syntax_validated"
 
     validate_layout_patch({"schema": PATCH_SCHEMA, "operations": [
         {"op": "move_component", "component_id": "rpu", "dx_grid": 1, "dy_grid": -2},

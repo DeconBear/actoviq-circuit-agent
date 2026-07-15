@@ -1655,6 +1655,21 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     if (!(await exists(candidate))) {
       throw new Error(`EDA export not found: ${exportId}`);
     }
+    const manifestPath = path.join(candidate, 'manifest.json');
+    if (!(await exists(manifestPath))) {
+      throw new Error(`EDA export manifest missing: ${exportId}`);
+    }
+    try {
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { export_id?: unknown };
+      if (manifest.export_id !== exportId) {
+        throw new Error(`EDA export manifest id mismatch: ${exportId}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && /manifest id mismatch|manifest missing/.test(error.message)) {
+        throw error;
+      }
+      throw new Error(`EDA export manifest is invalid: ${exportId}`);
+    }
     if (process.env.ACTOVIQ_E2E !== '1') {
       const error = await shell.openPath(candidate);
       if (error) throw new Error(error);

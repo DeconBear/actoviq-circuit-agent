@@ -138,9 +138,9 @@ def prepare_component(component: dict[str, Any]) -> dict[str, Any]:
         if role in used_roles:
             role = f"{role}_{index + 1}"
         used_roles.add(role)
-        if component_type == "BLOCK" and pin.get("side") in _SIDES:
+        if pin.get("side") in _SIDES:
             side = str(pin["side"])
-            order = pin.get("order", side_counts[side])
+            order = pin.get("order") if isinstance(pin.get("order"), int) else side_counts[side]
         else:
             side = _ROLE_SIDES.get(role, "left" if index < (len(pins) + 1) // 2 else "right")
             order = side_counts[side]

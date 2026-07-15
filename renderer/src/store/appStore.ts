@@ -265,7 +265,21 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   newConversation: () => {
     const id = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    set({ conversationId: id, messages: [] });
+    const now = Date.now();
+    const summary = {
+      id,
+      title: 'New conversation',
+      lastMessage: '',
+      messageCount: 0,
+      updatedAt: now,
+      titleLocked: false,
+    };
+    set((s) => ({
+      conversationId: id,
+      messages: [],
+      conversations: [summary, ...s.conversations.filter((conv) => conv.id !== id)].slice(0, 50),
+      conversationMessages: { ...s.conversationMessages, [id]: [] },
+    }));
     return id;
   },
   upsertConversation: (conv) =>

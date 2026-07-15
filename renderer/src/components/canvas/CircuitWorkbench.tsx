@@ -1483,6 +1483,9 @@ export function CircuitWorkbench({
                   <option value="design">Design (exclude testbench)</option>
                   <option value="simulation">Simulation (include sources)</option>
                 </select>
+                <p className="av-form-hint">
+                  Design omits ideal V/I sources unless they are marked mount_policy design_include. Simulation keeps sources and testbench parts.
+                </p>
               </label>
               <div className="av-form-field">
                 <span>Targets</span>

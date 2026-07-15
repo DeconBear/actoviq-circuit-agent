@@ -4,9 +4,10 @@ import {
   type DesktopAgentChatResponse,
   type DesktopAgentRunHandle,
 } from '../agent/desktopAgentService.js';
+import { summarizeOlderChatTurns } from '../agent/chatHistorySummarize.js';
 import {
-  compressChatHistory,
   contextLimitForTier,
+  prepareChatHistory,
   resolveTierContext1M,
   resolveTierModel,
   type ChatModelTier,
@@ -65,7 +66,23 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
     }
     const supports1M = resolveTierContext1M(settings, tier);
     const contextLimit = contextLimitForTier(supports1M);
-    const compressed = compressChatHistory(history ?? [], contextLimit);
+    const basicModel = settings.basicModel.trim() || settings.haikuModel.trim() || model;
+    const workDir = context?.workspaceRoot || settings.workspaceRoot || process.cwd();
+    const prepared = await prepareChatHistory({
+      history: history ?? [],
+      currentMessage: trimmed,
+      maxTokens: contextLimit,
+      summarizeOlder: (older) => summarizeOlderChatTurns(
+        {
+          provider: settings.actoviqProvider,
+          apiKey: settings.actoviqAuthToken,
+          baseURL: settings.actoviqBaseUrl,
+          model: basicModel,
+          workDir,
+        },
+        older,
+      ),
+    });
 
     const conversationId = context?.conversationId?.trim()
       || `desktop-${event.sender.id}-${Date.now()}`;
@@ -78,12 +95,12 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
         apiKey: settings.actoviqAuthToken,
         baseURL: settings.actoviqBaseUrl,
         model,
-        workDir: context?.workspaceRoot || settings.workspaceRoot || process.cwd(),
+        workDir,
       },
       {
         conversationId,
         message: trimmed,
-        history: compressed.history,
+        history: prepared.history,
         context: {
           activeJobId: context?.activeJobId,
           activeProject: context?.activeProject,
@@ -96,10 +113,11 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
     activeRuns.set(key, handle);
     try {
       const result = await handle.result;
-      if (compressed.compressed && !result.isError) {
+      if (prepared.compressed && !result.isError) {
+        const modeLabel = prepared.mode === 'summarized' ? 'auto-summarized' : 'auto-compressed';
         return {
           ...result,
-          text: `${result.text}\n\n_Context auto-compressed to fit the ${contextLimit.toLocaleString()}-token ${supports1M ? '1M' : '200K'} window._`,
+          text: `${result.text}\n\n_Context ${modeLabel} to fit the ${contextLimit.toLocaleString()}-token ${supports1M ? '1M' : '200K'} window._`,
         };
       }
       return result;

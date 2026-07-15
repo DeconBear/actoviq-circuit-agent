@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -1349,13 +1350,27 @@ def _native_status(
             ]
             failure = "\n".join(failures)
             if not failures and erc_report.is_file() and netlist.is_file():
-                validation = validate_kicad_xml_connectivity(netlist, ir, symbol_map)
-                _write_json(connectivity_report, validation)
+                try:
+                    validation = validate_kicad_xml_connectivity(netlist, ir, symbol_map)
+                    _write_json(connectivity_report, validation)
+                except (OSError, ValueError, ET.ParseError, json.JSONDecodeError) as error:
+                    message = f"KiCad vendor connectivity round-trip failed: {error}"
+                    native_files = [path for path in (erc_report, netlist, connectivity_report) if path.is_file()]
+                    return ("failed" if policy == "required" else base_status), [message], native_files, {
+                        "connectivity_roundtrip": "failed",
+                    }
                 if not validation["passed"]:
-                    raise ValueError(
+                    message = (
                         "KiCad vendor connectivity round-trip failed: "
-                        f"missing={validation['missing_endpoints']}, unexpected={validation['unexpected_endpoints']}"
+                        f"missing={validation['missing_endpoints']}, "
+                        f"unexpected={validation['unexpected_endpoints']}"
                     )
+                    native_files = [path for path in (erc_report, netlist, connectivity_report) if path.is_file()]
+                    # auto/never keep generated packages; required marks failed for export_eda.
+                    return ("failed" if policy == "required" else base_status), [message], native_files, {
+                        "connectivity_roundtrip": "failed",
+                        "vendor_connectivity_hash": validation.get("actual_hash"),
+                    }
                 erc_data = json.loads(erc_report.read_text(encoding="utf-8"))
                 violations = [
                     violation
