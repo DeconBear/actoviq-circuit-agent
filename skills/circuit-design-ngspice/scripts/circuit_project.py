@@ -4000,6 +4000,11 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--native-convert", choices=["auto", "never", "required"], default="auto")
     export_parser.add_argument("--strict-layout", action="store_true")
     export_parser.add_argument("--source-revision", type=int, default=None)
+    export_parser.add_argument(
+        "--output-dir",
+        default="",
+        help="Optional parent directory for the export. Defaults to <project>/build/exports.",
+    )
     return parser
 
 
@@ -4073,6 +4078,7 @@ def main() -> int:
                 native_convert=args.native_convert,
                 strict_layout=bool(args.strict_layout),
                 source_revision=args.source_revision,
+                output_dir=args.output_dir or None,
             )
         else:
             raise ValueError(f"unknown command: {args.command}")

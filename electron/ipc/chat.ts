@@ -4,6 +4,13 @@ import {
   type DesktopAgentChatResponse,
   type DesktopAgentRunHandle,
 } from '../agent/desktopAgentService.js';
+import {
+  compressChatHistory,
+  contextLimitForTier,
+  resolveTierContext1M,
+  resolveTierModel,
+  type ChatModelTier,
+} from '../agent/modelTiers.js';
 import { loadSettingsWithSecrets } from './settings.js';
 
 interface ChatContext {
@@ -11,6 +18,7 @@ interface ChatContext {
   activeJobId?: string | null;
   activeProject?: Record<string, unknown> | null;
   workspaceRoot?: string;
+  modelTier?: ChatModelTier;
 }
 
 const activeRuns = new Map<string, DesktopAgentRunHandle>();
@@ -28,6 +36,10 @@ function configurationError(text: string): DesktopAgentChatResponse {
   };
 }
 
+function normalizeTier(value: unknown): ChatModelTier {
+  return value === 'basic' || value === 'professional' ? value : 'medium';
+}
+
 export function registerChatHandlers(ipcMain: IpcMain): void {
   ipcMain.handle('chat:send', async (
     event,
@@ -42,9 +54,18 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
     if (!settings.actoviqAuthToken) {
       return configurationError('Configure an API key in Settings before chatting.');
     }
-    if (!settings.actoviqBaseUrl || !settings.chatModel) {
-      return configurationError('Provider URL and chat model are required. Check Settings.');
+    if (!settings.actoviqBaseUrl) {
+      return configurationError('Provider URL is required. Check Settings.');
     }
+
+    const tier = normalizeTier(context?.modelTier ?? settings.preferredChatTier);
+    const model = resolveTierModel(settings, tier);
+    if (!model) {
+      return configurationError('Configure Basic / Medium / Professional models in Settings before chatting.');
+    }
+    const supports1M = resolveTierContext1M(settings, tier);
+    const contextLimit = contextLimitForTier(supports1M);
+    const compressed = compressChatHistory(history ?? [], contextLimit);
 
     const conversationId = context?.conversationId?.trim()
       || `desktop-${event.sender.id}-${Date.now()}`;
@@ -56,13 +77,13 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
         provider: settings.actoviqProvider,
         apiKey: settings.actoviqAuthToken,
         baseURL: settings.actoviqBaseUrl,
-        model: settings.chatModel,
+        model,
         workDir: context?.workspaceRoot || settings.workspaceRoot || process.cwd(),
       },
       {
         conversationId,
         message: trimmed,
-        history,
+        history: compressed.history,
         context: {
           activeJobId: context?.activeJobId,
           activeProject: context?.activeProject,
@@ -74,7 +95,14 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
     );
     activeRuns.set(key, handle);
     try {
-      return await handle.result;
+      const result = await handle.result;
+      if (compressed.compressed && !result.isError) {
+        return {
+          ...result,
+          text: `${result.text}\n\n_Context auto-compressed to fit the ${contextLimit.toLocaleString()}-token ${supports1M ? '1M' : '200K'} window._`,
+        };
+      }
+      return result;
     } finally {
       if (activeRuns.get(key) === handle) activeRuns.delete(key);
     }

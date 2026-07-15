@@ -614,8 +614,14 @@ try {
   await page.getByTestId('eda-export-native-convert').selectOption('never');
   await clickEnabledTestId(page, 'run-eda-export');
   await page.getByTestId('eda-export-result').waitFor({ timeout: 60_000 });
-  for (const target of ['kicad', 'altium', 'orcad', 'virtuoso']) {
-    await page.getByTestId(`eda-export-status-${target}`).getByText('import_ready', { exact: true }).waitFor();
+  const expectedExportStatuses = {
+    kicad: 'syntax_validated',
+    altium: 'kicad_import_source',
+    orcad: 'syntax_validated',
+    virtuoso: 'generated_unverified',
+  };
+  for (const [target, status] of Object.entries(expectedExportStatuses)) {
+    await page.getByTestId(`eda-export-status-${target}`).getByText(status, { exact: true }).waitFor();
   }
   const exportNotice = await page.locator('[role="status"]').textContent();
   const exportId = exportNotice?.match(/EDA export (\S+) complete/)?.[1] ?? '';

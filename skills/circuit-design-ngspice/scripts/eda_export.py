@@ -10,11 +10,15 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from eda_kicad_validate import find_kicad_cli, validate_kicad_xml_connectivity
+from eda_symbols import assign_refdes, binding_for, prepare_component, resolve_symbol_map
 
 
 EDA_IR_SCHEMA = "actoviq.eda-ir.v1"
@@ -113,7 +117,14 @@ def _project_net_aliases(project: dict[str, Any], modules: dict[str, dict[str, A
 def _included_component(component: dict[str, Any], view: str) -> bool:
     if view == "simulation":
         return True
-    return str(component.get("mount_policy", "")) != "testbench_exclude"
+    mount_policy = str(component.get("mount_policy", ""))
+    if mount_policy == "testbench_exclude":
+        return False
+    if mount_policy == "design_include":
+        return True
+    # Ideal SPICE sources are testbench objects unless a project explicitly
+    # declares that they represent a physical design component.
+    return str(component.get("type", "")).upper() not in {"V", "I"}
 
 
 def _project_module_view(module: dict[str, Any], view: str) -> dict[str, Any]:
@@ -153,13 +164,18 @@ def _project_module_view(module: dict[str, Any], view: str) -> dict[str, Any]:
 def _component_size(component: dict[str, Any]) -> tuple[float, float]:
     if component.get("type") == "BLOCK":
         block = component.get("block") or {}
-        return float(block.get("width", 120)), float(block.get("height", 80))
-    if component.get("type") in {"M", "Q", "E"}:
+        width, height = float(block.get("width", 120)), float(block.get("height", 80))
+    elif component.get("type") in {"M", "Q", "E"}:
         width, height = 90.0, 90.0
     elif component.get("type") in {"V", "I"}:
         width, height = 70.0, 100.0
     else:
         width, height = 100.0, 50.0
+    # KiCad's normal schematic connection grid is 50 mil (1.27 mm), which is
+    # half of an Actoviq 20-unit grid step.  Grid-aligned symbol dimensions keep
+    # both pin connection points and routed wire endpoints on that grid.
+    width = math.ceil(width / GRID) * GRID
+    height = math.ceil(height / GRID) * GRID
     if int(round(float(component.get("rotation", 0)))) % 180 == 90:
         return height, width
     return width, height
@@ -183,21 +199,32 @@ def _rotate_point(x: float, y: float, rotation: int) -> tuple[float, float]:
     return x, y
 
 
+def _pin_side(component: dict[str, Any], pin: dict[str, Any], index: int) -> str:
+    pins = component.get("pins") or []
+    side = pin.get("side")
+    if side in {"left", "right", "top", "bottom"}:
+        return str(side)
+    if len(pins) == 2:
+        return "left" if index == 0 else "right"
+    if component.get("type") == "M":
+        return ("top", "left", "bottom", "right")[min(index, 3)]
+    if component.get("type") == "Q":
+        return ("top", "left", "bottom")[min(index, 2)]
+    return "left" if index < math.ceil(len(pins) / 2) else "right"
+
+
 def _pin_position(component: dict[str, Any], pin: dict[str, Any], index: int) -> dict[str, float]:
     pins = component.get("pins") or []
     width, height = _component_size({**component, "rotation": 0})
-    side = pin.get("side")
-    if not side:
-        if len(pins) == 2:
-            side = "left" if index == 0 else "right"
-        elif component.get("type") == "M":
-            side = ("right", "left", "bottom", "top")[min(index, 3)]
-        elif component.get("type") == "Q":
-            side = ("top", "left", "bottom")[min(index, 2)]
-        else:
-            side = "left" if index < math.ceil(len(pins) / 2) else "right"
-    side_pins = [entry for entry in pins if (entry.get("side") or side) == side]
-    side_index = side_pins.index(pin) if pin in side_pins else index
+    side = _pin_side(component, pin, index)
+    side_entries = [
+        (entry_index, entry)
+        for entry_index, entry in enumerate(pins)
+        if _pin_side(component, entry, entry_index) == side
+    ]
+    side_entries.sort(key=lambda item: (float(item[1].get("order", item[0])), item[0]))
+    side_pins = [entry for _, entry in side_entries]
+    side_index = side_pins.index(pin) if pin in side_pins else 0
     offset = (side_index - (len(side_pins) - 1) / 2) * GRID
     if side == "left":
         local = (-width / 2, offset)
@@ -247,7 +274,7 @@ def _port_positions(module: dict[str, Any], components: list[dict[str, Any]]) ->
 
 
 def _layout_candidates(module: dict[str, Any], view: str) -> list[list[dict[str, Any]]]:
-    source = [json.loads(json.dumps(component)) for component in module.get("components", []) if _included_component(component, view)]
+    source = [prepare_component(component) for component in module.get("components", []) if _included_component(component, view)]
     candidates = [source]
     if not source:
         return candidates
@@ -280,6 +307,15 @@ def _layout_candidates(module: dict[str, Any], view: str) -> list[list[dict[str,
             moved["position"]["x"] = _snap(float(moved["position"].get("x", 0)) + dx_grid * GRID)
             moved["position"]["y"] = _snap(float(moved["position"].get("y", 0)) + dy_grid * GRID)
             candidates.append(candidate)
+        if len(component.get("pins", [])) >= 3:
+            rotation_offsets = (0, -2) if movable_index == 0 else (0,)
+            for rotation in (90, 270):
+                for dx_grid in rotation_offsets:
+                    candidate = [json.loads(json.dumps(item)) for item in source]
+                    rotated = next(item for item in candidate if item.get("id") == component.get("id"))
+                    rotated["position"]["x"] = _snap(float(rotated["position"].get("x", 0)) + dx_grid * GRID)
+                    rotated["rotation"] = rotation
+                    candidates.append(candidate)
 
     for variant in range(1, 9):
         candidate = [json.loads(json.dumps(component)) for component in source]
@@ -740,6 +776,7 @@ def build_eda_ir(project: dict[str, Any], modules: dict[str, dict[str, Any]], *,
             "nets": nets, "wires": wires, "annotations": module.get("annotations", []),
             "spice": module.get("spice", {}),
         })
+    assign_refdes(pages)
     ir = {
         "schema": EDA_IR_SCHEMA,
         "source": {"project_id": project["project_id"], "revision": project["revision"], "document_hash": document_hash, "scope": scope, "module_id": module_id, "view": view},
@@ -759,24 +796,7 @@ def build_eda_ir(project: dict[str, Any], modules: dict[str, dict[str, Any]], *,
 
 
 def _load_symbol_map(path: str, pages: list[dict[str, Any]]) -> dict[str, Any]:
-    mapping = json.loads(Path(path).read_text(encoding="utf-8")) if path else {"schema": SYMBOL_MAP_SCHEMA, "targets": {}}
-    if mapping.get("schema") != SYMBOL_MAP_SCHEMA:
-        raise ValueError(f"mapping file schema must be {SYMBOL_MAP_SCHEMA}")
-    targets = mapping.setdefault("targets", {})
-    for target in TARGETS:
-        target_map = targets.setdefault(target, {})
-        overrides = target_map.get("components", {})
-        type_overrides = target_map.get("types", {})
-        for page in pages:
-            for component in page["components"]:
-                entry = overrides.get(component["id"]) or type_overrides.get(component["type"])
-                if not entry:
-                    continue
-                pin_map = entry.get("pin_map") or {}
-                source_pins = {str(pin["id"]) for pin in component.get("pins", [])}
-                if set(pin_map) != source_pins or len(set(pin_map.values())) != len(pin_map) or any(not str(value) for value in pin_map.values()):
-                    raise ValueError(f"incomplete or duplicate {target} pin map for {component['id']}")
-    return mapping
+    return resolve_symbol_map(path, pages, TARGETS, SYMBOL_MAP_SCHEMA)
 
 
 def _svg_preview(ir: dict[str, Any]) -> str:
@@ -806,65 +826,129 @@ def _stable_uuid(*parts: Any) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, "actoviq:" + ":".join(map(str, parts))))
 
 
+def _kicad_symbol_graphics(component: dict[str, Any], indent: str) -> list[str]:
+    eda = component.get("eda") or {}
+    device_class = str(eda.get("device_class", component.get("type", "generic"))).lower()
+    subtype = str(eda.get("subtype", "")).lower()
+    stroke = "(stroke (width 0) (type default))"
+    no_fill = "(fill (type none))"
+
+    def polyline(points: list[tuple[float, float]]) -> str:
+        coordinates = " ".join(f"(xy {x:.4f} {y:.4f})" for x, y in points)
+        return f"{indent}(polyline (pts {coordinates}) {stroke} {no_fill})"
+
+    if device_class == "resistor":
+        return [polyline([(-3.81, 0), (-3.175, -1.27), (-2.54, 1.27), (-1.27, -1.27), (0, 1.27), (1.27, -1.27), (2.54, 1.27), (3.175, -1.27), (3.81, 0)])]
+    if device_class == "capacitor":
+        return [polyline([(-3.81, 0), (-0.635, 0)]), polyline([(-0.635, -2.54), (-0.635, 2.54)]), polyline([(0.635, -2.54), (0.635, 2.54)]), polyline([(0.635, 0), (3.81, 0)])]
+    if device_class == "inductor":
+        return [polyline([(-3.81, 0), (-3.175, 0), (-2.54, -1.27), (-1.27, 1.27), (0, -1.27), (1.27, 1.27), (2.54, -1.27), (3.175, 0), (3.81, 0)])]
+    if device_class == "diode":
+        return [polyline([(-3.81, 0), (-1.27, 0)]), polyline([(-1.27, -2.54), (-1.27, 2.54), (1.27, 0), (-1.27, -2.54)]), polyline([(1.27, -2.54), (1.27, 2.54)]), polyline([(1.27, 0), (3.81, 0)])]
+    if device_class == "mosfet":
+        arrow = [(0.4, 0), (1.6, -0.7), (1.6, 0.7), (0.4, 0)] if subtype == "pmos" else [(1.6, 0), (0.4, -0.7), (0.4, 0.7), (1.6, 0)]
+        return [
+            f"{indent}(circle (center 0 0) (radius 3.1750) {stroke} {no_fill})",
+            polyline([(-1.27, -2.54), (-1.27, 2.54)]), polyline([(0.635, -2.54), (0.635, 2.54)]),
+            polyline([(-3.175, 0), (-1.27, 0)]), polyline([(0.635, -2.54), (0, -3.175)]),
+            polyline([(0.635, 2.54), (0, 3.175)]), polyline([(0.635, 0), (3.175, 0)]), polyline(arrow),
+        ]
+    if device_class == "bjt":
+        arrow = [(1.0, 1.2), (2.3, 2.5), (1.1, 2.2)] if subtype != "pnp" else [(2.3, 2.5), (1.0, 1.2), (1.3, 2.4)]
+        return [
+            f"{indent}(circle (center 0 0) (radius 3.1750) {stroke} {no_fill})",
+            polyline([(-0.635, -2.54), (-0.635, 2.54)]), polyline([(-3.175, 0), (-0.635, 0)]),
+            polyline([(-0.635, -1.27), (1.9, -3.175)]), polyline([(-0.635, 1.27), (1.9, 3.175)]), polyline(arrow),
+        ]
+    if device_class in {"voltage_source", "current_source"}:
+        graphics = [f"{indent}(circle (center 0 0) (radius 2.5400) {stroke} {no_fill})"]
+        if device_class == "voltage_source":
+            graphics.extend([polyline([(-1.4, -0.8), (-0.4, -0.8)]), polyline([(-0.9, -1.3), (-0.9, -0.3)]), polyline([(0.4, 0.8), (1.4, 0.8)])])
+        else:
+            graphics.extend([polyline([(0, 1.5), (0, -1.5)]), polyline([(0, -1.5), (-0.7, -0.5)]), polyline([(0, -1.5), (0.7, -0.5)])])
+        return graphics
+    width, height = _component_size({**component, "rotation": 0})
+    half_width = max(2.54, width * MM_PER_UNIT / 2 - 2.54)
+    half_height = max(1.27, height * MM_PER_UNIT / 2 - 1.27)
+    return [f"{indent}(rectangle (start {-half_width:.4f} {-half_height:.4f}) (end {half_width:.4f} {half_height:.4f}) {stroke} (fill (type background)))"]
+
+
+def _kicad_pin_electrical_type(component: dict[str, Any], pin: dict[str, Any]) -> str:
+    explicit = str(pin.get("electrical_type", "")).lower()
+    allowed = {"input", "output", "bidirectional", "tri_state", "passive", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"}
+    if explicit in allowed:
+        return explicit
+    return "passive"
+
+
 def _kicad_symbol_name(page_id: str, component: dict[str, Any]) -> str:
     return _safe_name(f"{page_id}_{component['id']}")
 
 
-def _kicad_symbol_definition(name: str, component: dict[str, Any], *, embedded: bool, indent: str) -> list[str]:
-    symbol_name = f"Actoviq_Generic:{name}" if embedded else name
+def _kicad_symbol_definition(component: dict[str, Any], binding: dict[str, Any], *, embedded: bool, indent: str) -> list[str]:
+    cell = _safe_name(str(binding["cell"]), "Generic")
+    symbol_name = f"{binding['library']}:{cell}" if embedded else cell
     width, height = _component_size({**component, "rotation": 0})
     half_width = max(2.54, width * MM_PER_UNIT / 2 - 2.54)
     half_height = max(1.27, height * MM_PER_UNIT / 2 - 1.27)
-    reference = str(component.get("type", "X"))[:1] or "X"
+    eda = component.get("eda") or {}
+    reference = str(eda.get("refdes_prefix", component.get("type", "X")))[:2] or "X"
+    physical = bool(eda.get("physical", str(component.get("type", "")).upper() in {"R", "C", "L", "D", "M", "Q"}))
+    footprint = str(binding.get("footprint") or component.get("footprint") or "")
+    hide_pin_names = " hide" if eda.get("device_class") in {"resistor", "capacitor", "inductor"} else ""
     lines = [
         f"{indent}(symbol {_sexpr_string(symbol_name)}",
-        f"{indent}  (pin_names (offset 1.27))",
-        f"{indent}  (exclude_from_sim no) (in_bom yes) (on_board no)",
+        f"{indent}  (pin_names (offset 1.27){hide_pin_names})",
+        f"{indent}  (exclude_from_sim no) (in_bom {'yes' if physical else 'no'}) (on_board {'yes' if physical else 'no'})",
         f"{indent}  (property \"Reference\" {_sexpr_string(reference)} (at 0 {-half_height-2.54:.4f} 0) (effects (font (size 1.27 1.27))))",
         f"{indent}  (property \"Value\" {_sexpr_string(component.get('value', ''))} (at 0 {half_height+2.54:.4f} 0) (effects (font (size 1.27 1.27))))",
-        f"{indent}  (property \"Footprint\" \"\" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
+        f"{indent}  (property \"Footprint\" {_sexpr_string(footprint)} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
         f"{indent}  (property \"Datasheet\" \"~\" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
-        f"{indent}  (property \"Description\" \"Actoviq generated generic symbol\" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
-        f"{indent}  (symbol {_sexpr_string(name + '_0_1')}",
-        f"{indent}    (rectangle (start {-half_width:.4f} {-half_height:.4f}) (end {half_width:.4f} {half_height:.4f}) (stroke (width 0) (type default)) (fill (type background)))",
-        f"{indent}  )",
-        f"{indent}  (symbol {_sexpr_string(name + '_1_1')}",
+        f"{indent}  (property \"Description\" {_sexpr_string('Actoviq portable ' + str(eda.get('device_class', 'symbol')))} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
+        f"{indent}  (symbol {_sexpr_string(cell + '_0_1')}",
     ]
+    lines.extend(_kicad_symbol_graphics(component, indent + "    "))
+    lines.extend([f"{indent}  )", f"{indent}  (symbol {_sexpr_string(cell + '_1_1')}"])
+    pin_map = binding["pin_map"]
     for index, pin in enumerate(component.get("pins", [])):
         point = _pin_position({**component, "position": {"x": 0, "y": 0}, "rotation": 0}, pin, index)
-        x, y = point["x"] * MM_PER_UNIT, point["y"] * MM_PER_UNIT
-        side = pin.get("side")
-        if not side:
-            if len(component.get("pins", [])) == 2:
-                side = "left" if index == 0 else "right"
-            elif component.get("type") == "M":
-                side = ("right", "left", "bottom", "top")[min(index, 3)]
-            elif component.get("type") == "Q":
-                side = ("top", "left", "bottom")[min(index, 2)]
-            else:
-                side = "left" if index < math.ceil(len(component.get("pins", [])) / 2) else "right"
+        # Actoviq page coordinates grow downwards; KiCad symbol-library Y
+        # coordinates grow upwards.  Reflect local Y before placement.
+        x, y = point["x"] * MM_PER_UNIT, -point["y"] * MM_PER_UNIT
+        side = _pin_side(component, pin, index)
         angle = {"left": 0, "right": 180, "top": 270, "bottom": 90}[side]
+        target_pin = str(pin_map[str(pin["id"])])
+        pin_name = str((pin.get("eda") or {}).get("role") or pin.get("name") or pin["id"]).upper()
         lines.append(
-            f"{indent}    (pin passive line (at {x:.4f} {y:.4f} {angle}) (length 2.54) "
-            f"(name {_sexpr_string(pin.get('name', pin['id']))} (effects (font (size 1.27 1.27)))) "
-            f"(number {_sexpr_string(pin['id'])} (effects (font (size 1.27 1.27)))))"
+            f"{indent}    (pin {_kicad_pin_electrical_type(component, pin)} line (at {x:.4f} {y:.4f} {angle}) (length 2.54) "
+            f"(name {_sexpr_string(pin_name)} (effects (font (size 1.27 1.27)))) "
+            f"(number {_sexpr_string(target_pin)} (effects (font (size 1.27 1.27)))))"
         )
     lines.extend([f"{indent}  )", f"{indent})"])
     return lines
 
 
-def _kicad_page_lines(project_name: str, page: dict[str, Any], all_components: list[dict[str, Any]]) -> list[str]:
+def _kicad_page_lines(project_name: str, page: dict[str, Any], all_components: list[dict[str, Any]], symbol_map: dict[str, Any], *, root_page: bool) -> list[str]:
     page_uuid = _stable_uuid(project_name, page["id"])
     lines = ["(kicad_sch (version 20231120) (generator actoviq)", f"  (uuid {page_uuid})", "  (paper \"A4\")", "  (lib_symbols"]
+    embedded: set[str] = set()
     for entry in all_components:
-        lines.extend(_kicad_symbol_definition(_kicad_symbol_name(entry["page_id"], entry), entry, embedded=True, indent="    "))
+        binding = binding_for(symbol_map, "kicad", entry["page_id"], entry)
+        lib_id = f"{binding['library']}:{binding['cell']}"
+        if lib_id in embedded:
+            continue
+        embedded.add(lib_id)
+        lines.extend(_kicad_symbol_definition(entry, binding, embedded=True, indent="    "))
     lines.append("  )")
     for wire in page["wires"]:
         points = wire.get("points") or []
         for index in range(len(points) - 1):
             left, right = points[index], points[index + 1]
             lines.append(f"  (wire (pts (xy {left['x']*MM_PER_UNIT:.4f} {left['y']*MM_PER_UNIT:.4f}) (xy {right['x']*MM_PER_UNIT:.4f} {right['y']*MM_PER_UNIT:.4f})) (stroke (width 0) (type default)) (uuid {_stable_uuid(page['id'], wire['id'], index)}))")
+    port_nets = {str(port.get("net", "")) for port in page["ports"]}
     for net in page["nets"]:
+        if str(net.get("name", "")) in port_nets:
+            continue
         if net["endpoints"]:
             point = net["endpoints"][0]
             lines.append(f"  (global_label {_sexpr_string(net['name'])} (shape bidirectional) (at {point['x']*MM_PER_UNIT:.4f} {point['y']*MM_PER_UNIT:.4f} 0) (fields_autoplaced yes) (effects (font (size 1.27 1.27)) (justify left)) (uuid {_stable_uuid(page['id'], net['id'])}))")
@@ -873,21 +957,36 @@ def _kicad_page_lines(project_name: str, page: dict[str, Any], all_components: l
         if not position:
             continue
         shape = {"input": "input", "output": "output"}.get(port.get("direction"), "bidirectional")
-        lines.append(f"  (hierarchical_label {_sexpr_string(port['name'])} (shape {shape}) (at {position['x']*MM_PER_UNIT:.4f} {position['y']*MM_PER_UNIT:.4f} 0) (fields_autoplaced yes) (effects (font (size 1.27 1.27)) (justify left)) (uuid {_stable_uuid(page['id'], 'port', port['id'])}))")
+        label_kind = "global_label" if root_page else "hierarchical_label"
+        lines.append(f"  ({label_kind} {_sexpr_string(port['name'])} (shape {shape}) (at {position['x']*MM_PER_UNIT:.4f} {position['y']*MM_PER_UNIT:.4f} 0) (fields_autoplaced yes) (effects (font (size 1.27 1.27)) (justify left)) (uuid {_stable_uuid(page['id'], 'port', port['id'])}))")
     for component in page["components"]:
         position = component["position"]
-        symbol_name = _kicad_symbol_name(page["id"], component)
+        binding = binding_for(symbol_map, "kicad", page["id"], component)
+        eda = component.get("eda") or {}
+        physical = bool(eda.get("physical", str(component.get("type", "")).upper() in {"R", "C", "L", "D", "M", "Q"}))
+        refdes = str(eda.get("refdes", component["name"]))
+        kicad_rotation = (-int(component.get("rotation", 0))) % 360
+        width, height = _component_size(component)
+        if int(component.get("rotation", 0)) % 180 == 90:
+            reference_at = ((position["x"] - width / 2 - 20) * MM_PER_UNIT, position["y"] * MM_PER_UNIT)
+            value_at = ((position["x"] + width / 2 + 20) * MM_PER_UNIT, position["y"] * MM_PER_UNIT)
+        else:
+            reference_at = (position["x"] * MM_PER_UNIT, (position["y"] - height / 2 - 20) * MM_PER_UNIT)
+            value_at = (position["x"] * MM_PER_UNIT, (position["y"] + height / 2 + 20) * MM_PER_UNIT)
         lines.extend([
-            f"  (symbol (lib_id {_sexpr_string('Actoviq_Generic:' + symbol_name)}) (at {position['x']*MM_PER_UNIT:.4f} {position['y']*MM_PER_UNIT:.4f} {int(component.get('rotation', 0))}) (unit 1) (exclude_from_sim no) (in_bom yes) (on_board no) (dnp no) (uuid {_stable_uuid(page['id'], component['id'])})",
-            f"    (property \"Reference\" {_sexpr_string(component['name'])} (at {position['x']*MM_PER_UNIT:.4f} {(position['y']-30)*MM_PER_UNIT:.4f} 0) (effects (font (size 1.27 1.27))))",
-            f"    (property \"Value\" {_sexpr_string(component.get('value', ''))} (at {position['x']*MM_PER_UNIT:.4f} {(position['y']+30)*MM_PER_UNIT:.4f} 0) (effects (font (size 1.27 1.27))))",
+            f"  (symbol (lib_id {_sexpr_string(binding['library'] + ':' + binding['cell'])}) (at {position['x']*MM_PER_UNIT:.4f} {position['y']*MM_PER_UNIT:.4f} {kicad_rotation}) (unit 1) (exclude_from_sim no) (in_bom {'yes' if physical else 'no'}) (on_board {'yes' if physical else 'no'}) (dnp no) (uuid {_stable_uuid(page['id'], component['id'])})",
+            f"    (property \"Reference\" {_sexpr_string(refdes)} (at {reference_at[0]:.4f} {reference_at[1]:.4f} 0) (effects (font (size 1.27 1.27))))",
+            f"    (property \"Value\" {_sexpr_string(component.get('value', ''))} (at {value_at[0]:.4f} {value_at[1]:.4f} 0) (effects (font (size 1.27 1.27))))",
             f"    (property \"ACTOVIQ_ID\" {_sexpr_string(component['id'])} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
+            f"    (property \"ACTOVIQ_NAME\" {_sexpr_string(component['name'])} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
+            f"    (property \"ACTOVIQ_DEVICE_CLASS\" {_sexpr_string(eda.get('device_class', 'generic'))} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
         ])
         for pin in component.get("pins", []):
-            lines.append(f"    (pin {_sexpr_string(pin['id'])} (uuid {_stable_uuid(page['id'], component['id'], pin['id'])}))")
+            target_pin = str(binding["pin_map"][str(pin["id"])])
+            lines.append(f"    (pin {_sexpr_string(target_pin)} (uuid {_stable_uuid(page['id'], component['id'], pin['id'])}))")
         lines.extend([
             "    (instances",
-            f"      (project {_sexpr_string(project_name)} (path {_sexpr_string('/' + page_uuid)} (reference {_sexpr_string(component['name'])}) (unit 1)))",
+            f"      (project {_sexpr_string(project_name)} (path {_sexpr_string('/' + page_uuid)} (reference {_sexpr_string(refdes)}) (unit 1)))",
             "    )",
             "  )",
         ])
@@ -895,25 +994,40 @@ def _kicad_page_lines(project_name: str, page: dict[str, Any], all_components: l
     return lines
 
 
-def _write_kicad(root: Path, project_name: str, ir: dict[str, Any]) -> list[Path]:
+def _write_kicad(root: Path, project_name: str, ir: dict[str, Any], symbol_map: dict[str, Any]) -> list[Path]:
     target = root / "kicad"
     target.mkdir(parents=True, exist_ok=True)
     pro = target / f"{project_name}.kicad_pro"
     _write_json(pro, {"board": {}, "boards": [], "cvpcb": {}, "erc": {}, "libraries": {}, "meta": {"filename": pro.name, "version": 1}, "net_settings": {}, "pcbnew": {}, "schematic": {}, "text_variables": {}})
-    symbols = target / "Actoviq_Generic.kicad_sym"
     all_components = [{**component, "page_id": page["id"]} for page in ir["pages"] for component in page["components"]]
-    symbol_lines = ["(kicad_symbol_lib (version 20231120) (generator actoviq)"]
+    libraries: dict[str, dict[str, tuple[dict[str, Any], dict[str, Any]]]] = {}
     for component in all_components:
-        symbol_lines.extend(_kicad_symbol_definition(_kicad_symbol_name(component["page_id"], component), component, embedded=False, indent="  "))
-    symbol_lines.append(")\n")
-    _write_text(symbols, "\n".join(symbol_lines))
+        binding = binding_for(symbol_map, "kicad", component["page_id"], component)
+        cell = str(binding["cell"])
+        existing = libraries.setdefault(str(binding["library"]), {}).get(cell)
+        if existing and set(existing[1]["pin_map"].values()) != set(binding["pin_map"].values()):
+            raise ValueError(f"conflicting KiCad pin maps for {binding['library']}:{cell}")
+        libraries[str(binding["library"])].setdefault(cell, (component, binding))
+    symbol_files: list[Path] = []
+    table_lines = ["(sym_lib_table", "  (version 7)"]
+    for library, cells in sorted(libraries.items()):
+        filename = _safe_name(library, "Actoviq_Standard") + ".kicad_sym"
+        symbols = target / filename
+        symbol_lines = ["(kicad_symbol_lib (version 20231120) (generator actoviq)"]
+        for component, binding in cells.values():
+            symbol_lines.extend(_kicad_symbol_definition(component, binding, embedded=False, indent="  "))
+        symbol_lines.append(")\n")
+        _write_text(symbols, "\n".join(symbol_lines))
+        symbol_files.append(symbols)
+        table_lines.append(f"  (lib (name {_sexpr_string(library)})(type \"KiCad\")(uri {_sexpr_string('${KIPRJMOD}/' + filename)})(options \"\")(descr \"Actoviq portable symbols\"))")
+    table_lines.append(")\n")
     sym_table = target / "sym-lib-table"
-    _write_text(sym_table, '(sym_lib_table\n  (version 7)\n  (lib (name "Actoviq_Generic")(type "KiCad")(uri "${KIPRJMOD}/Actoviq_Generic.kicad_sym")(options "")(descr "Actoviq generated symbols"))\n)\n')
+    _write_text(sym_table, "\n".join(table_lines))
     schematic_files: list[Path] = []
     for page in ir["pages"]:
         page_name = project_name if len(ir["pages"]) == 1 else f"{project_name}-{_safe_name(page['id'])}"
         schematic = target / f"{page_name}.kicad_sch"
-        _write_text(schematic, "\n".join(_kicad_page_lines(project_name, page, all_components)))
+        _write_text(schematic, "\n".join(_kicad_page_lines(project_name, page, all_components, symbol_map, root_page=len(ir["pages"]) == 1)))
         schematic_files.append(schematic)
     if len(ir["pages"]) > 1:
         root_schematic = target / f"{project_name}.kicad_sch"
@@ -950,17 +1064,18 @@ def _write_kicad(root: Path, project_name: str, ir: dict[str, Any]) -> list[Path
         _write_text(root_schematic, "\n".join(lines))
         schematic_files.insert(0, root_schematic)
     _write_json(target / "connectivity.json", ir["connectivity"])
-    return [pro, symbols, sym_table, target / "connectivity.json", *schematic_files]
+    return [pro, *symbol_files, sym_table, target / "connectivity.json", *schematic_files]
 
 
-def _write_altium(root: Path, project_name: str, ir: dict[str, Any]) -> list[Path]:
+def _write_altium(root: Path, project_name: str, ir: dict[str, Any], symbol_map: dict[str, Any]) -> list[Path]:
     target = root / "altium"
     target.mkdir(parents=True, exist_ok=True)
     for source in (root / "kicad").iterdir():
         if source.is_file():
             shutil.copy2(source, target / source.name)
     readme = target / "IMPORT_ALTIUM.md"
-    _write_text(readme, f"# Import {project_name} into Altium Designer\n\nUse File > Import Wizard > KiCad Design Files and select `{project_name}.kicad_pro`. The package targets the KiCad 8 format baseline. Save the converted project as PrjPcb/SchDoc.\n")
+    _write_text(readme, f"# Import {project_name} into Altium Designer\n\nThis is a validated KiCad import source, not a native SchDoc. Use File > Import Wizard > KiCad Design Files, add `{project_name}.kicad_pro` and every `.kicad_sym` file in this folder, then save the converted project as PrjPcb/SchDoc. Compile the imported project and compare its netlist with `connectivity.json`.\n")
+    _write_json(target / "symbol-map.resolved.json", symbol_map["targets"]["altium"])
     _write_json(target / "connectivity.json", ir["connectivity"])
     return [*target.iterdir()]
 
@@ -972,18 +1087,37 @@ def _edif_identifier(value: str) -> str:
     return result
 
 
-def _write_orcad(root: Path, project_name: str, ir: dict[str, Any]) -> list[Path]:
+def _write_orcad(root: Path, project_name: str, ir: dict[str, Any], resolved_map: dict[str, Any]) -> list[Path]:
     target = root / "orcad"
     target.mkdir(parents=True, exist_ok=True)
     edif = target / f"{project_name}.edf"
-    lines = [f"(edif {_edif_identifier(project_name)}", "  (edifVersion 2 0 0)", "  (edifLevel 0)", "  (keywordMap (keywordLevel 0))", "  (status (written (timeStamp 2000 1 1 0 0 0) (program \"Actoviq\")))", "  (library ACTOVIQ_GENERIC (edifLevel 0) (technology (numberDefinition))"]
+    lines = [
+        f"(edif {_edif_identifier(project_name)}", "  (edifVersion 2 0 0)", "  (edifLevel 0)",
+        "  (keywordMap (keywordLevel 0))",
+        "  (status (written (timeStamp 2000 1 1 0 0 0) (program \"Actoviq\")))",
+    ]
+    libraries: dict[str, dict[str, tuple[dict[str, Any], dict[str, Any]]]] = {}
     for page in ir["pages"]:
         for component in page["components"]:
-            cell_name = _edif_identifier(f"{page['id']}_{component['id']}")
-            lines.append(f"    (cell {cell_name} (cellType GENERIC) (view SYMBOL (viewType SYMBOL) (interface")
+            binding = binding_for(resolved_map, "orcad", page["id"], component)
+            libraries.setdefault(str(binding["library"]), {}).setdefault(str(binding["cell"]), (component, binding))
+    for library, cells in sorted(libraries.items()):
+        lines.append(f"  (library {_edif_identifier(library)} (edifLevel 0) (technology (numberDefinition (scale 1 1 (unit DISTANCE))))")
+        for cell, (component, binding) in sorted(cells.items()):
+            lines.append(f"    (cell {_edif_identifier(cell)} (cellType GENERIC) (view SYMBOL (viewType SYMBOL) (interface")
             for pin in component.get("pins", []):
-                lines.append(f"      (port {_edif_identifier(pin['id'])} (direction INOUT))")
+                target_pin = _edif_identifier(str(binding["pin_map"][str(pin["id"])]))
+                lines.append(f"      (port {target_pin} (direction INOUT))")
+            lines.append("    ) (contents")
+            width, height = _component_size({**component, "rotation": 0})
+            lines.append(f"      (figure SYMBOL (rectangle (pt {int(-width/2)} {int(-height/2)}) (pt {int(width/2)} {int(height/2)})))")
+            for index, pin in enumerate(component.get("pins", [])):
+                target_pin = _edif_identifier(str(binding["pin_map"][str(pin["id"])]))
+                point = _pin_position({**component, "position": {"x": 0, "y": 0}, "rotation": 0}, pin, index)
+                lines.append(f"      (portImplementation {target_pin} (connectLocation (figure SYMBOL (dot (pt {int(point['x'])} {int(point['y'])})))))")
             lines.append("    )))")
+        lines.append("  )")
+    lines.append("  (library ACTOVIQ_DESIGN (edifLevel 0) (technology (numberDefinition (scale 1 1 (unit DISTANCE))))")
     for page in ir["pages"]:
         lines.append(f"    (cell {_edif_identifier(page['id'])} (cellType GENERIC) (view SCHEMATIC (viewType SCHEMATIC) (interface")
         for port in page["ports"]:
@@ -991,25 +1125,50 @@ def _write_orcad(root: Path, project_name: str, ir: dict[str, Any]) -> list[Path
             lines.append(f"      (port {_edif_identifier(port['id'])} (direction {direction}))")
         lines.append("    ) (contents")
         for component in page["components"]:
-            cell_name = _edif_identifier(f"{page['id']}_{component['id']}")
+            binding = binding_for(resolved_map, "orcad", page["id"], component)
             position = component.get("position") or {}
             orientation = f"R{int(component.get('rotation', 0)) % 360}"
-            lines.append(f"      (instance {_edif_identifier(component['id'])} (viewRef SYMBOL (cellRef {cell_name} (libraryRef ACTOVIQ_GENERIC))) (transform (origin (pt {int(position.get('x', 0))} {int(position.get('y', 0))})) (orientation {orientation})) (property VALUE (string {_sexpr_string(component.get('value', ''))})))")
+            eda = component.get("eda") or {}
+            lines.append(
+                f"      (instance {_edif_identifier(component['id'])} (viewRef SYMBOL (cellRef {_edif_identifier(binding['cell'])} (libraryRef {_edif_identifier(binding['library'])}))) "
+                f"(transform (origin (pt {int(position.get('x', 0))} {int(position.get('y', 0))})) (orientation {orientation})) "
+                f"(property REFDES (string {_sexpr_string(eda.get('refdes', component['name']))})) "
+                f"(property VALUE (string {_sexpr_string(component.get('value', ''))})) "
+                f"(property DEVICE (string {_sexpr_string(binding['cell'])})))"
+            )
         for net in page["nets"]:
             net_wires = [wire for wire in page["wires"] if wire.get("net_id") == net["id"]]
             wire_points = ";".join(",".join(f"{point['x']}:{point['y']}" for point in wire.get("points", [])) for wire in net_wires)
             lines.append(f"      (net {_edif_identifier(net['id'])} (property ACTOVIQ_WIRE_POINTS (string {_sexpr_string(wire_points)})) (joined")
             for endpoint in net["endpoints"]:
                 if endpoint.get("kind") == "pin":
-                    lines.append(f"        (portRef {_edif_identifier(endpoint['pin_id'])} (instanceRef {_edif_identifier(endpoint['component_id'])}))")
+                    component = next(entry for entry in page["components"] if entry["id"] == endpoint["component_id"])
+                    binding = binding_for(resolved_map, "orcad", page["id"], component)
+                    target_pin = binding["pin_map"][str(endpoint["pin_id"])]
+                    lines.append(f"        (portRef {_edif_identifier(target_pin)} (instanceRef {_edif_identifier(endpoint['component_id'])}))")
                 else:
                     lines.append(f"        (portRef {_edif_identifier(endpoint['port_id'])})")
             lines.append("      ))")
         lines.append("    )))")
-    lines.extend(["  )", ")\n"])
+    top_cell = _edif_identifier(project_name + "_TOP")
+    lines.append(f"    (cell {top_cell} (cellType GENERIC) (view SCHEMATIC (viewType SCHEMATIC) (interface) (contents")
+    for page in ir["pages"]:
+        lines.append(f"      (instance {_edif_identifier('PAGE_' + page['id'])} (viewRef SCHEMATIC (cellRef {_edif_identifier(page['id'])} (libraryRef ACTOVIQ_DESIGN))))")
+    port_records: dict[str, list[dict[str, str]]] = {}
+    for record in ir["connectivity"]["records"]:
+        if record.get("port_id"):
+            port_records.setdefault(record["net"], []).append(record)
+    for net_name, records in sorted(port_records.items()):
+        if len(records) < 2:
+            continue
+        lines.append(f"      (net {_edif_identifier(net_name)} (joined")
+        for record in records:
+            lines.append(f"        (portRef {_edif_identifier(record['port_id'])} (instanceRef {_edif_identifier('PAGE_' + record['module_id'])}))")
+        lines.append("      ))")
+    lines.extend(["    )))", "  )", f"  (design {_edif_identifier(project_name)} (cellRef {top_cell} (libraryRef ACTOVIQ_DESIGN)))", ")\n"])
     _write_text(edif, "\n".join(lines))
     symbol_map = target / "symbol-map.json"
-    _write_json(symbol_map, {"schema": SYMBOL_MAP_SCHEMA, "target": "orcad", "generic_library": "ACTOVIQ_GENERIC"})
+    _write_json(symbol_map, resolved_map["targets"]["orcad"])
     readme = target / "IMPORT_ORCAD.md"
     _write_text(readme, f"# Import {project_name} into OrCAD Capture\n\nImport `{edif.name}` with the EDIF 2.0 importer, then save the design as DSN/OPJ. Verify the net count against `connectivity.json`.\n")
     _write_json(target / "connectivity.json", ir["connectivity"])
@@ -1021,20 +1180,21 @@ def _spice_lines(ir: dict[str, Any], cdl: bool = False) -> list[str]:
     global_net_by_endpoint = {(record.get("module_id"), record.get("component_id"), record.get("pin_id")): record["net"] for record in ir["connectivity"]["records"] if record.get("component_id")}
     for page in ir["pages"]:
         for component in page["components"]:
-            prefix = component.get("type", "X")
+            component_type = str(component.get("type", "X")).upper()
+            prefix = "X" if component_type == "BLOCK" else component_type
             name = str(component.get("name", component["id"]))
             if not name.upper().startswith(prefix):
                 name = prefix + name
             nets = [global_net_by_endpoint.get((page["id"], component["id"], pin["id"]), f"{page['id']}:{pin.get('net', '')}") for pin in component.get("pins", [])]
             value = component.get("value", "GENERIC")
-            if prefix == "BLOCK":
-                prefix, value = "X", _safe_name(value, "ACTOVIQ_BLOCK")
+            if component_type == "BLOCK":
+                value = _safe_name(value, "ACTOVIQ_BLOCK")
             lines.append(" ".join([_safe_name(name), *(_safe_name(net, "0") for net in nets), str(value)]))
     lines.append(".END")
     return lines
 
 
-def _write_virtuoso(root: Path, project_name: str, ir: dict[str, Any]) -> list[Path]:
+def _write_virtuoso(root: Path, project_name: str, ir: dict[str, Any], resolved_map: dict[str, Any]) -> list[Path]:
     target = root / "virtuoso"
     target.mkdir(parents=True, exist_ok=True)
     spice = target / f"{project_name}.spice"
@@ -1042,24 +1202,23 @@ def _write_virtuoso(root: Path, project_name: str, ir: dict[str, Any]) -> list[P
     _write_text(spice, "\n".join(_spice_lines(ir)) + "\n")
     _write_text(cdl, "\n".join(_spice_lines(ir, True)) + "\n")
     device_map = target / "device-map.json"
-    _write_json(device_map, {"schema": SYMBOL_MAP_SCHEMA, "target": "virtuoso", "types": {"R": "analogLib/res/symbol", "C": "analogLib/cap/symbol", "L": "analogLib/ind/symbol", "D": "analogLib/diode/symbol", "M": "analogLib/nmos4/symbol", "Q": "analogLib/npn/symbol", "V": "analogLib/vsource/symbol", "I": "analogLib/isource/symbol"}, "fallback": "create_generic_symbol"})
+    _write_json(device_map, resolved_map["targets"]["virtuoso"])
     skill = target / "create_schematic.il"
     skill_lines = [
         "; Actoviq Virtuoso reconstruction script",
         "; Set actoviqLibrary before loading this file in CIW or batch mode.",
         'unless(boundp(\'actoviqLibrary) actoviqLibrary="ACTOVIQ")',
         "procedure(actoviqEnsureGenericSymbol(libName cellName pinNames)",
-        "  let((cv net)",
+        "  let((cv net term fig x y)",
         '    cv=dbOpenCellViewByType(libName cellName "symbol" "" "a")',
         '    unless(cv~>shapes dbCreateRect(cv list("device" "drawing") list(-1:-1 1:1)))',
-        '    foreach(pinName pinNames unless(dbFindNetByName(cv pinName) net=dbCreateNet(cv pinName) dbCreateTerm(net pinName "inputOutput")))',
+        "    x=-1.5 y=0.75",
+        '    foreach(pinName pinNames unless(dbFindNetByName(cv pinName) net=dbCreateNet(cv pinName) term=dbCreateTerm(net pinName "inputOutput") fig=dbCreateRect(cv list("pin" "drawing") list(x:y x+0.2:y+0.2)) dbCreatePin(net fig) dbCreateLabel(cv list("pin" "label") x+0.25:y pinName "centerLeft" "R0" "roman" 0.2) y=y-0.5))',
         "    dbSave(cv)",
         "    cv",
         "  )",
         ")",
     ]
-    cell_map = {"R": ("analogLib", "res"), "C": ("analogLib", "cap"), "L": ("analogLib", "ind"), "D": ("analogLib", "diode"), "M": ("analogLib", "nmos4"), "Q": ("analogLib", "npn"), "V": ("analogLib", "vsource"), "I": ("analogLib", "isource")}
-    pin_map = {"R": ["PLUS", "MINUS"], "C": ["PLUS", "MINUS"], "L": ["PLUS", "MINUS"], "D": ["PLUS", "MINUS"], "M": ["D", "G", "S", "B"], "Q": ["C", "B", "E"], "V": ["PLUS", "MINUS"], "I": ["PLUS", "MINUS"]}
     for page in ir["pages"]:
         page_cell = _safe_name(page["id"])
         skill_lines.extend([f'; Module {page["id"]}', f'cv=dbOpenCellViewByType(actoviqLibrary "{page_cell}" "schematic" "" "a")'])
@@ -1069,23 +1228,21 @@ def _write_virtuoso(root: Path, project_name: str, ir: dict[str, Any]) -> list[P
             net_variables[str(net["name"])] = variable
             skill_lines.append(f'{variable}=dbCreateNet(cv "{_safe_name(net["name"])}")')
         for component_index, component in enumerate(page["components"]):
-            component_type = str(component.get("type", "BLOCK"))
-            library, cell = cell_map.get(component_type, ("", ""))
-            pin_names = pin_map.get(component_type, [str(pin.get("name", pin["id"])) for pin in component.get("pins", [])])
-            if not library:
-                cell = _safe_name(f"generic_{component_type}_{len(pin_names)}")
-                quoted_pins = " ".join(f'\"{_safe_name(name)}\"' for name in pin_names)
-                skill_lines.append(f'master=actoviqEnsureGenericSymbol(actoviqLibrary "{cell}" list({quoted_pins}))')
-            else:
-                skill_lines.append(f'master=dbOpenCellViewByType("{library}" "{cell}" "symbol" "" "r")')
-                quoted_pins = " ".join(f'\"{_safe_name(name)}\"' for name in pin_names)
-                skill_lines.append(f'unless(master master=actoviqEnsureGenericSymbol(actoviqLibrary "generic_{component_type}_{len(pin_names)}" list({quoted_pins})))')
+            binding = binding_for(resolved_map, "virtuoso", page["id"], component)
+            library, cell, view = str(binding["library"]), str(binding["cell"]), str(binding.get("view", "symbol"))
+            pin_names = [str(binding["pin_map"][str(pin["id"])]) for pin in component.get("pins", [])]
+            quoted_pins = " ".join(f'\"{_safe_name(name)}\"' for name in pin_names)
+            skill_lines.append(f'master=dbOpenCellViewByType("{library}" "{cell}" "{view}" "" "r")')
+            skill_lines.append(f'unless(master master=actoviqEnsureGenericSymbol(actoviqLibrary "generic_{_safe_name(cell)}_{len(pin_names)}" list({quoted_pins})))')
             position = component.get("position") or {}
             orientation = f"R{int(component.get('rotation', 0)) % 360}"
-            skill_lines.append(f'inst{component_index}=dbCreateInst(cv master "{_safe_name(component["name"])}" list({float(position.get("x", 0))*MM_PER_UNIT:.4f}:{float(position.get("y", 0))*MM_PER_UNIT:.4f}) "{orientation}")')
+            refdes = str((component.get("eda") or {}).get("refdes", component["name"]))
+            skill_lines.append(f'inst{component_index}=dbCreateInst(cv master "{_safe_name(refdes)}" list({float(position.get("x", 0))*MM_PER_UNIT:.4f}:{float(position.get("y", 0))*MM_PER_UNIT:.4f}) "{orientation}")')
+            skill_lines.append(f'dbReplaceProp(inst{component_index} "ACTOVIQ_ID" "string" "{_safe_name(component["id"])}")')
+            skill_lines.append(f'dbReplaceProp(inst{component_index} "ACTOVIQ_VALUE" "string" {_sexpr_string(component.get("value", ""))})')
             for pin_index, pin in enumerate(component.get("pins", [])):
                 net_variable = net_variables.get(str(pin.get("net", "")))
-                target_pin = _safe_name(pin_names[min(pin_index, len(pin_names) - 1)]) if pin_names else _safe_name(pin["id"])
+                target_pin = _safe_name(str(binding["pin_map"][str(pin["id"])]))
                 if net_variable:
                     skill_lines.append(f'dbCreateConnByName({net_variable} inst{component_index} "{target_pin}")')
         for port in page["ports"]:
@@ -1108,18 +1265,129 @@ def _write_virtuoso(root: Path, project_name: str, ir: dict[str, Any]) -> list[P
     return [spice, cdl, device_map, skill, cds, readme, target / "connectivity.json"]
 
 
-def _native_status(target: str, policy: str) -> tuple[str, list[str]]:
-    executable = {"kicad": shutil.which("kicad-cli"), "altium": os.environ.get("ALTIUM_BIN"), "orcad": os.environ.get("ORCAD_CAPTURE_BIN"), "virtuoso": os.environ.get("VIRTUOSO_BIN")}[target]
+def _balanced_sexpr(text: str) -> bool:
+    depth = 0
+    quoted = False
+    escaped = False
+    for character in text:
+        if escaped:
+            escaped = False
+        elif character == "\\" and quoted:
+            escaped = True
+        elif character == '"':
+            quoted = not quoted
+        elif not quoted and character == "(":
+            depth += 1
+        elif not quoted and character == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0 and not quoted
+
+
+def _validate_generated_target(target: str, export_root: Path) -> str:
+    target_root = export_root / target
+    if target in {"kicad", "altium"}:
+        schematics = list(target_root.glob("*.kicad_sch"))
+        libraries = list(target_root.glob("*.kicad_sym"))
+        if not schematics or not libraries or not all(_balanced_sexpr(path.read_text(encoding="utf-8")) for path in [*schematics, *libraries]):
+            raise ValueError(f"generated {target} package failed S-expression validation")
+        if any("Actoviq_Generic:" in path.read_text(encoding="utf-8") for path in schematics):
+            raise ValueError(f"generated {target} package still contains legacy generic symbols")
+        return "syntax_validated" if target == "kicad" else "kicad_import_source"
+    if target == "orcad":
+        text = next(target_root.glob("*.edf")).read_text(encoding="utf-8")
+        required = ("(design ", "(figure ", "(property REFDES", "(property VALUE")
+        if not _balanced_sexpr(text) or any(token not in text for token in required):
+            raise ValueError("generated OrCAD EDIF failed structural validation")
+        return "syntax_validated"
+    required_files = [*target_root.glob("*.spice"), *target_root.glob("*.cdl"), target_root / "create_schematic.il", target_root / "device-map.json"]
+    if any(not path.is_file() or path.stat().st_size == 0 for path in required_files):
+        raise ValueError("generated Virtuoso package is incomplete")
+    return "generated_unverified"
+
+
+def _native_status(
+    target: str,
+    policy: str,
+    export_root: Path,
+    project_name: str,
+    base_status: str,
+    ir: dict[str, Any],
+    symbol_map: dict[str, Any],
+) -> tuple[str, list[str], list[Path], dict[str, Any]]:
+    executable = {
+        "kicad": find_kicad_cli(),
+        "altium": os.environ.get("ALTIUM_BIN"),
+        "orcad": os.environ.get("ORCAD_CAPTURE_BIN"),
+        "virtuoso": os.environ.get("VIRTUOSO_BIN"),
+    }[target]
     if policy == "never":
-        return "import_ready", []
-    if executable:
-        return "import_ready", [f"Native {target} converter detected but unattended conversion is not enabled by this adapter; package was validated structurally."]
+        return base_status, [], [], {}
+    if target == "kicad" and executable:
+        schematic = export_root / "kicad" / f"{project_name}.kicad_sch"
+        erc_report = export_root / "reports" / "kicad-erc.json"
+        netlist = export_root / "reports" / "kicad-netlist.xml"
+        connectivity_report = export_root / "reports" / "kicad-connectivity-roundtrip.json"
+        erc_report.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            erc_completed = subprocess.run(
+                [str(executable), "sch", "erc", "--format", "json", "--output", str(erc_report), str(schematic)],
+                cwd=schematic.parent, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False,
+            )
+            netlist_completed = subprocess.run(
+                [str(executable), "sch", "export", "netlist", "--format", "kicadxml", "--output", str(netlist), str(schematic)],
+                cwd=schematic.parent, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            failure = str(error)
+        else:
+            failures = [
+                (completed.stderr or completed.stdout or "unknown kicad-cli error").strip()
+                for completed in (erc_completed, netlist_completed)
+                if completed.returncode != 0
+            ]
+            failure = "\n".join(failures)
+            if not failures and erc_report.is_file() and netlist.is_file():
+                validation = validate_kicad_xml_connectivity(netlist, ir, symbol_map)
+                _write_json(connectivity_report, validation)
+                if not validation["passed"]:
+                    raise ValueError(
+                        "KiCad vendor connectivity round-trip failed: "
+                        f"missing={validation['missing_endpoints']}, unexpected={validation['unexpected_endpoints']}"
+                    )
+                erc_data = json.loads(erc_report.read_text(encoding="utf-8"))
+                violations = [
+                    violation
+                    for sheet in erc_data.get("sheets", [])
+                    for violation in sheet.get("violations", [])
+                ]
+                error_count = sum(violation.get("severity") == "error" for violation in violations)
+                warning_count = sum(violation.get("severity") == "warning" for violation in violations)
+                native_warnings = []
+                if violations:
+                    native_warnings.append(
+                        f"KiCad connectivity round-trip passed, but vendor ERC reported "
+                        f"{error_count} error(s) and {warning_count} warning(s); see reports/kicad-erc.json."
+                    )
+                for preferences in schematic.parent.glob("*.kicad_prl"):
+                    preferences.unlink(missing_ok=True)
+                return "vendor_parsed", native_warnings, [erc_report, netlist, connectivity_report], {
+                    "connectivity_roundtrip": "passed",
+                    "vendor_connectivity_hash": validation["actual_hash"],
+                    "vendor_erc": {"errors": error_count, "warnings": warning_count},
+                }
+        message = f"kicad-cli could not validate the package: {failure}"
+        return ("failed" if policy == "required" else base_status), [message], [], {}
     if policy == "required":
-        return "failed", [f"Native {target} conversion was required but its executable is not configured."]
-    return "import_ready", [f"Native {target} tool was not detected; generated an import-ready package."]
+        reason = "is not configured" if not executable else "has no unattended converter implemented"
+        return "failed", [f"Native {target} validation was required but {reason}."], [], {}
+    if executable:
+        return base_status, [f"Native {target} tool was detected, but unattended import/resave is not implemented; status remains {base_status}."], [], {}
+    return base_status, [f"Native {target} tool was not detected; status remains {base_status}."], [], {}
 
 
-def export_eda(root: Path, project: dict[str, Any], modules: dict[str, dict[str, Any]], erc: dict[str, Any], document_hash: str, *, scope: str, module_id: str | None, targets: list[str], view: str, mapping_file: str, native_convert: str, strict_layout: bool, source_revision: int | None) -> dict[str, Any]:
+def export_eda(root: Path, project: dict[str, Any], modules: dict[str, dict[str, Any]], erc: dict[str, Any], document_hash: str, *, scope: str, module_id: str | None, targets: list[str], view: str, mapping_file: str, native_convert: str, strict_layout: bool, source_revision: int | None, output_dir: str | None = None) -> dict[str, Any]:
     if source_revision is not None and int(source_revision) != int(project["revision"]):
         raise ValueError(f"stale source revision: requested {source_revision}, current {project['revision']}")
     if erc.get("blocking"):
@@ -1136,7 +1404,14 @@ def export_eda(root: Path, project: dict[str, Any], modules: dict[str, dict[str,
         raise ValueError(f"layout readability score {quality['readability_score']} is below strict threshold 90")
     symbol_map = _load_symbol_map(mapping_file, ir["pages"])
     export_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{document_hash[:8]}"
-    export_root = root / "build" / "exports" / export_id
+    if output_dir and str(output_dir).strip():
+        parent = Path(output_dir).expanduser().resolve()
+        if parent.exists() and not parent.is_dir():
+            raise ValueError(f"output directory is not a folder: {parent}")
+        parent.mkdir(parents=True, exist_ok=True)
+        export_root = parent / export_id
+    else:
+        export_root = root / "build" / "exports" / export_id
     project_name = _safe_name(project.get("name", project["project_id"]))
     _write_json(export_root / "ir" / "project.eda.json", ir)
     _write_json(export_root / "ir" / "symbol-map.resolved.json", symbol_map)
@@ -1153,11 +1428,21 @@ def export_eda(root: Path, project: dict[str, Any], modules: dict[str, dict[str,
     ordered_targets = [target for target in TARGETS if target in targets]
     for target in ordered_targets:
         if target == "altium" and not (export_root / "kicad").exists():
-            _write_kicad(export_root, project_name, ir)
-        files = writers[target](export_root, project_name, ir)
-        status, target_warnings = _native_status(target, native_convert)
+            _write_kicad(export_root, project_name, ir, symbol_map)
+        files = writers[target](export_root, project_name, ir, symbol_map)
+        structural_status = _validate_generated_target(target, export_root)
+        status, target_warnings, native_files, native_details = _native_status(
+            target, native_convert, export_root, project_name, structural_status, ir, symbol_map
+        )
+        files.extend(native_files)
         warnings.extend({"target": target, "code": "native_conversion", "message": message} for message in target_warnings)
-        statuses[target] = {"status": status, "connectivity_hash": ir["connectivity"]["hash"], "files": [str(path.relative_to(export_root)).replace("\\", "/") for path in files if path.is_file()]}
+        statuses[target] = {
+            "status": status,
+            "structural_status": structural_status,
+            "connectivity_hash": ir["connectivity"]["hash"],
+            **native_details,
+            "files": [str(path.relative_to(export_root)).replace("\\", "/") for path in files if path.is_file()],
+        }
     _write_json(export_root / "reports" / "export-warnings.json", {"warnings": warnings})
     file_hashes = {}
     for path in sorted(export_root.rglob("*")):

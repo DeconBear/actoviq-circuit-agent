@@ -112,6 +112,14 @@ interface AppState {
   newConversation: () => string;
   upsertConversation: (conv: ConversationSummary) => void;
   setConversations: (convs: ConversationSummary[]) => void;
+  renameConversation: (id: string, title: string) => void;
+  deleteConversation: (id: string) => void;
+  clearAllConversations: () => void;
+  hydrateChatHistory: (snapshot: {
+    conversationId: string;
+    conversations: ConversationSummary[];
+    conversationMessages: Record<string, ChatMessage[]>;
+  }) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -183,14 +191,17 @@ export const useAppStore = create<AppState>((set) => ({
 
       const savedMessages = [...(s.conversationMessages[conversationId] ?? []), message];
       const existing = s.conversations.find((conv) => conv.id === conversationId);
-      const titleSource = existing?.title || savedMessages.find((entry) => entry.role === 'user')?.content || 'New Conversation';
+      const autoTitle = savedMessages.find((entry) => entry.role === 'user')?.content
+        || existing?.title
+        || 'New conversation';
       const summary: ConversationSummary = {
         id: conversationId,
-        title: titleSource.slice(0, 50),
+        title: (existing?.titleLocked ? existing.title : autoTitle).slice(0, 50),
         lastMessage: message.content,
         messageCount: savedMessages.length,
         updatedAt: message.timestamp,
         jobId: existing?.jobId,
+        titleLocked: existing?.titleLocked,
       };
 
       return {
@@ -268,4 +279,47 @@ export const useAppStore = create<AppState>((set) => ({
       ].slice(0, 50),
     })),
   setConversations: (convs) => set({ conversations: convs }),
+  renameConversation: (id, title) =>
+    set((s) => {
+      const nextTitle = title.trim().slice(0, 80);
+      if (!nextTitle) return {};
+      return {
+        conversations: s.conversations.map((conv) => (
+          conv.id === id
+            ? { ...conv, title: nextTitle, titleLocked: true, updatedAt: Date.now() }
+            : conv
+        )),
+      };
+    }),
+  deleteConversation: (id) =>
+    set((s) => {
+      const conversations = s.conversations.filter((conv) => conv.id !== id);
+      const { [id]: _removed, ...conversationMessages } = s.conversationMessages;
+      if (s.conversationId !== id) {
+        return { conversations, conversationMessages };
+      }
+      const next = conversations[0];
+      return {
+        conversations,
+        conversationMessages,
+        conversationId: next?.id ?? '',
+        messages: next ? (conversationMessages[next.id] ?? []) : [],
+      };
+    }),
+  clearAllConversations: () =>
+    set({
+      conversationId: '',
+      messages: [],
+      conversations: [],
+      conversationMessages: {},
+    }),
+  hydrateChatHistory: (snapshot) =>
+    set({
+      conversationId: snapshot.conversationId,
+      conversations: snapshot.conversations,
+      conversationMessages: snapshot.conversationMessages,
+      messages: snapshot.conversationId
+        ? (snapshot.conversationMessages[snapshot.conversationId] ?? [])
+        : [],
+    }),
 }));

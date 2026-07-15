@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
 import type { AppSettings } from '../../types';
+import { SecretField } from './SecretField';
 
 interface Props {
   onClose: () => void;
@@ -39,8 +40,14 @@ export function SetupWizard({ onClose }: Props) {
           actoviqProviderPreset: preset,
           actoviqProvider: 'openai',
           actoviqBaseUrl: 'https://api.deepseek.com',
-          chatModel: 'deepseek-chat',
-          reasoningModel: 'deepseek-reasoner',
+          basicModel: 'deepseek-v4-flash',
+          mediumModel: 'deepseek-v4-flash',
+          professionalModel: 'deepseek-v4-pro',
+          chatModel: 'deepseek-v4-flash',
+          reasoningModel: 'deepseek-v4-pro',
+          haikuModel: 'deepseek-v4-flash',
+          sonnetModel: 'deepseek-v4-flash',
+          opusModel: 'deepseek-v4-pro',
         };
       }
       if (preset === 'anthropic') {
@@ -49,8 +56,14 @@ export function SetupWizard({ onClose }: Props) {
           actoviqProviderPreset: preset,
           actoviqProvider: 'anthropic',
           actoviqBaseUrl: 'https://api.anthropic.com',
+          basicModel: current.haikuModel || 'claude-haiku-4-5-20251001',
+          mediumModel: current.sonnetModel || 'claude-sonnet-4-6',
+          professionalModel: current.opusModel || 'claude-opus-4-7',
           chatModel: current.sonnetModel,
           reasoningModel: current.opusModel,
+          haikuModel: current.haikuModel,
+          sonnetModel: current.sonnetModel,
+          opusModel: current.opusModel,
         };
       }
       return { ...current, actoviqProviderPreset: preset, actoviqProvider: 'openai' };
@@ -154,28 +167,81 @@ export function SetupWizard({ onClose }: Props) {
               <p style={styles.hint}>
                 This configures the SDK-based assistant inside the application. External skills use their own credentials.
               </p>
-              <label style={styles.field}>
-                <span style={styles.fieldLabel}>Provider preset</span>
+              <div style={fieldStyles.wrapper}>
+                <label style={fieldStyles.label}>Provider preset</label>
                 <select
                   value={settings.actoviqProviderPreset}
                   onChange={(event) => applyProviderPreset(event.target.value as AppSettings['actoviqProviderPreset'])}
-                  style={styles.input}
+                  className="av-settings-input"
+                  style={fieldStyles.input}
                 >
                   <option value="anthropic">Anthropic</option>
                   <option value="deepseek">DeepSeek</option>
                   <option value="openai-compatible">Custom OpenAI-compatible</option>
                 </select>
-              </label>
+              </div>
               <StepField label="Base URL" value={settings.actoviqBaseUrl} onChange={(v) => update('actoviqBaseUrl', v)} />
-              <StepField
-                label={settings.hasActoviqAuthToken ? `API Key (${settings.maskedActoviqAuthToken})` : 'API Key'}
+              <SecretField
+                label="API Key"
                 value={settings.actoviqAuthToken}
                 onChange={(v) => update('actoviqAuthToken', v)}
-                type="password"
-                placeholder={settings.hasActoviqAuthToken ? 'Leave blank to keep saved key' : 'Enter provider API key'}
+                hasSavedSecret={settings.hasActoviqAuthToken}
+                onRevealSaved={async () => window.electronAPI?.revealActoviqAuthToken?.() ?? null}
+                placeholder={settings.hasActoviqAuthToken
+                  ? `${settings.maskedActoviqAuthToken} — leave blank to keep`
+                  : 'Enter provider API key'}
+                testId="setup-api-key"
               />
-              <StepField label="Chat Model" value={settings.chatModel} onChange={(v) => update('chatModel', v)} />
-              <StepField label="Reasoning / Report Model" value={settings.reasoningModel} onChange={(v) => update('reasoningModel', v)} />
+              <StepField
+                label="Basic model"
+                value={settings.basicModel}
+                onChange={(v) => {
+                  update('basicModel', v);
+                  update('haikuModel', v);
+                }}
+              />
+              <label style={styles.contextCheck}>
+                <input
+                  type="checkbox"
+                  checked={settings.basicContext1M}
+                  onChange={(e) => update('basicContext1M', e.target.checked)}
+                />
+                1M context (default 200K)
+              </label>
+              <StepField
+                label="Medium model"
+                value={settings.mediumModel}
+                onChange={(v) => {
+                  update('mediumModel', v);
+                  update('chatModel', v);
+                  update('sonnetModel', v);
+                }}
+              />
+              <label style={styles.contextCheck}>
+                <input
+                  type="checkbox"
+                  checked={settings.mediumContext1M}
+                  onChange={(e) => update('mediumContext1M', e.target.checked)}
+                />
+                1M context (default 200K)
+              </label>
+              <StepField
+                label="Professional model"
+                value={settings.professionalModel}
+                onChange={(v) => {
+                  update('professionalModel', v);
+                  update('reasoningModel', v);
+                  update('opusModel', v);
+                }}
+              />
+              <label style={styles.contextCheck}>
+                <input
+                  type="checkbox"
+                  checked={settings.professionalContext1M}
+                  onChange={(e) => update('professionalContext1M', e.target.checked)}
+                />
+                1M context (default 200K)
+              </label>
             </div>
           )}
 
@@ -184,7 +250,13 @@ export function SetupWizard({ onClose }: Props) {
               <h3 style={styles.sectionTitle}>Tool Paths</h3>
               <StepField label="ngspice Binary" value={settings.ngspiceBin} onChange={(v) => update('ngspiceBin', v)} placeholder="e.g. E:/Program/ngspice/bin/ngspice.exe or /usr/bin/ngspice" />
               <StepField label="Yunzhisheng OCR Endpoint" value={settings.yunzhishengOcrBaseUrl} onChange={(v) => update('yunzhishengOcrBaseUrl', v)} placeholder="Optional OCR endpoint" />
-              <StepField label="Yunzhisheng OCR API Key" value={settings.yunzhishengOcrApiKey} onChange={(v) => update('yunzhishengOcrApiKey', v)} type="password" />
+              <SecretField
+                label="Yunzhisheng OCR API Key"
+                value={settings.yunzhishengOcrApiKey}
+                onChange={(v) => update('yunzhishengOcrApiKey', v)}
+                placeholder="Optional OCR API key"
+                testId="setup-ocr-api-key"
+              />
             </div>
           )}
 
@@ -255,6 +327,7 @@ function StepField({ label, value, onChange, type, placeholder }: {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        className="av-settings-input"
         style={fieldStyles.input}
       />
     </div>
@@ -263,16 +336,23 @@ function StepField({ label, value, onChange, type, placeholder }: {
 
 const fieldStyles: Record<string, React.CSSProperties> = {
   wrapper: { marginBottom: 12 },
-  label: { display: 'block', fontSize: 12, color: '#69727d', marginBottom: 4 },
+  label: {
+    display: 'block',
+    fontSize: 12,
+    fontWeight: 650,
+    color: '#111827',
+    marginBottom: 6,
+  },
   input: {
     width: '100%',
     padding: '8px 12px',
     backgroundColor: '#ffffff',
-    border: '1px solid #c8cfd7',
-    borderRadius: 6,
-    color: '#303741',
+    border: '1px solid #d0d5dd',
+    borderRadius: 8,
+    color: '#111827',
     fontSize: 13,
     outline: 'none',
+    boxSizing: 'border-box',
   },
 };
 
@@ -336,6 +416,16 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   stepLabel: { fontSize: 12, fontWeight: 600 },
+  contextCheck: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    margin: '-4px 0 12px',
+    color: '#303741',
+    fontSize: 12,
+    cursor: 'pointer',
+    userSelect: 'none',
+  },
   stepConnector: {
     width: 48,
     height: 2,

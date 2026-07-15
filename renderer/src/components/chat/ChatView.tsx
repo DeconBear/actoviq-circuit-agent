@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
+  ChevronDown,
   CircuitBoard,
   FileCode2,
   FileText,
+  History,
   MessageSquarePlus,
+  Pencil,
   Send,
   Square,
   TerminalSquare,
+  Trash2,
   Waves,
   Wrench,
   X,
 } from 'lucide-react';
 import { useAppStore } from '../../store/appStore';
+import { CHAT_MODEL_TIER_OPTIONS, type ChatModelTier } from '../../modelTiers';
 import { createSafeMarkdownParser, escapeHtml } from '../../utils/markdown';
 import './ChatView.css';
 
@@ -37,15 +42,25 @@ export interface ChatRunView {
 }
 
 interface Props {
-  onSend: (text: string) => void;
+  onSend: (text: string, modelTier: ChatModelTier) => void;
   onStop?: () => void;
   onClose?: () => void;
+  /** Called after the active conversation changes (switch / new / delete / clear). */
+  onConversationChange?: (conversationId: string) => void;
   isPending?: boolean;
   run?: ChatRunView | null;
 }
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatHistoryTime(ts: number): string {
+  const date = new Date(ts);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  if (sameDay) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 const chatMarkdown = createSafeMarkdownParser({
@@ -88,10 +103,29 @@ function formatUsage(usage?: Record<string, unknown>): string | null {
   return null;
 }
 
-export function ChatView({ onSend, onStop, onClose, isPending = false, run = null }: Props) {
+function normalizeTier(value: unknown): ChatModelTier {
+  return value === 'basic' || value === 'professional' ? value : 'medium';
+}
+
+export function ChatView({
+  onSend,
+  onStop,
+  onClose,
+  onConversationChange,
+  isPending = false,
+  run = null,
+}: Props) {
   const [input, setInput] = useState('');
+  const [modelTier, setModelTier] = useState<ChatModelTier>('medium');
+  const [tierMenuOpen, setTierMenuOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const tierMenuRef = useRef<HTMLDivElement>(null);
+  const historyPanelRef = useRef<HTMLDivElement>(null);
   const messages = useAppStore((state) => state.messages);
   const outputText = useAppStore((state) => state.outputText);
   const isRunning = useAppStore((state) => state.isRunning);
@@ -101,8 +135,37 @@ export function ChatView({ onSend, onStop, onClose, isPending = false, run = nul
   const svgContent = useAppStore((state) => state.svgContent);
   const reportContent = useAppStore((state) => state.reportContent);
   const simulationData = useAppStore((state) => state.simulationData);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const activeWorkspace = useAppStore((state) => state.activeWorkspace);
   const currentConversation = conversations.find((entry) => entry.id === conversationId);
   const runIsActive = Boolean(run && ['starting', 'streaming', 'repairing'].includes(run.status));
+  const selectedTier = CHAT_MODEL_TIER_OPTIONS.find((option) => option.id === modelTier)
+    ?? CHAT_MODEL_TIER_OPTIONS[1]
+    ?? { id: 'medium' as const, label: 'Medium model', shortLabel: 'Medium' };
+
+  const filteredConversations = useMemo(() => {
+    const query = historyQuery.trim().toLowerCase();
+    const sorted = conversations.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+    if (!query) return sorted;
+    return sorted.filter((entry) => (
+      entry.title.toLowerCase().includes(query)
+      || entry.lastMessage.toLowerCase().includes(query)
+    ));
+  }, [conversations, historyQuery]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!window.electronAPI) return;
+      try {
+        const settings = await window.electronAPI.getSettings();
+        if (!cancelled) setModelTier(normalizeTier(settings.preferredChatTier));
+      } catch {
+        // Keep the default medium tier when settings cannot be loaded.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -115,17 +178,101 @@ export function ChatView({ onSend, onStop, onClose, isPending = false, run = nul
     textarea.style.height = `${Math.min(160, Math.max(42, textarea.scrollHeight))}px`;
   }, [input]);
 
+  useEffect(() => {
+    if (!tierMenuOpen && !historyOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (tierMenuOpen && !tierMenuRef.current?.contains(target)) setTierMenuOpen(false);
+      if (historyOpen && !historyPanelRef.current?.contains(target)) {
+        setHistoryOpen(false);
+        setEditingId(null);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setTierMenuOpen(false);
+        setHistoryOpen(false);
+        setEditingId(null);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [tierMenuOpen, historyOpen]);
+
+  const persistTier = useCallback(async (tier: ChatModelTier) => {
+    if (!window.electronAPI) return;
+    try {
+      const settings = await window.electronAPI.getSettings();
+      await window.electronAPI.saveSettings({ ...settings, preferredChatTier: tier });
+    } catch {
+      // Selection still applies for the current session even if persist fails.
+    }
+  }, []);
+
+  const handleTierChange = useCallback((tier: ChatModelTier) => {
+    setModelTier(tier);
+    setTierMenuOpen(false);
+    void persistTier(tier);
+  }, [persistTier]);
+
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
     if (!trimmed || isPending) return;
-    onSend(trimmed);
+    onSend(trimmed, modelTier);
     setInput('');
-  }, [input, isPending, onSend]);
+  }, [input, isPending, modelTier, onSend]);
 
   const handleNewConversation = () => {
-    useAppStore.getState().newConversation();
+    const id = useAppStore.getState().newConversation();
+    onConversationChange?.(id);
+    setHistoryOpen(false);
     setInput('');
     requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const handleSelectHistory = (id: string) => {
+    if (id === conversationId) {
+      setHistoryOpen(false);
+      return;
+    }
+    useAppStore.getState().setConversationId(id);
+    onConversationChange?.(id);
+    setHistoryOpen(false);
+    setEditingId(null);
+  };
+
+  const beginRename = (id: string, title: string) => {
+    setEditingId(id);
+    setEditingTitle(title);
+  };
+
+  const commitRename = () => {
+    if (!editingId) return;
+    const next = editingTitle.trim();
+    if (next) useAppStore.getState().renameConversation(editingId, next);
+    setEditingId(null);
+  };
+
+  const handleDeleteConversation = (id: string) => {
+    const target = conversations.find((entry) => entry.id === id);
+    const label = target?.title || 'this conversation';
+    if (!window.confirm(`Delete “${label}”? This cannot be undone.`)) return;
+    useAppStore.getState().deleteConversation(id);
+    onConversationChange?.(useAppStore.getState().conversationId);
+    if (editingId === id) setEditingId(null);
+  };
+
+  const handleClearAll = () => {
+    if (conversations.length === 0) return;
+    if (!window.confirm(`Delete all ${conversations.length} conversations? This cannot be undone.`)) return;
+    useAppStore.getState().clearAllConversations();
+    onConversationChange?.('');
+    setHistoryOpen(false);
+    setEditingId(null);
   };
 
   const artifacts = [
@@ -137,6 +284,7 @@ export function ChatView({ onSend, onStop, onClose, isPending = false, run = nul
 
   const usageLabel = formatUsage(run?.usage);
   const providerModel = [run?.provider, run?.model].filter(Boolean).join(' · ') || 'Actoviq Agent SDK';
+  const contextLabel = activeProjectId || activeWorkspace?.name || 'workspace';
 
   return (
     <section className="chat-panel" aria-label="Actoviq circuit assistant">
@@ -149,6 +297,114 @@ export function ChatView({ onSend, onStop, onClose, isPending = false, run = nul
           </div>
         </div>
         <div className="chat-panel__actions">
+          <div className="chat-history" ref={historyPanelRef}>
+            <button
+              type="button"
+              className={`chat-icon-button${historyOpen ? ' is-active' : ''}`}
+              onClick={() => setHistoryOpen((open) => !open)}
+              title="Conversation history"
+              aria-label="Conversation history"
+              aria-expanded={historyOpen}
+              data-testid="chat-history-toggle"
+            >
+              <History size={17} aria-hidden="true" />
+            </button>
+            {historyOpen && (
+              <div className="chat-history__panel" role="dialog" aria-label="Conversation history" data-testid="chat-history-panel">
+                <div className="chat-history__header">
+                  <strong>History</strong>
+                  <button type="button" className="chat-history__new" onClick={handleNewConversation} data-testid="chat-history-new">
+                    <MessageSquarePlus size={14} aria-hidden="true" />
+                    New
+                  </button>
+                </div>
+                <input
+                  className="chat-history__search"
+                  value={historyQuery}
+                  onChange={(event) => setHistoryQuery(event.target.value)}
+                  placeholder="Search conversations"
+                  aria-label="Search conversations"
+                  data-testid="chat-history-search"
+                />
+                <div className="chat-history__list">
+                  {filteredConversations.length === 0 ? (
+                    <div className="chat-history__empty">
+                      {conversations.length === 0 ? 'No conversations yet.' : 'No matches.'}
+                    </div>
+                  ) : filteredConversations.map((entry) => {
+                    const isActive = entry.id === conversationId;
+                    const isEditing = editingId === entry.id;
+                    return (
+                      <div
+                        key={entry.id}
+                        className={`chat-history__item${isActive ? ' is-active' : ''}`}
+                        data-testid={`chat-history-item-${entry.id}`}
+                      >
+                        {isEditing ? (
+                          <form
+                            className="chat-history__rename"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              commitRename();
+                            }}
+                          >
+                            <input
+                              value={editingTitle}
+                              onChange={(event) => setEditingTitle(event.target.value)}
+                              autoFocus
+                              onBlur={commitRename}
+                              aria-label="Rename conversation"
+                              data-testid="chat-history-rename-input"
+                            />
+                          </form>
+                        ) : (
+                          <button
+                            type="button"
+                            className="chat-history__select"
+                            onClick={() => handleSelectHistory(entry.id)}
+                          >
+                            <span className="chat-history__title">{entry.title || 'New conversation'}</span>
+                            <span className="chat-history__meta">
+                              {entry.messageCount} msgs · {formatHistoryTime(entry.updatedAt)}
+                            </span>
+                          </button>
+                        )}
+                        <div className="chat-history__item-actions">
+                          <button
+                            type="button"
+                            className="chat-history__icon-btn"
+                            title="Rename"
+                            aria-label={`Rename ${entry.title}`}
+                            onClick={() => beginRename(entry.id, entry.title)}
+                            data-testid={`chat-history-rename-${entry.id}`}
+                          >
+                            <Pencil size={13} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="chat-history__icon-btn chat-history__icon-btn--danger"
+                            title="Delete"
+                            aria-label={`Delete ${entry.title}`}
+                            onClick={() => handleDeleteConversation(entry.id)}
+                            data-testid={`chat-history-delete-${entry.id}`}
+                          >
+                            <Trash2 size={13} aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {conversations.length > 0 && (
+                  <div className="chat-history__footer">
+                    <button type="button" onClick={handleClearAll} data-testid="chat-history-clear-all">
+                      Clear all
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             className="chat-icon-button"
@@ -270,47 +526,88 @@ export function ChatView({ onSend, onStop, onClose, isPending = false, run = nul
             {usageLabel && <span>{usageLabel}</span>}
           </div>
         )}
-        <div className="chat-composer">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder={isPending ? 'Agent is responding…' : 'Describe a circuit or ask about the current design'}
-            aria-label="Message Actoviq Circuit Agent"
-            data-testid="chat-composer"
-            disabled={isPending && !runIsActive}
-            rows={1}
-          />
-          {runIsActive ? (
-            <button
-              type="button"
-              className="chat-composer__action chat-composer__action--stop"
-              onClick={onStop}
-              title="Stop response"
-              aria-label="Stop response"
-              data-testid="chat-stop"
-            >
-              <Square size={14} fill="currentColor" aria-hidden="true" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="chat-composer__action"
-              onClick={handleSend}
-              disabled={!input.trim() || isPending}
-              title="Send message"
-              aria-label="Send message"
-              data-testid="chat-send"
-            >
-              <Send size={17} aria-hidden="true" />
-            </button>
-          )}
+        <div className="chat-composer-shell">
+          <div className="chat-composer-context" title={contextLabel}>
+            <CircuitBoard size={12} aria-hidden="true" />
+            <span>{contextLabel}</span>
+          </div>
+          <div className="chat-composer">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder={isPending ? 'Agent is responding…' : 'Ask Actoviq...'}
+              aria-label="Message Actoviq Circuit Agent"
+              data-testid="chat-composer"
+              disabled={isPending && !runIsActive}
+              rows={1}
+            />
+            <div className="chat-composer__toolbar">
+              <div className="chat-composer__toolbar-spacer" />
+              <div className="chat-model-picker" ref={tierMenuRef}>
+                <button
+                  type="button"
+                  className="chat-model-picker__button"
+                  onClick={() => setTierMenuOpen((open) => !open)}
+                  aria-haspopup="listbox"
+                  aria-expanded={tierMenuOpen}
+                  data-testid="chat-model-tier"
+                  title="Select model tier"
+                >
+                  <span>{selectedTier.shortLabel}</span>
+                  <ChevronDown size={14} aria-hidden="true" />
+                </button>
+                {tierMenuOpen && (
+                  <ul className="chat-model-picker__menu" role="listbox" aria-label="Model tier">
+                    {CHAT_MODEL_TIER_OPTIONS.map((option) => (
+                      <li key={option.id}>
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={option.id === modelTier}
+                          className={option.id === modelTier ? 'is-selected' : undefined}
+                          onClick={() => handleTierChange(option.id)}
+                          data-testid={`chat-model-tier-${option.id}`}
+                        >
+                          {option.label}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {runIsActive ? (
+                <button
+                  type="button"
+                  className="chat-composer__action chat-composer__action--stop"
+                  onClick={onStop}
+                  title="Stop response"
+                  aria-label="Stop response"
+                  data-testid="chat-stop"
+                >
+                  <Square size={13} fill="currentColor" aria-hidden="true" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="chat-composer__action"
+                  onClick={handleSend}
+                  disabled={!input.trim() || isPending}
+                  title="Send message"
+                  aria-label="Send message"
+                  data-testid="chat-send"
+                >
+                  <Send size={16} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
         <p className="chat-composer__hint">Enter to send · Shift+Enter for a new line</p>
       </footer>

@@ -58,6 +58,8 @@ interface EdaExportRequest {
   nativeConvert: 'auto' | 'never' | 'required';
   strictLayout: boolean;
   sourceRevision: number;
+  /** Optional parent directory. Export is written to <outputDir>/<export_id>/. */
+  outputDir?: string;
 }
 
 interface DesignMemoryItem {
@@ -1467,6 +1469,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     ];
     if (input.scope === 'module') args.push('--module-id', input.moduleId ?? '');
     if (input.mappingFile?.trim()) args.push('--mapping-file', path.resolve(input.mappingFile.trim()));
+    if (input.outputDir?.trim()) args.push('--output-dir', path.resolve(input.outputDir.trim()));
     if (input.strictLayout) args.push('--strict-layout');
     return runProjectTool(args);
   });
@@ -1476,6 +1479,14 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       title: 'Select Actoviq EDA symbol mapping',
       properties: ['openFile'],
       filters: [{ name: 'JSON mapping', extensions: ['json'] }],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  ipcMain.handle('project:choose-eda-output-dir', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select EDA export folder',
+      properties: ['openDirectory', 'createDirectory'],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
@@ -1626,19 +1637,28 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return projectRoot;
   });
 
-  ipcMain.handle('project:open-export-folder', async (_event, projectId: string, exportId: string) => {
+  ipcMain.handle('project:open-export-folder', async (
+    _event,
+    projectId: string,
+    exportId: string,
+    exportRoot?: string,
+  ) => {
     if (!/^[A-Za-z0-9_-]+$/.test(exportId)) throw new Error(`Invalid export id: ${exportId}`);
     const projectRoot = await resolveProjectRoot(projectId);
-    const exportRoot = path.resolve(projectRoot, 'build', 'exports', exportId);
-    const exportsRoot = path.resolve(projectRoot, 'build', 'exports');
-    const relative = path.relative(exportsRoot, exportRoot);
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !(await exists(exportRoot))) {
+    const defaultRoot = path.resolve(projectRoot, 'build', 'exports', exportId);
+    const candidate = typeof exportRoot === 'string' && exportRoot.trim()
+      ? path.resolve(exportRoot.trim())
+      : defaultRoot;
+    if (path.basename(candidate) !== exportId) {
+      throw new Error(`EDA export path does not match export id: ${exportId}`);
+    }
+    if (!(await exists(candidate))) {
       throw new Error(`EDA export not found: ${exportId}`);
     }
     if (process.env.ACTOVIQ_E2E !== '1') {
-      const error = await shell.openPath(exportRoot);
+      const error = await shell.openPath(candidate);
       if (error) throw new Error(error);
     }
-    return exportRoot;
+    return candidate;
   });
 }

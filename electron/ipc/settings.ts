@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export type ActoviqProvider = 'anthropic' | 'openai';
 export type ActoviqProviderPreset = 'anthropic' | 'deepseek' | 'openai-compatible';
 export type SecretStorageMode = 'encrypted' | 'plaintext-fallback' | 'environment' | 'none';
+export type ChatModelTier = 'basic' | 'medium' | 'professional';
 
 export interface AppSettings {
   actoviqProvider: ActoviqProvider;
@@ -21,9 +22,17 @@ export interface AppSettings {
   maskedActoviqAuthToken: string;
   clearActoviqAuthToken?: boolean;
   actoviqAuthTokenStorage: SecretStorageMode;
+  /** Three chat tiers shown in Settings and selectable in the chat composer. */
+  basicModel: string;
+  mediumModel: string;
+  professionalModel: string;
+  basicContext1M: boolean;
+  mediumContext1M: boolean;
+  professionalContext1M: boolean;
+  preferredChatTier: ChatModelTier;
+  /** Synced aliases for older consumers (chat = medium, reasoning = professional). */
   chatModel: string;
   reasoningModel: string;
-  /** Legacy model tiers retained for existing workflow/config consumers. */
   opusModel: string;
   sonnetModel: string;
   haikuModel: string;
@@ -65,6 +74,13 @@ const defaultSettings: PersistedAppSettings = {
   actoviqBaseUrl: 'https://api.anthropic.com',
   actoviqAuthToken: '',
   actoviqAuthTokenStorage: 'none',
+  basicModel: 'claude-haiku-4-5-20251001',
+  mediumModel: 'claude-sonnet-4-6',
+  professionalModel: 'claude-opus-4-7',
+  basicContext1M: false,
+  mediumContext1M: false,
+  professionalContext1M: false,
+  preferredChatTier: 'medium',
   chatModel: 'claude-sonnet-4-6',
   reasoningModel: 'claude-opus-4-7',
   opusModel: 'claude-opus-4-7',
@@ -107,6 +123,32 @@ function normalizeStoredSettings(raw: StoredSettings, authToken: string, storage
   const legacyOpus = typeof raw.opusModel === 'string' && raw.opusModel.trim()
     ? raw.opusModel.trim()
     : defaultSettings.opusModel;
+  const legacyHaiku = typeof raw.haikuModel === 'string' && raw.haikuModel.trim()
+    ? raw.haikuModel.trim()
+    : defaultSettings.haikuModel;
+  const legacyChat = typeof raw.chatModel === 'string' && raw.chatModel.trim()
+    ? raw.chatModel.trim()
+    : isDeepSeek ? 'deepseek-chat' : legacySonnet;
+  const legacyReasoning = typeof raw.reasoningModel === 'string' && raw.reasoningModel.trim()
+    ? raw.reasoningModel.trim()
+    : isDeepSeek ? 'deepseek-reasoner' : legacyOpus;
+
+  const basicModel = typeof raw.basicModel === 'string' && raw.basicModel.trim()
+    ? raw.basicModel.trim()
+    : isDeepSeek ? 'deepseek-v4-flash' : legacyHaiku;
+  const mediumModel = typeof raw.mediumModel === 'string' && raw.mediumModel.trim()
+    ? raw.mediumModel.trim()
+    : legacyChat;
+  const professionalModel = typeof raw.professionalModel === 'string' && raw.professionalModel.trim()
+    ? raw.professionalModel.trim()
+    : isDeepSeek && !(typeof raw.reasoningModel === 'string' && raw.reasoningModel.trim())
+      ? 'deepseek-v4-pro'
+      : legacyReasoning;
+  const preferredChatTier: ChatModelTier = raw.preferredChatTier === 'basic'
+    || raw.preferredChatTier === 'professional'
+    || raw.preferredChatTier === 'medium'
+    ? raw.preferredChatTier
+    : 'medium';
 
   return {
     ...defaultSettings,
@@ -117,17 +159,18 @@ function normalizeStoredSettings(raw: StoredSettings, authToken: string, storage
       : isDeepSeek ? 'https://api.deepseek.com' : defaultSettings.actoviqBaseUrl,
     actoviqAuthToken: authToken,
     actoviqAuthTokenStorage: authToken ? storage : 'none',
-    chatModel: (typeof raw.chatModel === 'string' && raw.chatModel.trim())
-      ? raw.chatModel.trim()
-      : isDeepSeek ? 'deepseek-chat' : legacySonnet,
-    reasoningModel: (typeof raw.reasoningModel === 'string' && raw.reasoningModel.trim())
-      ? raw.reasoningModel.trim()
-      : isDeepSeek ? 'deepseek-reasoner' : legacyOpus,
-    opusModel: legacyOpus,
-    sonnetModel: legacySonnet,
-    haikuModel: typeof raw.haikuModel === 'string' && raw.haikuModel.trim()
-      ? raw.haikuModel.trim()
-      : defaultSettings.haikuModel,
+    basicModel,
+    mediumModel,
+    professionalModel,
+    basicContext1M: Boolean(raw.basicContext1M),
+    mediumContext1M: Boolean(raw.mediumContext1M),
+    professionalContext1M: Boolean(raw.professionalContext1M),
+    preferredChatTier,
+    chatModel: mediumModel,
+    reasoningModel: professionalModel,
+    opusModel: professionalModel,
+    sonnetModel: mediumModel,
+    haikuModel: basicModel,
     ngspiceBin: typeof raw.ngspiceBin === 'string' ? raw.ngspiceBin : '',
     workspaceRoot: typeof raw.workspaceRoot === 'string' ? raw.workspaceRoot : '',
     yunzhishengOcrBaseUrl: typeof raw.yunzhishengOcrBaseUrl === 'string' ? raw.yunzhishengOcrBaseUrl : '',
@@ -247,10 +290,10 @@ export function applySettingsToEnvironment(settings: PersistedAppSettings): void
   setOrDelete('ACTOVIQ_API_KEY', settings.actoviqAuthToken);
   setOrDelete('ACTOVIQ_AUTH_TOKEN', settings.actoviqAuthToken);
   setOrDelete('ACTOVIQ_BASE_URL', settings.actoviqBaseUrl);
-  setOrDelete('ACTOVIQ_MODEL', settings.chatModel);
-  setOrDelete('ACTOVIQ_DEFAULT_MIN_MODEL', settings.haikuModel);
-  setOrDelete('ACTOVIQ_DEFAULT_MEDIUM_MODEL', settings.chatModel || settings.sonnetModel);
-  setOrDelete('ACTOVIQ_DEFAULT_MAX_MODEL', settings.reasoningModel || settings.opusModel);
+  setOrDelete('ACTOVIQ_MODEL', settings.mediumModel || settings.chatModel);
+  setOrDelete('ACTOVIQ_DEFAULT_MIN_MODEL', settings.basicModel || settings.haikuModel);
+  setOrDelete('ACTOVIQ_DEFAULT_MEDIUM_MODEL', settings.mediumModel || settings.chatModel || settings.sonnetModel);
+  setOrDelete('ACTOVIQ_DEFAULT_MAX_MODEL', settings.professionalModel || settings.reasoningModel || settings.opusModel);
   setOrDelete('NGSPICE_BIN', settings.ngspiceBin);
 }
 
@@ -269,9 +312,10 @@ async function testProvider(draft: AppSettings): Promise<ProviderTestResult> {
   const startedAt = Date.now();
   const current = await loadSettingsWithSecrets();
   const settings = resolveDraftSettings(current, draft);
+  const testModel = settings.mediumModel.trim() || settings.chatModel.trim();
   const resultBase = {
     provider: settings.actoviqProvider,
-    model: settings.chatModel,
+    model: testModel,
   };
 
   if (!settings.actoviqAuthToken) {
@@ -290,8 +334,8 @@ async function testProvider(draft: AppSettings): Promise<ProviderTestResult> {
       error: sanitizeProviderError(error, settings.actoviqAuthToken),
     };
   }
-  if (!settings.chatModel.trim()) {
-    return { ...resultBase, ok: false, latencyMs: Date.now() - startedAt, error: 'Chat model is required.' };
+  if (!testModel) {
+    return { ...resultBase, ok: false, latencyMs: Date.now() - startedAt, error: 'Medium model is required.' };
   }
 
   let sdk: Awaited<ReturnType<typeof createAgentSdk>> | null = null;
@@ -301,7 +345,7 @@ async function testProvider(draft: AppSettings): Promise<ProviderTestResult> {
       apiKey: settings.actoviqAuthToken,
       authToken: settings.actoviqProvider === 'anthropic' ? settings.actoviqAuthToken : undefined,
       baseURL: settings.actoviqBaseUrl,
-      model: settings.chatModel,
+      model: testModel,
       maxTokens: 24,
       maxRetries: 0,
       runTimeoutMs: 20_000,
@@ -350,6 +394,11 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle('settings:get', async () => {
     return loadSettings();
+  });
+
+  ipcMain.handle('settings:reveal-actoviq-auth-token', async () => {
+    const settings = await loadSettingsWithSecrets();
+    return settings.actoviqAuthToken || null;
   });
 
   ipcMain.handle('settings:save', async (_event, draft: AppSettings) => {

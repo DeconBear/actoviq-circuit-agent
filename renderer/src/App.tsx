@@ -14,7 +14,9 @@ import { SetupWizard } from './components/settings/SetupWizard';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AppToolbar, type AppToolbarAction } from './components/layout/AppToolbar';
 import { useAppStore, type SimulationMetric, type TabKey } from './store/appStore';
+import { loadPersistedChatHistory, persistChatHistory } from './store/chatHistoryPersistence';
 import type { CircuitTrashItem, DesktopAgentEvent, ModuleManifest, StageDef } from './types';
+import type { ChatModelTier } from './modelTiers';
 import {
   CircuitBoard,
   FileCode2,
@@ -182,6 +184,34 @@ export function App() {
     }
     return null;
   }
+
+  useEffect(() => {
+    const saved = loadPersistedChatHistory();
+    if (!saved || saved.conversations.length === 0) return;
+    useAppStore.getState().hydrateChatHistory({
+      conversationId: saved.conversationId,
+      conversations: saved.conversations,
+      conversationMessages: saved.conversationMessages,
+    });
+  }, []);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const unsubscribe = useAppStore.subscribe((state) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        persistChatHistory({
+          conversationId: state.conversationId,
+          conversations: state.conversations,
+          conversationMessages: state.conversationMessages,
+        });
+      }, 250);
+    });
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, []);
 
   // Listen for workflow events
   useEffect(() => {
@@ -837,7 +867,7 @@ export function App() {
   }, [handleMenuAction]);
 
   // Send a chat message: first checks intent, then decides chat vs workflow.
-  const handleSendMessage = useCallback(async (text: string) => {
+  const handleSendMessage = useCallback(async (text: string, modelTier: ChatModelTier = 'medium') => {
     const trimmed = text.trim();
     if (!trimmed || isChatPending) return;
 
@@ -918,6 +948,7 @@ export function App() {
         activeJobId,
         activeProject,
         workspaceRoot: state.activeWorkspace?.root,
+        modelTier,
       });
 
       // Show the agent's chat response
@@ -1130,6 +1161,23 @@ export function App() {
       setChatRun(null);
     }
   }, [isChatPending, loadCircuitProject, startWorkflowRun]);
+
+  const handleConversationChange = useCallback((nextConversationId: string) => {
+    const previous = activeChatConversationRef.current;
+    if (previous && previous !== nextConversationId) {
+      void window.electronAPI?.stopChat(previous);
+    }
+    activeChatConversationRef.current = null;
+    setChatRun(null);
+    setIsChatPending(false);
+
+    if (!nextConversationId) return;
+    const conv = useAppStore.getState().conversations.find((entry) => entry.id === nextConversationId);
+    if (conv?.jobId) {
+      setJobId(conv.jobId);
+      useAppStore.getState().setActiveJobId(conv.jobId);
+    }
+  }, [setJobId]);
 
   const handleStopChat = useCallback(() => {
     const conversationId = activeChatConversationRef.current ?? useAppStore.getState().conversationId;
@@ -1347,6 +1395,7 @@ export function App() {
                 onSend={handleSendMessage}
                 onStop={handleStopChat}
                 onClose={() => store.setChatOpen(false)}
+                onConversationChange={handleConversationChange}
                 isPending={isChatPending}
                 run={chatRun}
               />

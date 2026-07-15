@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  ChatModelTier,
   ProviderTestResult,
   DesktopAgentEvent,
   ChatResponse,
@@ -100,6 +101,7 @@ declare global {
       }>;
       exportCircuitEda(projectId: string, input: EdaExportRequest): Promise<EdaExportResult>;
       chooseCircuitEdaMapping(): Promise<string | null>;
+      chooseCircuitEdaOutputDir(): Promise<string | null>;
       simulateCircuitProject(projectId: string): Promise<SimulationRun>;
       generateCircuitTechnicalReport(projectId: string, sourceRevision: number): Promise<TechnicalReportResult>;
       compileCircuitModule(projectId: string, moduleId: string): Promise<{
@@ -147,8 +149,9 @@ declare global {
         callback: (event: { projectId: string; timestamp: number }) => void,
       ): () => void;
       openCircuitProjectFolder(projectId: string): Promise<string>;
-      openCircuitEdaExportFolder(projectId: string, exportId: string): Promise<string>;
+      openCircuitEdaExportFolder(projectId: string, exportId: string, exportRoot?: string): Promise<string>;
       getSettings(): Promise<AppSettings>;
+      revealActoviqAuthToken(): Promise<string | null>;
       saveSettings(settings: AppSettings): Promise<AppSettings>;
       testProviderSettings(settings: AppSettings): Promise<ProviderTestResult>;
       getAppVersion(): Promise<string>;
@@ -162,6 +165,7 @@ declare global {
           activeJobId?: string | null;
           activeProject?: Record<string, unknown> | null;
           workspaceRoot?: string;
+          modelTier?: ChatModelTier;
         },
       ): Promise<ChatResponse>;
       stopChat(conversationId?: string): Promise<boolean>;

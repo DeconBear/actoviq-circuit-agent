@@ -135,6 +135,23 @@ export function Sidebar({
     }
   }, [onSelectJob, setConversationId]);
 
+  const handleDeleteConversation = useCallback((convId: string, event: React.MouseEvent) => {
+    event.stopPropagation();
+    const target = useAppStore.getState().conversations.find((entry) => entry.id === convId);
+    const label = target?.title || 'this conversation';
+    if (!window.confirm(`Delete “${label}”? This cannot be undone.`)) return;
+    useAppStore.getState().deleteConversation(convId);
+  }, []);
+
+  const handleRenameConversation = useCallback((convId: string, event: React.MouseEvent) => {
+    event.stopPropagation();
+    const target = useAppStore.getState().conversations.find((entry) => entry.id === convId);
+    const next = window.prompt('Rename conversation', target?.title || '');
+    if (next == null) return;
+    const trimmed = next.trim();
+    if (trimmed) useAppStore.getState().renameConversation(convId, trimmed);
+  }, []);
+
   const handleExport = useCallback(async (jobId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!window.electronAPI) return;
@@ -768,8 +785,23 @@ export function Sidebar({
         </button>
         {conversations.length > 0 && (
           <>
-            <div style={styles.sectionHeader}>Conversations</div>
-            {conversations.slice(0, 5).map((conv) => (
+            <div style={styles.sectionHeader}>
+              Conversations
+              <div style={styles.sectionActions}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!window.confirm(`Delete all ${conversations.length} conversations?`)) return;
+                    useAppStore.getState().clearAllConversations();
+                  }}
+                  style={styles.inlineActionBtn}
+                  data-testid="sidebar-clear-conversations"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            {conversations.slice(0, 20).map((conv) => (
               <div
                 key={conv.id}
                 onClick={() => handleSelectConversation(conv.id)}
@@ -777,10 +809,29 @@ export function Sidebar({
                   ...styles.convItem,
                   ...(conversationId === conv.id ? styles.convItemActive : {}),
                 }}
+                data-testid={`sidebar-conversation-${conv.id}`}
               >
                 <div style={styles.convItemTitle}>{conv.title}</div>
                 <div style={styles.convItemMeta}>
-                  {conv.messageCount} msgs · {new Date(conv.updatedAt).toLocaleTimeString()}
+                  {conv.messageCount} msgs · {new Date(conv.updatedAt).toLocaleString()}
+                </div>
+                <div style={styles.convItemActions}>
+                  <button
+                    type="button"
+                    style={styles.convActionBtn}
+                    onClick={(event) => handleRenameConversation(conv.id, event)}
+                    title="Rename"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.convActionBtn}
+                    onClick={(event) => handleDeleteConversation(conv.id, event)}
+                    title="Delete"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             ))}
@@ -1284,4 +1335,18 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: 'ellipsis',
   },
   convItemMeta: { fontSize: 10, color: '#8a929d', marginTop: 2 },
+  convItemActions: {
+    display: 'flex',
+    gap: 6,
+    marginTop: 6,
+  },
+  convActionBtn: {
+    padding: '2px 6px',
+    border: '1px solid #d8dee7',
+    borderRadius: 4,
+    background: '#fff',
+    color: '#59636e',
+    cursor: 'pointer',
+    fontSize: 10,
+  },
 };

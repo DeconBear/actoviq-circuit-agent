@@ -56,6 +56,7 @@ interface EdaExportFormState {
   targets: EdaExportTarget[];
   view: 'design' | 'simulation';
   mappingFile: string;
+  outputDir: string;
   nativeConvert: 'auto' | 'never' | 'required';
   strictLayout: boolean;
 }
@@ -394,6 +395,7 @@ export function CircuitWorkbench({
     targets: ['kicad', 'altium', 'orcad', 'virtuoso'],
     view: 'design',
     mappingFile: '',
+    outputDir: '',
     nativeConvert: 'auto',
     strictLayout: false,
   });
@@ -827,6 +829,11 @@ export function CircuitWorkbench({
     if (selected) setEdaExportForm((current) => ({ ...current, mappingFile: selected }));
   }
 
+  async function chooseEdaOutputDir(): Promise<void> {
+    const selected = await window.electronAPI.chooseCircuitEdaOutputDir();
+    if (selected) setEdaExportForm((current) => ({ ...current, outputDir: selected }));
+  }
+
   async function runEdaExport(): Promise<void> {
     if (!currentProjectId || !project || edaExportForm.targets.length === 0) return;
     const operationProjectId = currentProjectId;
@@ -844,6 +851,7 @@ export function CircuitWorkbench({
         nativeConvert: edaExportForm.nativeConvert,
         strictLayout: edaExportForm.strictLayout,
         sourceRevision: project.revision,
+        outputDir: edaExportForm.outputDir || undefined,
       });
       if (isActiveProject(operationProjectId)) {
         setEdaExportResult(result);
@@ -862,7 +870,11 @@ export function CircuitWorkbench({
   async function openEdaExportFolder(): Promise<void> {
     if (!currentProjectId || !edaExportResult) return;
     try {
-      await window.electronAPI.openCircuitEdaExportFolder(currentProjectId, edaExportResult.export_id);
+      await window.electronAPI.openCircuitEdaExportFolder(
+        currentProjectId,
+        edaExportResult.export_id,
+        edaExportResult.export_root,
+      );
     } catch (openError) {
       setError(openError instanceof Error ? openError.message : String(openError));
     }
@@ -1431,15 +1443,15 @@ export function CircuitWorkbench({
 
       {edaExportOpen ? (
         <div style={styles.historyOverlay} data-testid="eda-export-dialog">
-          <section style={styles.edaExportPanel} aria-label="Export EDA schematic packages">
-            <div style={styles.historyHeader}>
+          <section className="av-sheet" aria-label="Export EDA schematic packages">
+            <div className="av-sheet__header">
               <div>
-                <div style={styles.historyTitle}>Export editable EDA packages</div>
-                <div style={styles.historySubtitle}>Revision {project.revision} | connectivity-preserving export</div>
+                <div className="av-sheet__title">Export editable EDA packages</div>
+                <div className="av-sheet__subtitle">Revision {project.revision} | connectivity-preserving export</div>
               </div>
               <button
                 type="button"
-                style={styles.iconButton}
+                className="av-btn av-btn--secondary"
                 onClick={() => setEdaExportOpen(false)}
                 disabled={busy}
                 data-testid="close-eda-export"
@@ -1447,8 +1459,8 @@ export function CircuitWorkbench({
                 Close
               </button>
             </div>
-            <div style={styles.edaExportBody}>
-              <label style={styles.edaExportField}>
+            <div className="av-sheet__body">
+              <label className="av-form-field">
                 <span>Scope</span>
                 <select
                   value={edaExportForm.scope}
@@ -1460,7 +1472,7 @@ export function CircuitWorkbench({
                   <option value="module">Current module{activeModuleId ? ` (${activeModuleId})` : ''}</option>
                 </select>
               </label>
-              <label style={styles.edaExportField}>
+              <label className="av-form-field">
                 <span>View</span>
                 <select
                   value={edaExportForm.view}
@@ -1472,11 +1484,11 @@ export function CircuitWorkbench({
                   <option value="simulation">Simulation (include sources)</option>
                 </select>
               </label>
-              <div style={styles.edaExportField}>
+              <div className="av-form-field">
                 <span>Targets</span>
-                <div style={styles.edaExportTargets}>
+                <div className="av-form-checks">
                   {(['kicad', 'altium', 'orcad', 'virtuoso'] as EdaExportTarget[]).map((target) => (
-                    <label key={target} style={styles.layoutCheck}>
+                    <label key={target} className="av-form-check">
                       <input
                         type="checkbox"
                         checked={edaExportForm.targets.includes(target)}
@@ -1494,7 +1506,7 @@ export function CircuitWorkbench({
                   ))}
                 </div>
               </div>
-              <label style={styles.edaExportField}>
+              <label className="av-form-field">
                 <span>Native conversion</span>
                 <select
                   value={edaExportForm.nativeConvert}
@@ -1507,17 +1519,42 @@ export function CircuitWorkbench({
                   <option value="required">Require native tool</option>
                 </select>
               </label>
-              <div style={styles.edaExportField}>
+              <div className="av-form-field">
                 <span>Symbol mapping</span>
                 <div style={styles.edaMappingRow}>
-                  <input value={edaExportForm.mappingFile} readOnly placeholder="Generic symbols (default)" data-testid="eda-export-mapping" />
-                  <button type="button" style={styles.secondaryButton} onClick={() => void chooseEdaMapping()} disabled={busy}>Choose...</button>
+                  <input
+                    className="av-form-control"
+                    value={edaExportForm.mappingFile}
+                    readOnly
+                    placeholder="Generic symbols (default)"
+                    data-testid="eda-export-mapping"
+                  />
+                  <button type="button" className="av-btn av-btn--secondary" onClick={() => void chooseEdaMapping()} disabled={busy}>Choose...</button>
                   {edaExportForm.mappingFile ? (
-                    <button type="button" style={styles.secondaryButton} onClick={() => setEdaExportForm((current) => ({ ...current, mappingFile: '' }))} disabled={busy}>Clear</button>
+                    <button type="button" className="av-btn av-btn--secondary" onClick={() => setEdaExportForm((current) => ({ ...current, mappingFile: '' }))} disabled={busy}>Clear</button>
                   ) : null}
                 </div>
               </div>
-              <label style={styles.layoutCheck}>
+              <div className="av-form-field">
+                <span>Output folder</span>
+                <div style={styles.edaMappingRow}>
+                  <input
+                    className="av-form-control"
+                    value={edaExportForm.outputDir}
+                    readOnly
+                    placeholder="Project build/exports (default)"
+                    data-testid="eda-export-output-dir"
+                  />
+                  <button type="button" className="av-btn av-btn--secondary" onClick={() => void chooseEdaOutputDir()} disabled={busy} data-testid="eda-export-choose-output">Choose...</button>
+                  {edaExportForm.outputDir ? (
+                    <button type="button" className="av-btn av-btn--secondary" onClick={() => setEdaExportForm((current) => ({ ...current, outputDir: '' }))} disabled={busy}>Clear</button>
+                  ) : null}
+                </div>
+                <p className="av-form-hint">
+                  Leave blank to use {'<project>/build/exports/<export_id>/'}. A chosen folder receives a new {'<export_id>'} subfolder.
+                </p>
+              </div>
+              <label className="av-form-check">
                 <input
                   type="checkbox"
                   checked={edaExportForm.strictLayout}
@@ -1528,23 +1565,27 @@ export function CircuitWorkbench({
                 Fail when readability is below 90
               </label>
               {edaExportResult ? (
-                <div style={styles.edaExportResult} data-testid="eda-export-result">
+                <div className="av-form-status av-form-status--ok" data-testid="eda-export-result">
                   <div>Readability: <strong>{edaExportResult.layout_quality.readability_score.toFixed(1)}</strong></div>
+                  <div className="av-form-hint" style={{ marginTop: 6 }} data-testid="eda-export-root">
+                    {edaExportResult.export_root}
+                  </div>
                   {Object.entries(edaExportResult.targets).map(([target, status]) => (
-                    <div key={target} style={styles.edaExportStatus} data-testid={`eda-export-status-${target}`}>
-                      <span>{target}</span><strong>{status.status}</strong>
+                    <div key={target} className="av-form-meta" style={{ marginTop: 6 }} data-testid={`eda-export-status-${target}`}>
+                      <span style={{ textTransform: 'capitalize' }}>{target}</span>
+                      <strong>{status.status}</strong>
                     </div>
                   ))}
                 </div>
               ) : null}
             </div>
-            <div style={styles.edaExportActions}>
+            <div className="av-sheet__footer">
               {edaExportResult ? (
-                <button type="button" style={styles.secondaryButton} onClick={() => void openEdaExportFolder()} data-testid="open-eda-export-folder">Open export folder</button>
+                <button type="button" className="av-btn av-btn--secondary" onClick={() => void openEdaExportFolder()} data-testid="open-eda-export-folder">Open export folder</button>
               ) : null}
               <button
                 type="button"
-                style={styles.primaryButton}
+                className="av-btn av-btn--primary"
                 onClick={() => void runEdaExport()}
                 disabled={busy || edaExportForm.targets.length === 0 || (edaExportForm.scope === 'module' && !activeModuleId)}
                 data-testid="run-eda-export"
@@ -1558,17 +1599,17 @@ export function CircuitWorkbench({
 
       {ercOpen ? (
         <div style={styles.historyOverlay} data-testid="project-erc-panel">
-          <section style={styles.historyPanel} aria-label="Electrical rules check">
-            <div style={styles.historyHeader}>
+          <section className="av-sheet" style={{ width: 520 }} aria-label="Electrical rules check">
+            <div className="av-sheet__header">
               <div>
-                <div style={styles.historyTitle}>Electrical Rules Check</div>
-                <div style={styles.historySubtitle}>
+                <div className="av-sheet__title">Electrical Rules Check</div>
+                <div className="av-sheet__subtitle">
                   Revision {erc?.source_revision ?? project.revision} | {erc?.summary.errors ?? 0} errors | {erc?.summary.warnings ?? 0} warnings
                 </div>
               </div>
               <button
                 type="button"
-                style={styles.iconButton}
+                className="av-btn av-btn--secondary"
                 onClick={() => setErcOpen(false)}
                 aria-label="Close electrical rules check"
                 data-testid="close-project-erc"
@@ -1614,15 +1655,15 @@ export function CircuitWorkbench({
 
       {historyOpen ? (
         <div style={styles.historyOverlay} data-testid="project-history-panel">
-          <section style={styles.historyPanel} aria-label="Project revision history">
-            <div style={styles.historyHeader}>
+          <section className="av-sheet" style={{ width: 520 }} aria-label="Project revision history">
+            <div className="av-sheet__header">
               <div>
-                <div style={styles.historyTitle}>Project History</div>
-                <div style={styles.historySubtitle}>{project.name} | current revision {project.revision}</div>
+                <div className="av-sheet__title">Project History</div>
+                <div className="av-sheet__subtitle">{project.name} | current revision {project.revision}</div>
               </div>
               <button
                 type="button"
-                style={styles.iconButton}
+                className="av-btn av-btn--secondary"
                 onClick={() => setHistoryOpen(false)}
                 aria-label="Close project history"
                 data-testid="close-project-history"

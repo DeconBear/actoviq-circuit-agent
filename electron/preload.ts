@@ -61,6 +61,7 @@ export interface ReferenceDocument {
 export type ActoviqProvider = 'anthropic' | 'openai';
 export type ActoviqProviderPreset = 'anthropic' | 'deepseek' | 'openai-compatible';
 export type SecretStorageMode = 'encrypted' | 'plaintext-fallback' | 'environment' | 'none';
+export type ChatModelTier = 'basic' | 'medium' | 'professional';
 
 export interface AppSettings {
   actoviqProvider: ActoviqProvider;
@@ -71,6 +72,13 @@ export interface AppSettings {
   maskedActoviqAuthToken: string;
   clearActoviqAuthToken?: boolean;
   actoviqAuthTokenStorage: SecretStorageMode;
+  basicModel: string;
+  mediumModel: string;
+  professionalModel: string;
+  basicContext1M: boolean;
+  mediumContext1M: boolean;
+  professionalContext1M: boolean;
+  preferredChatTier: ChatModelTier;
   chatModel: string;
   reasoningModel: string;
   opusModel: string;
@@ -302,12 +310,17 @@ const electronAPI = {
     nativeConvert: 'auto' | 'never' | 'required';
     strictLayout: boolean;
     sourceRevision: number;
+    outputDir?: string;
   }): Promise<unknown> {
     return ipcRenderer.invoke('project:export-eda', projectId, input);
   },
 
   chooseCircuitEdaMapping(): Promise<string | null> {
     return ipcRenderer.invoke('project:choose-eda-mapping');
+  },
+
+  chooseCircuitEdaOutputDir(): Promise<string | null> {
+    return ipcRenderer.invoke('project:choose-eda-output-dir');
   },
 
   simulateCircuitProject(projectId: string): Promise<unknown> {
@@ -378,12 +391,16 @@ const electronAPI = {
     return ipcRenderer.invoke('project:open-folder', projectId);
   },
 
-  openCircuitEdaExportFolder(projectId: string, exportId: string): Promise<string> {
-    return ipcRenderer.invoke('project:open-export-folder', projectId, exportId);
+  openCircuitEdaExportFolder(projectId: string, exportId: string, exportRoot?: string): Promise<string> {
+    return ipcRenderer.invoke('project:open-export-folder', projectId, exportId, exportRoot);
   },
 
   getSettings(): Promise<AppSettings> {
     return ipcRenderer.invoke('settings:get');
+  },
+
+  revealActoviqAuthToken(): Promise<string | null> {
+    return ipcRenderer.invoke('settings:reveal-actoviq-auth-token');
   },
 
   saveSettings(settings: AppSettings): Promise<AppSettings> {
@@ -414,6 +431,7 @@ const electronAPI = {
       activeJobId?: string | null;
       activeProject?: Record<string, unknown> | null;
       workspaceRoot?: string;
+      modelTier?: ChatModelTier;
     },
   ): Promise<ChatResponse> {
     return ipcRenderer.invoke('chat:send', message, history, context);

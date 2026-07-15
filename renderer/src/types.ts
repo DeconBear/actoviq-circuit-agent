@@ -18,6 +18,8 @@ export interface ConversationSummary {
   messageCount: number;
   updatedAt: number;
   jobId?: string;
+  /** When true, auto-title from the first user message is skipped. */
+  titleLocked?: boolean;
 }
 
 export interface StageState {
@@ -552,6 +554,8 @@ export interface EdaExportRequest {
   nativeConvert: 'auto' | 'never' | 'required';
   strictLayout: boolean;
   sourceRevision: number;
+  /** Optional parent directory. Export is written to <outputDir>/<export_id>/. */
+  outputDir?: string;
 }
 
 export interface EdaExportResult {
@@ -581,6 +585,7 @@ export interface ReferenceDocument {
 export type ActoviqProvider = 'anthropic' | 'openai';
 export type ActoviqProviderPreset = 'anthropic' | 'deepseek' | 'openai-compatible';
 export type SecretStorageMode = 'encrypted' | 'plaintext-fallback' | 'environment' | 'none';
+export type ChatModelTier = 'basic' | 'medium' | 'professional';
 
 export interface AppSettings {
   actoviqProvider: ActoviqProvider;
@@ -592,6 +597,14 @@ export interface AppSettings {
   maskedActoviqAuthToken: string;
   clearActoviqAuthToken?: boolean;
   actoviqAuthTokenStorage: SecretStorageMode;
+  basicModel: string;
+  mediumModel: string;
+  professionalModel: string;
+  basicContext1M: boolean;
+  mediumContext1M: boolean;
+  professionalContext1M: boolean;
+  preferredChatTier: ChatModelTier;
+  /** Synced aliases: chat/sonnet = medium, reasoning/opus = professional, haiku = basic. */
   chatModel: string;
   reasoningModel: string;
   opusModel: string;
