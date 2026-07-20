@@ -25,6 +25,7 @@ const legacyCurrentMirrorPrefix = `${projectPrefix}legacy-current-mirror-`;
 const legacyOpampFeedbackPrefix = `${projectPrefix}legacy-opamp-feedback-`;
 const legacyCascodePrefix = `${projectPrefix}legacy-cascode-`;
 const legacyBuckConverterPrefix = `${projectPrefix}legacy-buck-`;
+const junctionInteractionPrefix = `${projectPrefix}junction-interaction-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -845,6 +846,143 @@ async function createLegacyBuckConverterProject() {
   return { projectId: project.project_id, projectName: project.name };
 }
 
+async function createJunctionInteractionProject() {
+  const expectedProjectId = legacyProjectId('junction');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${junctionInteractionPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'junction interaction fixture project id should be stable');
+  const ports = [
+    {
+      id: 'out',
+      name: 'OUT',
+      direction: 'output',
+      signal_type: 'analog',
+      net: 'OUT',
+      net_id: 'net_out',
+      position: { x: 800, y: 300 },
+    },
+  ];
+  const moduleRef = {
+    id: 'junctions',
+    name: 'Junction interaction fixture',
+    kind: 'test',
+    function: 'Known wire geometry for KiCad-like crossing and junction interactions.',
+    parameters: {},
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/junctions/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 500, height: 320 },
+    ports,
+  };
+  const module = {
+    schema: 'actoviq.module.v2',
+    module_id: 'junctions',
+    name: 'Junction interaction fixture',
+    revision: 0,
+    ports,
+    nets: [
+      { id: 'net_h', name: 'HNET', kind: 'signal', aliases: [] },
+      { id: 'net_v', name: 'VNET', kind: 'signal', aliases: [] },
+      { id: 'net_trunk', name: 'TRUNK', kind: 'signal', aliases: [] },
+      { id: 'net_out', name: 'OUT', kind: 'signal', aliases: [] },
+    ],
+    components: [
+      {
+        id: 'r_branch',
+        type: 'R',
+        name: 'RBRANCH',
+        value: '1k',
+        position: { x: 620, y: 300 },
+        rotation: 0,
+        pins: [
+          { id: 'p1', name: '1', net: 'TRUNK', net_id: 'net_trunk' },
+          { id: 'p2', name: '2', net: 'OUT', net_id: 'net_out' },
+        ],
+      },
+    ],
+    wires: [
+      {
+        id: 'cross_h',
+        net: 'HNET',
+        net_id: 'net_h',
+        source: 'stored',
+        from: { x: 160, y: 120, junction_id: 'j_cross_h_left' },
+        to: { x: 480, y: 120, junction_id: 'j_cross_h_right' },
+        points: [{ x: 160, y: 120 }, { x: 480, y: 120 }],
+      },
+      {
+        id: 'cross_v',
+        net: 'VNET',
+        net_id: 'net_v',
+        source: 'stored',
+        from: { x: 320, y: 40, junction_id: 'j_cross_v_top' },
+        to: { x: 320, y: 200, junction_id: 'j_cross_v_bottom' },
+        points: [{ x: 320, y: 40 }, { x: 320, y: 200 }],
+      },
+      {
+        id: 'trunk_left',
+        net: 'TRUNK',
+        net_id: 'net_trunk',
+        source: 'stored',
+        from: { x: 160, y: 300, junction_id: 'j_trunk_left' },
+        to: { x: 320, y: 300, junction_id: 'j_trunk_center' },
+        points: [{ x: 160, y: 300 }, { x: 320, y: 300 }],
+      },
+      {
+        id: 'trunk_right',
+        net: 'TRUNK',
+        net_id: 'net_trunk',
+        source: 'stored',
+        from: { x: 320, y: 300, junction_id: 'j_trunk_center' },
+        to: { x: 480, y: 300, junction_id: 'j_trunk_right' },
+        points: [{ x: 320, y: 300 }, { x: 480, y: 300 }],
+      },
+      {
+        id: 'trunk_branch',
+        net: 'TRUNK',
+        net_id: 'net_trunk',
+        source: 'stored',
+        from: { x: 320, y: 300, junction_id: 'j_trunk_center' },
+        to: { x: 320, y: 420, junction_id: 'j_trunk_bottom' },
+        points: [{ x: 320, y: 300 }, { x: 320, y: 420 }],
+      },
+      {
+        id: 'branch_to_resistor',
+        net: 'TRUNK',
+        net_id: 'net_trunk',
+        source: 'stored',
+        from: { x: 480, y: 300, junction_id: 'j_trunk_right' },
+        to: { x: 568, y: 300, component_id: 'r_branch', pin_id: 'p1' },
+        points: [{ x: 480, y: 300 }, { x: 568, y: 300 }],
+      },
+      {
+        id: 'resistor_to_out',
+        net: 'OUT',
+        net_id: 'net_out',
+        source: 'stored',
+        from: { x: 672, y: 300, component_id: 'r_branch', pin_id: 'p2' },
+        to: { x: 800, y: 300, port_id: 'out' },
+        points: [{ x: 672, y: 300 }, { x: 800, y: 300 }],
+      },
+    ],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'junctions');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  return { projectId: project.project_id, projectName: project.name, projectRoot };
+}
+
 async function componentPositions(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-positions');
   return JSON.parse(raw || '{}');
@@ -884,6 +1022,22 @@ async function editorViewport(page) {
 async function editorWires(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-wires');
   return JSON.parse(raw || '[]');
+}
+
+async function renderedJunctions(page) {
+  return page.getByTestId('schematic-editor-svg').getByTestId('schematic-junction').evaluateAll((nodes) => (
+    nodes.map((node) => ({
+      x: Number(node.getAttribute('cx')),
+      y: Number(node.getAttribute('cy')),
+      net: node.getAttribute('data-net') ?? '',
+    }))
+  ));
+}
+
+function hasRenderedJunction(junctions, point, net) {
+  return junctions.some((junction) => (
+    junction.x === point.x && junction.y === point.y && (!net || junction.net === net)
+  ));
 }
 
 async function waitForEditorIdle(page) {
@@ -1300,6 +1454,7 @@ const legacyCurrentMirrorProject = await createLegacyCurrentMirrorProject();
 const legacyOpampFeedbackProject = await createLegacyOpampFeedbackProject();
 const legacyCascodeProject = await createLegacyCascodeProject();
 const legacyBuckConverterProject = await createLegacyBuckConverterProject();
+const junctionInteractionProject = await createJunctionInteractionProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -1453,6 +1608,10 @@ try {
   assert.equal(await page.getByTestId('schematic-editor-redo').isDisabled(), true, 'Redo should be disabled before the first edit');
   assert.equal(await page.getByTestId('schematic-editor-delete').isDisabled(), true, 'Delete should be disabled without a selection');
   assert.equal(await page.getByTestId('schematic-editor-save').isDisabled(), true, 'Apply should be disabled when there are no unsaved edits');
+  const optimizeLayoutButton = page.getByTestId('optimize-schematic-layout');
+  await optimizeLayoutButton.waitFor();
+  assert.equal(await optimizeLayoutButton.isVisible(), true, 'module schematic header should expose the LLM layout action');
+  assert.equal(await optimizeLayoutButton.isEnabled(), true, 'LLM layout action should be enabled for a clean, idle schematic');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-document-backed.png') });
   console.log('[e2e] filter editor loaded');
 
@@ -2319,6 +2478,11 @@ try {
     const rotations = JSON.parse(raw);
     return Number(rotations[componentId]) === Number(previousRotation);
   }, { componentId: 'r1', previousRotation: filterRotationsAfterNudge.r1 ?? 0 });
+  assert.equal(
+    await optimizeLayoutButton.isDisabled(),
+    true,
+    'LLM layout action should be disabled immediately while manual schematic edits are dirty',
+  );
   console.log('[e2e] component placed');
 
   await page.getByTestId('schematic-editor-select').click();
@@ -2991,6 +3155,11 @@ try {
       node?.getAttribute('data-component-count') === '4' &&
       Number(node?.getAttribute('data-wire-count') ?? '0') >= 3;
   });
+  assert.equal(
+    await optimizeLayoutButton.isEnabled(),
+    true,
+    'LLM layout action should be re-enabled after manual schematic edits are saved',
+  );
 
   const moduleData = JSON.parse(await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'));
   assert.equal(moduleData.components.length, 4);
@@ -4304,6 +4473,148 @@ try {
   }
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-buck-converter-drag.png') });
   console.log('[e2e] legacy buck converter drag isolated');
+
+  await page.getByTestId(`sidebar-project-${junctionInteractionProject.projectId}`).click();
+  await waitForWorkbenchProject(page, junctionInteractionProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(junctionInteractionProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-junctions').dblclick();
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'junctions'
+  ));
+  await waitForEditorIdle(page);
+  const junctionEditor = page.getByTestId('schematic-editor');
+  const junctionCanvas = page.getByTestId('schematic-editor-svg');
+  const initialJunctions = await renderedJunctions(page);
+  assert.ok(
+    hasRenderedJunction(initialJunctions, { x: 320, y: 300 }, 'TRUNK'),
+    'a real three-way TRUNK branch should render a junction dot',
+  );
+  assert.equal(
+    hasRenderedJunction(initialJunctions, { x: 320, y: 120 }),
+    false,
+    'strict HNET/VNET interior crossing should remain unconnected and render no junction dot',
+  );
+  const junctionWiresBeforeBranch = await editorWires(page);
+  const storedWireCountBeforeBranch = junctionWiresBeforeBranch.filter((wire) => wire.source === 'stored').length;
+  const junctionCanvasBox = await junctionCanvas.boundingBox();
+  assert.ok(junctionCanvasBox, 'junction interaction fixture requires a visible canvas');
+  const junctionViewBox = await editorViewBox(page);
+  const branchStartWorld = { x: 240, y: 120 };
+  const branchEndWorld = { x: 240, y: 220 };
+  const branchStart = worldToScreen(branchStartWorld, junctionViewBox, junctionCanvasBox);
+  const branchEnd = worldToScreen(branchEndWorld, junctionViewBox, junctionCanvasBox);
+  await page.getByTestId('schematic-editor-wire').click();
+  await page.mouse.move(branchStart.x, branchStart.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-hover-endpoint') === 'Wire HNET'
+  ));
+  assert.equal(
+    await page.getByTestId('schematic-hover-endpoint').getAttribute('data-net'),
+    'HNET',
+    'hovering a stored wire midpoint should expose its electrical net before snapping',
+  );
+  await page.mouse.click(branchStart.x, branchStart.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-start') === 'point:240,120'
+  ));
+  await page.mouse.click(branchEnd.x, branchEnd.y);
+  await page.waitForFunction((storedBefore) => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return wires.filter((wire) => wire.source === 'stored').length === storedBefore + 2;
+  }, storedWireCountBeforeBranch);
+  const junctionWiresAfterBranch = await editorWires(page);
+  const hnetIncidentEndpoints = junctionWiresAfterBranch
+    .filter((wire) => wire.net === 'HNET')
+    .flatMap((wire) => [wire.from, wire.to])
+    .filter((endpoint) => endpoint?.x === branchStartWorld.x && endpoint?.y === branchStartWorld.y);
+  assert.equal(hnetIncidentEndpoints.length, 3, 'starting from a wire midpoint should split the trunk and create a three-edge node');
+  assert.equal(
+    new Set(hnetIncidentEndpoints.map((endpoint) => endpoint.junction_id)).size,
+    1,
+    'all three midpoint branch edges should share one stable junction identity',
+  );
+  assert.ok(
+    hasRenderedJunction(await renderedJunctions(page), branchStartWorld, 'HNET'),
+    'the newly created T branch should render a junction dot at the split point',
+  );
+  assert.equal(
+    hasRenderedJunction(await renderedJunctions(page), { x: 320, y: 120 }),
+    false,
+    'adding a nearby branch must not turn an unrelated strict crossing into a connection',
+  );
+  assertWireOrthogonal(
+    junctionWiresAfterBranch.find((wire) => (
+      wire.net === 'HNET' && wire.from?.junction_id === hnetIncidentEndpoints[0]?.junction_id &&
+      wire.to?.x === branchEndWorld.x && wire.to?.y === branchEndWorld.y
+    )),
+    'wire-midpoint branch should remain orthogonal',
+  );
+  await page.getByTestId('schematic-editor-select').click();
+
+  const componentPositionBeforeJunctionDrag = (await componentPositions(page)).r_branch;
+  const wiresBeforeJunctionDrag = await editorWires(page);
+  await selectComponentForDrag(page, 'r_branch');
+  const junctionResistorDragPoint = await selectedComponentFrameScreenPoint(page, 'r_branch');
+  await page.mouse.move(junctionResistorDragPoint.x, junctionResistorDragPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(junctionResistorDragPoint.x + 100, junctionResistorDragPoint.y + 60, { steps: 10 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-drag-preview') === 'true'
+  ));
+  assertUnrelatedWireRoutesStable(
+    wiresBeforeJunctionDrag,
+    await editorWires(page),
+    ['r_branch'],
+    'dragging a component attached to a semantic junction',
+  );
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const positions = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}');
+    return positions.r_branch?.x !== previous.x || positions.r_branch?.y !== previous.y;
+  }, componentPositionBeforeJunctionDrag);
+  const wiresAfterJunctionDrag = await editorWires(page);
+  await assertWireEndpointsMatchComponentPins(
+    page,
+    'r_branch',
+    'dragging a component attached to a semantic junction',
+  );
+  const feedAfterJunctionDrag = wiresAfterJunctionDrag.find((wire) => wire.id === 'branch_to_resistor');
+  assert.ok(feedAfterJunctionDrag, 'component drag should preserve its stored feed wire');
+  assert.equal(feedAfterJunctionDrag.from?.junction_id, 'j_trunk_right', 'component drag should preserve the feed junction identity');
+  assertPositionEqual(feedAfterJunctionDrag.points?.[0], { x: 480, y: 300 }, 'component drag moved the fixed feed junction');
+  for (const beforeWire of wiresBeforeJunctionDrag) {
+    if (beforeWire.from?.component_id === 'r_branch' || beforeWire.to?.component_id === 'r_branch') continue;
+    const afterWire = wiresAfterJunctionDrag.find((wire) => wire.id === beforeWire.id);
+    assert.deepEqual(afterWire?.points, beforeWire.points, `dragging r_branch changed unrelated route ${beforeWire.id}`);
+  }
+  assert.ok(
+    hasRenderedJunction(await renderedJunctions(page), { x: 320, y: 300 }, 'TRUNK'),
+    'component dragging should not remove an existing three-way junction dot',
+  );
+  await page.getByTestId('schematic-editor-save').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
+  ));
+  await waitForEditorIdle(page);
+  const savedJunctionModule = JSON.parse(await readFile(
+    path.resolve(junctionInteractionProject.projectRoot, 'modules', 'junctions', 'module.circuit.json'),
+    'utf8',
+  ));
+  const savedFeed = savedJunctionModule.wires.find((wire) => wire.id === 'branch_to_resistor');
+  assert.equal(savedFeed?.from?.junction_id, 'j_trunk_right', 'saving should preserve semantic junction identities');
+  assert.ok(
+    savedJunctionModule.wires.some((wire) => (
+      wire.net === 'HNET' && (wire.from?.x === branchStartWorld.x && wire.from?.y === branchStartWorld.y ||
+        wire.to?.x === branchStartWorld.x && wire.to?.y === branchStartWorld.y)
+    )),
+    'saving should preserve the midpoint split branch topology',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-junction-interactions.png') });
+  console.log('[e2e] KiCad-like crossing, junction, midpoint branch, and connected component drag verified');
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await waitForWorkbenchProject(page, projectId);

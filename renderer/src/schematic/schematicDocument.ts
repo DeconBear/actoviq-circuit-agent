@@ -35,9 +35,13 @@ type SignalPortSide = 'left' | 'right';
 export type SchematicPortSide = 'left' | 'right' | 'top' | 'bottom';
 
 export interface EndpointHit extends CircuitWireEndpoint {
-  kind: 'pin' | 'port' | 'point';
+  kind: 'pin' | 'port' | 'point' | 'junction';
   label: string;
   net?: string;
+  net_id?: string;
+  /** Transient reference used to split/materialize a wire when a branch is committed. */
+  wire_id?: string;
+  segment_index?: number;
 }
 
 export interface SchematicBounds {
@@ -72,6 +76,18 @@ export interface SchematicDocument {
 
 export interface SchematicDocumentOptions {
   autoLayout?: boolean;
+}
+
+export interface WireTopologyIssue {
+  code:
+    | 'invalid_wire'
+    | 'invalid_endpoint'
+    | 'net_mismatch'
+    | 'junction_conflict'
+    | 'unintended_contact';
+  message: string;
+  wire_ids: string[];
+  point?: CircuitPosition;
 }
 
 export const COMPONENT_TYPES: ToolComponentType[] = ['R', 'C', 'L', 'D', 'M', 'Q', 'V', 'I'];
@@ -2685,17 +2701,25 @@ export function endpointKey(endpoint: CircuitWireEndpoint | undefined): string |
   if (!endpoint) return null;
   if (endpoint.component_id && endpoint.pin_id) return `c:${endpoint.component_id}:${endpoint.pin_id}`;
   if (endpoint.port_id) return `p:${endpoint.port_id}`;
+  if (endpoint.junction_id) return `j:${endpoint.junction_id}`;
   return null;
 }
 
 export function endpointNet(module: CircuitModule, endpoint: CircuitWireEndpoint | undefined): string | null {
   if (!endpoint) return null;
+  const transientNet = (endpoint as EndpointHit).net;
+  if (transientNet) return transientNet;
   if (endpoint.component_id && endpoint.pin_id) {
     const component = module.components.find((entry) => entry.id === endpoint.component_id);
     return component?.pins.find((pin) => pin.id === endpoint.pin_id)?.net ?? null;
   }
   if (endpoint.port_id) {
     return module.ports.find((port) => port.id === endpoint.port_id)?.net ?? null;
+  }
+  if (endpoint.junction_id) {
+    return module.wires.find((wire) => (
+      wire.from?.junction_id === endpoint.junction_id || wire.to?.junction_id === endpoint.junction_id
+    ))?.net ?? null;
   }
   return null;
 }
@@ -2709,7 +2733,10 @@ export function ensureStableNetModel(module: CircuitModule): CircuitModule {
   }
   const usedIds = new Set(existing.keys());
   const ensure = (name: string, currentId?: string): string => {
-    if (currentId && existing.has(currentId)) return currentId;
+    if (currentId && existing.has(currentId)) {
+      const current = existing.get(currentId);
+      if (current?.name === name || current?.aliases?.includes(name)) return currentId;
+    }
     const known = byName.get(name);
     if (known) return known;
     const base = `net_${wireIdToken(name)}`;
@@ -2730,6 +2757,25 @@ export function ensureStableNetModel(module: CircuitModule): CircuitModule {
     if (net && (net.kind === 'signal' || !net.kind)) net.kind = port.signal_type;
   }
   for (const wire of module.wires ?? []) wire.net_id = ensure(wire.net ?? `n_${wire.id}`, wire.net_id);
+  const junctionIds = new Set<string>();
+  const junctionByCoordinate = new Map<string, string>();
+  for (const wire of module.wires ?? []) {
+    for (const endpoint of [wire.from, wire.to]) {
+      if (!endpoint?.junction_id) continue;
+      junctionIds.add(endpoint.junction_id);
+      junctionByCoordinate.set(`${wire.net_id}:${roundCoordinate(endpoint.x)},${roundCoordinate(endpoint.y)}`, endpoint.junction_id);
+    }
+  }
+  for (const wire of module.wires ?? []) {
+    for (const endpoint of [wire.from, wire.to]) {
+      if (!endpoint || endpointKey(endpoint)) continue;
+      const coordinateKey = `${wire.net_id}:${roundCoordinate(endpoint.x)},${roundCoordinate(endpoint.y)}`;
+      const junctionId = junctionByCoordinate.get(coordinateKey) ?? makeId('j', junctionIds);
+      endpoint.junction_id = junctionId;
+      junctionIds.add(junctionId);
+      junctionByCoordinate.set(coordinateKey, junctionId);
+    }
+  }
   module.nets = [...existing.values()];
   module.schema = 'actoviq.module.v2';
   return module;
@@ -2737,12 +2783,19 @@ export function ensureStableNetModel(module: CircuitModule): CircuitModule {
 
 function endpointNetId(module: CircuitModule, endpoint: CircuitWireEndpoint | undefined): string | null {
   if (!endpoint) return null;
+  const transientNetId = (endpoint as EndpointHit).net_id;
+  if (transientNetId) return transientNetId;
   if (endpoint.component_id && endpoint.pin_id) {
     return module.components
       .find((entry) => entry.id === endpoint.component_id)
       ?.pins.find((pin) => pin.id === endpoint.pin_id)?.net_id ?? null;
   }
   if (endpoint.port_id) return module.ports.find((port) => port.id === endpoint.port_id)?.net_id ?? null;
+  if (endpoint.junction_id) {
+    return module.wires.find((wire) => (
+      wire.from?.junction_id === endpoint.junction_id || wire.to?.junction_id === endpoint.junction_id
+    ))?.net_id ?? null;
+  }
   return null;
 }
 
@@ -2760,8 +2813,11 @@ function mergeStableNets(
   const left = nets.find((net) => net.id === leftId);
   const right = nets.find((net) => net.id === rightId);
   if (!left && !right) {
-    const name = `n_${Date.now()}`;
-    const id = `net_${wireIdToken(name)}`;
+    const existingNames = new Set(nets.map((net) => net.name));
+    let index = 1;
+    while (existingNames.has(`n_wire_${index}`)) index += 1;
+    const name = `n_wire_${index}`;
+    const id = makeId('net_wire_', new Set(nets.map((net) => net.id)));
     nets.push({ id, name, kind: 'signal', aliases: [] });
     return { id, name };
   }
@@ -2830,26 +2886,198 @@ export function chooseMergedNet(left: string | null, right: string | null): stri
   return left || right || `n_${Date.now()}`;
 }
 
-export function addWire(module: CircuitModule, start: EndpointHit, end: EndpointHit) {
+export function addWire(
+  module: CircuitModule,
+  start: EndpointHit,
+  end: EndpointHit,
+  visibleWires: CircuitWire[] = [],
+): EndpointHit | null {
   ensureStableNetModel(module);
-  const startPoint = endpointDrawPoint(start);
-  const endPoint = endpointDrawPoint(end);
-  const leftNet = endpointNet(module, start);
-  const rightNet = endpointNet(module, end);
-  const merged = mergeStableNets(module, endpointNetId(module, start), endpointNetId(module, end));
+  const attachedStart = ensureWireNode(module, start, visibleWires);
+  const attachedEnd = ensureWireNode(module, end, visibleWires);
+  const startPoint = endpointDrawPoint(attachedStart);
+  const endPoint = endpointDrawPoint(attachedEnd);
+  if (sameCoordinate(startPoint, endPoint)) return null;
+  const leftNet = endpointNet(module, attachedStart);
+  const rightNet = endpointNet(module, attachedEnd);
+  const merged = mergeStableNets(module, endpointNetId(module, attachedStart), endpointNetId(module, attachedEnd));
   const mergedNet = merged.name || chooseMergedNet(leftNet, rightNet);
   const id = makeId('w', new Set((module.wires ?? []).map((wire) => wire.id)));
-  module.wires = [
-    ...(module.wires ?? []),
-    {
+  const from = stripEndpoint(startPoint, attachedStart);
+  const to = stripEndpoint(endPoint, attachedEnd);
+  const pair = [endpointKey(from), endpointKey(to)].sort().join('<->');
+  const duplicate = module.wires.some((wire) => (
+    [endpointKey(wire.from), endpointKey(wire.to)].sort().join('<->') === pair
+  ));
+  if (!duplicate) {
+    module.wires.push({
       id,
-      points: routePointsForModule(module, startPoint, endPoint, start, end, mergedNet),
-      from: stripEndpoint(startPoint, start),
-      to: stripEndpoint(endPoint, end),
+      points: routePointsForModule(
+        module,
+        startPoint,
+        endPoint,
+        attachedStart,
+        attachedEnd,
+        mergedNet,
+        module.wires,
+      ),
+      from,
+      to,
       net: mergedNet,
       net_id: merged.id,
-    },
-  ];
+      source: 'stored',
+    });
+  }
+  return {
+    ...attachedEnd,
+    kind: attachedEnd.kind === 'point' ? 'junction' : attachedEnd.kind,
+    net: mergedNet,
+    net_id: merged.id,
+  };
+}
+
+function ensureWireNode(
+  module: CircuitModule,
+  endpoint: EndpointHit,
+  visibleWires: CircuitWire[],
+): EndpointHit {
+  if (endpoint.kind === 'pin' || endpoint.kind === 'port' || endpoint.junction_id) return endpoint;
+  if (endpoint.wire_id) {
+    let wire = module.wires.find((entry) => entry.id === endpoint.wire_id);
+    if (!wire) {
+      const visible = visibleWires.find((entry) => entry.id === endpoint.wire_id);
+      if (visible) {
+        const existingIds = new Set(module.wires.map((entry) => entry.id));
+        wire = {
+          ...cloneWireRecord(visible),
+          id: existingIds.has(visible.id) ? makeId('w', existingIds) : visible.id,
+          source: 'stored',
+        };
+        const net = module.nets?.find((entry) => entry.id === visible.net_id)
+          ?? module.nets?.find((entry) => entry.name === visible.net);
+        wire.net = net?.name ?? visible.net;
+        wire.net_id = net?.id;
+        module.wires.push(wire);
+        ensureStableNetModel(module);
+      }
+    }
+    if (wire) return splitWireAtNode(module, wire, endpointDrawPoint(endpoint));
+  }
+  const point = endpointDrawPoint(endpoint);
+  return {
+    ...endpoint,
+    kind: 'junction',
+    x: point.x,
+    y: point.y,
+    junction_id: makeJunctionId(module),
+  };
+}
+
+function splitWireAtNode(module: CircuitModule, wire: CircuitWire, point: CircuitPosition): EndpointHit {
+  const snappedPoint = snapPoint(point);
+  const points = compactRoute(wire.points.map((entry) => ({ ...entry })));
+  const first = points[0];
+  const last = points.at(-1);
+  if (!first || !last) return pointEndpoint(snappedPoint);
+  if (sameCoordinate(snappedPoint, first)) {
+    return bindWireEndpointToNode(module, wire, 'from', snappedPoint);
+  }
+  if (sameCoordinate(snappedPoint, last)) {
+    return bindWireEndpointToNode(module, wire, 'to', snappedPoint);
+  }
+
+  let segmentIndex = -1;
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    if (start && end && pointToSegmentDistance(snappedPoint, start, end) < 0.5) {
+      segmentIndex = index;
+      break;
+    }
+  }
+  if (segmentIndex < 1) return pointEndpoint(snappedPoint);
+
+  const junctionId = makeJunctionId(module);
+  const junction = junctionEndpoint(snappedPoint, junctionId);
+  const leftPoints = compactRoute([...points.slice(0, segmentIndex), snappedPoint]);
+  const rightPoints = compactRoute([snappedPoint, ...points.slice(segmentIndex)]);
+  const rightId = makeId(`${wire.id}_`, new Set(module.wires.map((entry) => entry.id)));
+  const originalTo = wire.to ? { ...wire.to } : { x: last.x, y: last.y, junction_id: makeJunctionId(module) };
+  wire.points = leftPoints;
+  wire.to = junction;
+  wire.source = 'stored';
+  module.wires.push({
+    ...wire,
+    id: rightId,
+    points: rightPoints,
+    from: { ...junction },
+    to: originalTo,
+    source: 'stored',
+  });
+  return {
+    kind: 'junction',
+    ...snappedPoint,
+    junction_id: junctionId,
+    label: wire.net ? `Junction ${wire.net}` : 'Junction',
+    net: wire.net,
+    net_id: wire.net_id,
+  };
+}
+
+function bindWireEndpointToNode(
+  module: CircuitModule,
+  wire: CircuitWire,
+  side: 'from' | 'to',
+  point: CircuitPosition,
+): EndpointHit {
+  const current = wire[side];
+  if (current?.component_id && current.pin_id) {
+    const component = module.components.find((entry) => entry.id === current.component_id);
+    const pin = component?.pins.find((entry) => entry.id === current.pin_id);
+    if (component && pin) {
+      return { kind: 'pin', ...current, label: `${component.name}.${pin.name}`, net: pin.net, net_id: pin.net_id };
+    }
+  }
+  if (current?.port_id) {
+    const port = module.ports.find((entry) => entry.id === current.port_id);
+    if (port) return { kind: 'port', ...current, label: port.name, net: port.net, net_id: port.net_id };
+  }
+  const junctionId = current?.junction_id ?? makeJunctionId(module);
+  const bound = junctionEndpoint(point, junctionId);
+  wire[side] = bound;
+  return {
+    kind: 'junction',
+    ...bound,
+    label: wire.net ? `Junction ${wire.net}` : 'Junction',
+    net: wire.net,
+    net_id: wire.net_id,
+  };
+}
+
+function junctionEndpoint(point: CircuitPosition, junctionId: string): CircuitWireEndpoint {
+  return { x: point.x, y: point.y, junction_id: junctionId };
+}
+
+function makeJunctionId(module: CircuitModule): string {
+  const ids = new Set<string>();
+  for (const wire of module.wires) {
+    if (wire.from?.junction_id) ids.add(wire.from.junction_id);
+    if (wire.to?.junction_id) ids.add(wire.to.junction_id);
+  }
+  return makeId('j', ids);
+}
+
+function cloneWireRecord(wire: CircuitWire): CircuitWire {
+  return {
+    ...wire,
+    points: wire.points.map((point) => ({ ...point })),
+    from: wire.from ? { ...wire.from } : undefined,
+    to: wire.to ? { ...wire.to } : undefined,
+  };
+}
+
+function sameCoordinate(left: CircuitPosition, right: CircuitPosition): boolean {
+  return Math.abs(left.x - right.x) < 0.001 && Math.abs(left.y - right.y) < 0.001;
 }
 
 export function removeWireAndUpdateConnectivity(module: CircuitModule, wireOrId: CircuitWire | string): CircuitModule {
@@ -3170,6 +3398,7 @@ export function stripEndpoint(point: CircuitPosition, endpoint: EndpointHit): Ci
     value.pin_id = endpoint.pin_id;
   }
   if (endpoint.port_id) value.port_id = endpoint.port_id;
+  if (endpoint.junction_id) value.junction_id = endpoint.junction_id;
   return value;
 }
 
@@ -3180,68 +3409,156 @@ export function endpointDrawPoint(endpoint: EndpointHit): CircuitPosition {
 
 export function normalizeConnectivity(module: CircuitModule): CircuitModule {
   const next = cloneModule(module);
-  const parent = new Map<string, string>();
-  const nets = new Map<string, string>();
-
-  const find = (key: string): string => {
-    if (!parent.has(key)) parent.set(key, key);
-    const current = parent.get(key);
-    if (current === key || !current) return key;
-    const root = find(current);
-    parent.set(key, root);
-    return root;
-  };
-  const union = (left: string, right: string) => {
-    const leftRoot = find(left);
-    const rightRoot = find(right);
-    if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
-  };
-
+  ensureStableNetModel(next);
+  for (const wire of next.wires) {
+    const endpointIds = [endpointNetId(next, wire.from), endpointNetId(next, wire.to)].filter(
+      (value): value is string => Boolean(value),
+    );
+    let merged = { id: wire.net_id ?? endpointIds[0] ?? '', name: wire.net ?? '' };
+    for (const endpointId of endpointIds) {
+      merged = mergeStableNets(next, merged.id || null, endpointId);
+    }
+    if (merged.id) {
+      wire.net_id = merged.id;
+      wire.net = merged.name;
+    }
+  }
+  ensureStableNetModel(next);
+  const nets = new Map((next.nets ?? []).map((net) => [net.id, net]));
   for (const component of next.components) {
     for (const pin of component.pins) {
-      const key = `c:${component.id}:${pin.id}`;
-      find(key);
-      nets.set(key, pin.net);
+      const net = pin.net_id ? nets.get(pin.net_id) : undefined;
+      if (net) pin.net = net.name;
     }
   }
   for (const port of next.ports) {
-    const key = `p:${port.id}`;
-    find(key);
-    nets.set(key, port.net);
+    const net = port.net_id ? nets.get(port.net_id) : undefined;
+    if (net) port.net = net.name;
   }
-  for (const wire of next.wires ?? []) {
-    const left = endpointKey(wire.from);
-    const right = endpointKey(wire.to);
-    if (left && right) union(left, right);
-    if (left && wire.net && !nets.get(left)) nets.set(left, wire.net);
-    if (right && wire.net && !nets.get(right)) nets.set(right, wire.net);
+  for (const wire of next.wires) {
+    const net = wire.net_id ? nets.get(wire.net_id) : undefined;
+    if (net) wire.net = net.name;
   }
-
-  const groupNets = new Map<string, string[]>();
-  for (const [key, net] of nets) {
-    const root = find(key);
-    groupNets.set(root, [...(groupNets.get(root) ?? []), net]);
+  const issues = validateWireTopology(next);
+  if (issues.length > 0) {
+    throw new Error(`Invalid schematic wire topology: ${issues.map((issue) => issue.message).join('; ')}`);
   }
-  const chosen = new Map<string, string>();
-  for (const [root, candidates] of groupNets) {
-    chosen.set(root, candidates.includes('0') ? '0' : candidates.find(Boolean) ?? `n_${root.replace(/[^A-Za-z0-9_]/g, '_')}`);
-  }
-
-  for (const component of next.components) {
-    for (const pin of component.pins) {
-      pin.net = chosen.get(find(`c:${component.id}:${pin.id}`)) ?? pin.net;
-    }
-  }
-  for (const port of next.ports) {
-    port.net = chosen.get(find(`p:${port.id}`)) ?? port.net;
-  }
-  next.wires = (next.wires ?? []).map((wire) => {
-    const left = endpointKey(wire.from);
-    const right = endpointKey(wire.to);
-    const net = (left && chosen.get(find(left))) || (right && chosen.get(find(right))) || wire.net;
-    return { ...wire, net };
-  });
   return next;
+}
+
+export function validateWireTopology(module: CircuitModule): WireTopologyIssue[] {
+  const issues: WireTopologyIssue[] = [];
+  const nets = new Map((module.nets ?? []).map((net) => [net.id, net]));
+  const junctions = new Map<string, { point: CircuitPosition; netId?: string; wireId: string }>();
+  const segments: Array<{ wire: CircuitWire; start: CircuitPosition; end: CircuitPosition }> = [];
+
+  for (const wire of module.wires ?? []) {
+    const points = wire.points ?? [];
+    if (points.length < 2 || !wire.from || !wire.to) {
+      issues.push({ code: 'invalid_wire', message: `${wire.id} must have two endpoints and at least two points`, wire_ids: [wire.id] });
+      continue;
+    }
+    const net = wire.net_id ? nets.get(wire.net_id) : undefined;
+    if (!wire.net_id || !net || net.name !== wire.net) {
+      issues.push({ code: 'net_mismatch', message: `${wire.id} net/net_id does not match the module net table`, wire_ids: [wire.id] });
+    }
+    const first = points[0]!;
+    const last = points.at(-1)!;
+    if (!sameCoordinate(first, wire.from) || !sameCoordinate(last, wire.to)) {
+      issues.push({ code: 'invalid_endpoint', message: `${wire.id} endpoint coordinates do not match its path`, wire_ids: [wire.id] });
+    }
+    for (const endpoint of [wire.from, wire.to]) {
+      const key = endpointKey(endpoint);
+      if (!key) {
+        issues.push({ code: 'invalid_endpoint', message: `${wire.id} has an endpoint without pin, port, or junction identity`, wire_ids: [wire.id] });
+        continue;
+      }
+      const endpointId = endpointNetId(module, endpoint);
+      if ((endpoint.component_id || endpoint.port_id) && endpointId !== wire.net_id) {
+        issues.push({ code: 'net_mismatch', message: `${wire.id} endpoint ${key} belongs to another net`, wire_ids: [wire.id], point: endpoint });
+      }
+      if (endpoint.junction_id) {
+        const current = junctions.get(endpoint.junction_id);
+        if (current && (!sameCoordinate(current.point, endpoint) || current.netId !== wire.net_id)) {
+          issues.push({
+            code: 'junction_conflict',
+            message: `junction ${endpoint.junction_id} has inconsistent coordinates or nets`,
+            wire_ids: [current.wireId, wire.id],
+            point: endpoint,
+          });
+        } else if (!current) {
+          junctions.set(endpoint.junction_id, { point: endpoint, netId: wire.net_id, wireId: wire.id });
+        }
+      }
+    }
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1]!;
+      const end = points[index]!;
+      if (sameCoordinate(start, end) || (start.x !== end.x && start.y !== end.y)) {
+        issues.push({ code: 'invalid_wire', message: `${wire.id} contains a zero-length or non-orthogonal segment`, wire_ids: [wire.id], point: start });
+      } else {
+        segments.push({ wire, start, end });
+      }
+    }
+  }
+
+  for (let leftIndex = 0; leftIndex < segments.length; leftIndex += 1) {
+    const left = segments[leftIndex]!;
+    for (let rightIndex = leftIndex + 1; rightIndex < segments.length; rightIndex += 1) {
+      const right = segments[rightIndex]!;
+      if (left.wire.id === right.wire.id || left.wire.net_id === right.wire.net_id) continue;
+      const contact = blockingSegmentContact(left.start, left.end, right.start, right.end);
+      if (!contact) continue;
+      issues.push({
+        code: 'unintended_contact',
+        message: `${left.wire.id} and ${right.wire.id} from different nets touch or overlap`,
+        wire_ids: [left.wire.id, right.wire.id],
+        point: contact,
+      });
+    }
+  }
+  return issues;
+}
+
+function blockingSegmentContact(
+  leftStart: CircuitPosition,
+  leftEnd: CircuitPosition,
+  rightStart: CircuitPosition,
+  rightEnd: CircuitPosition,
+): CircuitPosition | null {
+  const leftVertical = leftStart.x === leftEnd.x;
+  const rightVertical = rightStart.x === rightEnd.x;
+  if (leftVertical === rightVertical) {
+    if (leftVertical && leftStart.x !== rightStart.x) return null;
+    if (!leftVertical && leftStart.y !== rightStart.y) return null;
+    const leftMin = leftVertical ? Math.min(leftStart.y, leftEnd.y) : Math.min(leftStart.x, leftEnd.x);
+    const leftMax = leftVertical ? Math.max(leftStart.y, leftEnd.y) : Math.max(leftStart.x, leftEnd.x);
+    const rightMin = rightVertical ? Math.min(rightStart.y, rightEnd.y) : Math.min(rightStart.x, rightEnd.x);
+    const rightMax = rightVertical ? Math.max(rightStart.y, rightEnd.y) : Math.max(rightStart.x, rightEnd.x);
+    const overlapStart = Math.max(leftMin, rightMin);
+    const overlapEnd = Math.min(leftMax, rightMax);
+    if (overlapStart > overlapEnd) return null;
+    return leftVertical ? { x: leftStart.x, y: overlapStart } : { x: overlapStart, y: leftStart.y };
+  }
+  const verticalStart = leftVertical ? leftStart : rightStart;
+  const verticalEnd = leftVertical ? leftEnd : rightEnd;
+  const horizontalStart = leftVertical ? rightStart : leftStart;
+  const horizontalEnd = leftVertical ? rightEnd : leftEnd;
+  const point = { x: verticalStart.x, y: horizontalStart.y };
+  const within = point.x >= Math.min(horizontalStart.x, horizontalEnd.x)
+    && point.x <= Math.max(horizontalStart.x, horizontalEnd.x)
+    && point.y >= Math.min(verticalStart.y, verticalEnd.y)
+    && point.y <= Math.max(verticalStart.y, verticalEnd.y);
+  if (!within) return null;
+  const interiorVertical = point.y > Math.min(verticalStart.y, verticalEnd.y)
+    && point.y < Math.max(verticalStart.y, verticalEnd.y);
+  const interiorHorizontal = point.x > Math.min(horizontalStart.x, horizontalEnd.x)
+    && point.x < Math.max(horizontalStart.x, horizontalEnd.x);
+  return interiorVertical && interiorHorizontal ? null : point;
+}
+
+function roundCoordinate(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 export function endpointWorldPosition(
@@ -3268,6 +3585,7 @@ export function rerouteWire(
   module: CircuitModule,
   wire: CircuitWire,
   portPositions: Map<string, CircuitPosition>,
+  occupiedWires: CircuitWire[] = [],
 ): CircuitWire {
   const start = endpointWorldPosition(module, wire.from, portPositions);
   const end = endpointWorldPosition(module, wire.to, portPositions);
@@ -3276,7 +3594,7 @@ export function rerouteWire(
     ...wire,
     from: wire.from ? { ...wire.from, x: start.x, y: start.y } : wire.from,
     to: wire.to ? { ...wire.to, x: end.x, y: end.y } : wire.to,
-    points: routePointsForModule(module, start, end, wire.from, wire.to, wire.net),
+    points: routePointsForModule(module, start, end, wire.from, wire.to, wire.net, occupiedWires),
   };
 }
 
@@ -3310,11 +3628,19 @@ export function rerouteStoredWires(
   const componentIds = new Set(options.componentIds ?? []);
   const portIds = new Set(options.portIds ?? []);
   const filterConnections = componentIds.size > 0 || portIds.size > 0;
-  return (module.wires ?? []).map((wire) => (
-    !filterConnections || wireTouchesAnyComponent(wire, componentIds) || wireTouchesAnyPort(wire, portIds)
-      ? rerouteWire(module, wire, portPositions)
-      : wire
-  ));
+  const wires = (module.wires ?? []).map(cloneWireRecord);
+  const routingModule = { ...module, wires };
+  for (let index = 0; index < wires.length; index += 1) {
+    const wire = wires[index];
+    if (!wire) continue;
+    if (filterConnections && !wireTouchesAnyComponent(wire, componentIds) && !wireTouchesAnyPort(wire, portIds)) {
+      continue;
+    }
+    const occupied = wires.filter((_, occupiedIndex) => occupiedIndex !== index);
+    wires[index] = rerouteWire(routingModule, wire, portPositions, occupied);
+    routingModule.wires = wires;
+  }
+  return wires;
 }
 
 function wireTouchesAnyComponent(wire: CircuitWire, componentIds: Set<string>): boolean {
@@ -3363,7 +3689,83 @@ export function hitEndpoint(document: SchematicDocument, world: CircuitPosition)
       };
     }
   }
-  return null;
+  return hitWireNode(document, world);
+}
+
+function hitWireNode(document: SchematicDocument, world: CircuitPosition): EndpointHit | null {
+  for (const wire of document.wires) {
+    for (const endpoint of [wire.from, wire.to]) {
+      if (!endpoint?.junction_id || distance(endpoint, world) > PIN_REACH) continue;
+      return {
+        kind: 'junction',
+        ...endpoint,
+        label: wire.net ? `Junction ${wire.net}` : 'Junction',
+        net: wire.net,
+        net_id: wire.net_id,
+        wire_id: wire.id,
+      };
+    }
+  }
+
+  const candidates: Array<{
+    wire: CircuitWire;
+    segmentIndex: number;
+    point: CircuitPosition;
+    distance: number;
+  }> = [];
+  for (const wire of document.wires) {
+    const points = wire.points ?? [];
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      if (!start || !end) continue;
+      const hitDistance = pointToSegmentDistance(world, start, end);
+      if (hitDistance > PIN_REACH) continue;
+      candidates.push({
+        wire,
+        segmentIndex: index,
+        point: snapPoint(nearestOrthogonalPoint(world, start, end)),
+        distance: hitDistance,
+      });
+    }
+  }
+  candidates.sort((left, right) => left.distance - right.distance || left.wire.id.localeCompare(right.wire.id));
+  const best = candidates[0];
+  if (!best) return null;
+  const coincident = candidates.filter((candidate) => (
+    sameCoordinate(candidate.point, best.point) && Math.abs(candidate.distance - best.distance) < 0.5
+  ));
+  const netKeys = new Set(coincident.map((candidate) => candidate.wire.net_id ?? candidate.wire.net ?? ''));
+  if (netKeys.size > 1) return null;
+  return {
+    kind: 'point',
+    ...best.point,
+    label: best.wire.net ? `Wire ${best.wire.net}` : 'Wire',
+    net: best.wire.net,
+    net_id: best.wire.net_id,
+    wire_id: best.wire.id,
+    segment_index: best.segmentIndex,
+  };
+}
+
+function nearestOrthogonalPoint(
+  point: CircuitPosition,
+  start: CircuitPosition,
+  end: CircuitPosition,
+): CircuitPosition {
+  if (Math.abs(start.x - end.x) < 0.001) {
+    return {
+      x: start.x,
+      y: Math.max(Math.min(start.y, end.y), Math.min(Math.max(start.y, end.y), point.y)),
+    };
+  }
+  if (Math.abs(start.y - end.y) < 0.001) {
+    return {
+      x: Math.max(Math.min(start.x, end.x), Math.min(Math.max(start.x, end.x), point.x)),
+      y: start.y,
+    };
+  }
+  return point;
 }
 
 function wireTouchesAnyPort(wire: CircuitWire, portIds: Set<string>): boolean {
@@ -4094,12 +4496,14 @@ function hitWireGroup(wires: CircuitWire[], world: CircuitPosition): CircuitWire
 }
 
 function splitNetAfterWireRemoval(module: CircuitModule, removedWire: CircuitWire) {
+  ensureStableNetModel(module);
   const affectedNet = removedWire.net ?? endpointNet(module, removedWire.from) ?? endpointNet(module, removedWire.to);
+  const affectedNetId = removedWire.net_id ?? module.nets?.find((net) => net.name === affectedNet)?.id;
   const leftKey = endpointKey(removedWire.from);
   const rightKey = endpointKey(removedWire.to);
   if (!affectedNet || !leftKey || !rightKey) return;
 
-  const affectedKeys = endpointKeysForNet(module, affectedNet);
+  const affectedKeys = endpointKeysForNet(module, affectedNet, affectedNetId);
   if (!affectedKeys.has(leftKey) || !affectedKeys.has(rightKey)) return;
 
   const adjacency = new Map<string, Set<string>>();
@@ -4139,11 +4543,20 @@ function splitNetAfterWireRemoval(module: CircuitModule, removedWire: CircuitWir
     if (group === keptGroup) continue;
     const nextNet = makeFreshNet(affectedNet, existingNets);
     existingNets.add(nextNet);
-    for (const key of group) setEndpointNetByKey(module, key, nextNet);
+    const nextNetId = makeId('net_', new Set((module.nets ?? []).map((net) => net.id)));
+    module.nets = [...(module.nets ?? []), { id: nextNetId, name: nextNet, kind: 'signal', aliases: [] }];
+    for (const key of group) setEndpointNetByKey(module, key, nextNet, nextNetId);
+    const groupKeys = new Set(group);
+    for (const wire of module.wires) {
+      if (groupKeys.has(endpointKey(wire.from) ?? '') || groupKeys.has(endpointKey(wire.to) ?? '')) {
+        wire.net = nextNet;
+        wire.net_id = nextNetId;
+      }
+    }
   }
 }
 
-function endpointKeysForNet(module: CircuitModule, net: string): Set<string> {
+function endpointKeysForNet(module: CircuitModule, net: string, netId?: string): Set<string> {
   const keys = new Set<string>();
   for (const component of module.components) {
     for (const pin of component.pins) {
@@ -4152,6 +4565,13 @@ function endpointKeysForNet(module: CircuitModule, net: string): Set<string> {
   }
   for (const port of module.ports) {
     if (port.net === net) keys.add(`p:${port.id}`);
+  }
+  for (const wire of module.wires) {
+    if (wire.net !== net && (!netId || wire.net_id !== netId)) continue;
+    const from = endpointKey(wire.from);
+    const to = endpointKey(wire.to);
+    if (from) keys.add(from);
+    if (to) keys.add(to);
   }
   return keys;
 }
@@ -4181,18 +4601,34 @@ function makeFreshNet(baseNet: string, existingNets: Set<string>): string {
   return `n_${token}_${Date.now()}`;
 }
 
-function setEndpointNetByKey(module: CircuitModule, key: string, net: string) {
+function setEndpointNetByKey(module: CircuitModule, key: string, net: string, netId: string) {
   if (key.startsWith('c:')) {
     const [, componentId, pinId] = key.split(':');
     const component = module.components.find((entry) => entry.id === componentId);
     const pin = component?.pins.find((entry) => entry.id === pinId);
-    if (pin) pin.net = net;
+    if (pin) {
+      pin.net = net;
+      pin.net_id = netId;
+    }
     return;
   }
   if (key.startsWith('p:')) {
     const [, portId] = key.split(':');
     const port = module.ports.find((entry) => entry.id === portId);
-    if (port) port.net = net;
+    if (port) {
+      port.net = net;
+      port.net_id = netId;
+    }
+    return;
+  }
+  if (key.startsWith('j:')) {
+    const junctionId = key.slice(2);
+    for (const wire of module.wires) {
+      if (wire.from?.junction_id === junctionId || wire.to?.junction_id === junctionId) {
+        wire.net = net;
+        wire.net_id = netId;
+      }
+    }
   }
 }
 

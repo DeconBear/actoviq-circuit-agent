@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   ChatModelTier,
+  LayoutModelTestResult,
   ProviderTestResult,
   DesktopAgentEvent,
   ChatResponse,
@@ -18,6 +19,8 @@ import type {
   DesignMemoryItem,
   EdaExportRequest,
   EdaExportResult,
+  LayoutOptimizationRequest,
+  LayoutOptimizationResult,
   SavedDesignMemorySummary,
   SimulationDataset,
   SimulationRun,
@@ -100,6 +103,7 @@ declare global {
         netlist_path: string;
       }>;
       exportCircuitEda(projectId: string, input: EdaExportRequest): Promise<EdaExportResult>;
+      optimizeCircuitLayout(projectId: string, input: LayoutOptimizationRequest): Promise<LayoutOptimizationResult>;
       chooseCircuitEdaMapping(): Promise<string | null>;
       chooseCircuitEdaOutputDir(): Promise<string | null>;
       simulateCircuitProject(projectId: string): Promise<SimulationRun>;
@@ -154,6 +158,7 @@ declare global {
       revealActoviqAuthToken(): Promise<string | null>;
       saveSettings(settings: AppSettings): Promise<AppSettings>;
       testProviderSettings(settings: AppSettings): Promise<ProviderTestResult>;
+      testLayoutModelSettings(settings: AppSettings): Promise<LayoutModelTestResult>;
       getAppVersion(): Promise<string>;
       getCircuitSkillStatus(): Promise<CircuitSkillStatus>;
       syncCircuitSkill(): Promise<CircuitSkillStatus>;

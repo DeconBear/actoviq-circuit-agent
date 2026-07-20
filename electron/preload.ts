@@ -62,6 +62,14 @@ export type ActoviqProvider = 'anthropic' | 'openai';
 export type ActoviqProviderPreset = 'anthropic' | 'deepseek' | 'openai-compatible';
 export type SecretStorageMode = 'encrypted' | 'plaintext-fallback' | 'environment' | 'none';
 export type ChatModelTier = 'basic' | 'medium' | 'professional';
+export type LayoutVisionVerificationStatus = 'unverified' | 'verified' | 'error';
+
+export interface LayoutVisionVerification {
+  status: LayoutVisionVerificationStatus;
+  fingerprint: string;
+  verifiedAt?: string;
+  error?: string;
+}
 
 export interface AppSettings {
   actoviqProvider: ActoviqProvider;
@@ -79,6 +87,8 @@ export interface AppSettings {
   mediumContext1M: boolean;
   professionalContext1M: boolean;
   preferredChatTier: ChatModelTier;
+  layoutVisionModel: string;
+  layoutVisionVerification: LayoutVisionVerification;
   chatModel: string;
   reasoningModel: string;
   opusModel: string;
@@ -97,6 +107,12 @@ export interface ProviderTestResult {
   model: string;
   latencyMs: number;
   error?: string;
+}
+
+export interface LayoutModelTestResult extends ProviderTestResult {
+  status: 'verified' | 'error';
+  fingerprint: string;
+  verifiedAt?: string;
 }
 
 export interface DesktopAgentEvent {
@@ -301,6 +317,13 @@ const electronAPI = {
     return ipcRenderer.invoke('project:compile', projectId);
   },
 
+  optimizeCircuitLayout(projectId: string, input: {
+    moduleId: string;
+    sourceRevision: number;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:optimize-layout', projectId, input);
+  },
+
   exportCircuitEda(projectId: string, input: {
     scope: 'project' | 'module';
     moduleId?: string;
@@ -409,6 +432,10 @@ const electronAPI = {
 
   testProviderSettings(settings: AppSettings): Promise<ProviderTestResult> {
     return ipcRenderer.invoke('settings:test-provider', settings);
+  },
+
+  testLayoutModelSettings(settings: AppSettings): Promise<LayoutModelTestResult> {
+    return ipcRenderer.invoke('settings:test-layout-model', settings);
   },
 
   getAppVersion(): Promise<string> {

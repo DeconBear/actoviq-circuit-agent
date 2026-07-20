@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from copy import deepcopy
@@ -61,6 +62,55 @@ _VIRTUOSO_CELLS = {
     "pnp": ("analogLib", "pnp"), "npn": ("analogLib", "npn"),
     "voltage_source": ("analogLib", "vsource"), "current_source": ("analogLib", "isource"),
 }
+
+
+def _portable_symbol_variant(component: dict[str, Any], base_cell: str) -> str:
+    """Return a stable local-cell name for non-canonical symbol geometry.
+
+    KiCad/Altium/OrCAD local libraries share one definition for every cell
+    name.  Reusing ``Block_3Pin`` (or ``R`` with custom pin sides) for two
+    different pin arrangements makes one of the instances connect to the
+    wrong graphical pin.  Canonical primitives keep their familiar cell
+    names; arbitrary blocks and non-standard pin arrangements get a short,
+    deterministic geometry suffix.
+    """
+    pins = component.get("pins") if isinstance(component.get("pins"), list) else []
+    component_type = str(component.get("type", "BLOCK")).upper()
+    canonical_roles = _DEVICE_SPECS.get(component_type, ("", "", "", ()))[3]
+    pin_layout = [
+        {
+            "role": str((pin.get("eda") or {}).get("role", "")),
+            "name": str(pin.get("name", "")),
+            "side": str(pin.get("side", "")),
+            "order": int(pin.get("order", 0)),
+        }
+        for pin in pins
+    ]
+    canonical = (
+        component_type != "BLOCK"
+        and len(pins) == len(canonical_roles)
+        and all(
+            entry["role"] == canonical_roles[index]
+            and entry["side"] == _ROLE_SIDES.get(canonical_roles[index], entry["side"])
+            for index, entry in enumerate(pin_layout)
+        )
+    )
+    if canonical:
+        return base_cell
+    block = component.get("block") if isinstance(component.get("block"), dict) else {}
+    payload = {
+        "type": component_type,
+        "subtype": str((component.get("eda") or {}).get("subtype", "")),
+        "pins": pin_layout,
+        "width": block.get("width"),
+        "height": block.get("height"),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:8]
+    if component_type in {"M", "Q"}:
+        base_cell = re.sub(r"_\d+PIN$", f"_{len(pins)}PIN", base_cell)
+    return f"{base_cell}_{digest}"
 
 
 def _normalized(value: Any) -> str:
@@ -187,7 +237,8 @@ def _default_binding(target: str, component: dict[str, Any]) -> dict[str, Any]:
         library, cell = _VIRTUOSO_CELLS.get(subtype, ("ACTOVIQ", f"Block_{len(pins)}Pin"))
     else:
         library = "ACTOVIQ_STANDARD" if target == "orcad" else "Actoviq_Standard"
-        cell = _STANDARD_CELLS.get(subtype, f"Block_{len(pins)}Pin")
+        base_cell = _STANDARD_CELLS.get(subtype, f"Block_{len(pins)}Pin")
+        cell = _portable_symbol_variant(component, base_cell)
     pin_map: dict[str, str] = {}
     used: set[str] = set()
     for index, pin in enumerate(pins):

@@ -51,6 +51,7 @@ interface JunctionAccumulator {
 
 interface JunctionSegment {
   net: string;
+  netKey: string;
   start: CircuitPosition;
   end: CircuitPosition;
   horizontal: boolean;
@@ -1116,7 +1117,8 @@ export function junctions(document: SchematicDocument): RenderedJunction[] {
   const segments: JunctionSegment[] = [];
   for (const wire of document.wires) {
     const net = wire.net ?? '';
-    if (!net) continue;
+    const netKey = wire.net_id ?? net;
+    if (!netKey) continue;
     const points = wire.points ?? [];
     for (let index = 1; index < points.length; index += 1) {
       const start = points[index - 1];
@@ -1124,14 +1126,15 @@ export function junctions(document: SchematicDocument): RenderedJunction[] {
       if (!start || !end || samePoint(start, end)) continue;
       const segment: JunctionSegment = {
         net,
+        netKey,
         start,
         end,
         horizontal: round(start.y) === round(end.y),
         vertical: round(start.x) === round(end.x),
       };
       segments.push(segment);
-      addSegmentDirectionsAtPoint(junctionMap, net, segment, start);
-      addSegmentDirectionsAtPoint(junctionMap, net, segment, end);
+      addSegmentDirectionsAtPoint(junctionMap, segment, start);
+      addSegmentDirectionsAtPoint(junctionMap, segment, end);
     }
   }
   for (let leftIndex = 0; leftIndex < segments.length; leftIndex += 1) {
@@ -1139,20 +1142,27 @@ export function junctions(document: SchematicDocument): RenderedJunction[] {
     if (!left) continue;
     for (let rightIndex = leftIndex + 1; rightIndex < segments.length; rightIndex += 1) {
       const right = segments[rightIndex];
-      if (!right || left.net !== right.net) continue;
-      const point = orthogonalSegmentIntersection(left, right);
-      if (!point) continue;
-      addSegmentDirectionsAtPoint(junctionMap, left.net, left, point);
-      addSegmentDirectionsAtPoint(junctionMap, right.net, right, point);
+      if (!right || left.netKey !== right.netKey) continue;
+      for (const point of [left.start, left.end]) {
+        if (!pointOnSegment(point, right)) continue;
+        addSegmentDirectionsAtPoint(junctionMap, left, point);
+        addSegmentDirectionsAtPoint(junctionMap, right, point);
+      }
+      for (const point of [right.start, right.end]) {
+        if (!pointOnSegment(point, left)) continue;
+        addSegmentDirectionsAtPoint(junctionMap, left, point);
+        addSegmentDirectionsAtPoint(junctionMap, right, point);
+      }
     }
   }
   for (const component of document.module?.components ?? []) {
     component.pins.forEach((pin, index) => {
       const net = pin.net ?? '';
-      if (!net) return;
+      const netKey = pin.net_id ?? net;
+      if (!netKey) return;
       const point = pinWorld(component, pin, index);
       if (samePoint(point, component.position)) return;
-      addJunctionDirection(junctionMap, net, point, directionBetween(point, component.position));
+      addJunctionDirection(junctionMap, netKey, net, point, directionBetween(point, component.position));
     });
   }
   return [...junctionMap.values()]
@@ -1162,27 +1172,39 @@ export function junctions(document: SchematicDocument): RenderedJunction[] {
 
 function addSegmentDirectionsAtPoint(
   junctionMap: Map<string, JunctionAccumulator>,
-  net: string,
   segment: JunctionSegment,
   point: CircuitPosition,
 ) {
   if (!pointOnSegment(point, segment)) return;
   if (!samePoint(point, segment.start)) {
-    addJunctionDirection(junctionMap, net, point, directionBetween(point, segment.start));
+    addJunctionDirection(
+      junctionMap,
+      segment.netKey,
+      segment.net,
+      point,
+      directionBetween(point, segment.start),
+    );
   }
   if (!samePoint(point, segment.end)) {
-    addJunctionDirection(junctionMap, net, point, directionBetween(point, segment.end));
+    addJunctionDirection(
+      junctionMap,
+      segment.netKey,
+      segment.net,
+      point,
+      directionBetween(point, segment.end),
+    );
   }
 }
 
 function addJunctionDirection(
   junctionMap: Map<string, JunctionAccumulator>,
+  netKey: string,
   net: string,
   point: CircuitPosition,
   direction: WireDirection,
 ) {
   const roundedPoint = { x: round(point.x), y: round(point.y) };
-  const key = `${net}:${roundedPoint.x},${roundedPoint.y}`;
+  const key = `${netKey}:${roundedPoint.x},${roundedPoint.y}`;
   const current = junctionMap.get(key) ?? { point: roundedPoint, net, directions: new Set<WireDirection>() };
   current.directions.add(direction);
   junctionMap.set(key, current);

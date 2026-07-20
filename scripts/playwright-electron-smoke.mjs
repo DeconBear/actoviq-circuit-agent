@@ -615,6 +615,12 @@ try {
   await clickEnabledTestId(page, 'run-eda-export');
   await page.getByTestId('eda-export-result').waitFor({ timeout: 60_000 });
   const expectedExportStatuses = {
+    kicad: 'import_ready',
+    altium: 'import_ready',
+    orcad: 'import_ready',
+    virtuoso: 'import_ready',
+  };
+  const expectedStructuralStatuses = {
     kicad: 'syntax_validated',
     altium: 'kicad_import_source',
     orcad: 'syntax_validated',
@@ -629,6 +635,10 @@ try {
   const exportManifest = JSON.parse(await readFile(path.resolve(projectRoot, 'build', 'exports', exportId, 'manifest.json'), 'utf8'));
   assert.equal(exportManifest.schema, 'actoviq.eda-export-manifest.v1');
   assert.equal(new Set(Object.values(exportManifest.targets).map((target) => target.connectivity_hash)).size, 1);
+  for (const [target, structuralStatus] of Object.entries(expectedStructuralStatuses)) {
+    assert.equal(exportManifest.targets[target].status, 'import_ready');
+    assert.equal(exportManifest.targets[target].detail.structural_status, structuralStatus);
+  }
   await clickEnabledTestId(page, 'open-eda-export-folder');
   await page.getByTestId('close-eda-export').click();
   await page.getByTestId('eda-export-dialog').waitFor({ state: 'detached' });
@@ -786,7 +796,6 @@ try {
   assert.ok(canvasBox);
   await canvasPanel.dispatchEvent('wheel', {
     deltaY: -120,
-    ctrlKey: true,
     bubbles: true,
     cancelable: true,
   });
@@ -839,6 +848,41 @@ try {
     scrollAfterPan.left > scrollBeforePan.left ||
     scrollAfterPan.top > scrollBeforePan.top,
   );
+
+  await canvasPanel.evaluate((element) => {
+    element.scrollLeft = 180;
+    element.scrollTop = 140;
+    element.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  const scrollBeforeRightPan = await canvasPanel.evaluate((element) => ({
+    left: element.scrollLeft,
+    top: element.scrollTop,
+  }));
+  await page.mouse.move(canvasBox.x + Math.min(640, canvasBox.width - 40), canvasBox.y + Math.min(420, canvasBox.height - 40));
+  await page.mouse.down({ button: 'right' });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="canvas-panel"]')?.getAttribute('data-panning') === 'true'
+  ));
+  await page.mouse.move(
+    canvasBox.x + Math.min(480, canvasBox.width - 80),
+    canvasBox.y + Math.min(300, canvasBox.height - 80),
+    { steps: 8 },
+  );
+  await page.mouse.up({ button: 'right' });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="canvas-panel"]')?.getAttribute('data-panning') === 'false'
+  ));
+  const scrollAfterRightPan = await canvasPanel.evaluate((element) => ({
+    left: element.scrollLeft,
+    top: element.scrollTop,
+  }));
+  assert.ok(
+    scrollAfterRightPan.left > scrollBeforeRightPan.left ||
+    scrollAfterRightPan.top > scrollBeforeRightPan.top,
+    'right-drag should pan the design canvas',
+  );
+  assert.equal(await page.getByTestId('canvas-context-menu').count(), 0);
+
   await canvasPanel.evaluate((element) => {
     element.scrollLeft = 220;
     element.scrollTop = 160;

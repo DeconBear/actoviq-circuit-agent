@@ -118,8 +118,93 @@
       },
       "additionalProperties": false
     },
-    "wires": { "type": "array" },
+    "wires": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "points", "from", "to", "net"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "points": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": ["x", "y"],
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "from": { "$ref": "#/$defs/wireEndpoint" },
+          "to": { "$ref": "#/$defs/wireEndpoint" },
+          "net": { "type": "string", "minLength": 1 },
+          "net_id": { "type": "string", "minLength": 1 },
+          "source": { "enum": ["stored", "net"] }
+        },
+        "additionalProperties": false
+      }
+    },
     "annotations": { "type": "array" }
   },
+  "$defs": {
+    "wireEndpoint": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "component_id": { "type": "string", "minLength": 1 },
+        "pin_id": { "type": "string", "minLength": 1 },
+        "port_id": { "type": "string", "minLength": 1 },
+        "junction_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "identifiedWireEndpoint": {
+      "allOf": [
+        { "$ref": "#/$defs/wireEndpoint" },
+        {
+          "oneOf": [
+            {
+              "required": ["component_id", "pin_id"],
+              "not": { "anyOf": [{ "required": ["port_id"] }, { "required": ["junction_id"] }] }
+            },
+            {
+              "required": ["port_id"],
+              "not": { "anyOf": [{ "required": ["component_id"] }, { "required": ["pin_id"] }, { "required": ["junction_id"] }] }
+            },
+            {
+              "required": ["junction_id"],
+              "not": { "anyOf": [{ "required": ["component_id"] }, { "required": ["pin_id"] }, { "required": ["port_id"] }] }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["schema"],
+        "properties": { "schema": { "const": "actoviq.module.v2" } }
+      },
+      "then": {
+        "properties": {
+          "wires": {
+            "items": {
+              "required": ["net_id"],
+              "properties": {
+                "from": { "$ref": "#/$defs/identifiedWireEndpoint" },
+                "to": { "$ref": "#/$defs/identifiedWireEndpoint" }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": true
 }

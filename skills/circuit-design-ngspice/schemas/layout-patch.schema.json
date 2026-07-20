@@ -21,12 +21,13 @@
     }
   },
   "$defs": {
+    "objectId": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "gridDelta": { "type": "integer", "minimum": -6, "maximum": 6 },
-    "moveComponent": { "type": "object", "required": ["op", "component_id", "dx_grid", "dy_grid"], "properties": { "op": { "const": "move_component" }, "component_id": { "type": "string" }, "dx_grid": { "$ref": "#/$defs/gridDelta" }, "dy_grid": { "$ref": "#/$defs/gridDelta" } }, "additionalProperties": false },
-    "rotateComponent": { "type": "object", "required": ["op", "component_id", "rotation"], "properties": { "op": { "const": "rotate_component" }, "component_id": { "type": "string" }, "rotation": { "enum": [0, 90, 180, 270] } }, "additionalProperties": false },
-    "movePort": { "type": "object", "required": ["op", "port_id", "dx_grid", "dy_grid"], "properties": { "op": { "const": "move_port" }, "port_id": { "type": "string" }, "dx_grid": { "$ref": "#/$defs/gridDelta" }, "dy_grid": { "$ref": "#/$defs/gridDelta" } }, "additionalProperties": false },
-    "blockPinSide": { "type": "object", "required": ["op", "component_id", "pin_id", "side"], "properties": { "op": { "const": "set_block_pin_side" }, "component_id": { "type": "string" }, "pin_id": { "type": "string" }, "side": { "enum": ["left", "right", "top", "bottom"] } }, "additionalProperties": false },
-    "layoutLane": { "type": "object", "required": ["op", "component_id", "rank", "lane"], "properties": { "op": { "const": "set_layout_lane" }, "component_id": { "type": "string" }, "rank": { "type": "integer" }, "lane": { "type": "integer" } }, "additionalProperties": false }
+    "moveComponent": { "type": "object", "required": ["op", "component_id", "dx_grid", "dy_grid"], "properties": { "op": { "const": "move_component" }, "component_id": { "$ref": "#/$defs/objectId" }, "dx_grid": { "$ref": "#/$defs/gridDelta" }, "dy_grid": { "$ref": "#/$defs/gridDelta" } }, "additionalProperties": false },
+    "rotateComponent": { "type": "object", "required": ["op", "component_id", "rotation"], "properties": { "op": { "const": "rotate_component" }, "component_id": { "$ref": "#/$defs/objectId" }, "rotation": { "enum": [0, 90, 180, 270] } }, "additionalProperties": false },
+    "movePort": { "type": "object", "required": ["op", "port_id", "dx_grid", "dy_grid"], "properties": { "op": { "const": "move_port" }, "port_id": { "$ref": "#/$defs/objectId" }, "dx_grid": { "$ref": "#/$defs/gridDelta" }, "dy_grid": { "$ref": "#/$defs/gridDelta" } }, "additionalProperties": false },
+    "blockPinSide": { "type": "object", "required": ["op", "component_id", "pin_id", "side"], "properties": { "op": { "const": "set_block_pin_side" }, "component_id": { "$ref": "#/$defs/objectId" }, "pin_id": { "$ref": "#/$defs/objectId" }, "side": { "enum": ["left", "right", "top", "bottom"] } }, "additionalProperties": false },
+    "layoutLane": { "type": "object", "required": ["op", "component_id", "rank", "lane"], "properties": { "op": { "const": "set_layout_lane" }, "component_id": { "$ref": "#/$defs/objectId" }, "rank": { "type": "integer", "minimum": 0, "maximum": 16 }, "lane": { "type": "integer", "minimum": -16, "maximum": 16 } }, "additionalProperties": false }
   },
   "additionalProperties": false
 }

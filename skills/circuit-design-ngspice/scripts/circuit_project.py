@@ -28,7 +28,7 @@ from workspace_paths import (
     resolve_projects_root,
     select_workspace,
 )
-from eda_export import export_eda
+from eda_export import connectivity_hash, evaluate_layout_patches, export_eda, prepare_layout_review
 
 
 PROJECT_SCHEMA = "actoviq.project.v2"
@@ -185,8 +185,47 @@ def validate_module(module: dict[str, Any]) -> None:
         raise ValueError(f"module schema must be one of {sorted(LEGACY_MODULE_SCHEMAS)}")
     if not isinstance(module.get("module_id"), str) or not module["module_id"]:
         raise ValueError("module_id is required")
+    nets = module.get("nets", [])
+    if not isinstance(nets, list):
+        raise ValueError("module nets must be an array")
+    net_names_by_id: dict[str, set[str]] = {}
+    used_net_names: dict[str, str] = {}
+    for net in nets:
+        if not isinstance(net, dict):
+            raise ValueError("module nets must contain objects")
+        net_id = net.get("id")
+        net_name = net.get("name")
+        if not isinstance(net_id, str) or not net_id or net_id in net_names_by_id:
+            raise ValueError("net ids must be present and unique")
+        if not isinstance(net_name, str) or not net_name:
+            raise ValueError(f"net {net_id} must have a name")
+        aliases = net.get("aliases", [])
+        if not isinstance(aliases, list) or any(not isinstance(alias, str) or not alias for alias in aliases):
+            raise ValueError(f"net {net_id} aliases must be non-empty strings")
+        names = {net_name, *aliases}
+        for name in names:
+            previous = used_net_names.get(name)
+            if previous is not None and previous != net_id:
+                raise ValueError(f"net name or alias {name} belongs to multiple nets")
+            used_net_names[name] = net_id
+        net_names_by_id[net_id] = names
+
+    def validate_net_reference(owner: str, net_name: Any, net_id: Any, *, required: bool = False) -> None:
+        if not isinstance(net_name, str) or not net_name:
+            raise ValueError(f"{owner} has no net")
+        if net_id is None and not required:
+            return
+        if not isinstance(net_id, str) or not net_id:
+            raise ValueError(f"{owner} has no net_id")
+        names = net_names_by_id.get(net_id)
+        if names is None:
+            raise ValueError(f"{owner} references unknown net_id: {net_id}")
+        if net_name not in names:
+            raise ValueError(f"{owner} net/name mismatch: {net_name} is not {net_id}")
+
     component_ids: set[str] = set()
     pin_keys: set[tuple[str, str]] = set()
+    pin_networks: dict[tuple[str, str], tuple[str, str | None]] = {}
     for component in module.get("components", []):
         component_id = component.get("id")
         component_type = component.get("type")
@@ -205,10 +244,16 @@ def validate_module(module: dict[str, Any]) -> None:
                 raise ValueError("component pin ids must be present and unique")
             if not isinstance(pin.get("net"), str) or not pin["net"]:
                 raise ValueError(f"pin {component_id}.{pin_id} has no net")
+            validate_net_reference(
+                f"pin {component_id}.{pin_id}",
+                pin.get("net"),
+                pin.get("net_id"),
+            )
             side = pin.get("side")
             if side is not None and side not in BLOCK_PIN_SIDES:
                 raise ValueError(f"pin {component_id}.{pin_id} has invalid side: {side}")
             pin_keys.add(key)
+            pin_networks[key] = (str(pin["net"]), pin.get("net_id"))
         if component_type == "BLOCK":
             block = component.get("block", {})
             if not isinstance(block, dict):
@@ -220,6 +265,148 @@ def validate_module(module: dict[str, Any]) -> None:
     port_ids = [port.get("id") for port in module.get("ports", [])]
     if len(port_ids) != len(set(port_ids)) or any(not value for value in port_ids):
         raise ValueError("module port ids must be present and unique")
+    port_networks: dict[str, tuple[str, str | None]] = {}
+    for port in module.get("ports", []):
+        port_id = str(port["id"])
+        validate_net_reference(f"port {port_id}", port.get("net"), port.get("net_id"))
+        port_networks[port_id] = (str(port["net"]), port.get("net_id"))
+
+    wires = module.get("wires", [])
+    if not isinstance(wires, list):
+        raise ValueError("module wires must be an array")
+    wire_ids: set[str] = set()
+    junctions: dict[str, tuple[float, float, str]] = {}
+    wire_segments: list[tuple[tuple[float, float], tuple[float, float], str, str]] = []
+
+    def coordinate(value: Any, owner: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise ValueError(f"{owner} must be a finite number")
+        return float(value)
+
+    def endpoint_network(endpoint: Any, owner: str, wire_net: str, wire_net_id: str) -> tuple[float, float]:
+        if not isinstance(endpoint, dict):
+            raise ValueError(f"{owner} must be an endpoint object")
+        x = coordinate(endpoint.get("x"), f"{owner}.x")
+        y = coordinate(endpoint.get("y"), f"{owner}.y")
+        component_id = endpoint.get("component_id")
+        pin_id = endpoint.get("pin_id")
+        port_id = endpoint.get("port_id")
+        junction_id = endpoint.get("junction_id")
+        has_pin_fields = component_id is not None or pin_id is not None
+        identities = int(has_pin_fields) + int(port_id is not None) + int(junction_id is not None)
+        if identities != 1:
+            raise ValueError(f"{owner} must identify exactly one component pin, port, or junction_id")
+
+        endpoint_net: str
+        endpoint_net_id: str | None
+        if has_pin_fields:
+            if not isinstance(component_id, str) or not component_id:
+                raise ValueError(f"{owner} references an invalid component")
+            if component_id not in component_ids:
+                raise ValueError(f"{owner} references unknown component: {component_id}")
+            if not isinstance(pin_id, str) or not pin_id:
+                raise ValueError(f"{owner} references an invalid pin")
+            network = pin_networks.get((component_id, pin_id))
+            if network is None:
+                raise ValueError(f"{owner} references unknown pin: {component_id}.{pin_id}")
+            endpoint_net, endpoint_net_id = network
+        elif port_id is not None:
+            if not isinstance(port_id, str) or not port_id or port_id not in port_networks:
+                raise ValueError(f"{owner} references unknown port: {port_id}")
+            endpoint_net, endpoint_net_id = port_networks[port_id]
+        else:
+            if not isinstance(junction_id, str) or not junction_id:
+                raise ValueError(f"{owner} has an invalid junction_id")
+            previous = junctions.get(junction_id)
+            if previous is not None:
+                previous_x, previous_y, previous_net_id = previous
+                if x != previous_x or y != previous_y:
+                    raise ValueError(f"junction {junction_id} is used at multiple coordinates")
+                if wire_net_id != previous_net_id:
+                    raise ValueError(f"junction {junction_id} is used by inconsistent networks")
+            else:
+                junctions[junction_id] = (x, y, wire_net_id)
+            endpoint_net, endpoint_net_id = wire_net, wire_net_id
+
+        if endpoint_net_id is not None and endpoint_net_id != wire_net_id:
+            raise ValueError(f"{owner} network does not match wire network {wire_net_id}")
+        endpoint_names = net_names_by_id.get(wire_net_id, set())
+        if endpoint_net not in endpoint_names or wire_net not in endpoint_names:
+            raise ValueError(f"{owner} network does not match wire net/name")
+        return x, y
+
+    for wire in wires:
+        if not isinstance(wire, dict):
+            raise ValueError("module wires must contain objects")
+        wire_id = wire.get("id")
+        if not isinstance(wire_id, str) or not wire_id or wire_id in wire_ids:
+            raise ValueError("wire ids must be present and unique")
+        wire_ids.add(wire_id)
+        wire_net = wire.get("net")
+        wire_net_id = wire.get("net_id")
+        validate_net_reference(f"wire {wire_id}", wire_net, wire_net_id, required=True)
+        points = wire.get("points")
+        if not isinstance(points, list) or len(points) < 2:
+            raise ValueError(f"wire {wire_id} must have at least two points")
+        normalized_points: list[tuple[float, float]] = []
+        for index, point in enumerate(points):
+            if not isinstance(point, dict):
+                raise ValueError(f"wire {wire_id} point {index} must be an object")
+            normalized_points.append((
+                coordinate(point.get("x"), f"wire {wire_id} point {index}.x"),
+                coordinate(point.get("y"), f"wire {wire_id} point {index}.y"),
+            ))
+        for index, (start, end) in enumerate(zip(normalized_points, normalized_points[1:])):
+            if start == end:
+                raise ValueError(f"wire {wire_id} has a zero-length segment at {index}")
+            if start[0] != end[0] and start[1] != end[1]:
+                raise ValueError(f"wire {wire_id} has a non-orthogonal segment at {index}")
+            wire_segments.append((start, end, str(wire_id), str(wire_net_id)))
+        start_endpoint = endpoint_network(wire.get("from"), f"wire {wire_id}.from", str(wire_net), str(wire_net_id))
+        end_endpoint = endpoint_network(wire.get("to"), f"wire {wire_id}.to", str(wire_net), str(wire_net_id))
+        if normalized_points[0] != start_endpoint:
+            raise ValueError(f"wire {wire_id} first point does not match from endpoint")
+        if normalized_points[-1] != end_endpoint:
+            raise ValueError(f"wire {wire_id} last point does not match to endpoint")
+
+    def different_net_contact(
+        left: tuple[tuple[float, float], tuple[float, float], str, str],
+        right: tuple[tuple[float, float], tuple[float, float], str, str],
+    ) -> str | None:
+        (a, b, _, left_net), (c, d, _, right_net) = left, right
+        if left_net == right_net:
+            return None
+        left_vertical = a[0] == b[0]
+        right_vertical = c[0] == d[0]
+        if left_vertical == right_vertical:
+            same_axis = a[0] == c[0] if left_vertical else a[1] == c[1]
+            if not same_axis:
+                return None
+            left_interval = sorted((a[1], b[1])) if left_vertical else sorted((a[0], b[0]))
+            right_interval = sorted((c[1], d[1])) if right_vertical else sorted((c[0], d[0]))
+            lower = max(left_interval[0], right_interval[0])
+            upper = min(left_interval[1], right_interval[1])
+            if lower > upper:
+                return None
+            return "collinear overlap" if lower < upper else "shared endpoint"
+        vertical_start, vertical_end, horizontal_start, horizontal_end = (a, b, c, d) if left_vertical else (c, d, a, b)
+        x, y = vertical_start[0], horizontal_start[1]
+        vertical_range = sorted((vertical_start[1], vertical_end[1]))
+        horizontal_range = sorted((horizontal_start[0], horizontal_end[0]))
+        if not (vertical_range[0] <= y <= vertical_range[1] and horizontal_range[0] <= x <= horizontal_range[1]):
+            return None
+        if vertical_range[0] < y < vertical_range[1] and horizontal_range[0] < x < horizontal_range[1]:
+            return None
+        return "endpoint on foreign segment"
+
+    for index, left in enumerate(wire_segments):
+        for right in wire_segments[index + 1:]:
+            contact = different_net_contact(left, right)
+            if contact:
+                raise ValueError(
+                    f"wires {left[2]} and {right[2]} form a different-net {contact} "
+                    f"between {left[3]} and {right[3]}"
+                )
 
 
 def stable_net_token(value: str) -> str:
@@ -227,7 +414,12 @@ def stable_net_token(value: str) -> str:
     return f"net_{token}"
 
 
-def upgrade_module_document(module: dict[str, Any]) -> dict[str, Any]:
+def upgrade_module_document(
+    module: dict[str, Any],
+    *,
+    repair_legacy_wire_endpoints: bool = False,
+    repair_invalid_net_ids: bool = False,
+) -> dict[str, Any]:
     existing = {
         str(net.get("id")): dict(net)
         for net in module.get("nets", [])
@@ -240,8 +432,12 @@ def upgrade_module_document(module: dict[str, Any]) -> dict[str, Any]:
             by_name[str(alias)] = net_id
 
     def ensure_net(name: str, current_id: Any = None, kind: str = "signal") -> str:
-        if current_id and str(current_id) in existing:
-            return str(current_id)
+        if current_id:
+            normalized_id = str(current_id)
+            if normalized_id in existing:
+                return normalized_id
+            if not repair_invalid_net_ids:
+                return normalized_id
         if name in by_name:
             return by_name[name]
         base = stable_net_token(name)
@@ -269,6 +465,24 @@ def upgrade_module_document(module: dict[str, Any]) -> dict[str, Any]:
             existing[net_id]["kind"] = port.get("signal_type", "signal")
     for wire in module.get("wires", []):
         wire["net_id"] = ensure_net(str(wire.get("net") or f"n_{wire.get('id', 'wire')}"), wire.get("net_id"))
+        if not repair_legacy_wire_endpoints:
+            continue
+        for endpoint_name in ("from", "to"):
+            endpoint = wire.get(endpoint_name)
+            if not isinstance(endpoint, dict):
+                continue
+            if any(endpoint.get(key) for key in ("component_id", "pin_id", "port_id", "junction_id")):
+                continue
+            x = endpoint.get("x")
+            y = endpoint.get("y")
+            if isinstance(x, bool) or isinstance(y, bool) or not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                continue
+            payload = "|".join((
+                str(wire["net_id"]),
+                format(float(x), ".12g"),
+                format(float(y), ".12g"),
+            ))
+            endpoint["junction_id"] = f"j_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
     module["schema"] = MODULE_SCHEMA
     module["nets"] = list(existing.values())
     return module
@@ -319,11 +533,18 @@ def load_project(root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]
     for module_ref in project["modules"]:
         path = module_path(root, module_ref["id"])
         ensure_inside(root, path)
-        module = read_json(path)
+        source_module = read_json(path)
+        if source_module.get("schema") not in LEGACY_MODULE_SCHEMAS:
+            raise ValueError(f"module schema must be one of {sorted(LEGACY_MODULE_SCHEMAS)}")
+        module = upgrade_module_document(
+            source_module,
+            repair_legacy_wire_endpoints=True,
+            repair_invalid_net_ids=True,
+        )
         validate_module(module)
         if module["module_id"] != module_ref["id"]:
             raise ValueError(f"module id mismatch: {module_ref['id']}")
-        modules[module_ref["id"]] = upgrade_module_document(module)
+        modules[module_ref["id"]] = module
         module_ref["ports"] = modules[module_ref["id"]].get("ports", [])
     project["schema"] = PROJECT_SCHEMA
     return project, modules
@@ -1235,6 +1456,21 @@ def apply_operation(
     if op == "set_module_schematic":
         module_id = operation["module_id"]
         module = modules[module_id]
+        expected_connectivity_hash = operation.get("expected_connectivity_hash")
+        connectivity_view = str(operation.get("connectivity_view", "design"))
+        if expected_connectivity_hash is not None:
+            if not isinstance(expected_connectivity_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_connectivity_hash):
+                raise ValueError("set_module_schematic expected_connectivity_hash must be a SHA-256 hex digest")
+            if connectivity_view not in {"design", "simulation"}:
+                raise ValueError("set_module_schematic connectivity_view must be design or simulation")
+            current_connectivity_hash = connectivity_hash(
+                project,
+                {module_id: module},
+                module_id,
+                connectivity_view,
+            )
+            if current_connectivity_hash != expected_connectivity_hash:
+                raise ValueError("set_module_schematic source connectivity does not match the guarded layout hash")
         components = operation.get("components")
         ports = operation.get("ports")
         wires = operation.get("wires", [])
@@ -1267,6 +1503,15 @@ def apply_operation(
             notebook_writes[module_id] = notebook
         next_module = upgrade_module_document(next_module)
         validate_module(next_module)
+        if expected_connectivity_hash is not None:
+            next_connectivity_hash = connectivity_hash(
+                project,
+                {module_id: next_module},
+                module_id,
+                connectivity_view,
+            )
+            if next_connectivity_hash != expected_connectivity_hash:
+                raise ValueError("set_module_schematic layout update would change authoritative connectivity")
         module["components"] = components
         module["ports"] = ports
         module["wires"] = wires
@@ -3999,12 +4244,36 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--mapping-file", default="")
     export_parser.add_argument("--native-convert", choices=["auto", "never", "required"], default="auto")
     export_parser.add_argument("--strict-layout", action="store_true")
-    export_parser.add_argument("--source-revision", type=int, default=None)
+    export_parser.add_argument("--source-revision", type=int, required=True)
     export_parser.add_argument(
         "--output-dir",
         default="",
         help="Optional parent directory for the export. Defaults to <project>/build/exports.",
     )
+
+    prepare_layout_parser = subparsers.add_parser(
+        "prepare-layout-review",
+        help="Prepare a deterministic routed candidate and vision-review stage without modifying the project.",
+    )
+    prepare_layout_parser.add_argument("--project-root", required=True)
+    prepare_layout_parser.add_argument("--module-id", required=True)
+    prepare_layout_parser.add_argument("--source-revision", type=int, required=True)
+    prepare_layout_parser.add_argument("--view", choices=["design", "simulation"], default="design")
+    prepare_layout_parser.add_argument("--output-dir", required=True)
+
+    evaluate_layout_parser = subparsers.add_parser(
+        "evaluate-layout-patches",
+        help="Validate and score one strict vision layout patch-set without modifying the project.",
+    )
+    evaluate_layout_parser.add_argument("--project-root", required=True)
+    evaluate_layout_parser.add_argument("--module-id", required=True)
+    evaluate_layout_parser.add_argument("--source-revision", type=int, required=True)
+    evaluate_layout_parser.add_argument("--state-path", required=True)
+    evaluate_layout_parser.add_argument("--view", choices=["design", "simulation"], default=None)
+    evaluate_layout_parser.add_argument("--output-dir", required=True)
+    patch_source = evaluate_layout_parser.add_mutually_exclusive_group(required=True)
+    patch_source.add_argument("--patch-set-json", default="")
+    patch_source.add_argument("--patch-set-file", default="")
     return parser
 
 
@@ -4079,6 +4348,33 @@ def main() -> int:
                 strict_layout=bool(args.strict_layout),
                 source_revision=args.source_revision,
                 output_dir=args.output_dir or None,
+            )
+        elif args.command == "prepare-layout-review":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            result = prepare_layout_review(
+                project,
+                modules,
+                module_id=args.module_id,
+                view=args.view,
+                document_hash=project_document_hash(project, modules),
+                source_revision=args.source_revision,
+                output_dir=Path(args.output_dir).resolve(),
+            )
+        elif args.command == "evaluate-layout-patches":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            patch_set = json.loads(args.patch_set_json) if args.patch_set_json else read_json(Path(args.patch_set_file).resolve())
+            result = evaluate_layout_patches(
+                project,
+                modules,
+                read_json(Path(args.state_path).resolve()),
+                patch_set,
+                module_id=args.module_id,
+                document_hash=project_document_hash(project, modules),
+                source_revision=args.source_revision,
+                output_dir=Path(args.output_dir).resolve(),
+                view=args.view,
             )
         else:
             raise ValueError(f"unknown command: {args.command}")

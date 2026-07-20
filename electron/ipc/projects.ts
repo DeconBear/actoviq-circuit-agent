@@ -1,11 +1,11 @@
-import { app, BrowserWindow, dialog, type IpcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, nativeImage, type IpcMain, shell } from 'electron';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { access, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { loadSettings, loadSettingsWithSecrets } from './settings.js';
+import { layoutVisionModelFingerprint, loadSettings, loadSettingsWithSecrets } from './settings.js';
 import { getActiveWorkspace } from '../workspaceState.js';
 import { generateDesktopTechnicalReport } from '../agent/desktopAgentService.js';
 
@@ -60,6 +60,25 @@ interface EdaExportRequest {
   sourceRevision: number;
   /** Optional parent directory. Export is written to <outputDir>/<export_id>/. */
   outputDir?: string;
+}
+
+interface LayoutOptimizationRequest {
+  moduleId: string;
+  sourceRevision: number;
+}
+
+interface LayoutVisionReviewRequest {
+  provider: 'anthropic' | 'openai';
+  model: string;
+  base_url?: string;
+  work_dir: string;
+  session_directory?: string;
+  svg_path: string;
+  image_path?: string;
+  layout_quality_report_path: string;
+  module_id: string;
+  source_revision: number;
+  connectivity_hash: string;
 }
 
 interface DesignMemoryItem {
@@ -791,6 +810,352 @@ function runProjectTool(args: string[]): Promise<Record<string, unknown>> {
   });
 }
 
+function layoutReviewCliArgs(): string[] {
+  const appRoot = app.getAppPath();
+  const compiled = path.resolve(appRoot, 'dist', 'cli', 'reviewSchematicLayout.js');
+  if (existsSync(compiled)) return [compiled];
+
+  const tsxCli = path.resolve(appRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const source = path.resolve(appRoot, 'src', 'cli', 'reviewSchematicLayout.ts');
+  if (existsSync(tsxCli) && existsSync(source)) return [tsxCli, source];
+  throw new Error('The isolated vision layout reviewer is missing from the application bundle.');
+}
+
+function runLayoutVisionReview(
+  request: LayoutVisionReviewRequest,
+  apiKey: string,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, layoutReviewCliArgs(), {
+      cwd: app.getAppPath(),
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        ACTOVIQ_API_KEY: apiKey,
+        ACTOVIQ_AUTH_TOKEN: apiKey,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finishReject = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      const raw = error instanceof Error ? error.message : String(error);
+      reject(new Error(apiKey ? raw.split(apiKey).join('[redacted]') : raw));
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finishReject(new Error('Vision layout review timed out.'));
+    }, 300_000);
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      finishReject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (settled) return;
+      let result: Record<string, unknown>;
+      try {
+        result = JSON.parse(stdout.trim()) as Record<string, unknown>;
+      } catch {
+        finishReject(new Error(stderr.trim() || stdout.trim() || `Vision layout reviewer exited with ${code}`));
+        return;
+      }
+      if (code !== 0 || result.schema !== 'actoviq.layout-patch-set.v1') {
+        finishReject(new Error(String(result.error ?? stderr.trim() ?? `Vision layout reviewer exited with ${code}`)));
+        return;
+      }
+      settled = true;
+      resolve(result);
+    });
+    child.stdin.end(`${JSON.stringify(request)}\n`);
+  });
+}
+
+function requiredResultString(result: Record<string, unknown>, key: string): string {
+  const value = result[key];
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Layout optimizer returned an invalid ${key}.`);
+  }
+  return value;
+}
+
+function layoutQualitySummary(result: Record<string, unknown>): {
+  readability_score: number;
+  lexicographic_cost: number[];
+} {
+  const nested = result.layout_quality;
+  const quality = nested && typeof nested === 'object'
+    ? nested as Record<string, unknown>
+    : result;
+  const readability = Number(quality.readability_score ?? result.readability_score);
+  const cost = quality.lexicographic_cost ?? result.lexicographic_cost;
+  if (!Number.isFinite(readability) || !Array.isArray(cost) || cost.some((value) => !Number.isFinite(Number(value)))) {
+    throw new Error('Layout optimizer returned an invalid quality report.');
+  }
+  return {
+    readability_score: readability,
+    lexicographic_cost: cost.map((value) => Number(value)),
+  };
+}
+
+function sourceLayoutQualitySummary(result: Record<string, unknown>): {
+  readability_score: number;
+  lexicographic_cost: number[];
+} {
+  const readability = Number(result.before_readability_score);
+  const cost = result.before_lexicographic_cost;
+  if (Number.isFinite(readability)
+    && Array.isArray(cost)
+    && cost.every((value) => Number.isFinite(Number(value)))) {
+    return {
+      readability_score: readability,
+      lexicographic_cost: cost.map((value) => Number(value)),
+    };
+  }
+  return layoutQualitySummary(result);
+}
+
+function requiresVisionLayoutReview(quality: {
+  readability_score: number;
+  lexicographic_cost: number[];
+}): boolean {
+  const issueDimensions = [0, 1, 2, 3, 4, 6];
+  return quality.readability_score < 90
+    || issueDimensions.some((index) => Number(quality.lexicographic_cost[index] ?? 0) > 0);
+}
+
+function layoutModuleOperation(moduleId: string, result: Record<string, unknown>): Record<string, unknown> {
+  const schematic = result.module_schematic;
+  if (!schematic || typeof schematic !== 'object') {
+    throw new Error('Layout optimizer did not return a module_schematic winner.');
+  }
+  const value = schematic as Record<string, unknown>;
+  for (const key of ['components', 'ports', 'wires', 'nets'] as const) {
+    if (!Array.isArray(value[key])) throw new Error(`Layout optimizer returned invalid module_schematic.${key}.`);
+  }
+  if (value.annotations !== undefined && !Array.isArray(value.annotations)) {
+    throw new Error('Layout optimizer returned invalid module_schematic.annotations.');
+  }
+  return {
+    op: 'set_module_schematic',
+    module_id: moduleId,
+    expected_connectivity_hash: requiredResultString(result, 'connectivity_hash'),
+    connectivity_view: 'design',
+    components: value.components,
+    ports: value.ports,
+    wires: value.wires,
+    nets: value.nets,
+    annotations: value.annotations ?? [],
+  };
+}
+
+async function rasterizeLayoutPreview(svgPath: string, pngPath: string): Promise<void> {
+  const direct = nativeImage.createFromPath(svgPath);
+  if (!direct.isEmpty()) {
+    await writeFile(pngPath, direct.toPNG());
+    return;
+  }
+  const svg = await readFile(svgPath, 'utf8');
+  if (!/<svg\b/i.test(svg)) throw new Error('Layout preview does not contain an SVG document.');
+  const window = new BrowserWindow({
+    show: false,
+    width: 2400,
+    height: 1800,
+    webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true },
+  });
+  try {
+    await window.loadURL(`data:text/html;base64,${Buffer.from(
+      `<style>html,body{margin:0;background:#fff}svg{display:block;max-width:2400px;max-height:1800px}</style>${svg}`,
+    ).toString('base64')}`);
+    const bounds = await window.webContents.executeJavaScript(`(() => {
+      const svg = document.querySelector('svg');
+      if (!svg) return null;
+      const rect = svg.getBoundingClientRect();
+      return { width: Math.ceil(rect.width), height: Math.ceil(rect.height) };
+    })()` ) as { width?: number; height?: number } | null;
+    const width = Math.min(2400, Math.max(1, Number(bounds?.width ?? 0)));
+    const height = Math.min(1800, Math.max(1, Number(bounds?.height ?? 0)));
+    if (!bounds?.width || !bounds.height) throw new Error('Layout preview has no visible SVG bounds.');
+    window.setContentSize(width, height);
+    const image = await window.webContents.capturePage({ x: 0, y: 0, width, height });
+    await writeFile(pngPath, image.toPNG());
+  } finally {
+    window.destroy();
+  }
+}
+
+async function optimizeModuleLayout(
+  projectId: string,
+  input: LayoutOptimizationRequest,
+): Promise<Record<string, unknown>> {
+  assertModuleId(input.moduleId);
+  if (!Number.isInteger(input.sourceRevision) || input.sourceRevision < 0) {
+    throw new Error(`Invalid source revision: ${input.sourceRevision}`);
+  }
+  const projectRoot = await resolveProjectRoot(projectId);
+  const project = await readJsonFile<Record<string, unknown>>(path.resolve(projectRoot, 'project.circuit.json'));
+  const currentRevision = Number(project.revision);
+  if (currentRevision !== input.sourceRevision) {
+    throw new Error(`Stale layout request: expected project revision ${currentRevision}, received ${input.sourceRevision}.`);
+  }
+
+  const runId = `${input.moduleId}-r${input.sourceRevision}-${Date.now().toString(36)}`;
+  const outputRoot = path.resolve(projectRoot, 'build', 'layout-reviews', runId);
+  const sessionDirectory = path.resolve(app.getPath('userData'), 'layout-vision-sessions');
+  await Promise.all([mkdir(outputRoot, { recursive: true }), mkdir(sessionDirectory, { recursive: true })]);
+
+  let current = await runProjectTool([
+    'prepare-layout-review',
+    '--project-root', projectRoot,
+    '--module-id', input.moduleId,
+    '--source-revision', String(input.sourceRevision),
+    '--view', 'design',
+    '--output-dir', outputRoot,
+  ]);
+  const initialQuality = sourceLayoutQualitySummary(current);
+  const connectivityHash = requiredResultString(current, 'connectivity_hash');
+  const rounds: Array<Record<string, unknown>> = [];
+  let llmInvoked = false;
+  let visionSettings: Awaited<ReturnType<typeof loadSettingsWithSecrets>> | null = null;
+  let changed = current.changed === true;
+  let stoppedReason: 'score_threshold' | 'no_improvement' | 'round_limit' | 'deterministic_only' = 'deterministic_only';
+
+  while (requiresVisionLayoutReview(layoutQualitySummary(current)) && rounds.length < 3) {
+    if (!visionSettings) {
+      visionSettings = await loadSettingsWithSecrets();
+      const expectedFingerprint = layoutVisionModelFingerprint(
+        visionSettings.actoviqProvider,
+        visionSettings.actoviqBaseUrl,
+        visionSettings.layoutVisionModel,
+      );
+      if (!visionSettings.layoutVisionModel.trim()
+        || visionSettings.layoutVisionVerification.status !== 'verified'
+        || visionSettings.layoutVisionVerification.fingerprint !== expectedFingerprint) {
+        throw new Error('Deterministic layout still has unresolved quality issues. Configure and verify a multimodal layout model in Settings to continue.');
+      }
+      if (!visionSettings.actoviqAuthToken) {
+        throw new Error('The verified layout model API key is unavailable. Re-enter it in Settings.');
+      }
+    }
+    llmInvoked = true;
+    const before = layoutQualitySummary(current);
+    const svgPath = requiredResultString(current, 'svg_path');
+    const imagePath = path.resolve(outputRoot, `vision-round-${rounds.length + 1}.png`);
+    await rasterizeLayoutPreview(svgPath, imagePath);
+    const patchSet = await runLayoutVisionReview({
+      provider: visionSettings.actoviqProvider,
+      model: visionSettings.layoutVisionModel,
+      base_url: visionSettings.actoviqBaseUrl,
+      work_dir: projectRoot,
+      session_directory: sessionDirectory,
+      svg_path: svgPath,
+      image_path: imagePath,
+      layout_quality_report_path: requiredResultString(current, 'layout_quality_report_path'),
+      module_id: input.moduleId,
+      source_revision: input.sourceRevision,
+      connectivity_hash: connectivityHash,
+    }, visionSettings.actoviqAuthToken);
+    const evaluated = await runProjectTool([
+      'evaluate-layout-patches',
+      '--project-root', projectRoot,
+      '--module-id', input.moduleId,
+      '--source-revision', String(input.sourceRevision),
+      '--state-path', requiredResultString(current, 'state_path'),
+      '--patch-set-json', JSON.stringify(patchSet),
+      '--output-dir', outputRoot,
+      '--view', 'design',
+    ]);
+    if (requiredResultString(evaluated, 'connectivity_hash') !== connectivityHash) {
+      throw new Error('Layout optimizer changed the authoritative connectivity hash.');
+    }
+    const after = layoutQualitySummary(evaluated);
+    const improved = evaluated.improved === true;
+    rounds.push({
+      round: rounds.length + 1,
+      improved,
+      before_score: before.readability_score,
+      after_score: after.readability_score,
+      preview_path: evaluated.svg_path,
+      report_path: evaluated.layout_quality_report_path,
+    });
+    if (!improved) {
+      stoppedReason = 'no_improvement';
+      break;
+    }
+    changed = true;
+    current = evaluated;
+    if (!requiresVisionLayoutReview(after)) {
+      stoppedReason = 'score_threshold';
+      break;
+    }
+    stoppedReason = rounds.length >= 3 ? 'round_limit' : 'no_improvement';
+  }
+
+  let revision = input.sourceRevision;
+  let compileWarning = '';
+  if (changed) {
+    const operation = layoutModuleOperation(input.moduleId, current);
+    const command = {
+      schema: 'actoviq.command.v1',
+      command_id: `layout-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      actor: 'agent',
+      project_id: String(project.project_id ?? projectId),
+      base_revision: input.sourceRevision,
+      message: llmInvoked
+        ? `Optimize ${input.moduleId} schematic with verified multimodal layout review`
+        : `Optimize ${input.moduleId} schematic with deterministic layout scoring`,
+      operations: [operation],
+    };
+    const applied = await runProjectTool([
+      'apply',
+      '--project-root', projectRoot,
+      '--command-json', JSON.stringify(command),
+    ]);
+    revision = Number(applied.revision);
+    if (!Number.isInteger(revision)) throw new Error('Layout transaction returned an invalid revision.');
+    try {
+      await runProjectTool(['compile-module', '--project-root', projectRoot, '--module-id', input.moduleId]);
+    } catch (error) {
+      compileWarning = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const finalQuality = layoutQualitySummary(current);
+  const visibleQualityValue = current.visible_layout_quality;
+  const visibleQuality = visibleQualityValue && typeof visibleQualityValue === 'object'
+    ? layoutQualitySummary({ layout_quality: visibleQualityValue })
+    : finalQuality;
+  const visibleConnectivityHash = typeof current.visible_connectivity_hash === 'string'
+    ? current.visible_connectivity_hash
+    : connectivityHash;
+  return {
+    ok: true,
+    module_id: input.moduleId,
+    source_revision: input.sourceRevision,
+    revision,
+    changed,
+    model: llmInvoked && visionSettings ? visionSettings.layoutVisionModel : 'deterministic',
+    llm_invoked: llmInvoked,
+    connectivity_hash: connectivityHash,
+    initial_quality: initialQuality,
+    final_quality: finalQuality,
+    visible_quality: visibleQuality,
+    visible_quality_unresolved: requiresVisionLayoutReview(visibleQuality),
+    visible_connectivity_hash: visibleConnectivityHash,
+    rounds,
+    stopped_reason: stoppedReason,
+    preview_path: current.svg_path,
+    report_path: current.layout_quality_report_path,
+    ...(compileWarning ? { compile_warning: compileWarning } : {}),
+  };
+}
+
 async function readOptionalJson(targetPath: string): Promise<Record<string, unknown> | null> {
   if (!(await exists(targetPath))) return null;
   try {
@@ -1448,6 +1813,12 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       runProjectTool(['compile', '--project-root', await resolveProjectRoot(projectId)])
     ));
   });
+
+  ipcMain.handle('project:optimize-layout', async (
+    _event,
+    projectId: string,
+    input: LayoutOptimizationRequest,
+  ) => withProjectWatchPaused(() => optimizeModuleLayout(projectId, input)));
 
   ipcMain.handle('project:export-eda', async (_event, projectId: string, input: EdaExportRequest) => {
     const root = await resolveProjectRoot(projectId);

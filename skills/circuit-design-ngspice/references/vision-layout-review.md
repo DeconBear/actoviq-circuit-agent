@@ -1,8 +1,8 @@
 # Vision Layout Review
 
 Use this path only after deterministic layout/routing candidates remain below
-the required quality threshold, or when a user explicitly requests visual
-schematic review.
+the required quality threshold or still have crossings, overlaps, congestion,
+or flow issues, or when a user explicitly requests visual schematic review.
 
 ## Model capability gate
 
@@ -19,9 +19,12 @@ schematic review.
 ## Closed-loop flow
 
 1. Generate deterministic layout/routing candidates and their quality reports.
-2. If the best candidate scores below 90, render its generated SVG.
-3. Give the vision skill the SVG path, quality-report path, module ID, source
-   revision, and connectivity hash.
+2. If the best candidate scores below 90 or still reports crossings, overlaps,
+   congestion, or signal-flow/feedback issues, rasterize its generated SVG to
+   a trusted PNG in the desktop parent process.
+3. Give the isolated vision skill the trusted PNG path, quality report, module
+   ID, source revision, and connectivity hash. Direct skill use may instead
+   pass a generated SVG path and let the read-only tool rasterize it.
 4. The skill calls `view_schematic_for_layout` once and visually checks symbol
    overlap, wire crossings, wires through symbols, congested corridors,
    avoidable bends, label collisions, feedback paths, and signal flow.
@@ -44,10 +47,16 @@ The tool returns a text metadata block and one image block:
 ```json
 {
   "schema": "actoviq.vision-layout-image.v1",
+  "ok": true,
+  "source_path": "<project>/build/layout-reviews/preview.png",
+  "source_kind": "png",
   "media_type": "image/png",
   "width": 1200,
   "height": 800,
-  "sha256": "..."
+  "bytes": 48321,
+  "sha256": "<64 lowercase hex characters>",
+  "rasterizer": "pre-rendered",
+  "instruction": "Inspect the attached schematic image; propose layout-only changes and preserve connectivity."
 }
 ```
 

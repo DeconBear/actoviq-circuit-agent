@@ -228,6 +228,8 @@ export interface CircuitWireEndpoint {
   component_id?: string;
   pin_id?: string;
   port_id?: string;
+  /** Stable electrical node for a free wire endpoint or an explicit wire junction. */
+  junction_id?: string;
 }
 
 export interface CircuitWire {
@@ -545,6 +547,46 @@ export interface SavedDesignMemorySummary extends DesignMemoryItem {
 
 export type EdaExportTarget = 'kicad' | 'altium' | 'orcad' | 'virtuoso';
 
+export interface LayoutOptimizationRequest {
+  moduleId: string;
+  sourceRevision: number;
+}
+
+export interface LayoutOptimizationQuality {
+  readability_score: number;
+  lexicographic_cost: number[];
+}
+
+export interface LayoutOptimizationRound {
+  round: number;
+  improved: boolean;
+  before_score: number;
+  after_score: number;
+  preview_path?: string;
+  report_path?: string;
+}
+
+export interface LayoutOptimizationResult {
+  ok: true;
+  module_id: string;
+  source_revision: number;
+  revision: number;
+  changed: boolean;
+  model: string;
+  llm_invoked: boolean;
+  connectivity_hash: string;
+  initial_quality: LayoutOptimizationQuality;
+  final_quality: LayoutOptimizationQuality;
+  visible_quality: LayoutOptimizationQuality;
+  visible_quality_unresolved: boolean;
+  visible_connectivity_hash: string;
+  rounds: LayoutOptimizationRound[];
+  stopped_reason: 'score_threshold' | 'no_improvement' | 'round_limit' | 'deterministic_only';
+  preview_path?: string;
+  report_path?: string;
+  compile_warning?: string;
+}
+
 export interface EdaExportRequest {
   scope: 'project' | 'module';
   moduleId?: string;
@@ -586,6 +628,14 @@ export type ActoviqProvider = 'anthropic' | 'openai';
 export type ActoviqProviderPreset = 'anthropic' | 'deepseek' | 'openai-compatible';
 export type SecretStorageMode = 'encrypted' | 'plaintext-fallback' | 'environment' | 'none';
 export type ChatModelTier = 'basic' | 'medium' | 'professional';
+export type LayoutVisionVerificationStatus = 'unverified' | 'verified' | 'error';
+
+export interface LayoutVisionVerification {
+  status: LayoutVisionVerificationStatus;
+  fingerprint: string;
+  verifiedAt?: string;
+  error?: string;
+}
 
 export interface AppSettings {
   actoviqProvider: ActoviqProvider;
@@ -604,6 +654,9 @@ export interface AppSettings {
   mediumContext1M: boolean;
   professionalContext1M: boolean;
   preferredChatTier: ChatModelTier;
+  /** Dedicated model; layout runs remain disabled until image capability is verified. */
+  layoutVisionModel: string;
+  layoutVisionVerification: LayoutVisionVerification;
   /** Synced aliases: chat/sonnet = medium, reasoning/opus = professional, haiku = basic. */
   chatModel: string;
   reasoningModel: string;
@@ -623,6 +676,12 @@ export interface ProviderTestResult {
   model: string;
   latencyMs: number;
   error?: string;
+}
+
+export interface LayoutModelTestResult extends ProviderTestResult {
+  status: 'verified' | 'error';
+  fingerprint: string;
+  verifiedAt?: string;
 }
 
 export interface CircuitSkillStatus {

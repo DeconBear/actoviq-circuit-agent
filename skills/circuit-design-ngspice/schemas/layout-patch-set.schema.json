@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/layout-patch-set.schema.json",
+  "title": "Actoviq Vision Layout Patch Set",
+  "type": "object",
+  "required": ["schema", "source_revision", "connectivity_hash", "candidates"],
+  "properties": {
+    "schema": { "const": "actoviq.layout-patch-set.v1" },
+    "source_revision": { "type": "integer", "minimum": 0 },
+    "connectivity_hash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+    "candidates": {
+      "type": "array",
+      "maxItems": 4,
+      "items": { "$ref": "layout-patch.schema.json" }
+    }
+  },
+  "additionalProperties": false
+}

@@ -3,7 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { createAgentSdk } from 'actoviq-agent-sdk';
+import { probeLayoutVisionModel } from '../agent/layoutVisionProbe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -11,6 +13,14 @@ export type ActoviqProvider = 'anthropic' | 'openai';
 export type ActoviqProviderPreset = 'anthropic' | 'deepseek' | 'openai-compatible';
 export type SecretStorageMode = 'encrypted' | 'plaintext-fallback' | 'environment' | 'none';
 export type ChatModelTier = 'basic' | 'medium' | 'professional';
+export type LayoutVisionVerificationStatus = 'unverified' | 'verified' | 'error';
+
+export interface LayoutVisionVerification {
+  status: LayoutVisionVerificationStatus;
+  fingerprint: string;
+  verifiedAt?: string;
+  error?: string;
+}
 
 export interface AppSettings {
   actoviqProvider: ActoviqProvider;
@@ -30,6 +40,9 @@ export interface AppSettings {
   mediumContext1M: boolean;
   professionalContext1M: boolean;
   preferredChatTier: ChatModelTier;
+  /** Dedicated multimodal model for the isolated LLM-assisted layout loop. */
+  layoutVisionModel: string;
+  layoutVisionVerification: LayoutVisionVerification;
   /** Synced aliases for older consumers (chat = medium, reasoning = professional). */
   chatModel: string;
   reasoningModel: string;
@@ -60,6 +73,12 @@ export interface ProviderTestResult {
   error?: string;
 }
 
+export interface LayoutModelTestResult extends ProviderTestResult {
+  status: 'verified' | 'error';
+  fingerprint: string;
+  verifiedAt?: string;
+}
+
 interface StoredSettings extends Partial<PersistedAppSettings> {
   schema?: string;
   actoviqAuthTokenEncrypted?: string;
@@ -81,6 +100,11 @@ const defaultSettings: PersistedAppSettings = {
   mediumContext1M: false,
   professionalContext1M: false,
   preferredChatTier: 'medium',
+  layoutVisionModel: '',
+  layoutVisionVerification: {
+    status: 'unverified',
+    fingerprint: '',
+  },
   chatModel: 'claude-sonnet-4-6',
   reasoningModel: 'claude-opus-4-7',
   opusModel: 'claude-opus-4-7',
@@ -92,6 +116,20 @@ const defaultSettings: PersistedAppSettings = {
   yunzhishengOcrApiKey: '',
   yunzhishengOcrModel: '',
 };
+
+const successfulLayoutVisionProbes = new Map<string, string>();
+
+export function layoutVisionModelFingerprint(
+  provider: ActoviqProvider,
+  baseUrl: string,
+  model: string,
+): string {
+  return createHash('sha256').update(JSON.stringify({
+    provider,
+    baseUrl: baseUrl.trim(),
+    model: model.trim(),
+  })).digest('hex');
+}
 
 function isEncryptionAvailable(): boolean {
   try {
@@ -149,14 +187,41 @@ function normalizeStoredSettings(raw: StoredSettings, authToken: string, storage
     || raw.preferredChatTier === 'medium'
     ? raw.preferredChatTier
     : 'medium';
+  const baseUrl = (typeof raw.actoviqBaseUrl === 'string' && raw.actoviqBaseUrl.trim())
+    ? raw.actoviqBaseUrl.trim()
+    : isDeepSeek ? 'https://api.deepseek.com' : defaultSettings.actoviqBaseUrl;
+  const layoutVisionModel = typeof raw.layoutVisionModel === 'string'
+    ? raw.layoutVisionModel.trim()
+    : '';
+  const layoutFingerprint = layoutVisionModelFingerprint(provider, baseUrl, layoutVisionModel);
+  const rawLayoutVerification = raw.layoutVisionVerification;
+  const matchingLayoutVerification = rawLayoutVerification
+    && rawLayoutVerification.fingerprint === layoutFingerprint;
+  const layoutVisionVerification: LayoutVisionVerification = matchingLayoutVerification
+    && rawLayoutVerification.status === 'verified'
+    ? {
+        status: 'verified',
+        fingerprint: layoutFingerprint,
+        verifiedAt: rawLayoutVerification.verifiedAt,
+      }
+    : matchingLayoutVerification && rawLayoutVerification.status === 'error'
+      ? {
+          status: 'error',
+          fingerprint: layoutFingerprint,
+          error: typeof rawLayoutVerification.error === 'string'
+            ? rawLayoutVerification.error.slice(0, 500)
+            : 'Image capability verification failed.',
+        }
+      : {
+          status: 'unverified',
+          fingerprint: layoutFingerprint,
+        };
 
   return {
     ...defaultSettings,
     actoviqProvider: provider,
     actoviqProviderPreset: preset,
-    actoviqBaseUrl: (typeof raw.actoviqBaseUrl === 'string' && raw.actoviqBaseUrl.trim())
-      ? raw.actoviqBaseUrl.trim()
-      : isDeepSeek ? 'https://api.deepseek.com' : defaultSettings.actoviqBaseUrl,
+    actoviqBaseUrl: baseUrl,
     actoviqAuthToken: authToken,
     actoviqAuthTokenStorage: authToken ? storage : 'none',
     basicModel,
@@ -166,6 +231,8 @@ function normalizeStoredSettings(raw: StoredSettings, authToken: string, storage
     mediumContext1M: Boolean(raw.mediumContext1M),
     professionalContext1M: Boolean(raw.professionalContext1M),
     preferredChatTier,
+    layoutVisionModel,
+    layoutVisionVerification,
     chatModel: mediumModel,
     reasoningModel: professionalModel,
     opusModel: professionalModel,
@@ -246,7 +313,7 @@ async function persistSettings(settings: PersistedAppSettings): Promise<void> {
     ...nonSecretSettings
   } = settings;
   const payload: StoredSettings = {
-    schema: 'actoviq.desktop-settings.v2',
+    schema: 'actoviq.desktop-settings.v3',
     ...nonSecretSettings,
   };
 
@@ -269,7 +336,7 @@ function resolveDraftSettings(current: PersistedAppSettings, draft: AppSettings)
   const token = draft.clearActoviqAuthToken
     ? suppliedToken
     : suppliedToken || current.actoviqAuthToken;
-  return normalizeStoredSettings(
+  const resolved = normalizeStoredSettings(
     {
       ...current,
       ...draft,
@@ -278,6 +345,35 @@ function resolveDraftSettings(current: PersistedAppSettings, draft: AppSettings)
     token,
     token === current.actoviqAuthToken ? current.actoviqAuthTokenStorage : isEncryptionAvailable() ? 'encrypted' : 'plaintext-fallback',
   );
+  const fingerprint = layoutVisionModelFingerprint(
+    resolved.actoviqProvider,
+    resolved.actoviqBaseUrl,
+    resolved.layoutVisionModel,
+  );
+  const currentStillMatches = current.layoutVisionVerification.status === 'verified'
+    && current.layoutVisionVerification.fingerprint === fingerprint;
+  const verifiedAt = successfulLayoutVisionProbes.get(fingerprint)
+    ?? (currentStillMatches ? current.layoutVisionVerification.verifiedAt : undefined);
+  if (verifiedAt) {
+    resolved.layoutVisionVerification = {
+      status: 'verified',
+      fingerprint,
+      verifiedAt,
+    };
+  } else if (draft.layoutVisionVerification?.status === 'error'
+    && draft.layoutVisionVerification.fingerprint === fingerprint) {
+    resolved.layoutVisionVerification = {
+      status: 'error',
+      fingerprint,
+      error: (draft.layoutVisionVerification.error || 'Image capability verification failed.').slice(0, 500),
+    };
+  } else {
+    resolved.layoutVisionVerification = {
+      status: 'unverified',
+      fingerprint,
+    };
+  }
+  return resolved;
 }
 
 export function applySettingsToEnvironment(settings: PersistedAppSettings): void {
@@ -294,6 +390,16 @@ export function applySettingsToEnvironment(settings: PersistedAppSettings): void
   setOrDelete('ACTOVIQ_DEFAULT_MIN_MODEL', settings.basicModel || settings.haikuModel);
   setOrDelete('ACTOVIQ_DEFAULT_MEDIUM_MODEL', settings.mediumModel || settings.chatModel || settings.sonnetModel);
   setOrDelete('ACTOVIQ_DEFAULT_MAX_MODEL', settings.professionalModel || settings.reasoningModel || settings.opusModel);
+  setOrDelete(
+    'ACTOVIQ_LAYOUT_VISION_MODEL',
+    settings.layoutVisionVerification.status === 'verified' ? settings.layoutVisionModel : '',
+  );
+  setOrDelete(
+    'ACTOVIQ_LAYOUT_VISION_FINGERPRINT',
+    settings.layoutVisionVerification.status === 'verified'
+      ? settings.layoutVisionVerification.fingerprint
+      : '',
+  );
   setOrDelete('NGSPICE_BIN', settings.ngspiceBin);
 }
 
@@ -388,6 +494,73 @@ async function testProvider(draft: AppSettings): Promise<ProviderTestResult> {
   }
 }
 
+async function testLayoutModel(draft: AppSettings): Promise<LayoutModelTestResult> {
+  const startedAt = Date.now();
+  const current = await loadSettingsWithSecrets();
+  const settings = resolveDraftSettings(current, draft);
+  const model = settings.layoutVisionModel.trim();
+  const fingerprint = layoutVisionModelFingerprint(
+    settings.actoviqProvider,
+    settings.actoviqBaseUrl,
+    model,
+  );
+  const resultBase = {
+    provider: settings.actoviqProvider,
+    model,
+    fingerprint,
+  };
+
+  if (!settings.actoviqAuthToken) {
+    return {
+      ...resultBase,
+      ok: false,
+      status: 'error',
+      latencyMs: Date.now() - startedAt,
+      error: 'API key is not configured.',
+    };
+  }
+  if (!model) {
+    return {
+      ...resultBase,
+      ok: false,
+      status: 'error',
+      latencyMs: Date.now() - startedAt,
+      error: 'A dedicated multimodal layout model is required.',
+    };
+  }
+  try {
+    const parsedUrl = new URL(settings.actoviqBaseUrl);
+    if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+      throw new Error('Base URL must use http or https.');
+    }
+    await probeLayoutVisionModel({
+      provider: settings.actoviqProvider,
+      apiKey: settings.actoviqAuthToken,
+      baseURL: settings.actoviqBaseUrl,
+      model,
+      workDir: process.cwd(),
+      sessionDirectory: path.join(settingsDir, 'desktop-layout-vision-probes'),
+    });
+    const verifiedAt = new Date().toISOString();
+    successfulLayoutVisionProbes.set(fingerprint, verifiedAt);
+    return {
+      ...resultBase,
+      ok: true,
+      status: 'verified',
+      verifiedAt,
+      latencyMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    return {
+      ...resultBase,
+      ok: false,
+      status: 'error',
+      latencyMs: Date.now() - startedAt,
+      error: sanitizeProviderError(error, settings.actoviqAuthToken),
+    };
+  }
+}
+
 export function registerSettingsHandlers(ipcMain: IpcMain): void {
   // Make saved provider settings available to spawned workflow processes immediately.
   void loadSettingsWithSecrets().then(applySettingsToEnvironment).catch(() => undefined);
@@ -416,6 +589,10 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle('settings:test-provider', async (_event, draft: AppSettings) => {
     return testProvider(draft);
+  });
+
+  ipcMain.handle('settings:test-layout-model', async (_event, draft: AppSettings) => {
+    return testLayoutModel(draft);
   });
 
   ipcMain.handle('app:version', async () => {

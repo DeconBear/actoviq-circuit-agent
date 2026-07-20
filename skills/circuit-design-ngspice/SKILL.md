@@ -1,18 +1,13 @@
 ---
 name: circuit-design-ngspice
-metadata:
-  version: "2.3.0"
-  protocol_version: "actoviq.project-agent.v2"
 description: >
   Design, simulate, and render primitive-based SPICE circuits with ngspice and
-  netlistsvg for the Actoviq project canvas. Given a natural-language circuit
-  requirement, run the full workflow: requirements analysis, specification
-  normalization, template selection, architecture planning, primitive-only
-  netlist design, multi-analysis simulation, schematic-document rendering, and
-  summary reporting. Supports single-block and partitioned (multi-module)
-  designs on `actoviq.module.v2` / `actoviq.schematic-document.v1`. Use this
-  skill when the user asks to design a circuit, create a SPICE netlist, run
-  ngspice simulation, or render a schematic from a netlist.
+  netlistsvg for the Actoviq project canvas. Use when designing circuits,
+  creating or simulating SPICE netlists, rendering schematics, optimizing
+  automatic schematic placement/routing with a vision-only model, checking
+  layout quality/connectivity, or exporting editable KiCad, Altium, OrCAD, and
+  Virtuoso schematic packages. Supports single-block and hierarchical projects
+  on `actoviq.module.v2` / `actoviq.schematic-document.v1`.
 ---
 
 # Circuit Design Ngspice

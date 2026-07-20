@@ -17,6 +17,7 @@ import { registerCircuitTools } from '../tools/registerCircuitTools.js';
 import { getWorkflowSkills } from '../skills/index.js';
 import { createOpenAiVisionModelApi } from '../vision/openAiVisionModelApi.js';
 import { createVisionLayoutReviewHost } from '../vision/visionLayoutReviewHost.js';
+import { LayoutPatchProtocolError, parseLayoutPatchSetText } from '../vision/layoutPatchProtocol.js';
 import { parseTuiCommand } from '../tui/commandParser.js';
 import { TuiStateStore } from '../tui/TuiState.js';
 import { classifyError } from '../utils/errors.js';
@@ -178,6 +179,25 @@ test('vision layout tool is isolated from text runs and returns a PNG image bloc
     assert.equal(content[0]?.type, 'text');
     assert.equal(content[1]?.type, 'image');
     assert.equal((content[1]?.source as Record<string, unknown>).media_type, 'image/png');
+    const preRenderedPath = path.resolve(root, 'trusted-preview.png');
+    await writeFile(preRenderedPath, png);
+    const requiredImageContext = {
+      ...createToolContext(root),
+      metadata: { model_capabilities: ['vision'], required_layout_image_path: preRenderedPath },
+    };
+    assert.deepEqual(
+      await visionTool.validateInput?.({ svg_path: svgPath }, requiredImageContext),
+      { result: false, message: 'This layout review must use the trusted pre-rendered image_path from its stage packet.' },
+    );
+    const preRendered = await visionTool.execute(
+      { image_path: preRenderedPath },
+      requiredImageContext,
+    );
+    assert.equal(preRendered.sourceKind, 'png');
+    assert.equal(preRendered.rasterizer, 'pre-rendered');
+    assert.equal(preRendered.sha256, output.sha256);
+    assert.equal(preRendered.width, output.width);
+    assert.equal(preRendered.height, output.height);
 
     const visionSkill = getWorkflowSkills().find((entry) => entry.name === 'review-schematic-layout-vision');
     assert.ok(visionSkill);
@@ -263,6 +283,7 @@ test('OpenAI vision ModelApi promotes tool-result images for create and stream r
 test('trusted vision host runs the isolated skill through SDK and forwards the rendered PNG', async () => {
   const root = path.resolve(process.cwd(), '.tmp-unit-tests', `vision-host-${Date.now()}`);
   const svgPath = path.resolve(root, 'schematic.svg');
+  const imagePath = path.resolve(root, 'schematic.png');
   const qualityPath = path.resolve(root, 'layout-quality.json');
   await mkdir(root, { recursive: true });
   await writeFile(svgPath, [
@@ -271,6 +292,10 @@ test('trusted vision host runs the isolated skill through SDK and forwards the r
     '<path d="M10 50H150" stroke="#188038" stroke-width="4"/>',
     '</svg>',
   ].join(''), 'utf8');
+  await writeFile(imagePath, Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  ));
   await writeFile(qualityPath, JSON.stringify({
     schema: 'actoviq.layout-quality.v1',
     readability_score: 82,
@@ -290,7 +315,7 @@ test('trusted vision host runs the isolated skill through SDK and forwards the r
             type: 'tool_use',
             id: 'vision-call',
             name: 'view_schematic_for_layout',
-            input: { svg_path: svgPath },
+            input: { image_path: imagePath },
           }],
           stop_reason: 'tool_use',
         };
@@ -300,7 +325,15 @@ test('trusted vision host runs the isolated skill through SDK and forwards the r
         type: 'message',
         role: 'assistant',
         model: 'vision-test',
-        content: [{ type: 'text', text: '{"schema":"actoviq.layout-patch.v1","candidates":[]}' }],
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            schema: 'actoviq.layout-patch-set.v1',
+            source_revision: 7,
+            connectivity_hash: 'a'.repeat(64),
+            candidates: [],
+          }),
+        }],
         stop_reason: 'end_turn',
       };
     },
@@ -324,6 +357,50 @@ test('trusted vision host runs the isolated skill through SDK and forwards the r
     );
     assert.equal(requests.length, 0);
 
+    const bypassHost = await createVisionLayoutReviewHost({
+      provider: 'openai',
+      model: 'vision-bypass-test',
+      modelCapabilities: ['vision'],
+      workDir: root,
+      homeDir: path.resolve(root, '.actoviq-bypass'),
+      modelApi: {
+        createMessage: async () => ({
+          id: 'vision-bypass',
+          type: 'message',
+          role: 'assistant',
+          model: 'vision-bypass-test',
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              schema: 'actoviq.layout-patch-set.v1',
+              source_revision: 7,
+              connectivity_hash: 'a'.repeat(64),
+              candidates: [],
+            }),
+          }],
+          stop_reason: 'end_turn',
+        }),
+        streamMessage: () => {
+          throw new Error('The bypass test must not call streamMessage.');
+        },
+      },
+    });
+    try {
+      await assert.rejects(
+        () => bypassHost.review({
+          svgPath,
+          imagePath,
+          layoutQualityReportPath: qualityPath,
+          moduleId: 'filter',
+          sourceRevision: 7,
+          connectivityHash: 'a'.repeat(64),
+        }),
+        /must call view_schematic_for_layout exactly once/,
+      );
+    } finally {
+      await bypassHost.close();
+    }
+
     host = await createVisionLayoutReviewHost({
       provider: 'openai',
       model: 'vision-test',
@@ -334,14 +411,18 @@ test('trusted vision host runs the isolated skill through SDK and forwards the r
     });
     const result = await host.review({
       svgPath,
+      imagePath,
       layoutQualityReportPath: qualityPath,
       moduleId: 'filter',
       sourceRevision: 7,
       connectivityHash: 'a'.repeat(64),
     });
 
-    assert.equal(result.toolCalls.length, 1);
-    assert.equal(result.toolCalls[0]?.publicName, 'view_schematic_for_layout');
+    assert.equal(result.rawResult.toolCalls.length, 1);
+    assert.equal(result.rawResult.toolCalls[0]?.publicName, 'view_schematic_for_layout');
+    assert.deepEqual(result.rawResult.toolCalls[0]?.input, { image_path: imagePath });
+    assert.equal(result.patchSet.schema, 'actoviq.layout-patch-set.v1');
+    assert.equal(result.patchSet.source_revision, 7);
     assert.equal(requests.length, 2);
     assert.deepEqual(requests[0]?.tools?.map((entry) => entry.name), ['view_schematic_for_layout']);
     const firstRequestContent = requests[0]?.messages[0]?.content;
@@ -351,6 +432,7 @@ test('trusted vision host runs the isolated skill through SDK and forwards the r
       stagePrompt,
       /"layout_quality_report":\{"schema":"actoviq\.layout-quality\.v1","readability_score":82\}/,
     );
+    assert.match(stagePrompt, /"image_path":/);
     const secondMessages = requests[1]?.messages ?? [];
     const resultIndex = secondMessages.findIndex((message) => (
       Array.isArray(message.content)
@@ -369,6 +451,69 @@ test('trusted vision host runs the isolated skill through SDK and forwards the r
     await host?.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('vision layout patch-set parser rejects prose, stale sources, unknown fields, and unsafe operations', () => {
+  const expected = { sourceRevision: 9, connectivityHash: 'b'.repeat(64) };
+  const valid = {
+    schema: 'actoviq.layout-patch-set.v1',
+    source_revision: 9,
+    connectivity_hash: 'b'.repeat(64),
+    candidates: [{
+      schema: 'actoviq.layout-patch.v1',
+      operations: [
+        { op: 'move_component', component_id: 'r1', dx_grid: 2, dy_grid: -1 },
+        { op: 'rotate_component', component_id: 'r1', rotation: 90 },
+        { op: 'move_port', port_id: 'out', dx_grid: 1, dy_grid: 0 },
+        { op: 'set_block_pin_side', component_id: 'u1', pin_id: 'out', side: 'right' },
+        { op: 'set_layout_lane', component_id: 'r1', rank: 2, lane: -1 },
+      ],
+    }],
+  };
+  assert.deepEqual(parseLayoutPatchSetText(JSON.stringify(valid), expected), valid);
+
+  const reject = (payload: unknown, code: LayoutPatchProtocolError['code']) => {
+    assert.throws(
+      () => parseLayoutPatchSetText(typeof payload === 'string' ? payload : JSON.stringify(payload), expected),
+      (error: unknown) => error instanceof LayoutPatchProtocolError && error.code === code,
+    );
+  };
+  reject(`\`\`\`json\n${JSON.stringify(valid)}\n\`\`\``, 'INVALID_JSON');
+  reject({ ...valid, source_revision: 8 }, 'SOURCE_REVISION_MISMATCH');
+  reject({ ...valid, connectivity_hash: 'c'.repeat(64) }, 'CONNECTIVITY_HASH_MISMATCH');
+  reject({ ...valid, explanation: 'looks better' }, 'INVALID_SCHEMA');
+  reject({
+    ...valid,
+    candidates: [{ schema: 'actoviq.layout-patch.v1', operations: [
+      { op: 'move_component', component_id: 'r1', dx_grid: 7, dy_grid: 0 },
+    ] }],
+  }, 'INVALID_SCHEMA');
+  reject({
+    ...valid,
+    candidates: [{ schema: 'actoviq.layout-patch.v1', operations: [
+      { op: 'set_layout_lane', component_id: 'r1', rank: 17, lane: 0 },
+    ] }],
+  }, 'INVALID_SCHEMA');
+  reject({
+    ...valid,
+    candidates: [{ schema: 'actoviq.layout-patch.v1', operations: [
+      { op: 'move_component', component_id: 'r1', dx_grid: 4, dy_grid: 0 },
+      { op: 'move_component', component_id: 'r1', dx_grid: 3, dy_grid: 0 },
+    ] }],
+  }, 'INVALID_SCHEMA');
+  reject({
+    ...valid,
+    candidates: [{ schema: 'actoviq.layout-patch.v1', operations: [
+      { op: 'rotate_component', component_id: 'r1', rotation: 90 },
+      { op: 'rotate_component', component_id: 'r1', rotation: 180 },
+    ] }],
+  }, 'INVALID_SCHEMA');
+  reject({
+    ...valid,
+    candidates: [{ schema: 'actoviq.layout-patch.v1', operations: [
+      { op: 'delete_component', component_id: 'r1' },
+    ] }],
+  }, 'INVALID_SCHEMA');
 });
 
 async function prepareJobDirs(paths: JobPaths): Promise<void> {

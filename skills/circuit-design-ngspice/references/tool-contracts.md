@@ -134,9 +134,11 @@ workflow workspace:
 
 It rasterizes the SVG with Electron and returns a short
 `actoviq.vision-layout-image.v1` metadata block followed by an actual
-`image/png` content block. The tool accepts SVG files only, rejects paths
-outside allowed workspace roots, and does not edit the SVG, module, netlist,
-or schematic document.
+`image/png` content block. The tool accepts a trusted generated SVG or a
+pre-rendered PNG; the desktop closed loop normally rasterizes SVG in its parent
+process and passes the trusted PNG path to the isolated vision host. It rejects
+paths outside allowed workspace roots and does not edit the image, module,
+netlist, or schematic document.
 
 **Capability gate:** text-only models must not call this tool. They must make
 layout decisions from `actoviq.layout-quality.v1` and other structured data.

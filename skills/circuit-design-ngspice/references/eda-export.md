@@ -23,18 +23,26 @@ The command runs ERC, rejects blocking diagnostics and stale revisions, generate
 
 **Artifacts and target status**
 
-Artifacts are written under `build/exports/<export-id>/` by default (or under `--output-dir`). KiCad is generated directly with a portable `Actoviq_Standard` symbol library. Altium receives a KiCad import package (`kicad_import_source`). OrCAD receives EDIF 2.0.0. Virtuoso receives SPICE/CDL, mapping data, and a SKILL bootstrap.
+Artifacts are written under `build/exports/<export-id>/` by default (or under `--output-dir`). KiCad is generated directly with a portable `Actoviq_Standard` symbol library. Altium receives an exact, validated copy of that KiCad import source. OrCAD receives EDIF 2.0.0. Virtuoso receives SPICE/CDL, mapping data (including deterministic generic-symbol fallbacks), module schematics, a top-level hierarchy, and a SKILL bootstrap.
 
-Structural generation statuses:
+The public `targets.<target>.status` contract is:
 
 | Status | Meaning |
 | --- | --- |
-| `syntax_validated` | Generated package passed structural / S-expression checks (KiCad, OrCAD). |
-| `kicad_import_source` | Altium package is a validated KiCad import source, not a native SchDoc. |
-| `generated_unverified` | Virtuoso package files were written; vendor import was not verified. |
-| `vendor_parsed` | Optional native tool path succeeded (for example KiCad ERC + connectivity round-trip). |
-| `failed` | Required native validation failed, or auto native checks could not complete. |
+| `native` | The configured vendor tool parsed the package and its available round-trip checks passed. |
+| `import_ready` | The portable package passed Actoviq structural/round-trip validation and is ready for manual vendor import. |
+| `warning` | A usable package remains, but an optional vendor check or unattended conversion did not complete cleanly. |
+| `failed` | Required native validation/conversion failed. |
 
-`--native-convert never` keeps the structural status only. `--native-convert auto` may attempt vendor checks when tools are present; failures are recorded without discarding already-generated packages. `--native-convert required` fails the export when native validation cannot pass.
+Format-specific structural results remain machine-readable under `targets.<target>.detail.structural_status` (`syntax_validated`, `kicad_import_source`, or `generated_unverified`). `--native-convert never` returns `import_ready` after internal validation without invoking vendor tools. `--native-convert auto` returns `native` when an implemented vendor check succeeds, `import_ready` when no tool is configured, or `warning` when a non-blocking optional check cannot complete. `--native-convert required` returns `failed` and fails the command when native validation/conversion cannot pass.
+
+Internal validation is stricter than a file-presence check:
+
+- KiCad cross-checks every instance against embedded and project-local symbol definitions, pin numbers, UUIDs, and normalized connectivity; `kicad-cli`, when available, additionally runs ERC and netlist round-trip.
+- Altium verifies that every KiCad project/schematic/library/table file is copied byte-for-byte. Altium-specific mapping is retained as advisory metadata because the first-stage importer consumes the KiCad bindings.
+- OrCAD parses the EDIF libraries, symbol ports, pin locations, instances, transforms, page nets, stored wire coordinates, and top hierarchy against EDA IR.
+- Virtuoso compares both SPICE and CDL with the IR pin order/net partition, verifies device-map and generic fallback coverage, and checks that SKILL reconstructs every module, terminal, wire path, component, and top-level connection.
+
+Without Altium, OrCAD Capture, or Virtuoso installed, Actoviq can prove package structure and normalized connectivity but cannot claim that a particular vendor release has imported and re-saved its native database. Those targets remain `import_ready`, not `native`.
 
 Layout adjustment proposals use `actoviq.layout-patch.v1`. The validator accepts only bounded component/port moves, cardinal rotations, BLOCK pin-side changes, and rank/lane changes. It rejects electrical edits.

@@ -1,7 +1,7 @@
 {
   "schema": "actoviq.skill-version.v1",
   "skill": "circuit-design-ngspice",
-  "skill_version": "2.3.0",
+  "skill_version": "2.3.1",
   "protocol_version": "actoviq.project-agent.v2",
   "compatibility": {
     "project": ["actoviq.project.v1", "actoviq.project.v2"],
@@ -11,7 +11,7 @@
     "simulation": ["actoviq.simulation.v2"],
     "eda_ir": ["actoviq.eda-ir.v1"],
     "layout_quality": ["actoviq.layout-quality.v1"],
-    "layout_patch": ["actoviq.layout-patch.v1"],
+    "layout_patch": ["actoviq.layout-patch.v1", "actoviq.layout-patch-set.v1"],
     "eda_symbol_map": ["actoviq.eda-symbol-map.v1"],
     "vision_layout_image": ["actoviq.vision-layout-image.v1"]
   }

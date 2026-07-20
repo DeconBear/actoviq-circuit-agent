@@ -90,6 +90,7 @@ interface Props {
   onSave: (module: CircuitModule) => Promise<void>;
   onBuild: () => void;
   onProbe?: (probe: SchematicProbeSelection) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 export interface SchematicProbeSelection {
@@ -180,7 +181,7 @@ interface ContextMenuState {
 
 type DraftUpdate = (current: CircuitModule) => CircuitModule;
 
-export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBuild, onProbe }: Props) {
+export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBuild, onProbe, onDirtyChange }: Props) {
   const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
@@ -266,6 +267,10 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (tool === 'place' || tool === 'place-block') return 'copy';
     return interactionCursor;
   })();
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     cancelPendingViewportUpdate();
@@ -539,10 +544,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         return;
       }
       const next = cloneModule(draft);
-      addWire(next, wireStart, hit);
+      const nextWireStart = addWire(next, wireStart, hit, document.wires);
+      if (!nextWireStart) return;
       commitDraft(next);
       setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
-      setWireStart(hit);
+      setWireStart(nextWireStart);
       setHoverWorld(null);
       setHoverEndpoint(null);
       wireDragRef.current = null;
@@ -830,10 +836,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       const world = screenToWorld(event);
       const end = hitEndpoint(document, world) ?? pointEndpoint(snapPoint(world));
       const next = cloneModule(draft);
-      addWire(next, wireDrag.start, end);
+      const nextWireStart = addWire(next, wireDrag.start, end, document.wires);
+      if (!nextWireStart) return;
       commitDraft(next);
       setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
-      setWireStart(end);
+      setWireStart(nextWireStart);
       setHoverWorld(null);
       setHoverEndpoint(null);
       setInteractionCursor('default');
@@ -890,7 +897,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setDraft((current) => {
       const next = cloneModule(current);
       applyComponentPositions(next, drag.lastPositions);
-      next.wires = rerouteStoredWires(next);
+      next.wires = rerouteStoredWires(next, { componentIds: drag.componentIds });
       return next;
     });
     setDirty(true);
@@ -1009,7 +1016,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       changed = true;
     }
     if (!changed) return;
-    next.wires = rerouteStoredWires(next);
+    next.wires = rerouteStoredWires(next, { componentIds: selectedComponentIds });
     commitDraft(next);
     setContextMenu(null);
   }
@@ -1026,7 +1033,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       changed = true;
     }
     if (!changed) return;
-    next.wires = rerouteStoredWires(next);
+    next.wires = rerouteStoredWires(next, { componentIds });
     commitDraft(next);
     setContextMenu(null);
   }
@@ -1409,7 +1416,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         if (touchesPin) wire.net = pin.net;
       }
     }
-    next.wires = rerouteStoredWires(next);
+    next.wires = rerouteStoredWires(next, { componentIds: [component.id] });
     commitDraft(next);
   }
 
@@ -1428,7 +1435,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       side: index % 2 === 0 ? 'left' : 'right',
       order: index,
     });
-    next.wires = rerouteStoredWires(next);
+    next.wires = rerouteStoredWires(next, { componentIds: [component.id] });
     commitDraft(next);
   }
 
@@ -1441,7 +1448,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     next.wires = (next.wires ?? []).filter((wire) => ![wire.from, wire.to].some((endpoint) => (
       endpoint?.component_id === component.id && endpoint.pin_id === pinId
     )));
-    next.wires = rerouteStoredWires(next);
+    next.wires = rerouteStoredWires(next, { componentIds: [component.id] });
     commitDraft(next);
   }
 
@@ -1453,13 +1460,13 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     Object.assign(component, patch);
     if (patch.rotation !== undefined) {
       component.rotation = normalizeRotation(Number(patch.rotation));
-      next.wires = rerouteStoredWires(next);
+      next.wires = rerouteStoredWires(next, { componentIds: [component.id] });
     }
     commitDraft(next);
   }
 
   async function saveAndRebuild() {
-    const normalized = normalizeConnectivity({ ...draft, wires: document.wires });
+    const normalized = normalizeConnectivity(draft);
     await onSave(normalized);
     setDirty(false);
     setHistory([]);
@@ -2178,7 +2185,9 @@ function hitSelectedStoredWirePoint(
 function wirePointIsDraggable(wire: CircuitWire, pointIndex: number): boolean {
   if (pointIndex > 0 && pointIndex < wire.points.length - 1) return true;
   const endpoint = pointIndex === 0 ? wire.from : pointIndex === wire.points.length - 1 ? wire.to : undefined;
-  return Boolean(endpoint && !endpoint.component_id && !endpoint.port_id);
+  // Shared semantic junctions must move as a whole graph. Until a junction-drag
+  // gesture is active, keep them anchored instead of silently detaching one edge.
+  return Boolean(endpoint && !endpoint.component_id && !endpoint.port_id && !endpoint.junction_id);
 }
 
 function cursorForWorld(

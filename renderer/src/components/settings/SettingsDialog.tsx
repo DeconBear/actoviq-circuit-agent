@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ActoviqProviderPreset, AppSettings, CircuitSkillStatus, ProviderTestResult } from '../../types';
+import type {
+  ActoviqProviderPreset,
+  AppSettings,
+  CircuitSkillStatus,
+  LayoutModelTestResult,
+  ProviderTestResult,
+} from '../../types';
 import { SecretField } from './SecretField';
 
 interface Props {
@@ -17,6 +23,8 @@ export function SettingsDialog({ onClose }: Props) {
   const [skillSyncing, setSkillSyncing] = useState(false);
   const [testingProvider, setTestingProvider] = useState(false);
   const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
+  const [testingLayoutModel, setTestingLayoutModel] = useState(false);
+  const [layoutModelTest, setLayoutModelTest] = useState<LayoutModelTestResult | null>(null);
 
   useEffect(() => {
     if (!window.electronAPI) {
@@ -62,14 +70,24 @@ export function SettingsDialog({ onClose }: Props) {
   }, []);
 
   const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+    const invalidatesLayoutVerification = key === 'actoviqProvider'
+      || key === 'actoviqBaseUrl'
+      || key === 'layoutVisionModel';
     setSettings((prev) => (prev ? {
       ...prev,
       [key]: value,
       ...(key === 'actoviqAuthToken' ? { clearActoviqAuthToken: false } : {}),
+      ...(invalidatesLayoutVerification ? {
+        layoutVisionVerification: {
+          status: 'unverified' as const,
+          fingerprint: '',
+        },
+      } : {}),
     } : prev));
     setSaved(false);
     setDirty(true);
     setProviderTest(null);
+    if (invalidatesLayoutVerification) setLayoutModelTest(null);
   }, []);
 
   const revealProviderKey = useCallback(async (): Promise<string | null> => {
@@ -100,6 +118,7 @@ export function SettingsDialog({ onClose }: Props) {
           haikuModel: 'claude-haiku-4-5-20251001',
           sonnetModel: 'claude-sonnet-4-6',
           opusModel: 'claude-opus-4-7',
+          layoutVisionVerification: { status: 'unverified', fingerprint: '' },
         };
       }
       if (preset === 'deepseek') {
@@ -116,6 +135,7 @@ export function SettingsDialog({ onClose }: Props) {
           haikuModel: 'deepseek-v4-flash',
           sonnetModel: 'deepseek-v4-flash',
           opusModel: 'deepseek-v4-pro',
+          layoutVisionVerification: { status: 'unverified', fingerprint: '' },
         };
       }
       const wasKnownPreset = prev.actoviqProviderPreset !== 'openai-compatible';
@@ -132,11 +152,13 @@ export function SettingsDialog({ onClose }: Props) {
         haikuModel: wasKnownPreset ? 'gpt-4.1-mini' : prev.haikuModel,
         sonnetModel: wasKnownPreset ? 'gpt-4.1-mini' : prev.sonnetModel,
         opusModel: wasKnownPreset ? 'o3' : prev.opusModel,
+        layoutVisionVerification: { status: 'unverified', fingerprint: '' },
       };
     });
     setSaved(false);
     setDirty(true);
     setProviderTest(null);
+    setLayoutModelTest(null);
   }, []);
 
   const clearProviderKey = useCallback(() => {
@@ -170,6 +192,54 @@ export function SettingsDialog({ onClose }: Props) {
       });
     } finally {
       setTestingProvider(false);
+    }
+  }, [settings]);
+
+  const handleTestLayoutModel = useCallback(async () => {
+    if (!settings || !window.electronAPI) return;
+    setTestingLayoutModel(true);
+    setLayoutModelTest(null);
+    setError(null);
+    try {
+      const result = await window.electronAPI.testLayoutModelSettings(settings);
+      setLayoutModelTest(result);
+      setSettings((prev) => prev ? {
+        ...prev,
+        layoutVisionVerification: result.ok ? {
+          status: 'verified',
+          fingerprint: result.fingerprint,
+          verifiedAt: result.verifiedAt,
+        } : {
+          status: 'error',
+          fingerprint: result.fingerprint,
+          error: result.error ?? 'Image capability verification failed.',
+        },
+      } : prev);
+      setSaved(false);
+      setDirty(true);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const result: LayoutModelTestResult = {
+        ok: false,
+        status: 'error',
+        provider: settings.actoviqProvider,
+        model: settings.layoutVisionModel,
+        fingerprint: settings.layoutVisionVerification.fingerprint,
+        latencyMs: 0,
+        error: message,
+      };
+      setLayoutModelTest(result);
+      setSettings((prev) => prev ? {
+        ...prev,
+        layoutVisionVerification: {
+          status: 'error',
+          fingerprint: result.fingerprint,
+          error: message,
+        },
+      } : prev);
+      setDirty(true);
+    } finally {
+      setTestingLayoutModel(false);
     }
   }, [settings]);
 
@@ -263,6 +333,50 @@ export function SettingsDialog({ onClose }: Props) {
                   {settings.hasActoviqAuthToken && !settings.clearActoviqAuthToken && (
                     <button type="button" className="av-btn--danger-link" onClick={clearProviderKey}>Clear saved key</button>
                   )}
+                </div>
+              </section>
+
+              <section className="av-form-section" data-testid="layout-vision-model-settings">
+                <h3 className="av-form-section__title">LLM-assisted schematic layout</h3>
+                <Field
+                  label="Dedicated multimodal model"
+                  value={settings.layoutVisionModel}
+                  onChange={(value) => update('layoutVisionModel', value)}
+                  placeholder="Enter a model that accepts image input"
+                  testId="settings-layout-vision-model"
+                />
+                <p className="av-form-hint">
+                  This model is used only by the isolated layout review loop. It must pass a real image-input
+                  challenge before layout runs are enabled; ordinary text chat cannot access the visual layout tool.
+                </p>
+                <div className="av-form-meta">
+                  <span>Capability status: {settings.layoutVisionVerification.status}</span>
+                  <button
+                    type="button"
+                    className="av-btn av-btn--secondary"
+                    onClick={() => { void handleTestLayoutModel(); }}
+                    disabled={testingLayoutModel || !settings.layoutVisionModel.trim()}
+                    data-testid="settings-test-layout-model"
+                  >
+                    {testingLayoutModel ? 'Verifying image input...' : 'Verify multimodal model'}
+                  </button>
+                </div>
+                <div
+                  className={`av-form-status ${settings.layoutVisionVerification.status === 'verified'
+                    ? 'av-form-status--ok'
+                    : settings.layoutVisionVerification.status === 'error'
+                      ? 'av-form-status--error'
+                      : ''}`}
+                  role="status"
+                  data-testid="settings-layout-model-status"
+                >
+                  {settings.layoutVisionVerification.status === 'verified'
+                    ? `Verified image input for ${settings.layoutVisionModel}${settings.layoutVisionVerification.verifiedAt
+                      ? ` at ${new Date(settings.layoutVisionVerification.verifiedAt).toLocaleString()}`
+                      : ''}.`
+                    : settings.layoutVisionVerification.status === 'error'
+                      ? settings.layoutVisionVerification.error ?? layoutModelTest?.error ?? 'Image capability verification failed.'
+                      : 'Unverified. LLM-assisted layout is disabled until this exact provider, Base URL, and model pass.'}
                 </div>
               </section>
 
@@ -406,12 +520,13 @@ export function SettingsDialog({ onClose }: Props) {
   );
 }
 
-function Field({ label, value, onChange, type, placeholder }: {
+function Field({ label, value, onChange, type, placeholder, testId }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   type?: string;
   placeholder?: string;
+  testId?: string;
 }) {
   return (
     <label className="av-form-field">
@@ -422,6 +537,7 @@ function Field({ label, value, onChange, type, placeholder }: {
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className="av-settings-input"
+        data-testid={testId}
       />
     </label>
   );

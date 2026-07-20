@@ -6,9 +6,14 @@ import {
   componentBounds,
   createSchematicDocument,
   endpointWorldPosition,
+  hitEndpoint,
   isGroundPort,
   isPmosComponent,
+  normalizeConnectivity,
   pinWorld,
+  pointEndpoint,
+  removeWireAndUpdateConnectivity,
+  validateWireTopology,
 } from '../renderer/src/schematic/schematicDocument';
 import { junctions } from '../renderer/src/schematic/SchematicDocumentSvg';
 
@@ -410,6 +415,7 @@ const fixtures: CircuitModule[] = [
 ];
 
 assertJunctionNetIsolation();
+assertManualWireTopology();
 
 for (const fixture of fixtures) {
   const document = createSchematicDocument(fixture);
@@ -548,12 +554,50 @@ function assertJunctionNetIsolation() {
     'same-net three-way branch should create one junction dot',
   );
 
+  const aliasedSameNetBranch = {
+    wires: [
+      { id: 'a1', net: 'a_alias', net_id: 'net_a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }] },
+      { id: 'a2', net: 'a', net_id: 'net_a', source: 'net', points: [{ x: 40, y: 40 }, { x: 80, y: 40 }] },
+      { id: 'a3', net: 'a', net_id: 'net_a', source: 'net', points: [{ x: 40, y: 0 }, { x: 40, y: 40 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(
+    junctions(aliasedSameNetBranch).map((junction) => ({ net: junction.net, x: junction.point.x, y: junction.point.y })),
+    [{ net: 'a_alias', x: 40, y: 40 }],
+    'wire aliases with one stable net_id should still create a junction dot',
+  );
+
+  const collidingNamesDifferentNets = {
+    wires: [
+      { id: 'a1', net: 'shared', net_id: 'net_a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }] },
+      { id: 'a2', net: 'shared', net_id: 'net_a', source: 'net', points: [{ x: 40, y: 40 }, { x: 80, y: 40 }] },
+      { id: 'b1', net: 'shared', net_id: 'net_b', source: 'net', points: [{ x: 40, y: 0 }, { x: 40, y: 40 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(
+    junctions(collidingNamesDifferentNets),
+    [],
+    'identical display names with different stable net_ids must remain electrically isolated',
+  );
+
   const simpleBend = {
     wires: [
       { id: 'a1', net: 'a', source: 'net', points: [{ x: 0, y: 40 }, { x: 40, y: 40 }, { x: 40, y: 80 }] },
     ],
   } as unknown as ReturnType<typeof createSchematicDocument>;
   assert.deepEqual(junctions(simpleBend), [], 'same-net wire bends should not create junction dots');
+
+  const sameNetInteriorCrossing = {
+    wires: [
+      { id: 'a1', net: 'a', source: 'net', points: [{ x: 0, y: 40 }, { x: 80, y: 40 }] },
+      { id: 'a2', net: 'a', source: 'net', points: [{ x: 40, y: 0 }, { x: 40, y: 80 }] },
+    ],
+  } as unknown as ReturnType<typeof createSchematicDocument>;
+  assert.deepEqual(
+    junctions(sameNetInteriorCrossing),
+    [],
+    'interior wire crossings must stay unconnected unless an endpoint or explicit junction is present',
+  );
 
   const passThroughBranch = {
     wires: [
@@ -1152,6 +1196,132 @@ function assertGeneratedWireCrossings(document: ReturnType<typeof createSchemati
       }
     }
   }
+}
+
+function assertManualWireTopology() {
+  const chain = moduleFixture('manual_chain', [
+    component('rleft', 'R', '1k', 100, 200, [['a', '1', 'left_open'], ['b', '2', 'left']]),
+    component('rright', 'R', '1k', 500, 200, [['a', '1', 'right'], ['b', '2', 'right_open']]),
+  ], []);
+  const leftPin = chain.components[0]!.pins[1]!;
+  const rightPin = chain.components[1]!.pins[0]!;
+  const leftPoint = pinWorld(chain.components[0]!, leftPin, 1);
+  const rightPoint = pinWorld(chain.components[1]!, rightPin, 0);
+  const bend = pointEndpoint({ x: 300, y: 300 });
+  const continued = addWire(
+    chain,
+    { kind: 'pin', ...leftPoint, component_id: 'rleft', pin_id: 'b', label: 'RLEFT.2', net: leftPin.net },
+    bend,
+  );
+  assert.ok(continued?.junction_id, 'a free wire endpoint should receive a stable junction id');
+  addWire(
+    chain,
+    continued!,
+    { kind: 'pin', ...rightPoint, component_id: 'rright', pin_id: 'a', label: 'RRIGHT.1', net: rightPin.net },
+  );
+  const normalizedChain = normalizeConnectivity(chain);
+  const normalizedLeft = normalizedChain.components[0]!.pins[1]!;
+  const normalizedRight = normalizedChain.components[1]!.pins[0]!;
+  assert.equal(normalizedLeft.net_id, normalizedRight.net_id, 'pin -> free point -> pin must form one electrical net');
+  assert.equal(new Set(normalizedChain.wires.map((wire) => wire.net_id)).size, 1, 'continuous wire segments must share one net id');
+  assert.equal(
+    normalizedChain.wires.filter((wire) => (
+      wire.from?.junction_id === continued!.junction_id || wire.to?.junction_id === continued!.junction_id
+    )).length,
+    2,
+    'the continued free point must be a shared semantic node',
+  );
+
+  const branch = moduleFixture('manual_branch', [
+    component('rleft', 'R', '1k', 100, 200, [['a', '1', 'left_open'], ['b', '2', 'trunk_left']]),
+    component('rright', 'R', '1k', 500, 200, [['a', '1', 'trunk_right'], ['b', '2', 'right_open']]),
+    component('rbranch', 'R', '1k', 300, 400, [['a', '1', 'branch'], ['b', '2', 'branch_open']]),
+  ], []);
+  branch.components[2]!.rotation = 90;
+  const trunkLeftPin = branch.components[0]!.pins[1]!;
+  const trunkRightPin = branch.components[1]!.pins[0]!;
+  addWire(
+    branch,
+    { kind: 'pin', ...pinWorld(branch.components[0]!, trunkLeftPin, 1), component_id: 'rleft', pin_id: 'b', label: 'left', net: trunkLeftPin.net },
+    { kind: 'pin', ...pinWorld(branch.components[1]!, trunkRightPin, 0), component_id: 'rright', pin_id: 'a', label: 'right', net: trunkRightPin.net },
+  );
+  const beforeBranch = createSchematicDocument(branch, { autoLayout: false });
+  const trunkHit = hitEndpoint(beforeBranch, { x: 300, y: 200 });
+  assert.equal(trunkHit?.wire_id, branch.wires[0]?.id, 'wire midpoint should be an attachable endpoint target');
+  const branchPin = branch.components[2]!.pins[0]!;
+  const branchEnd = addWire(
+    branch,
+    { kind: 'pin', ...pinWorld(branch.components[2]!, branchPin, 0), component_id: 'rbranch', pin_id: 'a', label: 'branch', net: branchPin.net },
+    trunkHit!,
+    beforeBranch.wires,
+  );
+  assert.ok(branchEnd?.junction_id, 'T connection should materialize an explicit junction');
+  const junctionId = branchEnd!.junction_id;
+  assert.equal(
+    branch.wires.filter((wire) => wire.from?.junction_id === junctionId || wire.to?.junction_id === junctionId).length,
+    3,
+    'T connection should split the trunk into two edges and add one branch edge',
+  );
+  const branchedDocument = createSchematicDocument(branch, { autoLayout: false });
+  assert.equal(
+    junctions(branchedDocument).some((entry) => entry.point.x === 300 && entry.point.y === 200),
+    true,
+    'an explicit T connection should render a junction dot',
+  );
+
+  const bridge = moduleFixture('manual_bridge_delete', [
+    component('rleft', 'R', '1k', 100, 200, [['a', '1', 'left_open'], ['b', '2', 'left']]),
+    component('rright', 'R', '1k', 500, 200, [['a', '1', 'right'], ['b', '2', 'right_open']]),
+  ], []);
+  const bridgeLeft = bridge.components[0]!.pins[1]!;
+  const bridgeRight = bridge.components[1]!.pins[0]!;
+  addWire(
+    bridge,
+    { kind: 'pin', ...pinWorld(bridge.components[0]!, bridgeLeft, 1), component_id: 'rleft', pin_id: 'b', label: 'left', net: bridgeLeft.net },
+    { kind: 'pin', ...pinWorld(bridge.components[1]!, bridgeRight, 0), component_id: 'rright', pin_id: 'a', label: 'right', net: bridgeRight.net },
+  );
+  const split = removeWireAndUpdateConnectivity(bridge, bridge.wires[0]!);
+  const splitLeft = split.components[0]!.pins[1]!;
+  const splitRight = split.components[1]!.pins[0]!;
+  assert.notEqual(splitLeft.net_id, splitRight.net_id, 'deleting a bridge must split the stable net id');
+  assert.equal(split.nets?.find((net) => net.id === splitLeft.net_id)?.name, splitLeft.net);
+  assert.equal(split.nets?.find((net) => net.id === splitRight.net_id)?.name, splitRight.net);
+
+  const crossing: CircuitModule = {
+    schema: 'actoviq.module.v2',
+    module_id: 'crossing_semantics',
+    name: 'crossing_semantics',
+    revision: 0,
+    nets: [
+      { id: 'net_a', name: 'a' },
+      { id: 'net_b', name: 'b' },
+    ],
+    ports: [],
+    components: [],
+    wires: [
+      {
+        id: 'wa', net: 'a', net_id: 'net_a', source: 'stored',
+        points: [{ x: 0, y: 40 }, { x: 80, y: 40 }],
+        from: { x: 0, y: 40, junction_id: 'ja0' },
+        to: { x: 80, y: 40, junction_id: 'ja1' },
+      },
+      {
+        id: 'wb', net: 'b', net_id: 'net_b', source: 'stored',
+        points: [{ x: 40, y: 0 }, { x: 40, y: 80 }],
+        from: { x: 40, y: 0, junction_id: 'jb0' },
+        to: { x: 40, y: 80, junction_id: 'jb1' },
+      },
+    ],
+    annotations: [],
+  };
+  assert.deepEqual(validateWireTopology(crossing), [], 'a pure interior crossing must remain electrically isolated');
+  crossing.wires[1]!.points[1] = { x: 40, y: 40 };
+  crossing.wires[1]!.to = { x: 40, y: 40, junction_id: 'jb1' };
+  assert.equal(
+    validateWireTopology(crossing).some((issue) => issue.code === 'unintended_contact'),
+    true,
+    'a different-net endpoint landing on a segment must be a blocking contact',
+  );
 }
 
 function assertPmosLdoBenchWiring(document: ReturnType<typeof createSchematicDocument>) {

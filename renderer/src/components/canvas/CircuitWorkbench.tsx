@@ -21,6 +21,7 @@ import type {
   CircuitPort,
   EdaExportResult,
   EdaExportTarget,
+  LayoutOptimizationResult,
   SchematicOverrides,
   SimulationRun,
 } from '../../types';
@@ -354,6 +355,7 @@ export function CircuitWorkbench({
   const [view, setView] = useState<'board' | 'module'>('board');
   const [zoom, setZoom] = useState(65);
   const [notice, setNotice] = useState('');
+  const [layoutFeedback, setLayoutFeedback] = useState<Record<string, LayoutOptimizationResult>>({});
   const [copiedId, setCopiedId] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
   const [isPanning, setIsPanning] = useState(false);
@@ -369,6 +371,7 @@ export function CircuitWorkbench({
   const [moduleEditorError, setModuleEditorError] = useState('');
   const [emptyProjectForm, setEmptyProjectForm] = useState<EmptyProjectFormState | null>(null);
   const canvasPanelRef = useRef<HTMLDivElement | null>(null);
+  const suppressContextMenuRef = useRef(false);
   const emptyProjectCreateRef = useRef(false);
   const [modulePreviewPositions, setModulePreviewPositions] = useState<
     Record<string, { x: number; y: number }>
@@ -472,6 +475,7 @@ export function CircuitWorkbench({
     setBusy(false);
     setError('');
     setNotice('');
+    setLayoutFeedback({});
     setModulePreviewPositions({});
     setModulePreviewSizes({});
     setModulePreviewBusy({});
@@ -643,6 +647,41 @@ export function CircuitWorkbench({
       return false;
     } finally {
       if (isActiveProject(operationProjectId)) setModulePreviewBuildBusy(moduleId, false);
+    }
+  }
+
+  async function optimizeModuleSchematic(moduleId: string): Promise<void> {
+    if (!currentProjectId || !project) return;
+    const operationProjectId = currentProjectId;
+    const sourceRevision = project.revision;
+    setBusy(true);
+    setError('');
+    setNotice('Scoring deterministic layouts and preparing multimodal review...');
+    try {
+      const result = await window.electronAPI.optimizeCircuitLayout(operationProjectId, {
+        moduleId,
+        sourceRevision,
+      });
+      if (!isActiveProject(operationProjectId)) return;
+      await onReloadProject(operationProjectId);
+      if (!isActiveProject(operationProjectId)) return;
+      setLayoutFeedback((current) => ({ ...current, [moduleId]: result }));
+      const before = Math.round(result.initial_quality.readability_score);
+      const after = Math.round(result.final_quality.readability_score);
+      const review = result.llm_invoked ? `${result.rounds.length} visual round${result.rounds.length === 1 ? '' : 's'}` : 'deterministic scoring';
+      setNotice(result.changed
+        ? `Layout updated: readability ${before} → ${after} (${review})`
+        : `Layout kept: readability ${after} (${review}, no better candidate)`);
+      if (result.compile_warning) {
+        setError(`Layout was saved, but the netlistsvg preview rebuild failed: ${result.compile_warning}`);
+      }
+    } catch (layoutError) {
+      if (isActiveProject(operationProjectId)) {
+        setError(layoutError instanceof Error ? layoutError.message : String(layoutError));
+        setNotice('');
+      }
+    } finally {
+      if (isActiveProject(operationProjectId)) setBusy(false);
     }
   }
 
@@ -1024,7 +1063,7 @@ export function CircuitWorkbench({
   }
 
   function handleCanvasWheel(event: WheelEvent) {
-    if (view !== 'board' || !event.ctrlKey) return;
+    if (view !== 'board') return;
     event.preventDefault();
     const panel = canvasPanelRef.current;
     if (!panel) return;
@@ -1039,6 +1078,7 @@ export function CircuitWorkbench({
       const nextScale = nextZoom / 100;
       panel.scrollLeft = boardX * nextScale - (event.clientX - rect.left);
       panel.scrollTop = boardY * nextScale - (event.clientY - rect.top);
+      setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
     });
   }
 
@@ -1111,7 +1151,8 @@ export function CircuitWorkbench({
   function beginCanvasPan(event: ReactPointerEvent<HTMLDivElement>) {
     if (view !== 'board') return;
     const leftTemporaryPan = event.button === 0 && (event.altKey || spacePanActive);
-    if (event.button !== 1 && !leftTemporaryPan) return;
+    const rightPan = event.button === 2;
+    if (event.button !== 1 && !leftTemporaryPan && !rightPan) return;
     const panel = canvasPanelRef.current;
     if (!panel) return;
     event.preventDefault();
@@ -1119,19 +1160,28 @@ export function CircuitWorkbench({
     const startY = event.clientY;
     const startLeft = panel.scrollLeft;
     const startTop = panel.scrollTop;
+    let moved = false;
+    if (rightPan) suppressContextMenuRef.current = false;
     setIsPanning(true);
     const move = (moveEvent: PointerEvent) => {
-      panel.scrollLeft = startLeft - (moveEvent.clientX - startX);
-      panel.scrollTop = startTop - (moveEvent.clientY - startY);
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 3) return;
+      moved = true;
+      if (rightPan) suppressContextMenuRef.current = true;
+      panel.scrollLeft = startLeft - dx;
+      panel.scrollTop = startTop - dy;
       setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
       setIsPanning(false);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointercancel', up, { once: true });
   }
 
   function openCanvasContextMenu(
@@ -1140,6 +1190,10 @@ export function CircuitWorkbench({
   ) {
     event.preventDefault();
     event.stopPropagation();
+    if (suppressContextMenuRef.current) {
+      suppressContextMenuRef.current = false;
+      return;
+    }
     const panel = canvasPanelRef.current;
     if (!panel) return;
     const rect = panel.getBoundingClientRect();
@@ -1764,6 +1818,8 @@ export function CircuitWorkbench({
               busy={busy}
               previewBusy={selectedPreviewBusy}
               onBuild={() => buildModulePreview(selectedRef.id)}
+              onOptimize={() => optimizeModuleSchematic(selectedRef.id)}
+              layoutFeedback={layoutFeedback[selectedRef.id]}
               onSaveSchematic={(moduleData) => saveModuleSchematic(selectedRef.id, moduleData)}
               onMoveItem={(itemId, x, y) => moveSchematicItem(selectedRef.id, itemId, x, y)}
               onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
@@ -1971,7 +2027,7 @@ function ModuleBoard({
         }}
       >
         <div style={{ ...styles.boardGuide, left: metrics.originX + 28, top: metrics.originY + 24 }}>
-          Drag modules anywhere | double-click to open the netlistsvg schematic
+          Drag modules anywhere | scroll to zoom | right-drag to pan | double-click to open the netlistsvg schematic
         </div>
         {modules.map((module) => (
           <ModuleCard
@@ -2190,6 +2246,8 @@ function ModuleSchematic({
   busy,
   previewBusy,
   onBuild,
+  onOptimize,
+  layoutFeedback,
   onSaveSchematic,
   onMoveItem,
   onResetItem,
@@ -2203,6 +2261,8 @@ function ModuleSchematic({
   busy: boolean;
   previewBusy: boolean;
   onBuild: () => void;
+  onOptimize: () => Promise<void>;
+  layoutFeedback?: LayoutOptimizationResult;
   onSaveSchematic: (moduleData: CircuitModule) => Promise<void>;
   onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
   onResetItem: (itemId: string) => Promise<void>;
@@ -2211,6 +2271,7 @@ function ModuleSchematic({
 }) {
   const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
   const [editLayout, setEditLayout] = useState(false);
+  const [editorDirty, setEditorDirty] = useState(false);
   const [draggedItem, setDraggedItem] = useState('');
   const [selectedItem, setSelectedItem] = useState('');
   const [snapToGrid, setSnapToGrid] = useState(true);
@@ -2267,6 +2328,10 @@ function ModuleSchematic({
   useEffect(() => {
     if (!moduleData && viewMode === 'editor') setViewMode('svg');
   }, [moduleData, viewMode]);
+
+  useEffect(() => {
+    setEditorDirty(false);
+  }, [module.id]);
 
   function svgClientDeltaScale(svgElement: SVGSVGElement): { x: number; y: number } {
     const matrix = svgElement.getScreenCTM();
@@ -2548,8 +2613,34 @@ function ModuleSchematic({
           >
             {previewBusy ? 'Building netlistsvg' : 'Build netlistsvg'}
           </button>
+          <button
+            style={styles.primaryButton}
+            onClick={() => void onOptimize()}
+            disabled={busy || previewBusy || !moduleData || editorDirty}
+            title={editorDirty
+              ? 'Save or undo manual edits before running layout optimization.'
+              : 'Use the verified multimodal layout model when deterministic routing remains below 90 or leaves crossings, overlaps, congestion, or flow issues.'}
+            data-testid="optimize-schematic-layout"
+          >
+            AI layout
+          </button>
         </div>
       </div>
+      {layoutFeedback ? (
+        <div style={styles.layoutFeedback} data-testid="layout-optimization-feedback">
+          <strong>Layout quality {Math.round(layoutFeedback.initial_quality.readability_score)} → {Math.round(layoutFeedback.final_quality.readability_score)}</strong>
+          <span>
+            {layoutFeedback.llm_invoked
+              ? `${layoutFeedback.rounds.length} visual review round${layoutFeedback.rounds.length === 1 ? '' : 's'} · ${layoutFeedback.stopped_reason}`
+              : `deterministic candidates · ${layoutFeedback.stopped_reason}`}
+          </span>
+          <span>Connectivity {layoutFeedback.connectivity_hash.slice(0, 12)}… preserved</span>
+          <span>
+            Visible full schematic {Math.round(layoutFeedback.visible_quality.readability_score)}
+            {layoutFeedback.visible_quality_unresolved ? ' · unresolved quality issues' : ' · clean'}
+          </span>
+        </div>
+      ) : null}
       {viewMode === 'svg' && editLayout ? (
         <div style={styles.layoutToolbar} data-testid="schematic-layout-tools">
           <label style={styles.layoutCheck}>
@@ -2613,6 +2704,7 @@ function ModuleSchematic({
             onSave={onSaveSchematic}
             onBuild={onBuild}
             onProbe={onProbe}
+            onDirtyChange={setEditorDirty}
           />
         ) : schematicDocument ? (
           <div
@@ -3230,6 +3322,19 @@ const styles: Record<string, CSSProperties> = {
   moduleViewerActions: { display: 'flex', alignItems: 'center', gap: 8 },
   moduleViewerTitle: { margin: '2px 0', fontSize: 18 },
   moduleViewerId: { color: '#7b8490', fontFamily: 'Consolas, monospace', fontSize: 10 },
+  layoutFeedback: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
+    margin: '-2px 0 10px',
+    padding: '7px 10px',
+    border: '1px solid #bfdbfe',
+    borderRadius: 6,
+    background: '#eff6ff',
+    color: '#1e3a5f',
+    fontSize: 11,
+  },
   layoutToolbar: {
     minHeight: 40,
     display: 'flex',
