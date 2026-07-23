@@ -34,7 +34,14 @@ def catalog_root(references_dir: Path | None = None) -> Path:
         if override:
             references_dir = Path(override)
         else:
-            references_dir = Path(get_active_workspace()["referencesDir"])
+            active = get_active_workspace()
+            refs = (
+                active.get("references_dir")
+                or (active.get("workspace") or {}).get("referencesDir")
+            )
+            if not refs:
+                raise KeyError("references_dir")
+            references_dir = Path(refs)
     root = Path(references_dir) / "catalog"
     root.mkdir(parents=True, exist_ok=True)
     return root

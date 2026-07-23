@@ -81,6 +81,15 @@ COMMAND_SCHEMA = "actoviq.command.v1"
 ERC_SCHEMA = "actoviq.erc.v1"
 AGENT_PROTOCOL_VERSION = "actoviq.project-agent.v2"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
+DEFAULT_MODULE_SIZE = {"width": 360.0, "height": 280.0}
+DEFAULT_MODULE_POSITION = {"x": 100.0, "y": 100.0}
+# Match renderer Arrange modules grid so auto-placed cards stay readable.
+MODULE_LAYOUT_ORIGIN_X = 100.0
+MODULE_LAYOUT_ORIGIN_Y = 110.0
+MODULE_LAYOUT_DX = 400.0
+MODULE_LAYOUT_DY = 340.0
+MODULE_LAYOUT_COLUMNS = 3
+MODULE_LAYOUT_MARGIN = 24.0
 ALLOWED_COMPONENT_TYPES = allowed_component_types("analog_ic")  # union used for CLI help / broad checks
 BLOCK_PIN_SIDES = {"left", "right", "top", "bottom"}
 EDITABLE_PIN_NAMES = {
@@ -1243,7 +1252,7 @@ def evaluate_erc(
                 "prefer stimuli + functional stage modules unless this is a trivial path."
             ),
             module_id=only_id,
-        )
+                )
 
     if any_components and not has_ground:
         erc_diagnostic(
@@ -1382,6 +1391,62 @@ def find_component(module: dict[str, Any], component_id: str) -> dict[str, Any]:
     raise ValueError(f"unknown component: {module['module_id']}.{component_id}")
 
 
+def coerce_netlist_notebook_text(value: Any, *, operation: dict[str, Any] | None = None) -> str:
+    """Accept common LLM shapes for netlist_notebook and return plain text."""
+    if value is None and operation is not None:
+        for alias in ("netlist_notebook", "notebook", "netlist", "spice", "source", "markdown"):
+            if alias in operation and operation.get(alias) is not None and alias != "netlist_notebook":
+                value = operation.get(alias)
+                break
+            if alias == "netlist_notebook" and operation.get(alias) is not None:
+                value = operation.get(alias)
+                break
+    if isinstance(value, str):
+        return value
+    if value is None:
+        raise ValueError(
+            "upsert_module_netlist netlist_notebook must be text "
+            f"(got missing/null; keys={sorted((operation or {}).keys())})"
+        )
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                chunk = item.get("content") or item.get("text") or item.get("source") or item.get("line")
+                if isinstance(chunk, str):
+                    parts.append(chunk)
+                else:
+                    parts.append(json.dumps(item, ensure_ascii=False))
+            else:
+                parts.append(str(item))
+        text = "\n".join(parts)
+        if not text.strip():
+            raise ValueError("upsert_module_netlist netlist_notebook must be non-empty text (got empty list)")
+        return text
+    if isinstance(value, dict):
+        for key in ("netlist_notebook", "content", "text", "source", "markdown", "spice", "netlist", "notebook"):
+            nested = value.get(key)
+            if isinstance(nested, str) and nested.strip():
+                return nested
+            if isinstance(nested, list):
+                return coerce_netlist_notebook_text(nested)
+        lines = value.get("lines")
+        if isinstance(lines, list):
+            return coerce_netlist_notebook_text(lines)
+        raise ValueError(
+            "upsert_module_netlist netlist_notebook must be text "
+            f"(got object keys={sorted(value.keys())})"
+        )
+    raise ValueError(
+        "upsert_module_netlist netlist_notebook must be text "
+        f"(got {type(value).__name__})"
+    )
+
+
 def module_from_netlist_notebook(
     module_id: str,
     notebook: str,
@@ -1389,9 +1454,13 @@ def module_from_netlist_notebook(
     project_kind: str | None = None,
 ) -> dict[str, Any]:
     netlist_text = extract_notebook_netlist(notebook)
+    kind = project_kind or DEFAULT_PROJECT_KIND
+    if kind == "simulation":
+        netlist_text = unwrap_simulation_subckt_wrapper(netlist_text)
+        netlist_text = strip_control_blocks(netlist_text)
     netlist_validation = validate_netlist_text(
         netlist_text,
-        project_kind or DEFAULT_PROJECT_KIND,
+        kind,
         source=f"module:{module_id}",
     )
     if not netlist_validation["ok"]:
@@ -1421,6 +1490,99 @@ def module_from_netlist_notebook(
     ensure_module_stable_ids(next_module)
     validate_module(next_module, project_kind or DEFAULT_PROJECT_KIND)
     return next_module
+
+
+def _module_rect(position: dict[str, Any] | None, size: dict[str, Any] | None) -> tuple[float, float, float, float]:
+    pos = position if isinstance(position, dict) else {}
+    sz = size if isinstance(size, dict) else {}
+    x = float(pos.get("x", DEFAULT_MODULE_POSITION["x"]))
+    y = float(pos.get("y", DEFAULT_MODULE_POSITION["y"]))
+    width = float(sz.get("width", DEFAULT_MODULE_SIZE["width"]))
+    height = float(sz.get("height", DEFAULT_MODULE_SIZE["height"]))
+    if width <= 0:
+        width = DEFAULT_MODULE_SIZE["width"]
+    if height <= 0:
+        height = DEFAULT_MODULE_SIZE["height"]
+    return x, y, width, height
+
+
+def _rects_overlap(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+    margin: float = MODULE_LAYOUT_MARGIN,
+) -> bool:
+    ax, ay, aw, ah = left
+    bx, by, bw, bh = right
+    return not (
+        ax + aw + margin <= bx
+        or bx + bw + margin <= ax
+        or ay + ah + margin <= by
+        or by + bh + margin <= ay
+    )
+
+
+def _occupied_module_rects(project: dict[str, Any], exclude_module_id: str | None = None) -> list[tuple[float, float, float, float]]:
+    rects: list[tuple[float, float, float, float]] = []
+    for entry in project.get("modules", []):
+        if not isinstance(entry, dict):
+            continue
+        module_id = str(entry.get("id") or "")
+        if exclude_module_id and module_id == exclude_module_id:
+            continue
+        rects.append(_module_rect(entry.get("position"), entry.get("size")))
+    return rects
+
+
+def _grid_slot_position(index: int) -> dict[str, float]:
+    col = index % MODULE_LAYOUT_COLUMNS
+    row = index // MODULE_LAYOUT_COLUMNS
+    return {
+        "x": MODULE_LAYOUT_ORIGIN_X + col * MODULE_LAYOUT_DX,
+        "y": MODULE_LAYOUT_ORIGIN_Y + row * MODULE_LAYOUT_DY,
+    }
+
+
+def resolve_module_canvas_position(
+    project: dict[str, Any],
+    *,
+    module_id: str,
+    preferred: dict[str, Any] | None = None,
+    size: dict[str, Any] | None = None,
+    previous: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    """Pick a canvas position that does not overlap other module cards.
+
+    - Keep an existing module's previous position when the op does not move it
+      and it still does not collide.
+    - Honor an explicit non-overlapping preferred position from the agent.
+    - Otherwise allocate the next free Arrange-modules grid slot.
+    """
+    module_size = dict(size or DEFAULT_MODULE_SIZE)
+    occupied = _occupied_module_rects(project, exclude_module_id=module_id)
+
+    candidates: list[dict[str, float]] = []
+    if isinstance(preferred, dict) and "x" in preferred and "y" in preferred:
+        candidates.append({"x": float(preferred["x"]), "y": float(preferred["y"])})
+    if isinstance(previous, dict) and "x" in previous and "y" in previous:
+        candidates.append({"x": float(previous["x"]), "y": float(previous["y"])})
+
+    for candidate in candidates:
+        rect = _module_rect(candidate, module_size)
+        if not any(_rects_overlap(rect, other) for other in occupied):
+            return candidate
+
+    start_index = len(occupied)
+    for index in range(start_index, start_index + 64):
+        candidate = _grid_slot_position(index)
+        rect = _module_rect(candidate, module_size)
+        if not any(_rects_overlap(rect, other) for other in occupied):
+            return candidate
+
+    # Extremely dense boards: fall back to a far-right column.
+    return {
+        "x": MODULE_LAYOUT_ORIGIN_X + MODULE_LAYOUT_COLUMNS * MODULE_LAYOUT_DX,
+        "y": MODULE_LAYOUT_ORIGIN_Y + start_index * MODULE_LAYOUT_DY,
+    }
 
 
 def apply_operation(
@@ -1486,12 +1648,27 @@ def apply_operation(
         changed_modules.update(restored_modules)
         return
     if op == "upsert_module":
-        module_ref = operation["module_ref"]
+        module_ref = dict(operation["module_ref"])
         module = operation["module"]
         module_id = module_ref["id"]
         if module.get("module_id") != module_id:
             raise ValueError("upsert_module ids do not match")
         validate_module(module, project.get("project_kind"))
+        previous_ref = next(
+            (entry for entry in project.get("modules", []) if entry.get("id") == module_id),
+            None,
+        )
+        module_size = dict(module_ref.get("size") or (previous_ref or {}).get("size") or DEFAULT_MODULE_SIZE)
+        preferred = module_ref.get("position") if isinstance(module_ref.get("position"), dict) else None
+        previous = (previous_ref or {}).get("position") if isinstance(previous_ref, dict) else None
+        module_ref["size"] = module_size
+        module_ref["position"] = resolve_module_canvas_position(
+            project,
+            module_id=str(module_id),
+            preferred=preferred,
+            size=module_size,
+            previous=previous if isinstance(previous, dict) else None,
+        )
         project["modules"] = [
             entry for entry in project["modules"] if entry.get("id") != module_id
         ]
@@ -1536,9 +1713,26 @@ def apply_operation(
         changed_modules.add(module_id)
         return
     if op == "add_port":
-        module_id = operation["module_id"]
+        module_id = str(operation.get("module_id") or "").strip()
+        if not module_id:
+            module_ids = list(modules.keys())
+            if len(module_ids) == 1:
+                module_id = module_ids[0]
+            else:
+                raise ValueError("add_port requires module_id")
         module = modules[module_id]
-        port = operation["port"]
+        port = operation.get("port")
+        if not isinstance(port, dict):
+            port_id = str(operation.get("port_id") or operation.get("id") or "").strip()
+            if not port_id:
+                raise ValueError("add_port requires port or port_id")
+            port = {
+                "id": port_id,
+                "name": str(operation.get("name") or port_id),
+                "direction": str(operation.get("direction") or "bidirectional"),
+                "signal_type": str(operation.get("signal_type") or "analog"),
+                "net": str(operation.get("net") or port_id),
+            }
         if any(entry.get("id") == port.get("id") for entry in module.get("ports", [])):
             raise ValueError(f"port already exists: {module_id}.{port.get('id')}")
         module.setdefault("ports", []).append(port)
@@ -1620,9 +1814,7 @@ def apply_operation(
         module_id = str(operation.get("module_id", "")).strip()
         if not module_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", module_id):
             raise ValueError("upsert_module_netlist requires a stable module_id")
-        notebook = operation.get("netlist_notebook")
-        if not isinstance(notebook, str):
-            raise ValueError("upsert_module_netlist netlist_notebook must be text")
+        notebook = coerce_netlist_notebook_text(operation.get("netlist_notebook"), operation=operation)
         existing = modules.get(module_id, {
             "schema": MODULE_SCHEMA,
             "module_id": module_id,
@@ -1649,6 +1841,12 @@ def apply_operation(
             (entry for entry in project.get("modules", []) if entry.get("id") == module_id),
             None,
         )
+        preferred = operation.get("position") if isinstance(operation.get("position"), dict) else None
+        previous = (previous_ref or {}).get("position") if isinstance(previous_ref, dict) else None
+        # Updating a notebook without an explicit move should keep the prior card seat when free.
+        if preferred is None and previous_ref is not None:
+            preferred = previous if isinstance(previous, dict) else None
+        module_size = dict(operation.get("size") or (previous_ref or {}).get("size") or DEFAULT_MODULE_SIZE)
         module_ref = {
             **(previous_ref or {}),
             "id": module_id,
@@ -1659,8 +1857,14 @@ def apply_operation(
             "notes": str(operation.get("notes") or (previous_ref or {}).get("notes") or ""),
             "preview_enabled": bool(operation.get("preview_enabled", (previous_ref or {}).get("preview_enabled", True))),
             "source": f"modules/{module_id}/module.circuit.json",
-            "position": dict(operation.get("position") or (previous_ref or {}).get("position") or {"x": 100, "y": 100}),
-            "size": dict(operation.get("size") or (previous_ref or {}).get("size") or {"width": 360, "height": 280}),
+            "size": module_size,
+            "position": resolve_module_canvas_position(
+                project,
+                module_id=module_id,
+                preferred=preferred if isinstance(preferred, dict) else None,
+                size=module_size,
+                previous=previous if isinstance(previous, dict) else None,
+            ),
             "ports": next_module["ports"],
         }
         project["modules"] = [
@@ -1713,8 +1917,7 @@ def apply_operation(
             "annotations": annotations,
         }
         if notebook is not None:
-            if not isinstance(notebook, str):
-                raise ValueError("set_module_schematic netlist_notebook must be text")
+            notebook = coerce_netlist_notebook_text(notebook)
             netlist_text = extract_notebook_netlist(notebook)
             netlist_validation = validate_netlist_text(
                 netlist_text,
@@ -1756,9 +1959,7 @@ def apply_operation(
     if op == "set_module_netlist":
         module_id = str(operation["module_id"])
         module = modules[module_id]
-        notebook = operation.get("netlist_notebook")
-        if not isinstance(notebook, str):
-            raise ValueError("set_module_netlist netlist_notebook must be text")
+        notebook = coerce_netlist_notebook_text(operation.get("netlist_notebook"))
         next_module = module_from_netlist_notebook(
             module_id,
             notebook,
@@ -1846,8 +2047,58 @@ def apply_operation(
         changed_modules.add(module_id)
         return
     if op == "connect_ports":
-        source = operation["from"]
-        target = operation["to"]
+        source = operation.get("from")
+        target = operation.get("to")
+        if not isinstance(source, dict):
+            if operation.get("from_module") and operation.get("from_port"):
+                source = {
+                    "module_id": str(operation["from_module"]),
+                    "port_id": str(operation["from_port"]),
+                }
+        if not isinstance(target, dict):
+            if operation.get("to_module") and operation.get("to_port"):
+                target = {
+                    "module_id": str(operation["to_module"]),
+                    "port_id": str(operation["to_port"]),
+                }
+            elif isinstance(source, dict) and operation.get("to_port") and not operation.get("to_module"):
+                # Same-module shorthand occasionally emitted by LLMs.
+                target = {
+                    "module_id": str(source["module_id"]),
+                    "port_id": str(operation["to_port"]),
+                }
+        ports = operation.get("ports")
+        if (not isinstance(source, dict) or not isinstance(target, dict)) and isinstance(ports, list):
+            endpoints: list[dict[str, str]] = []
+            for entry in ports:
+                if not isinstance(entry, dict):
+                    continue
+                mid = str(entry.get("module_id") or "").strip()
+                pid = str(entry.get("port_id") or entry.get("id") or "").strip()
+                if mid and pid:
+                    endpoints.append({"module_id": mid, "port_id": pid})
+            if len(endpoints) < 2:
+                raise ValueError("connect_ports requires from/to or at least two ports")
+            # Star-connect around the first endpoint; recurse via repeated ops.
+            network = str(operation.get("network") or operation.get("net") or "").strip()
+            for endpoint in endpoints[1:]:
+                apply_operation(
+                    root,
+                    project,
+                    modules,
+                    {
+                        "op": "connect_ports",
+                        "from": endpoints[0],
+                        "to": endpoint,
+                        **({"network": network} if network else {}),
+                    },
+                    changed_modules,
+                    schematic_override_writes,
+                    notebook_writes,
+                )
+            return
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            raise ValueError("connect_ports requires from and to endpoints")
         find_module_ref(project, source["module_id"])
         find_module_ref(project, target["module_id"])
         endpoint_pair = {
@@ -1874,7 +2125,7 @@ def apply_operation(
             if connection.get("id") != connection_id
         ]
         connection = {"id": connection_id, "from": source, "to": target}
-        network = str(operation.get("network") or (existing or {}).get("network") or "").strip()
+        network = str(operation.get("network") or operation.get("net") or (existing or {}).get("network") or "").strip()
         if network:
             connection["network"] = network
         project["connections"].append(connection)
@@ -2063,6 +2314,66 @@ def sanitize_node(value: str) -> str:
     return cleaned or "node"
 
 
+def strip_control_blocks(netlist_text: str) -> str:
+    """Remove .control/.endc decks so control verbs are not parsed as devices."""
+    lines_out: list[str] = []
+    in_control = False
+    for raw in netlist_text.splitlines():
+        lower = strip_spice_comment(raw).lower()
+        if lower.startswith(".control"):
+            in_control = True
+            continue
+        if lower.startswith(".endc"):
+            in_control = False
+            continue
+        if in_control:
+            continue
+        lines_out.append(raw)
+    return "\n".join(lines_out).rstrip() + ("\n" if lines_out else "")
+
+
+def unwrap_simulation_subckt_wrapper(netlist_text: str) -> str:
+    """If a simulation netlist is only one .subckt/.ends shell, keep the body.
+
+    DeepSeek and similar models often wrap teaching circuits in .subckt even though
+    project_kind=simulation forbids hierarchical definitions.
+    """
+    lines = [line.rstrip() for line in netlist_text.splitlines()]
+    meaningful = [line for line in lines if strip_spice_comment(line)]
+    if not meaningful:
+        return netlist_text
+    first = meaningful[0].lstrip().lower()
+    if not first.startswith(".subckt"):
+        return netlist_text
+    # Count subckt/ends pairs; only unwrap a single top-level definition with no
+    # leftover X-instances of that subckt outside the body.
+    depth = 0
+    body: list[str] = []
+    saw_ends = False
+    for raw in lines:
+        stripped = strip_spice_comment(raw)
+        lower = stripped.lower()
+        if lower.startswith(".subckt"):
+            depth += 1
+            if depth == 1:
+                continue
+        if lower.startswith(".ends"):
+            if depth == 1:
+                saw_ends = True
+                depth = 0
+                continue
+            if depth > 1:
+                depth -= 1
+        if depth >= 1:
+            body.append(raw)
+        elif stripped and not lower.startswith("*"):
+            # Content outside the single subckt — do not unwrap.
+            return netlist_text
+    if not saw_ends or depth != 0 or not any(strip_spice_comment(line) for line in body):
+        return netlist_text
+    return "\n".join(body).rstrip() + "\n"
+
+
 def extract_notebook_netlist(markdown: str) -> str:
     blocks = [
         match.strip()
@@ -2073,11 +2384,24 @@ def extract_notebook_netlist(markdown: str) -> str:
         )
         if match.strip()
     ]
-    if not blocks:
+    if blocks:
+        return "\n\n".join(blocks) + "\n"
+
+    # LLMs often emit bare SPICE without a fenced code block. Accept that when
+    # the body looks like a netlist (device lines / analysis directives).
+    bare = markdown.strip()
+    if bare:
+        spice_line = re.compile(
+            r"^\s*([A-Za-z]\w*|\.(title|end|tran|ac|dc|op|include|param|model|subckt|ends|control|probe|save|plot|print)\b)",
+            flags=re.IGNORECASE,
+        )
+        meaningful = [line for line in bare.splitlines() if strip_spice_comment(line)]
+        if meaningful and sum(1 for line in meaningful if spice_line.match(line)) >= max(1, len(meaningful) // 3):
+            return bare + ("\n" if not bare.endswith("\n") else "")
+
         raise ValueError(
             "netlist notebook requires a fenced spice, cir, or netlist code block"
         )
-    return "\n\n".join(blocks) + "\n"
 
 
 def strip_spice_comment(line: str) -> str:
@@ -2319,7 +2643,13 @@ def parse_editable_netlist_components(
                 "x": 140 + (grid_index % 4) * 180,
                 "y": 120 + (grid_index // 4) * 140,
             }
-            rotation = 0
+            # V/I default upright; R stays 0 here — schematic render picks h/v by topology.
+            rotation = 90 if component_type in {"V", "I"} else 0
+            if component_type in {"V", "I"}:
+                # Rare series sources may stay horizontal in the editor.
+                source_name = str(instance)
+                if re.search(r"(?:^vser|^iser|series)", source_name, flags=re.IGNORECASE):
+                    rotation = 0
         grid_index += 1
         pin_names = EDITABLE_PIN_NAMES.get(component_type, [])
         pins = [

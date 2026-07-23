@@ -194,9 +194,14 @@ function normalizeStoredSettings(raw: StoredSettings, authToken: string, storage
     || raw.preferredChatTier === 'medium'
     ? raw.preferredChatTier
     : 'medium';
-  const baseUrl = (typeof raw.actoviqBaseUrl === 'string' && raw.actoviqBaseUrl.trim())
+  let baseUrl = (typeof raw.actoviqBaseUrl === 'string' && raw.actoviqBaseUrl.trim())
     ? raw.actoviqBaseUrl.trim()
     : isDeepSeek ? 'https://api.deepseek.com' : defaultSettings.actoviqBaseUrl;
+  // DeepSeek preset uses the OpenAI-compatible API root. A leftover `/anthropic`
+  // suffix (Anthropic-compatible path) breaks chat when provider === 'openai'.
+  if (isDeepSeek && /\/anthropic\/?$/i.test(baseUrl)) {
+    baseUrl = baseUrl.replace(/\/anthropic\/?$/i, '');
+  }
   const layoutVisionModel = typeof raw.layoutVisionModel === 'string'
     ? raw.layoutVisionModel.trim()
     : '';

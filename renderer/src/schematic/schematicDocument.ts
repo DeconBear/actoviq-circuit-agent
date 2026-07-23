@@ -189,7 +189,8 @@ export function makePlacedComponent(
     name,
     value: DEFAULT_VALUES[type],
     position,
-    rotation: 0,
+    // Voltage / current sources default upright; resistors stay 0 and layout heuristics rotate.
+    rotation: type === 'V' || type === 'I' ? 90 : 0,
     pins,
   };
 }
@@ -272,7 +273,7 @@ function autoLayoutPassiveModule(module: CircuitModule): CircuitModule {
   const nodeX = new Map<string, number>();
   const yMain = 180;
   const xStart = 210;
-  const spacing = 180;
+  const spacing = 280;
 
   path.forEach((entry, index) => {
     const center = { x: xStart + index * spacing, y: yMain };
@@ -790,7 +791,7 @@ function autoLayoutDifferentialPairModule(module: CircuitModule, layout: Differe
     }
     component.position = snapPoint({
       x: 850 + (fallbackIndex % 3) * 150,
-      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+      y: 170 + Math.floor(fallbackIndex / 3) * 200,
     });
     component.rotation = normalizeRotation(component.rotation);
     placed.add(component.id);
@@ -985,7 +986,7 @@ function autoLayoutCurrentMirrorModule(module: CircuitModule, layout: CurrentMir
     }
     component.position = snapPoint({
       x: 760 + (fallbackIndex % 3) * 150,
-      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+      y: 170 + Math.floor(fallbackIndex / 3) * 200,
     });
     component.rotation = normalizeRotation(component.rotation);
     placed.add(component.id);
@@ -1306,7 +1307,7 @@ function autoLayoutCascodeModule(module: CircuitModule, layout: CascodeLayout): 
     }
     component.position = snapPoint({
       x: upperDrain.x + 470 + (fallbackIndex % 3) * 150,
-      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+      y: 170 + Math.floor(fallbackIndex / 3) * 200,
     });
     component.rotation = normalizeRotation(component.rotation);
     placed.add(component.id);
@@ -1440,7 +1441,7 @@ function autoLayoutOpampFeedbackModule(module: CircuitModule, layout: OpampFeedb
     }
     component.position = snapPoint({
       x: opampOutput.x + 300 + (fallbackIndex % 3) * 150,
-      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+      y: 170 + Math.floor(fallbackIndex / 3) * 200,
     });
     component.rotation = normalizeRotation(component.rotation);
     placed.add(component.id);
@@ -1496,7 +1497,7 @@ function autoLayoutCmosRingModule(module: CircuitModule, layout: CmosRingLayout)
     }
     component.position = snapPoint({
       x: xStart + layout.stages.length * stageSpacing + (fallbackIndex % 2) * 150,
-      y: 180 + Math.floor(fallbackIndex / 2) * 140,
+      y: 180 + Math.floor(fallbackIndex / 2) * 200,
     });
     component.rotation = normalizeRotation(component.rotation);
     placed.add(component.id);
@@ -1578,7 +1579,7 @@ function autoLayoutCmosInverterModule(module: CircuitModule, layout: CmosInverte
 
     component.position = snapPoint({
       x: 760 + (fallbackIndex % 3) * 150,
-      y: 170 + Math.floor(fallbackIndex / 3) * 140,
+      y: 170 + Math.floor(fallbackIndex / 3) * 200,
     });
     component.rotation = normalizeRotation(component.rotation);
     placed.add(component.id);
@@ -1771,7 +1772,7 @@ function autoLayoutSingleTransistorStageModule(module: CircuitModule, active: Ci
     if (placed.has(component.id)) continue;
     component.position = snapPoint({
       x: 700 + (fallbackIndex % 3) * 150,
-      y: 180 + Math.floor(fallbackIndex / 3) * 140,
+      y: 180 + Math.floor(fallbackIndex / 3) * 200,
     });
     component.rotation = normalizeRotation(component.rotation);
     fallbackIndex += 1;
@@ -1962,7 +1963,7 @@ function autoLayoutGenericModule(module: CircuitModule): CircuitModule {
   module.components.forEach((component, index) => {
     component.position = snapPoint({
       x: 180 + (index % columns) * 180,
-      y: 170 + Math.floor(index / columns) * 140,
+      y: 170 + Math.floor(index / columns) * 200,
     });
     component.rotation = normalizeRotation(component.rotation);
   });
@@ -1984,7 +1985,7 @@ function placeRailBranch(
     const index = lowerCounts.get(signalNet) ?? 0;
     lowerCounts.set(signalNet, index + 1);
     placeVertical(component, signalNet, railNet, {
-      x: xBase + index * 95,
+      x: xBase + index * 130,
       y: yMain + 95 + index * 12,
     });
     return;
@@ -1992,7 +1993,7 @@ function placeRailBranch(
   const index = upperCounts.get(signalNet) ?? 0;
   upperCounts.set(signalNet, index + 1);
   placeVertical(component, railNet, signalNet, {
-    x: xBase + index * 95,
+    x: xBase + index * 130,
     y: yMain - 95 - index * 12,
   });
 }

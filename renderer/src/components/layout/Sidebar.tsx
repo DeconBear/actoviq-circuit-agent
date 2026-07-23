@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
+import { conversationsForProject, conversationHasContent } from '../../store/chatHistoryPersistence';
 import type { CircuitTrashItem, ProjectKind, ReferenceDocument, WorkspaceSummary } from '../../types';
 import type { CircuitProjectSummary } from '../../types';
 
@@ -61,6 +62,19 @@ export function Sidebar({
   const [ocrRunningPath, setOcrRunningPath] = useState<string | null>(null);
   const [catalogAssets, setCatalogAssets] = useState<Array<Record<string, unknown>>>([]);
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const [projectModules, setProjectModules] = useState<Array<{ id: string; name: string }>>([]);
+  const [moduleAction, setModuleAction] = useState<{
+    kind: 'layout' | 'promote';
+    assetId: string;
+    assetName: string;
+  } | null>(null);
+  const [moduleActionId, setModuleActionId] = useState('');
+  const [layoutPrep, setLayoutPrep] = useState<{
+    hashMatch: boolean | null;
+    useAs: string;
+    message: string;
+  } | null>(null);
+  const activeModuleId = useAppStore((s) => s.activeModuleId);
   const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [workspaceFormOpen, setWorkspaceFormOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState('');
@@ -78,7 +92,13 @@ export function Sidebar({
   } | null>(null);
   const creatingRef = useRef(false);
   const conversations = useAppStore((s) => s.conversations);
+  const conversationMessages = useAppStore((s) => s.conversationMessages);
   const conversationId = useAppStore((s) => s.conversationId);
+  const projectConversations = useMemo(
+    () => conversationsForProject(conversations, activeProjectId, conversationMessages)
+      .filter((entry) => conversationHasContent(entry, conversationMessages) || entry.id === conversationId),
+    [activeProjectId, conversationId, conversationMessages, conversations],
+  );
   const setConversationId = useAppStore((s) => s.setConversationId);
 
   useEffect(() => {
@@ -222,9 +242,84 @@ export function Sidebar({
     }
   }, []);
 
+  const refreshProjectModules = useCallback(async () => {
+    if (!window.electronAPI || !activeProjectId) {
+      setProjectModules([]);
+      return;
+    }
+    try {
+      const bundle = await window.electronAPI.getCircuitProject(activeProjectId) as {
+        project?: { modules?: Array<{ id?: string; name?: string }> };
+        modules?: Record<string, { name?: string }>;
+      };
+      const fromProject = (bundle.project?.modules ?? [])
+        .map((module) => ({
+          id: String(module.id ?? ''),
+          name: String(module.name ?? module.id ?? ''),
+        }))
+        .filter((module) => module.id);
+      const fromMap = Object.entries(bundle.modules ?? {}).map(([id, module]) => ({
+        id,
+        name: String(module.name ?? id),
+      }));
+      setProjectModules(fromProject.length > 0 ? fromProject : fromMap);
+    } catch {
+      setProjectModules([]);
+    }
+  }, [activeProjectId]);
+
   useEffect(() => {
     void refreshCatalog();
   }, [refreshCatalog, activeWorkspace?.id]);
+
+  useEffect(() => {
+    void refreshProjectModules();
+    setModuleAction(null);
+    setLayoutPrep(null);
+  }, [refreshProjectModules, activeProjectId]);
+
+  useEffect(() => {
+    if (!moduleAction) return;
+    const preferred = activeModuleId && projectModules.some((module) => module.id === activeModuleId)
+      ? activeModuleId
+      : (projectModules[0]?.id ?? '');
+    setModuleActionId(preferred);
+    setLayoutPrep(null);
+  }, [moduleAction, activeModuleId, projectModules]);
+
+  useEffect(() => {
+    if (!moduleAction || moduleAction.kind !== 'layout' || !activeProjectId || !moduleActionId || !window.electronAPI) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await window.electronAPI.prepareLayoutReference({
+          projectId: activeProjectId,
+          moduleId: moduleActionId,
+          assetId: moduleAction.assetId,
+        }) as {
+          hash_match?: boolean;
+          use_as?: string;
+          message?: string;
+        };
+        if (cancelled) return;
+        setLayoutPrep({
+          hashMatch: result.hash_match === true,
+          useAs: String(result.use_as ?? ''),
+          message: String(result.message ?? ''),
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setLayoutPrep({
+          hashMatch: false,
+          useAs: 'agent_context_only',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [moduleAction, activeProjectId, moduleActionId]);
 
   const handleCatalogImportCircuit = useCallback(async () => {
     if (!window.electronAPI) return;
@@ -291,7 +386,7 @@ export function Sidebar({
   const handleCatalogInsertModule = useCallback(async (assetId: string) => {
     if (!window.electronAPI) return;
     if (!activeProjectId) {
-      setNotice({ type: 'error', text: 'Select a project before inserting a module' });
+      setNotice({ type: 'error', text: 'Open a project before inserting a module' });
       return;
     }
     setCatalogBusy(true);
@@ -304,67 +399,78 @@ export function Sidebar({
       if (!result.ok) throw new Error(result.error || 'Insert failed');
       setNotice({ type: 'ok', text: `Inserted module ${result.module_id}` });
       onSelectProject(activeProjectId);
+      await refreshProjectModules();
     } catch (error) {
       setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
     } finally {
       setCatalogBusy(false);
     }
-  }, [activeProjectId, onSelectProject]);
+  }, [activeProjectId, onSelectProject, refreshProjectModules]);
 
-  const handleCatalogApplyLayout = useCallback(async (assetId: string) => {
-    if (!window.electronAPI) return;
+  const openModuleAction = useCallback((kind: 'layout' | 'promote', assetId: string, assetName: string) => {
     if (!activeProjectId) {
-      setNotice({ type: 'error', text: 'Select a project before applying layout' });
+      setNotice({ type: 'error', text: 'Open a project before using layout actions' });
       return;
     }
-    const moduleId = window.prompt('Module id to apply layout reference');
-    if (!moduleId?.trim()) return;
-    setCatalogBusy(true);
-    setNotice(null);
-    try {
-      const result = await window.electronAPI.applyLayoutReference({
-        projectId: activeProjectId,
-        moduleId: moduleId.trim(),
-        assetId,
-      }) as { ok?: boolean; applied?: boolean; message?: string; error?: string };
-      if (!result.ok) throw new Error(result.error || result.message || 'Apply layout failed');
+    if (projectModules.length === 0) {
+      setNotice({ type: 'error', text: 'Current project has no modules to select' });
+      void refreshProjectModules();
+      return;
+    }
+    setModuleAction({ kind, assetId, assetName });
+  }, [activeProjectId, projectModules.length, refreshProjectModules]);
+
+  const confirmModuleAction = useCallback(async () => {
+    if (!window.electronAPI || !activeProjectId || !moduleAction || !moduleActionId) return;
+    if (moduleAction.kind === 'layout' && layoutPrep && layoutPrep.hashMatch === false) {
       setNotice({
-        type: 'ok',
-        text: result.applied ? 'Layout reference applied' : (result.message || 'Layout prepared without apply'),
+        type: 'error',
+        text: layoutPrep.message || 'Connectivity changed; layout reference is context-only',
       });
-      onSelectProject(activeProjectId);
-    } catch (error) {
-      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
-    } finally {
-      setCatalogBusy(false);
-    }
-  }, [activeProjectId, onSelectProject]);
-
-  const handleCatalogPromoteVisual = useCallback(async (assetId: string) => {
-    if (!window.electronAPI) return;
-    if (!activeProjectId) {
-      setNotice({ type: 'error', text: 'Select a project before promoting a visual layout' });
       return;
     }
-    const moduleId = window.prompt('Module id whose current placement becomes the layout reference');
-    if (!moduleId?.trim()) return;
     setCatalogBusy(true);
     setNotice(null);
     try {
-      const result = await window.electronAPI.promoteVisualReferenceFromModule({
-        projectId: activeProjectId,
-        moduleId: moduleId.trim(),
-        assetId,
-      }) as { ok?: boolean; error?: string };
-      if (!result.ok) throw new Error(result.error || 'Promote failed');
-      setNotice({ type: 'ok', text: 'Visual reference promoted to schematic_layout' });
-      await refreshCatalog();
+      if (moduleAction.kind === 'layout') {
+        const result = await window.electronAPI.applyLayoutReference({
+          projectId: activeProjectId,
+          moduleId: moduleActionId,
+          assetId: moduleAction.assetId,
+        }) as { ok?: boolean; applied?: boolean; message?: string; error?: string };
+        if (!result.ok) throw new Error(result.error || result.message || 'Apply layout failed');
+        setNotice({
+          type: 'ok',
+          text: result.applied
+            ? `Layout applied to ${moduleActionId}`
+            : (result.message || 'Layout prepared without applying'),
+        });
+        onSelectProject(activeProjectId);
+      } else {
+        const result = await window.electronAPI.promoteVisualReferenceFromModule({
+          projectId: activeProjectId,
+          moduleId: moduleActionId,
+          assetId: moduleAction.assetId,
+        }) as { ok?: boolean; error?: string };
+        if (!result.ok) throw new Error(result.error || 'Promote failed');
+        setNotice({ type: 'ok', text: `Promoted visual using module ${moduleActionId}` });
+        await refreshCatalog();
+      }
+      setModuleAction(null);
+      setLayoutPrep(null);
     } catch (error) {
       setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
     } finally {
       setCatalogBusy(false);
     }
-  }, [activeProjectId, refreshCatalog]);
+  }, [
+    activeProjectId,
+    layoutPrep,
+    moduleAction,
+    moduleActionId,
+    onSelectProject,
+    refreshCatalog,
+  ]);
 
   const handleCatalogAttachChat = useCallback(async (assetId: string) => {
     if (!window.electronAPI) return;
@@ -970,7 +1076,7 @@ export function Sidebar({
         >
           Legacy chat design
         </button>
-        {conversations.length > 0 && (
+        {projectConversations.length > 0 && (
           <>
             <div style={styles.sectionHeader}>
               Conversations
@@ -978,8 +1084,10 @@ export function Sidebar({
                 <button
                   type="button"
                   onClick={() => {
-                    if (!window.confirm(`Delete all ${conversations.length} conversations?`)) return;
-                    useAppStore.getState().clearAllConversations();
+                    const scope = activeProjectId ? 'this project' : 'workspace chat';
+                    if (!window.confirm(`Delete all ${projectConversations.length} conversations for ${scope}?`)) return;
+                    useAppStore.getState().clearConversationsForProject(activeProjectId);
+                    useAppStore.getState().newConversation(activeProjectId);
                   }}
                   style={styles.inlineActionBtn}
                   data-testid="sidebar-clear-conversations"
@@ -988,7 +1096,7 @@ export function Sidebar({
                 </button>
               </div>
             </div>
-            {conversations.slice(0, 20).map((conv) => (
+            {projectConversations.slice(0, 20).map((conv) => (
               <div
                 key={conv.id}
                 onClick={() => handleSelectConversation(conv.id)}
@@ -1031,17 +1139,19 @@ export function Sidebar({
               onClick={() => { void handleCatalogImportCircuit(); }}
               style={styles.inlineActionBtn}
               disabled={catalogBusy}
+              title="Import a .cir / .sp netlist"
               data-testid="sidebar-import-circuit-ref"
             >
-              +Cir
+              Import circuit
             </button>
             <button
               onClick={() => { void handleCatalogImportVisual(); }}
               style={styles.inlineActionBtn}
               disabled={catalogBusy}
+              title="Import a schematic screenshot or PDF page"
               data-testid="sidebar-import-visual-ref"
             >
-              +Img
+              Import image
             </button>
             <button
               onClick={() => { void refreshCatalog(); }}
@@ -1053,14 +1163,79 @@ export function Sidebar({
             </button>
           </div>
         </div>
+        {!activeProjectId && (
+          <div style={styles.empty}>Open a project to insert modules or apply layout.</div>
+        )}
+        {moduleAction && (
+          <div style={styles.createPanel} data-testid="catalog-module-picker">
+            <div style={styles.formTitle}>
+              {moduleAction.kind === 'layout' ? 'Apply layout' : 'Promote visual'} · {moduleAction.assetName}
+            </div>
+            <label style={styles.projectKindLabel} htmlFor="catalog-module-select">Module</label>
+            <select
+              id="catalog-module-select"
+              style={styles.projectKindSelect}
+              value={moduleActionId}
+              disabled={catalogBusy || projectModules.length === 0}
+              onChange={(event) => setModuleActionId(event.target.value)}
+            >
+              {projectModules.map((module) => (
+                <option key={module.id} value={module.id}>
+                  {module.name} ({module.id})
+                </option>
+              ))}
+            </select>
+            {moduleAction.kind === 'layout' && layoutPrep && (
+              <div style={{
+                ...styles.refMeta,
+                color: layoutPrep.hashMatch ? '#166534' : '#9a3412',
+              }}>
+                {layoutPrep.hashMatch
+                  ? 'Connectivity matches — safe to apply.'
+                  : (layoutPrep.message || 'Connectivity changed — layout is context-only.')}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                type="button"
+                style={styles.newBtn}
+                disabled={
+                  catalogBusy
+                  || !moduleActionId
+                  || (moduleAction.kind === 'layout' && layoutPrep?.hashMatch === false)
+                }
+                title={
+                  moduleAction.kind === 'layout' && layoutPrep?.hashMatch === false
+                    ? 'Connectivity changed; cannot apply layout seed'
+                    : undefined
+                }
+                onClick={() => { void confirmModuleAction(); }}
+              >
+                {moduleAction.kind === 'layout' ? 'Apply' : 'Promote'}
+              </button>
+              <button
+                type="button"
+                style={styles.blankProjectBtn}
+                disabled={catalogBusy}
+                onClick={() => {
+                  setModuleAction(null);
+                  setLayoutPrep(null);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {catalogAssets.length === 0 && (
-          <div style={styles.empty}>Import .cir or layout images into catalog/</div>
+          <div style={styles.empty}>Import a circuit netlist or layout image to get started.</div>
         )}
         {catalogAssets.slice(0, 10).map((asset) => {
           const id = String(asset.id ?? '');
           const kind = String(asset.kind ?? '');
           const name = String(asset.name ?? id);
           const useAs = Array.isArray(asset.use_as) ? asset.use_as.map(String) : [];
+          const canMutateProject = Boolean(activeProjectId);
           return (
             <div key={id} style={styles.refItem} data-testid={`catalog-asset-${id}`}>
               <div style={styles.refTitle}>{name}</div>
@@ -1071,37 +1246,49 @@ export function Sidebar({
                     type="button"
                     style={styles.refOcrBtn}
                     disabled={catalogBusy}
+                    title="Create a new project from this circuit reference"
                     onClick={() => { void handleCatalogCreateProject(id, name); }}
                   >
-                    New
+                    New project
                   </button>
                 )}
                 {useAs.includes('insert_module') && (
                   <button
                     type="button"
                     style={styles.refOcrBtn}
-                    disabled={catalogBusy || !activeProjectId}
+                    disabled={catalogBusy || !canMutateProject}
+                    title={canMutateProject ? 'Insert as a module into the open project' : 'Open a project first'}
                     onClick={() => { void handleCatalogInsertModule(id); }}
                   >
-                    Insert
+                    Insert module
                   </button>
                 )}
                 {(useAs.includes('apply_layout_seed') || useAs.includes('guide_router')) && (
                   <button
                     type="button"
                     style={styles.refOcrBtn}
-                    disabled={catalogBusy || !activeProjectId}
-                    onClick={() => { void handleCatalogApplyLayout(id); }}
+                    disabled={catalogBusy || !canMutateProject}
+                    title={
+                      canMutateProject
+                        ? 'Choose a module and apply layout if connectivity matches'
+                        : 'Open a project first'
+                    }
+                    onClick={() => openModuleAction('layout', id, name)}
                   >
-                    Layout
+                    Apply layout
                   </button>
                 )}
                 {kind === 'layout_visual' && (
                   <button
                     type="button"
                     style={styles.refOcrBtn}
-                    disabled={catalogBusy || !activeProjectId}
-                    onClick={() => { void handleCatalogPromoteVisual(id); }}
+                    disabled={catalogBusy || !canMutateProject}
+                    title={
+                      canMutateProject
+                        ? 'Promote this image using the selected module placement'
+                        : 'Open a project first'
+                    }
+                    onClick={() => openModuleAction('promote', id, name)}
                   >
                     Promote
                   </button>
@@ -1110,16 +1297,17 @@ export function Sidebar({
                   type="button"
                   style={styles.refOcrBtn}
                   disabled={catalogBusy}
+                  title="Attach this reference summary to chat context"
                   onClick={() => { void handleCatalogAttachChat(id); }}
                 >
-                  Chat
+                  Attach chat
                 </button>
               </div>
             </div>
           );
         })}
         <div style={styles.sectionHeader}>
-          References
+          Documents
           <div style={styles.sectionActions}>
             <button
               onClick={() => { void handleOpenWorkspaceReferences(); }}
@@ -1127,7 +1315,7 @@ export function Sidebar({
               disabled={creating}
               data-testid="sidebar-open-references"
             >
-              Open
+              Open folder
             </button>
             <button
               onClick={onRefreshReferences}

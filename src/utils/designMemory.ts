@@ -78,7 +78,7 @@ export async function listSavedDesignTemplates(
         simulation_coverage?: string[];
       };
     }>(manifestPath);
-    if (!manifest || !['actoviq.design-template.v1', 'actoviq.design-template.v2'].includes(manifest.schema ?? '')) continue;
+    if (!manifest || !['actoviq.design-template.v1', 'actoviq.design-template.v2', 'actoviq.design-template.v3'].includes(manifest.schema ?? '')) continue;
     const templateNetlistPath = path.resolve(rootPath, 'template.cir');
     const agentGuidePath = path.resolve(rootPath, 'agent-guide.md');
     templates.push({

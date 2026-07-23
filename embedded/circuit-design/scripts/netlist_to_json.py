@@ -749,16 +749,169 @@ def generic_ports(comp: dict) -> tuple[list[str], dict[str, str]]:
     return pin_names[:node_count], directions
 
 
-def choose_two_terminal_orientation(nodes: list[str]) -> str:
+_DIGITAL_DRIVE_NODE_RE = re.compile(
+    r"^(?:vb|bit|din|d|b)(\d+)$",
+    re.IGNORECASE,
+)
+_LADDER_SERIES_NODE_RE = re.compile(
+    r"^(?:n|node|tap)?(\d+)$",
+    re.IGNORECASE,
+)
+_VERTICAL_RESISTOR_NAME_RE = re.compile(
+    # rs0 / rs_0 / r2_0 style shunts — not rser/rseries (those are horizontal).
+    r"^(?:r2[_-]?\d*|rs\d+|rs[_-].+|rsh\d*|rdiv\d*|rth\d*|rtop\d*|rbot\d*|rfb\d*|rpull\d*|rbias\d*|rterm\d*|rload\d*|rl\d+)$",
+    re.IGNORECASE,
+)
+_SERIES_RESISTOR_NAME_RE = re.compile(
+    r"^(?:rser|rseries|rfilter|rin|rout)\d*$",
+    re.IGNORECASE,
+)
+_VERTICAL_CAPACITOR_NAME_RE = re.compile(
+    r"^(?:cdec|cbypass|cbyp|cvdd|cvss|cvcc|cvee|cload|ce|ces|cs|csh|ccomp|cc(?!\w)|cfb)\d*$",
+    re.IGNORECASE,
+)
+_SERIES_CAPACITOR_NAME_RE = re.compile(
+    r"^(?:cin|cout|cser|cseries|ccoup|ccoupling|cblock)\d*$",
+    re.IGNORECASE,
+)
+_VERTICAL_INDUCTOR_NAME_RE = re.compile(
+    r"^(?:lchoke|lch|lbias|ldec)\d*$",
+    re.IGNORECASE,
+)
+_SERIES_INDUCTOR_NAME_RE = re.compile(
+    r"^(?:lin|lout|lser|lseries|lmatch|lrf)\d*$",
+    re.IGNORECASE,
+)
+_VERTICAL_DIODE_NAME_RE = re.compile(
+    r"^(?:desd|dclamp|dz|dzener|dprot)\d*$",
+    re.IGNORECASE,
+)
+_SERIES_DIODE_NAME_RE = re.compile(
+    r"^(?:dser|dseries|dblock|ddet|drect)\d*$",
+    re.IGNORECASE,
+)
+_HORIZONTAL_SOURCE_NAME_RE = re.compile(
+    r"^(?:vser|iser|vac_ser|iac_ser|.*(?:_series|series_).*)$",
+    re.IGNORECASE,
+)
+_FEEDBACK_NODE_RE = re.compile(r"^(?:fb|vn|vfb|feedback)$", re.IGNORECASE)
+
+
+def is_digital_drive_node(node: str) -> bool:
+    """Bit / DAC code rails like b0, vb3, bit7 — usually tapped vertically."""
+    return _DIGITAL_DRIVE_NODE_RE.fullmatch(str(node).strip()) is not None
+
+
+def looks_like_ladder_series_nodes(a: str, b: str) -> bool:
+    """Adjacent ladder taps (n0–n1, node2–node3) read left-to-right as series R."""
+    match_a = _LADDER_SERIES_NODE_RE.fullmatch(str(a).strip())
+    match_b = _LADDER_SERIES_NODE_RE.fullmatch(str(b).strip())
+    if not match_a or not match_b:
+        return False
+    return abs(int(match_a.group(1)) - int(match_b.group(1))) == 1
+
+
+def _is_feedback_or_output_pair(a: str, b: str) -> bool:
+    lowers = {str(a).strip().lower(), str(b).strip().lower()}
+    has_fb = any(_FEEDBACK_NODE_RE.fullmatch(node) for node in lowers)
+    has_out = any(node in {"out", "output", "vout"} or "out" in node for node in lowers)
+    return has_fb and has_out
+
+
+def _name_orientation_hint(comp_type: str, name: str) -> str | None:
+    """Return 'h'/'v' from device-specific naming, or None."""
+    if not name:
+        return None
+    ctype = (comp_type or "").strip().lower()
+    if ctype in {"resistor", "r"}:
+        if _SERIES_RESISTOR_NAME_RE.match(name):
+            return "h"
+        if _VERTICAL_RESISTOR_NAME_RE.match(name):
+            return "v"
+        return None
+    if ctype in {"capacitor", "c"}:
+        if _SERIES_CAPACITOR_NAME_RE.match(name):
+            return "h"
+        if _VERTICAL_CAPACITOR_NAME_RE.match(name):
+            return "v"
+        return None
+    if ctype in {"inductor", "l"}:
+        if _SERIES_INDUCTOR_NAME_RE.match(name):
+            return "h"
+        if _VERTICAL_INDUCTOR_NAME_RE.match(name):
+            return "v"
+        return None
+    if ctype in {"diode", "d"}:
+        if _SERIES_DIODE_NAME_RE.match(name):
+            return "h"
+        if _VERTICAL_DIODE_NAME_RE.match(name):
+            return "v"
+        return None
+    # Unknown / generic two-terminal: apply R-style shunt/series prefixes loosely.
+    if _SERIES_RESISTOR_NAME_RE.match(name) or _SERIES_CAPACITOR_NAME_RE.match(name) or _SERIES_INDUCTOR_NAME_RE.match(name):
+        return "h"
+    if _VERTICAL_RESISTOR_NAME_RE.match(name) or _VERTICAL_CAPACITOR_NAME_RE.match(name) or _VERTICAL_INDUCTOR_NAME_RE.match(name):
+        return "v"
+    return None
+
+
+def choose_two_terminal_orientation(
+    nodes: list[str],
+    *,
+    comp: dict | None = None,
+) -> str:
+    """Pick h/v for two-terminal passives (R/C/L/D).
+
+    Case-based (not always vertical):
+    - vertical: rail shunt, bit/DAC tap, divider/decoupling/bypass-style names
+    - horizontal: series signal / ladder chain / coupling-series-style names
+    """
     if len(nodes) != 2:
         return "v"
     a = str(nodes[0])
     b = str(nodes[1])
     a_rail = rail_symbol_for_node(a) is not None
     b_rail = rail_symbol_for_node(b) is not None
+    if a_rail and b_rail:
+        return "v"
     if a_rail ^ b_rail:
         return "v"
+    if is_digital_drive_node(a) ^ is_digital_drive_node(b):
+        return "v"
+
+    comp = comp or {}
+    name = str(comp.get("name") or "").strip()
+    comp_type = str(comp.get("type") or "").strip().lower()
+    # Series name hints before shunt prefixes (rser must not match rs*).
+    name_hint = _name_orientation_hint(comp_type, name)
+    if name_hint is not None:
+        return name_hint
+
+    # Compensation / feedback caps across fb–out prefer a short vertical branch.
+    if comp_type in {"capacitor", "c"} and _is_feedback_or_output_pair(a, b):
+        return "v"
+
+    if looks_like_ladder_series_nodes(a, b):
+        return "h"
+    if abs(node_flow_rank(a) - node_flow_rank(b)) >= 30:
+        return "h"
     return "h"
+
+
+def choose_source_orientation(comp: dict) -> str:
+    """Voltage/current sources default vertical; only special series names go horizontal."""
+    name = str(comp.get("name") or "").strip()
+    if name and _HORIZONTAL_SOURCE_NAME_RE.match(name):
+        return "h"
+    nodes = [str(node) for node in (comp.get("schematic_nodes") or comp.get("nodes") or [])]
+    if len(nodes) == 2:
+        a_rail = rail_symbol_for_node(nodes[0]) is not None
+        b_rail = rail_symbol_for_node(nodes[1]) is not None
+        # Floating series source on a left→right signal chain.
+        if not a_rail and not b_rail and abs(node_flow_rank(nodes[0]) - node_flow_rank(nodes[1])) >= 40:
+            if "ser" in name.lower() or "series" in name.lower():
+                return "h"
+    return "v"
 
 
 def node_flow_rank(node: str) -> int:
@@ -815,6 +968,9 @@ def oriented_two_terminal_nodes(comp: dict, alias: str, nodes: list[str]) -> lis
         if first_rail in {"gnd", "vee"} and second_rail not in {"gnd", "vee"}:
             return [nodes[1], nodes[0]]
         if second_rail in {"vcc"} and first_rail != "vcc":
+            return [nodes[1], nodes[0]]
+        # Bit/DAC drive at the bottom of a vertical tap.
+        if is_digital_drive_node(str(nodes[0])) and not is_digital_drive_node(str(nodes[1])):
             return [nodes[1], nodes[0]]
     return nodes
 
@@ -1253,23 +1409,19 @@ def component_to_cell(comp: dict, bit_for: callable) -> tuple[str, dict]:
     pin_names: list[str]
     port_directions: dict[str, str]
     if comp_type == "resistor":
-        alias = f"r_{choose_two_terminal_orientation(nodes)}"
-        node_lowers = {str(node).lower() for node in nodes}
-        if ref.lower().startswith(("rdiv", "rth")):
-            alias = "r_v"
-        if ref.lower().startswith(("rfb1", "rtop")) and {"out", "fb"} <= node_lowers:
-            alias = "r_v"
+        alias = f"r_{choose_two_terminal_orientation(nodes, comp=comp)}"
         pin_names = ["A", "B"]
         port_directions = {"A": "input", "B": "output"}
     elif comp_type == "capacitor":
-        alias = f"c_{choose_two_terminal_orientation(nodes)}"
+        alias = f"c_{choose_two_terminal_orientation(nodes, comp=comp)}"
         pin_names = ["A", "B"]
         port_directions = {"A": "input", "B": "output"}
     elif comp_type == "inductor":
-        alias = f"l_{choose_two_terminal_orientation(nodes)}"
+        alias = f"l_{choose_two_terminal_orientation(nodes, comp=comp)}"
         pin_names = ["A", "B"]
         port_directions = {"A": "input", "B": "output"}
     elif comp_type == "voltage_source":
+        # Analog skin ships a vertical source; keep alias `v` (orientation is for editor/layout).
         alias = "v"
         pin_names = ["+", "-"]
         port_directions = {"+": "output", "-": "input"}
@@ -1278,7 +1430,7 @@ def component_to_cell(comp: dict, bit_for: callable) -> tuple[str, dict]:
         pin_names = ["+", "-"]
         port_directions = {"+": "output", "-": "input"}
     elif comp_type == "diode":
-        alias = f"d_{choose_two_terminal_orientation(nodes)}"
+        alias = f"d_{choose_two_terminal_orientation(nodes, comp=comp)}"
         pin_names = ["+", "-"]
         port_directions = {"+": "input", "-": "output"}
     elif comp_type == "bjt":

@@ -1194,7 +1194,8 @@ try {
   assert.match(templateId, /^playwright-module-hub-/);
   await page.getByTestId(`design-memory-template-${templateId}`).waitFor({ timeout: 10_000 });
   const savedTemplate = await readDesignMemoryManifest('template', templateId);
-  assert.equal(savedTemplate.manifest.schema, 'actoviq.design-template.v2');
+  assert.equal(savedTemplate.manifest.schema, 'actoviq.design-template.v3');
+  assert.ok(Array.isArray(savedTemplate.manifest.module_layout_refs));
   assert.equal(savedTemplate.manifest.source_project_id, projectId);
   assert.match(savedTemplate.manifest.source_document_hash, /^[a-f0-9]{64}$/);
   assert.equal(savedTemplate.manifest.validation.status, 'simulated');

@@ -1379,9 +1379,9 @@ def apply_generic_passive_placements(root: ET.Element, payload: dict[str, object
 
     groups = find_cell_groups(root)
     pin_nodes_by_cell = cell_pin_node_map(payload)
-    main_y = 160.0
-    branch_y = main_y + 50.0
-    cursor_x = 90.0
+    main_y = 180.0
+    branch_y = main_y + 140.0
+    cursor_x = 130.0
     node_xs: dict[str, list[float]] = defaultdict(list)
     shunt_index: dict[str, int] = defaultdict(int)
 
@@ -1415,7 +1415,7 @@ def apply_generic_passive_placements(root: ET.Element, payload: dict[str, object
             if offset is None:
                 continue
             node_xs[node].append(transform[0] + offset[0])
-        cursor_x = max((transform[0] + offset[0] for offset in offsets.values()), default=cursor_x) + 90.0
+        cursor_x = max((transform[0] + offset[0] for offset in offsets.values()), default=cursor_x) + 200.0
         node_xs.setdefault(first_node, [])
 
     if not series_components:
@@ -1426,7 +1426,7 @@ def apply_generic_passive_placements(root: ET.Element, payload: dict[str, object
                     seen_nodes.append(node)
         for node in seen_nodes:
             node_xs[node].append(cursor_x)
-            cursor_x += 90.0
+            cursor_x += 200.0
 
     for comp in shunt_components:
         name = str(comp.get("name") or "")
@@ -1438,7 +1438,7 @@ def apply_generic_passive_placements(root: ET.Element, payload: dict[str, object
             continue
         pin, node = signal_pins[0]
         base_x = max(node_xs.get(node, [cursor_x]))
-        branch_x = base_x + 56.0 * shunt_index[node]
+        branch_x = base_x + 120.0 * shunt_index[node]
         shunt_index[node] += 1
         if set_group_pin(group, pin, (branch_x, branch_y)):
             node_xs[node].append(branch_x)
@@ -1448,9 +1448,9 @@ def apply_generic_passive_placements(root: ET.Element, payload: dict[str, object
     input_node = str(interfaces.get("input_node") or io.get("input_node") or "")
     output_node = str(interfaces.get("output_node") or io.get("output_node") or "")
     if "IN" in groups and input_node in node_xs:
-        set_group_anchor(groups["IN"], (min(node_xs[input_node]) - 70.0, main_y))
+        set_group_anchor(groups["IN"], (min(node_xs[input_node]) - 140.0, main_y))
     if "OUT" in groups and output_node in node_xs:
-        set_group_anchor(groups["OUT"], (max(node_xs[output_node]) + 90.0, main_y))
+        set_group_anchor(groups["OUT"], (max(node_xs[output_node]) + 160.0, main_y))
 
     return True
 

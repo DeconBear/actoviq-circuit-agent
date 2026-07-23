@@ -1,53 +1,50 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { homedir } from 'node:os';
+import { readFile } from 'node:fs/promises';
 import {
   createAgentSdk,
+  skill,
   type ActoviqAgentClient,
   type AgentEvent,
   type AgentSession,
+  type ActoviqSkillDefinition,
 } from 'actoviq-agent-sdk';
-import { z } from 'zod';
+
+import { createDesktopCircuitTools } from './desktopCircuitTools.js';
+import { createDisabledTaskTool, withAgentFacingToolErrorsForAll } from './toolHelpers.js';
 
 const DESKTOP_AGENT_NAME = 'actoviq-circuit-desktop';
 const REPORT_AGENT_NAME = 'actoviq-circuit-report-writer';
 const MAX_INITIAL_HISTORY_MESSAGES = 20;
-const MAX_CONTEXT_CHARS = 16_000;
+const MAX_TOOL_ITERATIONS = 60;
 
-const INTENT_SYSTEM_PROMPT = `You are Actoviq Circuit Agent, the built-in assistant in an electronic circuit design application.
+const INTENT_SYSTEM_PROMPT = `You are Actoviq Circuit Agent, the built-in assistant in the Actoviq desktop circuit design app.
 
-You translate a user's request into a safe, revisioned project transaction. You do not call tools. The desktop host validates and applies every operation.
+You design and revise circuits by calling tools (ReAct). Tools wrap the same circuit_project.py CLI that external Skill agents use. Do not invent file contents under build/.
 
-Rules:
-1. Put the JSON field "text" first so the desktop can stream the natural-language response while the rest is generated.
-2. For greetings, general questions, or requests that are not for a concrete circuit, set isDesignRequest and isRevisionRequest to false and answer briefly.
-3. For a request to modify, tune, fix, optimize, rerun, or validate the selected design, set isRevisionRequest to true and include revisionRequest.
-4. For a new circuit, set isDesignRequest to true and include formalizedRequirement.
-5. Never set both request flags to true. Prefer revision when activeProject exists and the user refers to the current design.
-6. Project transactions are the default design path. If enough information exists, include projectOperations using only operations listed in activeProject.transaction.allowed_operations. For a new design, prefer functional modules: several upsert_module_netlist ops (stimuli / stage cores / encode-load), then add_port and connect_ports for shared nets (vdd, vin, thresholds, etc.). Use a single upsert_module_netlist only for trivial paths (about ≤8 devices, one signal chain). For a revision, use stable IDs from activeProject. Honor project_kind: simulation stays primitive-only; pcb_schematic may use packaged parts and LCSC binding; analog_ic requires SPICE/PDK-aware transistor sizing and Virtuoso export. Honor activeProject.modularity guidance and oversized_module ERC warnings by splitting rather than packing more devices into one sheet.
-7. Never include project_id, base_revision, generated SVG, or build files in projectOperations. Never claim a transaction or simulation succeeded; the host reports the result after validation.
-8. Set compileAfterApply true after electrical changes. Set simulateAfterApply true only when the design includes a valid analysis and stimulus, and when project_kind requires or requests simulation (simulation kind: usually yes; pcb_schematic: optional).
-9. If the request cannot be translated safely, return no projectOperations and ask one concise clarification question.
-10. targetStage, when present, must be one of: solution-analyst, doc-writer, librarian, architect, netlist-designer, simulation-verifier, netlistsvg-renderer, workflow-lead.
-11. For every new design, set projectKind to simulation, pcb_schematic, or analog_ic from the user's requested workflow. For pcb_schematic part selection, prefer bind_lcsc_part when LCSC tools are available in agent context. Do not invent LCSC C-numbers.
-12. For analog_ic, never invent a PDK name, model-library path, corner, or foundry device. If they are missing, ask for them before returning electrical projectOperations. When supplied, include set_analog_ic_profile and reference the exact library/corner in SPICE.
-13. Every analog_ic MOS primitive or MOS-like subcircuit must give explicit positive W and L with SPICE scale suffixes. Preserve M and NF as separate positive design variables; NF is an integer. State in text what is held fixed when proposing a channel-size change. Do not emit user-authored .control/.endc blocks.
-14. Treat KiCad/JLCEDA pull as stable-ID layout/property handoff, not lossless connectivity co-editing. A canonical LCSC C-number carries catalog metadata but does not prove symbol/pin/footprint compatibility.
-15. Prefer workspace reference_catalog assets (circuit_module / circuit_project / schematic_layout / layout_idiom) before inventing topology. Layout references are not electrical truth: only apply when connectivity_hash matches; otherwise use them as agent_context_only. Never treat layout_visual images as a source write path.
-Return only one JSON object with this shape:
-{
-  "text": "Natural-language response",
-  "isDesignRequest": boolean,
-  "isRevisionRequest": boolean,
-  "formalizedRequirement": "optional",
-  "revisionRequest": "optional",
-  "targetStage": "optional",
-  "projectName": "optional",
-  "projectKind": "simulation | pcb_schematic | analog_ic (required for a new design)",
-  "projectOperations": [{"op": "supported operation"}],
-  "compileAfterApply": boolean,
-  "simulateAfterApply": boolean
-}`;
+Protocol loop (actoviq.project-agent.v2):
+1. Resolve workspace with workspace_active / workspace_list / workspace_use when needed.
+2. For a new design: create_circuit_project, then agent_context, then apply_circuit_command.
+3. For a revision: agent_context first and use the exact base_revision returned.
+4. After apply: run_erc; fix blocking errors with another apply if needed.
+5. compile_circuit_project (or compile_circuit_module), then simulate when the design has stimulus/analysis.
+6. Prefer reference_catalog_list / reference_insert_module / prepare_layout_from_reference before inventing topology.
+7. For pcb_schematic part selection, use lcsc_search / lcsc_bind. For analog_ic, run analog_ic_audit before simulation.
+
+Module composition (default for desktop canvas):
+- Prefer functional modules: stimuli / cores / encode-load, then add_port + connect_ports.
+- A single upsert_module_netlist is ONLY for trivial paths (about ≤8 devices, one signal chain).
+- Designs with >8 devices or multiple stages MUST be split; do not leave a monolithic oversized module.
+- Canvas card positions are auto-unstacked by the project tool when omitted or overlapping; still prefer distinct positions when known.
+
+Hard constraints:
+- simulation kind: flat SPICE primitives only (R C L Q M D V I). No .subckt/.ends, no B/E/F/G/H/X.
+- Never claim success without reading tool results.
+- For greetings or non-circuit questions, answer briefly without tools.
+- Prefer concise Chinese or English matching the user.
+- After tools finish, summarize what changed (project id, revision, ERC, sim status, module count) in natural language.
+`;
 
 const REPORT_SYSTEM_PROMPT = `You are the built-in Actoviq circuit technical report writer.
 
@@ -72,37 +69,6 @@ Rules:
 - Use concise tables for measurements and specifications when data exists.
 - Do not call tools and do not wrap the report in a Markdown code fence.`;
 
-const ProjectOperationSchema = z.object({
-  op: z.string().min(1),
-}).catchall(z.unknown());
-
-const ChatResponseSchema = z.object({
-  text: z.string().min(1),
-  isDesignRequest: z.boolean().default(false),
-  isRevisionRequest: z.boolean().default(false),
-  formalizedRequirement: z.string().optional(),
-  revisionRequest: z.string().optional(),
-  targetStage: z.string().optional(),
-  projectName: z.string().optional(),
-  projectKind: z.enum(['simulation', 'pcb_schematic', 'analog_ic']).optional(),
-  projectOperations: z.array(ProjectOperationSchema).optional(),
-  compileAfterApply: z.boolean().optional(),
-  simulateAfterApply: z.boolean().optional(),
-}).passthrough().superRefine((value, context) => {
-  if (
-    value.isDesignRequest
-    && !value.isRevisionRequest
-    && (value.projectOperations?.length ?? 0) > 0
-    && !value.projectKind
-  ) {
-    context.addIssue({
-      code: 'custom',
-      path: ['projectKind'],
-      message: 'projectKind is required when creating a new project transaction',
-    });
-  }
-});
-
 export interface DesktopAgentConfig {
   provider: 'anthropic' | 'openai';
   apiKey: string;
@@ -114,6 +80,9 @@ export interface DesktopAgentConfig {
 
 export interface DesktopAgentContext {
   activeJobId?: string | null;
+  activeProjectId?: string | null;
+  workspaceRoot?: string | null;
+  /** @deprecated Prefer agent_context tool; kept for prompt hints only. */
   activeProject?: Record<string, unknown> | null;
 }
 
@@ -126,9 +95,10 @@ export interface DesktopAgentRunInput {
 
 export interface DesktopAgentChatResponse {
   text: string;
+  /** Legacy flags retained for type compatibility; always false on the ReAct path. */
   isDesignRequest: boolean;
-  formalizedRequirement?: string;
   isRevisionRequest?: boolean;
+  formalizedRequirement?: string;
   revisionRequest?: string;
   targetStage?: string;
   projectName?: string;
@@ -141,6 +111,8 @@ export interface DesktopAgentChatResponse {
   sessionId?: string;
   model?: string;
   usage?: Record<string, unknown>;
+  /** Best-effort project id touched during the run (from tool args). */
+  touchedProjectId?: string;
 }
 
 export type DesktopAgentEventType =
@@ -201,6 +173,38 @@ function configSignature(config: DesktopAgentConfig): string {
     .digest('hex');
 }
 
+async function loadCircuitDesignSkill(): Promise<ActoviqSkillDefinition | null> {
+  try {
+    const skillPath = path.resolve(
+      process.cwd(),
+      'skills',
+      'circuit-design-ngspice',
+      'SKILL.md',
+    );
+    const markdown = await readFile(skillPath, 'utf8');
+    // Strip YAML frontmatter for the prompt body.
+    const prompt = markdown.replace(/^---[\s\S]*?---\s*/, '').trim();
+    return skill({
+      name: 'circuit-design-ngspice',
+      description: 'Actoviq circuit-design-ngspice project protocol and CLI map.',
+      whenToUse: 'Use when designing, revising, simulating, or exporting Actoviq circuit projects.',
+      prompt: [
+        'You are following /circuit-design-ngspice.',
+        'Use the registered desktop circuit tools (same CLI as this skill).',
+        '',
+        prompt.slice(0, 12_000),
+        '',
+        'Arguments / context:',
+        '$ARGUMENTS',
+      ].join('\n'),
+      source: 'custom',
+      loadedFrom: 'custom',
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function getClient(config: DesktopAgentConfig): Promise<ActoviqAgentClient> {
   const signature = configSignature(config);
   if (cachedClient?.signature === signature) return cachedClient.client;
@@ -217,6 +221,11 @@ async function getClient(config: DesktopAgentConfig): Promise<ActoviqAgentClient
     }
     const workDir = path.resolve(config.workDir || process.cwd());
     const homeDir = path.resolve(config.homeDir || path.join(homedir(), '.actoviq'));
+    const circuitTools = withAgentFacingToolErrorsForAll([
+      createDisabledTaskTool(),
+      ...createDesktopCircuitTools(),
+    ]);
+    const circuitSkill = await loadCircuitDesignSkill();
     const client = await createAgentSdk({
       provider: config.provider,
       apiKey: config.apiKey,
@@ -228,25 +237,28 @@ async function getClient(config: DesktopAgentConfig): Promise<ActoviqAgentClient
       sessionDirectory: path.join(homeDir, 'circuit-agent-desktop', 'sessions'),
       clientName: 'actoviq-circuit-agent-desktop',
       clientVersion: '0.1.11',
-      tools: [],
+      tools: circuitTools,
       mcpServers: [],
       disableDefaultAgents: true,
       loadDefaultAgentDirectories: false,
       disableDefaultSkills: true,
       loadDefaultSkillDirectories: false,
+      skills: circuitSkill ? [circuitSkill] : [],
       permissionMode: 'default',
-      maxToolIterations: 0,
+      maxToolIterations: MAX_TOOL_ITERATIONS,
       agents: [{
         name: DESKTOP_AGENT_NAME,
-        description: 'Built-in circuit intent and revision transaction agent.',
+        description: 'Built-in ReAct circuit design agent using Skill-aligned tools.',
         systemPrompt: INTENT_SYSTEM_PROMPT,
         model: config.model,
-        tools: [],
+        tools: circuitTools,
+        allowedTools: circuitTools.map((entry) => entry.name),
         mcpServers: [],
         inheritDefaultTools: false,
         inheritDefaultMcpServers: false,
         allowNestedAgents: false,
-        maxToolIterations: 0,
+        maxToolIterations: MAX_TOOL_ITERATIONS,
+        skills: circuitSkill ? [circuitSkill.name] : [],
         source: 'custom',
       }, {
         name: REPORT_AGENT_NAME,
@@ -254,6 +266,7 @@ async function getClient(config: DesktopAgentConfig): Promise<ActoviqAgentClient
         systemPrompt: REPORT_SYSTEM_PROMPT,
         model: config.model,
         tools: [],
+        allowedTools: [],
         mcpServers: [],
         inheritDefaultTools: false,
         inheritDefaultMcpServers: false,
@@ -295,117 +308,67 @@ async function getSession(
       title: input.message.slice(0, 80),
       model: config.model,
       initialMessages,
-      tags: ['desktop', 'circuit-design'],
+      tags: ['desktop', 'circuit-design', 'react'],
       metadata: { desktopConversationId: input.conversationId },
     });
   }
 }
 
 function buildPrompt(input: DesktopAgentRunInput): string {
-  const activeProject = input.context?.activeProject
-    ? JSON.stringify(input.context.activeProject).slice(0, MAX_CONTEXT_CHARS)
-    : '(none)';
+  const activeProjectHint = input.context?.activeProject
+    ? JSON.stringify({
+      project_id: (input.context.activeProject as { project_id?: string }).project_id
+        ?? input.context.activeProjectId,
+      base_revision: (input.context.activeProject as { base_revision?: number }).base_revision,
+      next_action: (input.context.activeProject as { next_action?: unknown }).next_action,
+    }).slice(0, 4_000)
+    : '(none — call agent_context after create or when revising)';
   return [
     'Desktop context:',
     `- activeJobId: ${input.context?.activeJobId ?? '(none)'}`,
-    `- activeProject: ${activeProject}`,
+    `- activeProjectId: ${input.context?.activeProjectId ?? '(none)'}`,
+    `- workspaceRoot: ${input.context?.workspaceRoot ?? '(none)'}`,
+    `- activeProjectHint: ${activeProjectHint}`,
     '',
     'User message:',
     input.message,
   ].join('\n');
 }
 
-function extractJsonObject(raw: string): string | null {
-  const start = raw.indexOf('{');
-  if (start < 0) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < raw.length; index += 1) {
-    const char = raw[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') inString = true;
-    else if (char === '{') depth += 1;
-    else if (char === '}') {
-      depth -= 1;
-      if (depth === 0) return raw.slice(start, index + 1);
-    }
-  }
-  return null;
-}
-
-function decodePartialJsonString(raw: string): string {
-  let result = '';
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index];
-    if (char !== '\\') {
-      result += char;
-      continue;
-    }
-    const next = raw[index + 1];
-    if (next === undefined) break;
-    const escapes: Record<string, string> = {
-      '"': '"',
-      '\\': '\\',
-      '/': '/',
-      b: '\b',
-      f: '\f',
-      n: '\n',
-      r: '\r',
-      t: '\t',
-    };
-    if (next === 'u') {
-      const hex = raw.slice(index + 2, index + 6);
-      if (!/^[0-9a-fA-F]{4}$/.test(hex)) break;
-      result += String.fromCharCode(Number.parseInt(hex, 16));
-      index += 5;
-    } else {
-      result += escapes[next] ?? next;
-      index += 1;
-    }
-  }
-  return result;
-}
-
-function extractStreamingText(snapshot: string): string {
-  const key = /"text"\s*:\s*"/.exec(snapshot);
-  if (!key || key.index === undefined) return '';
-  const start = key.index + key[0].length;
-  let escaped = false;
-  let raw = '';
-  for (let index = start; index < snapshot.length; index += 1) {
-    const char = snapshot[index];
-    if (!escaped && char === '"') break;
-    raw += char;
-    if (escaped) escaped = false;
-    else if (char === '\\') escaped = true;
-  }
-  return decodePartialJsonString(raw);
-}
-
-function parseChatResponse(raw: string): DesktopAgentChatResponse {
-  const json = extractJsonObject(raw);
-  if (!json) throw new Error('The model response did not contain a JSON object.');
-  const parsed = ChatResponseSchema.parse(JSON.parse(json));
-  const isRevisionRequest = Boolean(parsed.isRevisionRequest);
-  return {
-    text: parsed.text,
-    isRevisionRequest,
-    isDesignRequest: !isRevisionRequest && Boolean(parsed.isDesignRequest),
-    formalizedRequirement: parsed.formalizedRequirement,
-    revisionRequest: parsed.revisionRequest,
-    targetStage: parsed.targetStage,
-    projectName: parsed.projectName,
-    projectKind: parsed.projectKind,
-    projectOperations: parsed.projectOperations,
-    compileAfterApply: parsed.compileAfterApply,
-    simulateAfterApply: parsed.simulateAfterApply,
+function toolLabel(name: string, phase: 'call' | 'result'): string {
+  const labels: Record<string, string> = {
+    workspace_list: 'Listing workspaces',
+    workspace_active: 'Reading active workspace',
+    workspace_use: 'Switching workspace',
+    create_circuit_project: 'Creating circuit project',
+    agent_context: 'Reading agent context',
+    project_summary: 'Reading project summary',
+    apply_circuit_command: 'Applying project transaction',
+    run_erc: 'Running ERC',
+    compile_circuit_project: 'Compiling project',
+    compile_circuit_module: 'Compiling module',
+    simulate_circuit_project: 'Running simulation',
+    simulate_circuit_module: 'Simulating module',
+    analog_ic_audit: 'Auditing analog IC constraints',
+    export_eda: 'Exporting EDA package',
+    lcsc_search: 'Searching LCSC parts',
+    lcsc_bind: 'Binding LCSC part',
+    reference_catalog_list: 'Listing reference catalog',
+    reference_insert_module: 'Inserting reference module',
+    prepare_layout_from_reference: 'Checking layout reference',
+    apply_layout_from_reference: 'Applying layout reference',
   };
+  const base = labels[name] || name;
+  return phase === 'result' ? `${base} · done` : base;
+}
+
+function extractTouchedProjectId(toolName: string, input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const record = input as Record<string, unknown>;
+  const projectId = record.project_id ?? record.projectId;
+  if (typeof projectId === 'string' && projectId.trim()) return projectId.trim();
+  if (toolName === 'create_circuit_project') return undefined;
+  return undefined;
 }
 
 export function sanitizeAgentError(error: unknown): string {
@@ -428,6 +391,7 @@ export function startDesktopAgentRun(
   let lastRunId: string | undefined;
   let lastSessionId: string | undefined;
   let lastModel = config.model;
+  let touchedProjectId = input.context?.activeProjectId ?? undefined;
 
   const emit = (event: Omit<DesktopAgentEvent, 'conversationId' | 'sequence' | 'timestamp'>): void => {
     onEvent({
@@ -438,7 +402,7 @@ export function startDesktopAgentRun(
     });
   };
 
-  const runAttempt = async (session: AgentSession, prompt: string, attempt: number): Promise<{
+  const runAttempt = async (session: AgentSession, prompt: string): Promise<{
     raw: string;
     runId?: string;
     sessionId?: string;
@@ -450,9 +414,9 @@ export function startDesktopAgentRun(
     let usage: Record<string, unknown> | undefined;
     const stream = session.stream(prompt, {
       signal: abortController.signal,
-      maxTokens: 4096,
-      temperature: 0.1,
-      metadata: { surface: 'desktop', attempt },
+      maxTokens: 8192,
+      temperature: 0.2,
+      metadata: { surface: 'desktop-react' },
     });
     activeStream = stream;
     for await (const event of stream) {
@@ -469,39 +433,64 @@ export function startDesktopAgentRun(
             type: 'status',
             runId: sdkEvent.runId,
             iteration: sdkEvent.iteration,
-            label: attempt === 1 ? 'Generating circuit response' : 'Repairing structured response',
+            label: 'Thinking and selecting tools',
           });
           break;
         case 'response.text.delta': {
-          raw = sdkEvent.snapshot;
-          const nextText = extractStreamingText(sdkEvent.snapshot);
+          const snapshot = typeof sdkEvent.snapshot === 'string' ? sdkEvent.snapshot : '';
+          const delta = typeof sdkEvent.delta === 'string' ? sdkEvent.delta : '';
+          raw = snapshot || raw + delta;
+          const nextText = snapshot || raw;
           if (nextText !== visibleText) {
-            const delta = nextText.startsWith(visibleText) ? nextText.slice(visibleText.length) : nextText;
+            const textDelta = nextText.startsWith(visibleText) ? nextText.slice(visibleText.length) : (delta || nextText);
             visibleText = nextText;
-            emit({ type: 'text-progress', runId: sdkEvent.runId, text: nextText, delta });
+            emit({ type: 'text-progress', runId: sdkEvent.runId, text: nextText, delta: textDelta });
           }
           break;
         }
         case 'response.thinking.delta':
           emit({ type: 'thinking-delta', runId: sdkEvent.runId, delta: sdkEvent.delta });
           break;
-        case 'tool.call':
+        case 'tool.call': {
+          const name = sdkEvent.call.name;
+          const fromInput = extractTouchedProjectId(name, sdkEvent.call.input);
+          if (fromInput) touchedProjectId = fromInput;
           emit({
             type: 'tool-call',
             runId: sdkEvent.runId,
-            toolName: sdkEvent.call.name,
+            toolName: name,
             toolUseId: sdkEvent.call.id,
-            label: 'Unexpected tool request blocked by the desktop agent profile',
+            label: toolLabel(name, 'call'),
           });
           break;
-        case 'tool.result':
+        }
+        case 'tool.result': {
+          const name = sdkEvent.result.name;
+          let resultLabel = toolLabel(name, 'result');
+          // Best-effort: parse create/result JSON for project id
+          try {
+            const content = sdkEvent.result.outputText
+              || (typeof sdkEvent.result.output === 'string'
+                ? sdkEvent.result.output
+                : JSON.stringify(sdkEvent.result.output ?? ''));
+            const match = /"project_id"\s*:\s*"([^"]+)"/.exec(content)
+              || /"projectId"\s*:\s*"([^"]+)"/.exec(content);
+            if (match?.[1]) {
+              touchedProjectId = match[1];
+              resultLabel = `${resultLabel} · ${match[1]}`;
+            }
+          } catch {
+            // ignore
+          }
           emit({
             type: 'tool-result',
             runId: sdkEvent.runId,
-            toolName: sdkEvent.result.name,
+            toolName: name,
             toolUseId: sdkEvent.result.id,
+            label: resultLabel,
           });
           break;
+        }
         case 'session.compacted':
         case 'conversation.compacted':
           emit({ type: 'compacted', runId: sdkEvent.runId, label: 'Conversation context compacted' });
@@ -516,7 +505,7 @@ export function startDesktopAgentRun(
           });
           break;
         case 'response.completed':
-          raw = sdkEvent.result.text;
+          raw = sdkEvent.result.text || raw;
           usage = sdkEvent.result.usage as unknown as Record<string, unknown> | undefined;
           if (usage) emit({ type: 'usage', runId: sdkEvent.runId, usage });
           break;
@@ -541,30 +530,17 @@ export function startDesktopAgentRun(
     try {
       const client = await getClient(config);
       const session = await getSession(client, config, input);
-      const first = await runAttempt(session, buildPrompt(input), 1);
-      let parsed: DesktopAgentChatResponse;
-      try {
-        parsed = parseChatResponse(first.raw);
-      } catch (firstError) {
-        emit({
-          type: 'retry',
-          runId: first.runId,
-          label: `Structured response validation failed: ${sanitizeAgentError(firstError)}`,
-        });
-        const repaired = await runAttempt(
-          session,
-          'Your previous answer did not match the required JSON schema. Return a corrected JSON object only. Put the "text" field first and preserve the original user intent.',
-          2,
-        );
-        parsed = parseChatResponse(repaired.raw);
-        Object.assign(first, repaired);
-      }
+      const first = await runAttempt(session, buildPrompt(input));
+      const text = (first.raw || '').trim() || 'Done.';
       const completed: DesktopAgentChatResponse = {
-        ...parsed,
+        text,
+        isDesignRequest: false,
+        isRevisionRequest: false,
         runId: first.runId,
         sessionId: first.sessionId ?? session.id,
         model: first.model,
         usage: first.usage,
+        touchedProjectId,
       };
       emit({
         type: 'completed',
@@ -587,6 +563,7 @@ export function startDesktopAgentRun(
           runId: lastRunId,
           sessionId: lastSessionId,
           model: lastModel,
+          touchedProjectId,
         };
       }
       emit({ type: 'error', runId: lastRunId, sessionId: lastSessionId, model: lastModel, label: message });
@@ -598,6 +575,7 @@ export function startDesktopAgentRun(
         runId: lastRunId,
         sessionId: lastSessionId,
         model: lastModel,
+        touchedProjectId,
       };
     } finally {
       activeStream = null;

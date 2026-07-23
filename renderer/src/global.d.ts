@@ -220,6 +220,7 @@ declare global {
         context?: {
           conversationId?: string;
           activeJobId?: string | null;
+          activeProjectId?: string | null;
           activeProject?: Record<string, unknown> | null;
           workspaceRoot?: string;
           modelTier?: ChatModelTier;

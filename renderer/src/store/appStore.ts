@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type {
   ChatMessage,
+  ChatMessageTool,
   CircuitBuildState,
   CircuitProjectBundle,
   CircuitProjectSummary,
@@ -12,6 +13,9 @@ import type {
   ToolCallEntry,
   WorkspaceSummary,
 } from '../types';
+import {
+  conversationHasContent,
+} from './chatHistoryPersistence';
 
 export type TabKey = 'design' | 'netlist' | 'svg' | 'simulation' | 'report';
 export type ApprovalPolicy = 'manual' | 'execution' | 'all';
@@ -58,6 +62,7 @@ interface AppState {
   // Conversations
   conversations: ConversationSummary[];
   conversationMessages: Record<string, ChatMessage[]>;
+  activeConversationByProject: Record<string, string>;
 
   // Content
   netlistContent: string;
@@ -93,6 +98,8 @@ interface AppState {
   setApprovalPolicy: (policy: ApprovalPolicy) => void;
   setIsRunning: (running: boolean) => void;
   addMessage: (msg: ChatMessage) => void;
+  patchMessage: (id: string, patch: Partial<ChatMessage> | ((msg: ChatMessage) => Partial<ChatMessage>)) => void;
+  upsertMessageTool: (messageId: string, tool: ChatMessageTool) => void;
   clearMessages: () => void;
   setStages: (stages: StageState[]) => void;
   updateStage: (key: string, status: StageState['status']) => void;
@@ -109,16 +116,21 @@ interface AppState {
   resetWorkflow: (options?: { preserveMessages?: boolean }) => void;
   setConversationId: (id: string) => void;
   setConversationJobId: (jobId: string, conversationId?: string) => void;
-  newConversation: () => string;
+  newConversation: (projectId?: string | null) => string;
   upsertConversation: (conv: ConversationSummary) => void;
   setConversations: (convs: ConversationSummary[]) => void;
   renameConversation: (id: string, title: string) => void;
   deleteConversation: (id: string) => void;
   clearAllConversations: () => void;
+  clearConversationsForProject: (projectId: string | null) => void;
+  /** Attach an existing conversation to a project without switching the active thread. */
+  bindConversationToProject: (conversationId: string, projectId: string) => void;
+  switchProjectChatContext: (projectId: string | null) => string;
   hydrateChatHistory: (snapshot: {
     conversationId: string;
     conversations: ConversationSummary[];
     conversationMessages: Record<string, ChatMessage[]>;
+    activeConversationByProject?: Record<string, string>;
   }) => void;
 }
 
@@ -149,6 +161,7 @@ export const useAppStore = create<AppState>((set) => ({
   conversationId: '',
   conversations: [],
   conversationMessages: {},
+  activeConversationByProject: {},
   netlistContent: '',
   svgContent: '',
   reportContent: '',
@@ -182,14 +195,18 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => {
       const conversationId = msg.conversationId ?? s.conversationId;
       const message = conversationId ? { ...msg, conversationId } : msg;
-      const messages = !conversationId || conversationId === s.conversationId
-        ? [...s.messages, message]
-        : s.messages;
       if (!conversationId) {
-        return { messages };
+        return { messages: [...s.messages, message] };
       }
 
-      const savedMessages = [...(s.conversationMessages[conversationId] ?? []), message];
+      // Prefer the longer of live vs stored history so a wiped `messages` array
+      // cannot truncate conversationMessages (and the visible transcript) to the
+      // latest turn only on the next append.
+      const stored = s.conversationMessages[conversationId] ?? [];
+      const live = conversationId === s.conversationId ? s.messages : [];
+      const prior = stored.length >= live.length ? stored : live;
+      const savedMessages = [...prior, message];
+      const messages = conversationId === s.conversationId ? savedMessages : s.messages;
       const existing = s.conversations.find((conv) => conv.id === conversationId);
       const autoTitle = savedMessages.find((entry) => entry.role === 'user')?.content
         || existing?.title
@@ -202,7 +219,13 @@ export const useAppStore = create<AppState>((set) => ({
         updatedAt: message.timestamp,
         jobId: existing?.jobId,
         titleLocked: existing?.titleLocked,
+        projectId: existing?.projectId ?? s.activeProjectId ?? null,
       };
+
+      const activeConversationByProject = { ...s.activeConversationByProject };
+      if (summary.projectId) {
+        activeConversationByProject[summary.projectId] = conversationId;
+      }
 
       return {
         messages,
@@ -214,9 +237,61 @@ export const useAppStore = create<AppState>((set) => ({
           summary,
           ...s.conversations.filter((conv) => conv.id !== conversationId),
         ].slice(0, 50),
+        activeConversationByProject,
       };
     }),
-  clearMessages: () => set({ messages: [] }),
+  patchMessage: (id, patch) =>
+    set((s) => {
+      const apply = (msg: ChatMessage): ChatMessage => {
+        const nextPatch = typeof patch === 'function' ? patch(msg) : patch;
+        return { ...msg, ...nextPatch };
+      };
+      const conversationMessages: Record<string, ChatMessage[]> = {};
+      for (const [conversationId, entries] of Object.entries(s.conversationMessages)) {
+        conversationMessages[conversationId] = entries.map((msg) => (msg.id === id ? apply(msg) : msg));
+      }
+      const messagesApplied = s.messages.map((msg) => (msg.id === id ? apply(msg) : msg));
+      const activeId = s.conversationId;
+      const canonical = activeId ? conversationMessages[activeId] : undefined;
+      const messages = canonical && canonical.length >= messagesApplied.length
+        ? canonical
+        : messagesApplied;
+      return { messages, conversationMessages };
+    }),
+  upsertMessageTool: (messageId, tool) =>
+    set((s) => {
+      const apply = (msg: ChatMessage): ChatMessage => {
+        if (msg.id !== messageId) return msg;
+        const tools = [
+          ...(msg.tools ?? []).filter((entry) => entry.id !== tool.id),
+          tool,
+        ];
+        return { ...msg, tools };
+      };
+      const conversationMessages: Record<string, ChatMessage[]> = {};
+      for (const [conversationId, entries] of Object.entries(s.conversationMessages)) {
+        conversationMessages[conversationId] = entries.map(apply);
+      }
+      const messagesApplied = s.messages.map(apply);
+      const activeId = s.conversationId;
+      const canonical = activeId ? conversationMessages[activeId] : undefined;
+      const messages = canonical && canonical.length >= messagesApplied.length
+        ? canonical
+        : messagesApplied;
+      return { messages, conversationMessages };
+    }),
+  clearMessages: () =>
+    set((s) => {
+      const conversationId = s.conversationId;
+      if (!conversationId) return { messages: [] };
+      return {
+        messages: [],
+        conversationMessages: {
+          ...s.conversationMessages,
+          [conversationId]: [],
+        },
+      };
+    }),
   setStages: (stages) => set({ stages }),
   updateStage: (key, status) =>
     set((s) => ({
@@ -247,10 +322,28 @@ export const useAppStore = create<AppState>((set) => ({
       stages: [],
     }),
   setConversationId: (id) =>
-    set((s) => ({
-      conversationId: id,
-      messages: s.conversationMessages[id] ?? [],
-    })),
+    set((s) => {
+      const conv = s.conversations.find((entry) => entry.id === id);
+      const activeConversationByProject = { ...s.activeConversationByProject };
+      let conversations = s.conversations;
+      let claimedProjectId = conv?.projectId ?? null;
+      // Opening an unscoped legacy chat while a project is active claims it for that project.
+      if (conv && conv.projectId == null && s.activeProjectId) {
+        claimedProjectId = s.activeProjectId;
+        conversations = conversations.map((entry) => (
+          entry.id === id ? { ...entry, projectId: s.activeProjectId } : entry
+        ));
+      }
+      if (claimedProjectId) {
+        activeConversationByProject[claimedProjectId] = id;
+      }
+      return {
+        conversationId: id,
+        messages: s.conversationMessages[id] ?? [],
+        conversations,
+        activeConversationByProject,
+      };
+    }),
   setConversationJobId: (jobId, conversationId) =>
     set((s) => {
       const targetId = conversationId ?? s.conversationId;
@@ -263,24 +356,35 @@ export const useAppStore = create<AppState>((set) => ({
         ),
       };
     }),
-  newConversation: () => {
+  newConversation: (projectId) => {
     const id = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const now = Date.now();
-    const summary = {
-      id,
-      title: 'New conversation',
-      lastMessage: '',
-      messageCount: 0,
-      updatedAt: now,
-      titleLocked: false,
-    };
-    set((s) => ({
-      conversationId: id,
-      messages: [],
-      conversations: [summary, ...s.conversations.filter((conv) => conv.id !== id)].slice(0, 50),
-      conversationMessages: { ...s.conversationMessages, [id]: [] },
-    }));
-    return id;
+    let createdId = id;
+    set((s) => {
+      const scopedProjectId = projectId === undefined ? (s.activeProjectId ?? null) : projectId;
+      const summary: ConversationSummary = {
+        id,
+        title: 'New conversation',
+        lastMessage: '',
+        messageCount: 0,
+        updatedAt: now,
+        titleLocked: false,
+        projectId: scopedProjectId,
+      };
+      const activeConversationByProject = { ...s.activeConversationByProject };
+      if (scopedProjectId) {
+        activeConversationByProject[scopedProjectId] = id;
+      }
+      createdId = id;
+      return {
+        conversationId: id,
+        messages: [],
+        conversations: [summary, ...s.conversations.filter((conv) => conv.id !== id)].slice(0, 50),
+        conversationMessages: { ...s.conversationMessages, [id]: [] },
+        activeConversationByProject,
+      };
+    });
+    return createdId;
   },
   upsertConversation: (conv) =>
     set((s) => ({
@@ -309,13 +413,22 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => {
       const conversations = s.conversations.filter((conv) => conv.id !== id);
       const { [id]: _removed, ...conversationMessages } = s.conversationMessages;
+      const activeConversationByProject = Object.fromEntries(
+        Object.entries(s.activeConversationByProject).filter(([, conversationId]) => conversationId !== id),
+      );
+      const sameScope = (entry: ConversationSummary) => {
+        const deleted = s.conversations.find((conv) => conv.id === id);
+        if (!deleted) return true;
+        return (entry.projectId ?? null) === (deleted.projectId ?? null);
+      };
       if (s.conversationId !== id) {
-        return { conversations, conversationMessages };
+        return { conversations, conversationMessages, activeConversationByProject };
       }
-      const next = conversations[0];
+      const next = conversations.find(sameScope) ?? conversations[0];
       return {
         conversations,
         conversationMessages,
+        activeConversationByProject,
         conversationId: next?.id ?? '',
         messages: next ? (conversationMessages[next.id] ?? []) : [],
       };
@@ -326,12 +439,125 @@ export const useAppStore = create<AppState>((set) => ({
       messages: [],
       conversations: [],
       conversationMessages: {},
+      activeConversationByProject: {},
     }),
+  bindConversationToProject: (conversationId, projectId) =>
+    set((s) => {
+      if (!conversationId || !projectId) return s;
+      const conversations = s.conversations.map((entry) => (
+        entry.id === conversationId ? { ...entry, projectId } : entry
+      ));
+      return {
+        conversations,
+        activeConversationByProject: {
+          ...s.activeConversationByProject,
+          [projectId]: conversationId,
+        },
+      };
+    }),
+  clearConversationsForProject: (projectId) =>
+    set((s) => {
+      const keep = s.conversations.filter((entry) => (entry.projectId ?? null) !== (projectId ?? null));
+      const removeIds = new Set(
+        s.conversations
+          .filter((entry) => (entry.projectId ?? null) === (projectId ?? null))
+          .map((entry) => entry.id),
+      );
+      const conversationMessages = { ...s.conversationMessages };
+      for (const id of removeIds) {
+        delete conversationMessages[id];
+      }
+      const activeConversationByProject = { ...s.activeConversationByProject };
+      if (projectId) {
+        delete activeConversationByProject[projectId];
+      }
+      const stillActive = s.conversationId && !removeIds.has(s.conversationId);
+      if (stillActive) {
+        return { conversations: keep, conversationMessages, activeConversationByProject };
+      }
+      return {
+        conversations: keep,
+        conversationMessages,
+        activeConversationByProject,
+        conversationId: '',
+        messages: [],
+      };
+    }),
+  switchProjectChatContext: (projectId) => {
+    let nextId = '';
+    set((s) => {
+      const scoped = s.conversations.filter((entry) => (entry.projectId ?? null) === (projectId ?? null));
+      const withContent = scoped.filter((entry) => conversationHasContent(entry, s.conversationMessages));
+      const remembered = projectId ? s.activeConversationByProject[projectId] : undefined;
+      const rememberedEntry = remembered
+        ? scoped.find((entry) => entry.id === remembered)
+        : undefined;
+      const rememberedOk = Boolean(
+        rememberedEntry && conversationHasContent(rememberedEntry, s.conversationMessages),
+      );
+
+      let pickId = rememberedOk ? remembered : withContent[0]?.id;
+      let conversations = s.conversations;
+
+      // Restore unscoped legacy history instead of opening a blank thread.
+      if (!pickId && projectId) {
+        const legacy = s.conversations
+          .filter((entry) => entry.projectId == null && conversationHasContent(entry, s.conversationMessages))
+          .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        if (legacy) {
+          pickId = legacy.id;
+          conversations = conversations.map((entry) => (
+            entry.id === legacy.id ? { ...entry, projectId } : entry
+          ));
+        }
+      }
+
+      if (pickId) {
+        nextId = pickId;
+        const activeConversationByProject = { ...s.activeConversationByProject };
+        if (projectId) {
+          activeConversationByProject[projectId] = pickId;
+        }
+        return {
+          conversations,
+          conversationId: pickId,
+          messages: s.conversationMessages[pickId] ?? [],
+          activeConversationByProject,
+        };
+      }
+
+      const id = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const now = Date.now();
+      const summary: ConversationSummary = {
+        id,
+        title: 'New conversation',
+        lastMessage: '',
+        messageCount: 0,
+        updatedAt: now,
+        titleLocked: false,
+        projectId: projectId ?? null,
+      };
+      const activeConversationByProject = { ...s.activeConversationByProject };
+      if (projectId) {
+        activeConversationByProject[projectId] = id;
+      }
+      nextId = id;
+      return {
+        conversationId: id,
+        messages: [],
+        conversations: [summary, ...conversations].slice(0, 50),
+        conversationMessages: { ...s.conversationMessages, [id]: [] },
+        activeConversationByProject,
+      };
+    });
+    return nextId;
+  },
   hydrateChatHistory: (snapshot) =>
     set({
       conversationId: snapshot.conversationId,
       conversations: snapshot.conversations,
       conversationMessages: snapshot.conversationMessages,
+      activeConversationByProject: snapshot.activeConversationByProject ?? {},
       messages: snapshot.conversationId
         ? (snapshot.conversationMessages[snapshot.conversationId] ?? [])
         : [],

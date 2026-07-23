@@ -15,8 +15,9 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AppToolbar, type AppToolbarAction } from './components/layout/AppToolbar';
 import { useAppStore, type SimulationMetric, type TabKey } from './store/appStore';
 import { loadPersistedChatHistory, persistChatHistory } from './store/chatHistoryPersistence';
-import type { CircuitTrashItem, DesktopAgentEvent, ModuleManifest, ProjectKind, StageDef } from './types';
+import type { ChatMessageTool, CircuitTrashItem, DesktopAgentEvent, ModuleManifest, ProjectKind, StageDef } from './types';
 import type { ChatModelTier } from './modelTiers';
+import type { ChatRunToolView } from './components/chat/ChatView';
 import {
   CircuitBoard,
   FileCode2,
@@ -77,12 +78,6 @@ const workflowStageKeys = [
   'netlistsvg-renderer',
   'workflow-lead',
 ];
-
-function normalizeWorkflowStage(stage?: string): string | undefined {
-  if (!stage) return undefined;
-  const normalized = stage.trim().toLowerCase();
-  return workflowStageKeys.find((key) => key === normalized);
-}
 
 function reduceDesktopAgentEvent(current: ChatRunView | null, event: DesktopAgentEvent): ChatRunView {
   const base: ChatRunView = current ?? { status: 'starting', text: '' };
@@ -155,12 +150,15 @@ export function App() {
   const currentJobIdRef = useRef<string | null>(null);
   const [isChatPending, setIsChatPending] = useState(false);
   const [chatRun, setChatRun] = useState<ChatRunView | null>(null);
+  const chatRunRef = useRef<ChatRunView | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const [stagePanelWidth, setStagePanelWidth] = useState(280);
   const [chatWidth, setChatWidth] = useState(460);
   const [trashProjects, setTrashProjects] = useState<CircuitTrashItem[]>([]);
   const resizing = useRef<'sidebar' | 'stage' | 'chat' | null>(null);
   const activeChatConversationRef = useRef<string | null>(null);
+  const pendingAssistantMessageIdRef = useRef<string | null>(null);
+  const isChatPendingRef = useRef(false);
   const workflowConversationIdRef = useRef<string | null>(null);
   const suppressAutoLoadRef = useRef(false);
   const latestDiscoveredJobRef = useRef<string | null>(null);
@@ -192,6 +190,7 @@ export function App() {
       conversationId: saved.conversationId,
       conversations: saved.conversations,
       conversationMessages: saved.conversationMessages,
+      activeConversationByProject: saved.activeConversationByProject,
     });
   }, []);
 
@@ -204,6 +203,7 @@ export function App() {
           conversationId: state.conversationId,
           conversations: state.conversations,
           conversationMessages: state.conversationMessages,
+          activeConversationByProject: state.activeConversationByProject,
         });
       }, 250);
     });
@@ -388,13 +388,54 @@ export function App() {
     return cleanup;
   }, []);
 
+  useEffect(() => {
+    chatRunRef.current = chatRun;
+  }, [chatRun]);
+
   // The desktop agent uses the SDK's typed stream; keep transient run state
-  // separate from persisted conversation messages until the response validates.
+  // and also persist tool timeline into the conversation so History stays visible.
   useEffect(() => {
     if (!window.electronAPI?.onChatEvent) return undefined;
     return window.electronAPI.onChatEvent((event) => {
       if (event.conversationId !== activeChatConversationRef.current) return;
       setChatRun((current) => reduceDesktopAgentEvent(current, event));
+
+      if (event.type === 'tool-call' || event.type === 'tool-result') {
+        const store = useAppStore.getState();
+        const conversationId = event.conversationId;
+        let assistantId = pendingAssistantMessageIdRef.current;
+        if (!assistantId) {
+          assistantId = `agent-${Date.now()}`;
+          pendingAssistantMessageIdRef.current = assistantId;
+        }
+        const hasDraft = (store.conversationMessages[conversationId] ?? []).some((msg) => msg.id === assistantId)
+          || store.messages.some((msg) => msg.id === assistantId);
+        if (!hasDraft) {
+          store.addMessage({
+            id: assistantId,
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            conversationId,
+            tools: [],
+          });
+        }
+        const toolId = event.toolUseId ?? `${event.toolName ?? 'tool'}-${event.sequence}`;
+        store.upsertMessageTool(assistantId, {
+          id: toolId,
+          name: event.toolName ?? 'Tool',
+          status: event.type === 'tool-result' ? 'done' : 'running',
+          label: event.label,
+        });
+
+        // Soft-bind the thread as soon as tools create/touch a project id in labels.
+        const hint = `${event.label ?? ''} ${event.toolName ?? ''}`;
+        const match = /·\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})\s*$/.exec(event.label ?? '')
+          || /(?:project[_ ]?id|Created)\s*[:=]?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/i.exec(hint);
+        if (match?.[1] && match[1] !== 'create_circuit_project') {
+          store.bindConversationToProject(conversationId, match[1]);
+        }
+      }
     });
   }, []);
 
@@ -442,15 +483,53 @@ export function App() {
     setTrashProjects(await window.electronAPI.listCircuitTrash());
   }, []);
 
-  const loadCircuitProject = useCallback(async (projectId: string, openDesign = true) => {
+  const loadCircuitProject = useCallback(async (
+    projectId: string,
+    openDesign = true,
+    options?: { preserveChat?: boolean },
+  ) => {
     if (!window.electronAPI) return;
     const requestId = ++circuitLoadRequestRef.current;
     const state = useAppStore.getState();
+    const previousProjectId = state.activeProjectId;
+    const activeConversation = state.conversations.find((entry) => entry.id === state.conversationId);
+    // Keep the ReAct thread visible when chat is in flight, caller asks to preserve,
+    // or the open conversation is already bound to this project (reload / sidebar re-click).
+    const preserveChat = Boolean(options?.preserveChat)
+      || Boolean(activeChatConversationRef.current)
+      || isChatPendingRef.current
+      || Boolean(activeConversation?.projectId && activeConversation.projectId === projectId);
     state.setCircuitBusy(true);
     state.setCircuitError('');
     state.setActiveProjectId(projectId);
-    state.setActiveJobId(null);
-    setJobId(null);
+    if (!preserveChat) {
+      state.setActiveJobId(null);
+      setJobId(null);
+    }
+    if (previousProjectId !== projectId) {
+      if (preserveChat) {
+        const cid = activeChatConversationRef.current || state.conversationId;
+        if (cid) {
+          useAppStore.getState().bindConversationToProject(cid, projectId);
+        }
+      } else {
+        const previousChatId = activeChatConversationRef.current;
+        if (previousChatId) {
+          void window.electronAPI?.stopChat(previousChatId);
+        }
+        activeChatConversationRef.current = null;
+        pendingAssistantMessageIdRef.current = null;
+        setChatRun(null);
+        setIsChatPending(false);
+        isChatPendingRef.current = false;
+        const nextConversationId = state.switchProjectChatContext(projectId);
+        const conv = useAppStore.getState().conversations.find((entry) => entry.id === nextConversationId);
+        if (conv?.jobId) {
+          setJobId(conv.jobId);
+          useAppStore.getState().setActiveJobId(conv.jobId);
+        }
+      }
+    }
     if (openDesign) state.setActiveTab('design');
     try {
       const bundle = await window.electronAPI.getCircuitProject(projectId);
@@ -517,6 +596,7 @@ export function App() {
 
   useEffect(() => {
     const state = useAppStore.getState();
+    if (isChatPendingRef.current || activeChatConversationRef.current) return;
     if (!state.activeProjectId && state.circuitProjects[0]?.projectId) {
       void loadCircuitProject(state.circuitProjects[0].projectId);
     }
@@ -561,6 +641,9 @@ export function App() {
     state.setCircuitError('');
     try {
       await window.electronAPI.trashCircuitProjects(projectIds);
+      for (const projectId of projectIds) {
+        useAppStore.getState().clearConversationsForProject(projectId);
+      }
       const [projects, trash] = await Promise.all([
         window.electronAPI.listCircuitProjects(),
         window.electronAPI.listCircuitTrash(),
@@ -577,6 +660,7 @@ export function App() {
           state.setActiveModuleId(null);
           state.setCircuitProject(null);
           state.setCircuitBuild(null);
+          state.switchProjectChatContext(null);
         }
       }
     } catch (error) {
@@ -882,13 +966,12 @@ export function App() {
     return window.electronAPI.onMenuAction(handleMenuAction);
   }, [handleMenuAction]);
 
-  // Send a chat message: first checks intent, then decides chat vs workflow.
+  // Send a chat message; desktop agent applies circuit changes via ReAct tools.
   const handleSendMessage = useCallback(async (text: string, modelTier: ChatModelTier = 'medium') => {
     const trimmed = text.trim();
     if (!trimmed || isChatPending) return;
 
     const state = useAppStore.getState();
-    const workflowWasRunning = state.isRunning;
 
     // Auto-create conversation if none exists
     let cid = state.conversationId;
@@ -918,252 +1001,76 @@ export function App() {
     }
 
     activeChatConversationRef.current = cid;
+    pendingAssistantMessageIdRef.current = `agent-${Date.now()}`;
     setChatRun({ status: 'starting', text: '', label: 'Connecting to Actoviq agent' });
     setIsChatPending(true);
+    isChatPendingRef.current = true;
     try {
-      // Build conversation history for context
-      const history = state.messages.map((m) => ({
+      const latest = useAppStore.getState();
+      const transcript = latest.conversationMessages[cid] ?? latest.messages;
+      const history = transcript.map((m) => ({
         role: m.role === 'user' ? 'user' as const : 'assistant' as const,
         content: m.content,
       }));
-      const activeJobId = currentJobIdRef.current ?? state.activeJobId;
-      const agentContext = state.activeProjectId
-        ? await window.electronAPI.getCircuitAgentContext(state.activeProjectId).catch(() => null)
-        : null;
-      const activeProject = agentContext ? {
-        protocol_version: agentContext.protocol_version,
-        project_id: agentContext.project_id,
-        base_revision: agentContext.base_revision,
-        document_hash: agentContext.document_hash,
-        project: agentContext.project,
-        modules: Object.fromEntries(Object.entries(agentContext.modules).map(([moduleId, module]) => [
-          moduleId,
-          {
-            module_id: module.module_id,
-            name: module.name,
-            revision: module.revision,
-            ports: module.ports,
-            components: module.components,
-            nets: module.nets,
-            spice: module.spice,
-          },
-        ])),
-        erc: agentContext.erc,
-        build: { state: agentContext.build.state },
-        simulation: {
-          state: agentContext.simulation.state,
-          execution_status: agentContext.simulation.run?.execution_status,
-          measurement_status: agentContext.simulation.run?.measurement_status,
-          specification_status: agentContext.simulation.run?.specification_status,
-        },
-        next_action: agentContext.next_action,
-        transaction: agentContext.transaction,
-      } : null;
+      const activeJobId = currentJobIdRef.current ?? latest.activeJobId;
       const result = await window.electronAPI.sendChatMessage(trimmed, history, {
         conversationId: cid,
         activeJobId,
-        activeProject,
-        workspaceRoot: state.activeWorkspace?.root,
+        activeProjectId: latest.activeProjectId,
+        workspaceRoot: latest.activeWorkspace?.root,
         modelTier,
       });
 
-      // Show the agent's chat response
-      useAppStore.getState().addMessage({
-        id: `agent-${Date.now()}`,
-        role: 'assistant',
-        content: result.text,
-        timestamp: Date.now(),
-        isError: result.isError,
-        conversationId: cid,
-        runId: result.runId,
-        sessionId: result.sessionId,
-        model: result.model,
-        usage: result.usage,
-      });
+      // Finalize the assistant turn (tools may already be persisted from stream events).
+      const assistantMessageId = pendingAssistantMessageIdRef.current ?? `agent-${Date.now()}`;
+      const liveRun = chatRunRef.current;
+      const liveTools: ChatMessageTool[] = (liveRun?.tools ?? []).map((tool: ChatRunToolView) => ({
+        id: tool.id,
+        name: tool.name,
+        status: tool.status === 'running' ? 'done' : tool.status,
+        label: tool.label,
+      }));
+      const store = useAppStore.getState();
+      const existing = (store.conversationMessages[cid] ?? []).some((msg) => msg.id === assistantMessageId);
+      if (existing) {
+        store.patchMessage(assistantMessageId, {
+          content: result.text,
+          isError: result.isError,
+          runId: result.runId,
+          sessionId: result.sessionId,
+          model: result.model,
+          usage: result.usage,
+          tools: liveTools.length > 0 ? liveTools : undefined,
+          thinking: liveRun?.thinking || undefined,
+        });
+      } else {
+        store.addMessage({
+          id: assistantMessageId,
+          role: 'assistant',
+          content: result.text,
+          timestamp: Date.now(),
+          isError: result.isError,
+          conversationId: cid,
+          runId: result.runId,
+          sessionId: result.sessionId,
+          model: result.model,
+          usage: result.usage,
+          tools: liveTools.length > 0 ? liveTools : undefined,
+          thinking: liveRun?.thinking || undefined,
+        });
+      }
 
-      const wantsWorkflow = result.isDesignRequest || result.isRevisionRequest;
-      const projectOperations = result.projectOperations?.filter(
-        (operation): operation is Record<string, unknown> => Boolean(operation && typeof operation.op === 'string'),
-      ) ?? [];
-
-      if (projectOperations.length > 0) {
-        if (workflowWasRunning) {
-          useAppStore.getState().addMessage({
-            id: `project-agent-busy-${Date.now()}`,
-            role: 'system',
-            content: 'A workflow is already running. The project transaction was not applied.',
-            timestamp: Date.now(),
-            conversationId: cid,
-          });
-          return;
-        }
-        const latest = useAppStore.getState();
-        latest.setCircuitBusy(true);
-        latest.setCircuitError('');
-        setChatRun((current) => current ? { ...current, status: 'streaming', label: 'Applying revisioned project transaction' } : current);
-        let targetProjectId = '';
+      // Bind + reload canvas; never swap away from this conversation.
+      const reloadId = result.touchedProjectId || store.activeProjectId;
+      if (reloadId && !result.isError) {
+        store.bindConversationToProject(cid, reloadId);
         try {
-          let baseRevision = 0;
-          if (result.isRevisionRequest && agentContext) {
-            targetProjectId = agentContext.project_id;
-            baseRevision = agentContext.base_revision;
-          } else {
-            if (!result.projectKind) {
-              throw new Error('The Agent must classify a new project as simulation, pcb_schematic, or analog_ic.');
-            }
-            const created = await window.electronAPI.createCircuitProject({
-              name: result.projectName?.trim() || `Agent Circuit ${new Date().toLocaleString()}`,
-              demo: false,
-              projectKind: result.projectKind,
-            });
-            targetProjectId = created.project.project_id;
-            baseRevision = created.project.revision;
-          }
-          const applied = await window.electronAPI.applyCircuitCommand(targetProjectId, {
-            schema: 'actoviq.command.v1',
-            command_id: `agent-${Date.now()}`,
-            actor: 'agent',
-            project_id: targetProjectId,
-            base_revision: baseRevision,
-            message: result.revisionRequest || result.formalizedRequirement || trimmed,
-            operations: projectOperations,
-          });
-          if (applied.erc.blocking) {
-            await loadCircuitProject(targetProjectId);
-            useAppStore.getState().addMessage({
-              id: `project-agent-erc-${Date.now()}`,
-              role: 'system',
-              content: `The project transaction was saved at revision ${applied.revision}, but compile and simulation were blocked by ${applied.erc.summary.errors} ERC error${applied.erc.summary.errors === 1 ? '' : 's'}. Fix the listed diagnostics before continuing.`,
-              timestamp: Date.now(),
-              isError: true,
-              conversationId: cid,
-            });
-            return;
-          }
-          if (result.compileAfterApply !== false) {
-            setChatRun((current) => current ? { ...current, label: 'Compiling the validated circuit' } : current);
-            await window.electronAPI.compileCircuitProject(targetProjectId);
-          }
-          if (result.simulateAfterApply) {
-            setChatRun((current) => current ? { ...current, label: 'Running ngspice simulation' } : current);
-            await window.electronAPI.simulateCircuitProject(targetProjectId);
-          }
-          if (result.compileAfterApply !== false) {
-            setChatRun((current) => current ? { ...current, label: 'Writing revision-bound technical report' } : current);
-            try {
-              const technicalReport = await window.electronAPI.generateCircuitTechnicalReport(
-                targetProjectId,
-                applied.revision,
-              );
-              useAppStore.getState().setReportContent(technicalReport.report);
-              useAppStore.getState().addMessage({
-                id: `project-agent-report-${Date.now()}`,
-                role: 'system',
-                content: `Technical report generated for revision ${applied.revision} with ${technicalReport.metadata.model}.`,
-                timestamp: Date.now(),
-                conversationId: cid,
-              });
-            } catch (reportError) {
-              const reportMessage = reportError instanceof Error ? reportError.message : String(reportError);
-              useAppStore.getState().addMessage({
-                id: `project-agent-report-warning-${Date.now()}`,
-                role: 'system',
-                content: `The circuit build completed, but the AI technical report could not be generated: ${reportMessage}. The deterministic build report remains available.`,
-                timestamp: Date.now(),
-                conversationId: cid,
-                isError: true,
-              });
-            }
-          }
-          await loadCircuitProject(targetProjectId);
-          useAppStore.getState().addMessage({
-            id: `project-agent-applied-${Date.now()}`,
-            role: 'system',
-            content: `Applied ${projectOperations.length} project operation${projectOperations.length === 1 ? '' : 's'} at revision ${applied.revision}. ERC: ${applied.erc.summary.errors} errors, ${applied.erc.summary.warnings} warnings.`,
-            timestamp: Date.now(),
-            conversationId: cid,
-          });
-        } catch (projectError) {
-          if (targetProjectId) await loadCircuitProject(targetProjectId, false).catch(() => undefined);
-          const message = projectError instanceof Error ? projectError.message : String(projectError);
-          useAppStore.getState().setCircuitError(message);
-          useAppStore.getState().addMessage({
-            id: `project-agent-error-${Date.now()}`,
-            role: 'system',
-            content: `Project transaction failed: ${message}`,
-            timestamp: Date.now(),
-            isError: true,
-            conversationId: cid,
-          });
-        } finally {
-          useAppStore.getState().setCircuitBusy(false);
+          await window.electronAPI.listCircuitProjects();
+          await refreshCircuitProjects();
+          await loadCircuitProject(reloadId, false, { preserveChat: true });
+        } catch {
+          // File watch may still catch updates; ignore reload races.
         }
-        return;
-      }
-
-      if ((result.isRevisionRequest && agentContext) || result.isDesignRequest) {
-        return;
-      }
-
-      // If it is a design or revision request, trigger the workflow
-      if (wantsWorkflow && workflowWasRunning) {
-        useAppStore.getState().addMessage({
-          id: `workflow-busy-${Date.now()}`,
-          role: 'system',
-          content: 'A design workflow is already running. I kept your note in this conversation and will not start a second workflow until the current one finishes.',
-          timestamp: Date.now(),
-          conversationId: cid,
-        });
-      } else if (result.isRevisionRequest) {
-        const latest = useAppStore.getState();
-        const baseJobId = activeJobId ?? latest.activeJobId;
-        if (!baseJobId) {
-          latest.addMessage({
-            id: `revision-no-job-${Date.now()}`,
-            role: 'system',
-            content: 'Select a completed job first, then ask for the change again.',
-            timestamp: Date.now(),
-            isError: true,
-            conversationId: cid,
-          });
-          return;
-        }
-        const targetStage = normalizeWorkflowStage(result.targetStage);
-        const revisionText = `${trimmed}\n${result.revisionRequest ?? ''}`;
-        const rerunOnly =
-          targetStage !== undefined &&
-          /rerun|validate|verify|simulation|simulate|render|summary|重跑|重新|验证|仿真|渲染|总结/i.test(revisionText) &&
-          !/modify|change|fix|tune|optimi[sz]e|adjust|修改|改成|调整|优化|修复|替换|增加|删除/i.test(revisionText);
-        latest.addMessage({
-          id: `revision-start-${Date.now()}`,
-          role: 'system',
-          content: rerunOnly
-            ? `Rerunning ${targetStage} for ${baseJobId}.`
-            : `Starting a revision workflow from ${baseJobId}${targetStage ? `, focusing on ${targetStage}` : ''}.`,
-          timestamp: Date.now(),
-          conversationId: cid,
-        });
-        if (rerunOnly) {
-          startWorkflowRun({
-            resumeJob: baseJobId,
-            rerunFromStage: targetStage,
-            approvalPolicy: latest.approvalPolicy,
-          }, cid);
-        } else {
-          startWorkflowRun({
-            requirement: result.revisionRequest || trimmed,
-            revisionBaseJob: baseJobId,
-            approvalPolicy: latest.approvalPolicy,
-          }, cid);
-        }
-      } else if (result.isDesignRequest) {
-        const requirement = result.formalizedRequirement || trimmed;
-        const latest = useAppStore.getState();
-        startWorkflowRun({
-          requirement,
-          approvalPolicy: latest.approvalPolicy,
-          jobName: undefined,
-        }, cid);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -1177,10 +1084,12 @@ export function App() {
       });
     } finally {
       setIsChatPending(false);
+      isChatPendingRef.current = false;
       activeChatConversationRef.current = null;
+      pendingAssistantMessageIdRef.current = null;
       setChatRun(null);
     }
-  }, [isChatPending, loadCircuitProject, startWorkflowRun]);
+  }, [isChatPending, loadCircuitProject, refreshCircuitProjects]);
 
   const handleConversationChange = useCallback((nextConversationId: string) => {
     const previous = activeChatConversationRef.current;
@@ -1188,8 +1097,10 @@ export function App() {
       void window.electronAPI?.stopChat(previous);
     }
     activeChatConversationRef.current = null;
+    pendingAssistantMessageIdRef.current = null;
     setChatRun(null);
     setIsChatPending(false);
+    isChatPendingRef.current = false;
 
     if (!nextConversationId) return;
     const conv = useAppStore.getState().conversations.find((entry) => entry.id === nextConversationId);
@@ -1216,7 +1127,11 @@ export function App() {
     state.setCircuitProject(null);
     state.setCircuitBuild(null);
     state.resetWorkflow();
+    state.switchProjectChatContext(null);
     setJobId(null);
+    activeChatConversationRef.current = null;
+    setChatRun(null);
+    setIsChatPending(false);
     await refreshWorkspaces();
   }, [refreshWorkspaces, setJobId]);
 
@@ -1233,7 +1148,11 @@ export function App() {
     state.setCircuitProject(null);
     state.setCircuitBuild(null);
     state.resetWorkflow();
+    state.switchProjectChatContext(null);
     setJobId(null);
+    activeChatConversationRef.current = null;
+    setChatRun(null);
+    setIsChatPending(false);
     await refreshWorkspaces();
   }, [refreshWorkspaces, setJobId]);
 
@@ -1567,8 +1486,8 @@ const styles: Record<string, React.CSSProperties> = {
     right: 0,
     minWidth: 0,
     height: 'calc(100% - var(--av-toolbar-height))',
-    backgroundColor: '#ffffff',
-    borderLeft: '1px solid #dfe3e8',
+    backgroundColor: 'var(--av-surface-raised, #ffffff)',
+    borderLeft: '1px solid var(--av-stroke, #dfe3e8)',
     display: 'flex',
     flexDirection: 'column',
     boxShadow: '-8px 0 24px rgba(32,42,56,0.12)',

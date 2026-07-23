@@ -1,3 +1,11 @@
+export interface ChatMessageTool {
+  id: string;
+  name: string;
+  status: 'running' | 'done' | 'error';
+  label?: string;
+  detail?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
@@ -9,6 +17,10 @@ export interface ChatMessage {
   sessionId?: string;
   model?: string;
   usage?: Record<string, unknown>;
+  /** Tool / host-step timeline captured for this turn (visible in history). */
+  tools?: ChatMessageTool[];
+  /** Optional thinking trace captured with the assistant turn. */
+  thinking?: string;
 }
 
 export interface ConversationSummary {
@@ -20,6 +32,8 @@ export interface ConversationSummary {
   jobId?: string;
   /** When true, auto-title from the first user message is skipped. */
   titleLocked?: boolean;
+  /** Circuit project this conversation belongs to; null/undefined = workspace/legacy. */
+  projectId?: string | null;
 }
 
 export interface StageState {
@@ -48,6 +62,7 @@ export interface ChatResponse {
   targetStage?: string;
   projectName?: string;
   projectKind?: ProjectKind;
+  /** @deprecated ReAct path applies via tools; kept for compatibility. */
   projectOperations?: Array<Record<string, unknown>>;
   compileAfterApply?: boolean;
   simulateAfterApply?: boolean;
@@ -56,6 +71,8 @@ export interface ChatResponse {
   sessionId?: string;
   model?: string;
   usage?: Record<string, unknown>;
+  /** Project id touched by desktop ReAct tools (for GUI reload). */
+  touchedProjectId?: string;
 }
 
 export interface DesktopAgentEvent {

@@ -17,6 +17,7 @@ import { loadSettingsWithSecrets } from './settings.js';
 interface ChatContext {
   conversationId?: string;
   activeJobId?: string | null;
+  activeProjectId?: string | null;
   activeProject?: Record<string, unknown> | null;
   workspaceRoot?: string;
   modelTier?: ChatModelTier;
@@ -103,6 +104,9 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
         history: prepared.history,
         context: {
           activeJobId: context?.activeJobId,
+          activeProjectId: context?.activeProjectId
+            ?? (typeof context?.activeProject?.project_id === 'string' ? context.activeProject.project_id : null),
+          workspaceRoot: context?.workspaceRoot ?? workDir,
           activeProject: context?.activeProject,
         },
       },

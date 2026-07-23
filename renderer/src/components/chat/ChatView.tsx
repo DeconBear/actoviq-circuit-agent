@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bot,
   ChevronDown,
   CircuitBoard,
   FileCode2,
@@ -17,7 +16,9 @@ import {
   X,
 } from 'lucide-react';
 import { useAppStore } from '../../store/appStore';
+import { conversationsForProject, conversationHasContent } from '../../store/chatHistoryPersistence';
 import { CHAT_MODEL_TIER_OPTIONS, type ChatModelTier } from '../../modelTiers';
+import type { ChatMessage, ChatMessageTool } from '../../types';
 import { createSafeMarkdownParser, escapeHtml } from '../../utils/markdown';
 import './ChatView.css';
 
@@ -26,6 +27,7 @@ export interface ChatRunToolView {
   name: string;
   status: 'running' | 'done' | 'error';
   label?: string;
+  detail?: string;
 }
 
 export interface ChatRunView {
@@ -50,6 +52,8 @@ interface Props {
   isPending?: boolean;
   run?: ChatRunView | null;
 }
+
+const STICK_THRESHOLD_PX = 80;
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -76,7 +80,24 @@ function renderMarkdown(content: string): string {
   }
 }
 
-function BubbleContent({ msg }: { msg: { role: string; content: string } }) {
+function ToolTimeline({ tools }: { tools: Array<ChatRunToolView | ChatMessageTool> }) {
+  if (tools.length === 0) return null;
+  return (
+    <div className="chat-tool-list" data-testid="chat-tool-list" aria-label="Tool calls">
+      {tools.map((tool) => (
+        <div className={`chat-tool chat-tool--${tool.status}`} key={tool.id} title={tool.detail || tool.label || tool.name}>
+          <span className="chat-tool__icon" aria-hidden="true"><Wrench size={14} /></span>
+          <span className="chat-tool__name">{tool.name}</span>
+          <span className="chat-tool__label">{tool.label || tool.status}</span>
+          <span className="chat-tool__dot" aria-hidden="true" />
+          {tool.detail ? <span className="chat-tool__detail">{tool.detail}</span> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MessageBody({ msg }: { msg: ChatMessage }) {
   const html = useMemo(() => (
     msg.role === 'user'
       ? escapeHtml(msg.content).replace(/\n/g, '<br/>')
@@ -84,10 +105,21 @@ function BubbleContent({ msg }: { msg: { role: string; content: string } }) {
   ), [msg.content, msg.role]);
 
   return (
-    <div
-      className={msg.role === 'user' ? 'chat-message__plain' : 'markdown-content chat-markdown'}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="chat-message-row__stack">
+      {msg.thinking ? (
+        <details className="chat-thinking">
+          <summary>{`Thought · ${msg.thinking.length} chars`}</summary>
+          <pre>{msg.thinking}</pre>
+        </details>
+      ) : null}
+      {msg.content ? (
+        <div
+          className={msg.role === 'user' ? 'chat-message-row__plain' : 'chat-md-prose markdown-content'}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      ) : null}
+      {msg.tools && msg.tools.length > 0 ? <ToolTimeline tools={msg.tools} /> : null}
+    </div>
   );
 }
 
@@ -107,6 +139,10 @@ function normalizeTier(value: unknown): ChatModelTier {
   return value === 'basic' || value === 'professional' ? value : 'medium';
 }
 
+function isNearBottom(el: HTMLElement, thresholdPx = STICK_THRESHOLD_PX): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < thresholdPx;
+}
+
 export function ChatView({
   onSend,
   onStop,
@@ -122,8 +158,10 @@ export function ChatView({
   const [historyQuery, setHistoryQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [showJump, setShowJump] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
   const tierMenuRef = useRef<HTMLDivElement>(null);
   const historyPanelRef = useRef<HTMLDivElement>(null);
   const messages = useAppStore((state) => state.messages);
@@ -131,6 +169,7 @@ export function ChatView({
   const isRunning = useAppStore((state) => state.isRunning);
   const conversationId = useAppStore((state) => state.conversationId);
   const conversations = useAppStore((state) => state.conversations);
+  const conversationMessages = useAppStore((state) => state.conversationMessages);
   const netlistContent = useAppStore((state) => state.netlistContent);
   const svgContent = useAppStore((state) => state.svgContent);
   const reportContent = useAppStore((state) => state.reportContent);
@@ -138,6 +177,12 @@ export function ChatView({
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeWorkspace = useAppStore((state) => state.activeWorkspace);
   const currentConversation = conversations.find((entry) => entry.id === conversationId);
+  // Canonical transcript: prefer the longer of live vs stored so a desynced
+  // `messages` wipe cannot hide earlier turns while conversationMessages still has them.
+  const transcriptMessages = useMemo(() => {
+    const stored = conversationId ? (conversationMessages[conversationId] ?? []) : [];
+    return stored.length >= messages.length ? stored : messages;
+  }, [conversationId, conversationMessages, messages]);
   const runIsActive = Boolean(run && ['starting', 'streaming', 'repairing'].includes(run.status));
   const selectedTier = CHAT_MODEL_TIER_OPTIONS.find((option) => option.id === modelTier)
     ?? CHAT_MODEL_TIER_OPTIONS[1]
@@ -145,13 +190,58 @@ export function ChatView({
 
   const filteredConversations = useMemo(() => {
     const query = historyQuery.trim().toLowerCase();
-    const sorted = conversations.slice().sort((a, b) => b.updatedAt - a.updatedAt);
-    if (!query) return sorted;
-    return sorted.filter((entry) => (
+    const scoped = conversationsForProject(conversations, activeProjectId, conversationMessages);
+    const current = conversations.find((entry) => entry.id === conversationId);
+    // Always keep the open thread visible in History, even before project binding catches up.
+    const merged = current && !scoped.some((entry) => entry.id === conversationId)
+      ? [current, ...scoped]
+      : scoped;
+    const visible = merged.filter((entry) => (
+      conversationHasContent(entry, conversationMessages) || entry.id === conversationId
+    ));
+    if (!query) return visible;
+    return visible.filter((entry) => (
       entry.title.toLowerCase().includes(query)
       || entry.lastMessage.toLowerCase().includes(query)
     ));
-  }, [conversations, historyQuery]);
+  }, [activeProjectId, conversationId, conversationMessages, conversations, historyQuery]);
+
+  const projectConversations = useMemo(() => {
+    const scoped = conversationsForProject(conversations, activeProjectId, conversationMessages);
+    const current = conversations.find((entry) => entry.id === conversationId);
+    const merged = current && !scoped.some((entry) => entry.id === conversationId)
+      ? [current, ...scoped]
+      : scoped;
+    return merged.filter((entry) => (
+      conversationHasContent(entry, conversationMessages) || entry.id === conversationId
+    ));
+  }, [activeProjectId, conversationId, conversationMessages, conversations]);
+
+  const visibleMessages = useMemo(() => {
+    // While the live run panel shows tools/text, hide the empty assistant draft to avoid duplicates.
+    if (!runIsActive) return transcriptMessages;
+    return transcriptMessages.filter((msg) => !(
+      msg.role === 'assistant'
+      && !msg.content
+      && (msg.tools?.length ?? 0) > 0
+    ));
+  }, [transcriptMessages, runIsActive]);
+
+  const updateJumpVisibility = useCallback(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const near = isNearBottom(el);
+    stickRef.current = near;
+    setShowJump(!near && el.scrollHeight > el.clientHeight + 40);
+  }, []);
+
+  const jumpToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = messagesRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+    stickRef.current = true;
+    setShowJump(false);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -168,14 +258,18 @@ export function ChatView({
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, outputText, run?.text, run?.thinking, run?.tools]);
+    if (!stickRef.current) {
+      updateJumpVisibility();
+      return;
+    }
+    jumpToBottom(runIsActive ? 'auto' : 'smooth');
+  }, [visibleMessages, outputText, run?.text, run?.thinking, run?.tools, runIsActive, jumpToBottom, updateJumpVisibility]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = '0px';
-    textarea.style.height = `${Math.min(160, Math.max(42, textarea.scrollHeight))}px`;
+    textarea.style.height = `${Math.min(190, Math.max(58, textarea.scrollHeight))}px`;
   }, [input]);
 
   useEffect(() => {
@@ -222,15 +316,17 @@ export function ChatView({
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
     if (!trimmed || isPending) return;
+    stickRef.current = true;
     onSend(trimmed, modelTier);
     setInput('');
   }, [input, isPending, modelTier, onSend]);
 
   const handleNewConversation = () => {
-    const id = useAppStore.getState().newConversation();
+    const id = useAppStore.getState().newConversation(activeProjectId);
     onConversationChange?.(id);
     setHistoryOpen(false);
     setInput('');
+    stickRef.current = true;
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
@@ -243,6 +339,7 @@ export function ChatView({
     onConversationChange?.(id);
     setHistoryOpen(false);
     setEditingId(null);
+    stickRef.current = true;
   };
 
   const beginRename = (id: string, title: string) => {
@@ -267,10 +364,12 @@ export function ChatView({
   };
 
   const handleClearAll = () => {
-    if (conversations.length === 0) return;
-    if (!window.confirm(`Delete all ${conversations.length} conversations? This cannot be undone.`)) return;
-    useAppStore.getState().clearAllConversations();
-    onConversationChange?.('');
+    if (projectConversations.length === 0) return;
+    const scope = activeProjectId ? 'this project' : 'workspace chat';
+    if (!window.confirm(`Delete all ${projectConversations.length} conversations for ${scope}? This cannot be undone.`)) return;
+    useAppStore.getState().clearConversationsForProject(activeProjectId);
+    const id = useAppStore.getState().newConversation(activeProjectId);
+    onConversationChange?.(id);
     setHistoryOpen(false);
     setEditingId(null);
   };
@@ -285,6 +384,7 @@ export function ChatView({
   const usageLabel = formatUsage(run?.usage);
   const providerModel = [run?.provider, run?.model].filter(Boolean).join(' · ') || 'Actoviq Agent SDK';
   const contextLabel = activeProjectId || activeWorkspace?.name || 'workspace';
+  const thinkingChars = run?.thinking?.length ?? 0;
 
   return (
     <section className="chat-panel" aria-label="Actoviq circuit assistant">
@@ -292,7 +392,7 @@ export function ChatView({
         <div className="chat-panel__identity">
           <span className={`chat-panel__status chat-panel__status--${runIsActive ? 'active' : run?.status === 'error' ? 'error' : 'idle'}`} />
           <div className="chat-panel__title-group">
-            <strong>{currentConversation?.title || messages[0]?.content.slice(0, 44) || 'New conversation'}</strong>
+            <strong>{currentConversation?.title || transcriptMessages[0]?.content.slice(0, 44) || 'New conversation'}</strong>
             <span title={run?.sessionId}>{providerModel}</span>
           </div>
         </div>
@@ -312,7 +412,7 @@ export function ChatView({
             {historyOpen && (
               <div className="chat-history__panel" role="dialog" aria-label="Conversation history" data-testid="chat-history-panel">
                 <div className="chat-history__header">
-                  <strong>History</strong>
+                  <strong>{activeProjectId ? 'Project history' : 'History'}</strong>
                   <button type="button" className="chat-history__new" onClick={handleNewConversation} data-testid="chat-history-new">
                     <MessageSquarePlus size={14} aria-hidden="true" />
                     New
@@ -329,7 +429,9 @@ export function ChatView({
                 <div className="chat-history__list">
                   {filteredConversations.length === 0 ? (
                     <div className="chat-history__empty">
-                      {conversations.length === 0 ? 'No conversations yet.' : 'No matches.'}
+                      {projectConversations.length === 0
+                        ? (activeProjectId ? 'No conversations for this project yet.' : 'No conversations yet.')
+                        : 'No matches.'}
                     </div>
                   ) : filteredConversations.map((entry) => {
                     const isActive = entry.id === conversationId;
@@ -395,7 +497,7 @@ export function ChatView({
                     );
                   })}
                 </div>
-                {conversations.length > 0 && (
+                {projectConversations.length > 0 && (
                   <div className="chat-history__footer">
                     <button type="button" onClick={handleClearAll} data-testid="chat-history-clear-all">
                       Clear all
@@ -430,106 +532,114 @@ export function ChatView({
         </div>
       </header>
 
-      <div className="chat-panel__messages" data-testid="chat-message-list">
-        {messages.length === 0 && !outputText && !runIsActive && (
-          <div className="chat-empty">
-            <div className="chat-empty__icon"><CircuitBoard size={30} aria-hidden="true" /></div>
-            <h2>Design with Actoviq</h2>
-            <p>Describe a circuit, request a revision, or ask the built-in agent to compile, simulate, and explain the result.</p>
-            <div className="chat-empty__examples">
-              <button type="button" onClick={() => setInput('Design a 1 kHz RC low-pass filter and verify its cutoff frequency.')}>RC low-pass filter</button>
-              <button type="button" onClick={() => setInput('Review the current circuit and fix blocking ERC issues.')}>Review current design</button>
+      <div className="chat-transcript-shell">
+        <div
+          className="chat-panel__messages"
+          data-testid="chat-message-list"
+          ref={messagesRef}
+          onScroll={updateJumpVisibility}
+        >
+          {visibleMessages.length === 0 && !outputText && !runIsActive && (
+            <div className="chat-empty">
+              <div className="chat-empty__icon"><CircuitBoard size={30} aria-hidden="true" /></div>
+              <h2>Design with Actoviq</h2>
+              <p>Describe a circuit, request a revision, or ask the built-in agent to compile, simulate, and explain the result.</p>
+              <div className="chat-empty__examples">
+                <button type="button" onClick={() => setInput('Design a 1 kHz RC low-pass filter and verify its cutoff frequency.')}>RC low-pass filter</button>
+                <button type="button" onClick={() => setInput('Review the current circuit and fix blocking ERC issues.')}>Review current design</button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {messages.map((message) => (
-          <article
-            key={message.id}
-            className={`chat-message chat-message--${message.role === 'user' ? 'user' : 'assistant'}${message.isError ? ' chat-message--error' : ''}`}
-          >
-            {message.role !== 'user' && (
-              <div className="chat-message__avatar" aria-hidden="true"><Bot size={15} /></div>
-            )}
-            <div className="chat-message__body">
-              <div className="chat-message__meta">
+          {visibleMessages.map((message) => (
+            <article
+              key={message.id}
+              className={`chat-message-row chat-message-row--${message.role === 'user' ? 'user' : 'assistant'}${message.isError ? ' chat-message-row--error' : ''}`}
+            >
+              <div className="chat-message-row__meta">
                 <span>{message.role === 'user' ? 'You' : message.isError ? 'Actoviq · error' : 'Actoviq'}</span>
                 <time>{formatTime(message.timestamp)}</time>
               </div>
-              <BubbleContent msg={message} />
-            </div>
-          </article>
-        ))}
+              <div className="chat-message-row__body">
+                <MessageBody msg={message} />
+              </div>
+            </article>
+          ))}
 
-        {runIsActive && run && (
-          <article className="chat-message chat-message--assistant chat-message--stream" data-testid="chat-streaming-message">
-            <div className="chat-message__avatar chat-message__avatar--pulse" aria-hidden="true"><Bot size={15} /></div>
-            <div className="chat-message__body">
+          {runIsActive && run && (
+            <article className="chat-message-row chat-message-row--assistant chat-message-row--stream" data-testid="chat-streaming-message">
               <div className="chat-run-status">
                 <span className="chat-run-status__spinner" />
                 <span>{run.label || (run.status === 'repairing' ? 'Validating response' : 'Thinking')}</span>
               </div>
               {run.thinking && (
-                <details className="chat-run-thinking">
-                  <summary>Reasoning</summary>
+                <details className="chat-thinking" open>
+                  <summary>
+                    {runIsActive ? 'Thinking…' : `Thought · ${thinkingChars} chars`}
+                  </summary>
                   <pre>{run.thinking}</pre>
                 </details>
               )}
               {run.text && (
                 <div
-                  className="markdown-content chat-markdown chat-run-text"
+                  className="chat-md-prose markdown-content chat-run-text is-streaming"
                   dangerouslySetInnerHTML={{ __html: renderMarkdown(run.text) }}
                 />
               )}
-              {run.tools?.map((tool) => (
-                <div className={`chat-tool-card chat-tool-card--${tool.status}`} key={tool.id}>
-                  <Wrench size={14} aria-hidden="true" />
-                  <span>{tool.name}</span>
-                  <small>{tool.label || tool.status}</small>
-                </div>
-              ))}
+              {run.tools && run.tools.length > 0 ? <ToolTimeline tools={run.tools} /> : null}
+            </article>
+          )}
+
+          {artifacts.some((artifact) => artifact.visible) && (
+            <div className="chat-artifacts" aria-label="Generated circuit artifacts">
+              {artifacts.filter((artifact) => artifact.visible).map((artifact) => {
+                const Icon = artifact.icon;
+                return (
+                  <button
+                    type="button"
+                    key={artifact.key}
+                    onClick={() => useAppStore.getState().setActiveTab(artifact.key)}
+                  >
+                    <Icon size={14} aria-hidden="true" />
+                    {artifact.label}
+                  </button>
+                );
+              })}
             </div>
-          </article>
-        )}
+          )}
 
-        {artifacts.some((artifact) => artifact.visible) && (
-          <div className="chat-artifacts" aria-label="Generated circuit artifacts">
-            {artifacts.filter((artifact) => artifact.visible).map((artifact) => {
-              const Icon = artifact.icon;
-              return (
-                <button
-                  type="button"
-                  key={artifact.key}
-                  onClick={() => useAppStore.getState().setActiveTab(artifact.key)}
-                >
-                  <Icon size={14} aria-hidden="true" />
-                  {artifact.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
+          {outputText && (
+            <details className="chat-execution-log">
+              <summary><TerminalSquare size={14} aria-hidden="true" /> Execution log</summary>
+              <pre>{outputText}</pre>
+            </details>
+          )}
+        </div>
 
-        {outputText && (
-          <details className="chat-execution-log">
-            <summary><TerminalSquare size={14} aria-hidden="true" /> Execution log</summary>
-            <pre>{outputText}</pre>
-          </details>
-        )}
-        <div ref={bottomRef} />
+        <button
+          type="button"
+          className={`chat-jump${showJump ? ' visible' : ''}`}
+          onClick={() => jumpToBottom('smooth')}
+          aria-label="Jump to bottom"
+          data-testid="chat-jump-bottom"
+        >
+          ↓ Jump to bottom
+        </button>
       </div>
 
       <footer className="chat-composer-wrap">
-        {(run?.label || usageLabel || isRunning) && (
-          <div className="chat-composer-status">
-            <span>{run?.label || (isRunning ? 'Circuit workflow is running' : '')}</span>
-            {usageLabel && <span>{usageLabel}</span>}
-          </div>
-        )}
-        <div className="chat-composer-shell">
-          <div className="chat-composer-context" title={contextLabel}>
-            <CircuitBoard size={12} aria-hidden="true" />
-            <span>{contextLabel}</span>
+        <div className="chat-composer-stack">
+          {(run?.label || usageLabel || isRunning) && (
+            <div className="chat-composer-status">
+              <span>{run?.label || (isRunning ? 'Circuit workflow is running' : '')}</span>
+              {usageLabel && <span>{usageLabel}</span>}
+            </div>
+          )}
+          <div className="chat-composer-meta" title={contextLabel}>
+            <div className="chat-composer-meta__chip">
+              <CircuitBoard size={13} aria-hidden="true" />
+              <span>{contextLabel}</span>
+            </div>
           </div>
           <div className="chat-composer">
             <textarea
@@ -542,7 +652,7 @@ export function ChatView({
                   handleSend();
                 }
               }}
-              placeholder={isPending ? 'Agent is responding…' : 'Ask Actoviq...'}
+              placeholder={isPending ? 'Agent is responding…' : 'Ask Actoviq…'}
               aria-label="Message Actoviq Circuit Agent"
               data-testid="chat-composer"
               disabled={isPending && !runIsActive}
@@ -608,8 +718,8 @@ export function ChatView({
               )}
             </div>
           </div>
+          <p className="chat-composer__hint">Enter to send · Shift+Enter for a new line</p>
         </div>
-        <p className="chat-composer__hint">Enter to send · Shift+Enter for a new line</p>
       </footer>
     </section>
   );

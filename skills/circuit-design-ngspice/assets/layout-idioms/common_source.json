@@ -1,0 +1,17 @@
+{
+  "schema": "actoviq.layout-idiom.v1",
+  "idiom_id": "common_source",
+  "name": "Common-source / common-emitter stage",
+  "topology_tags": ["common_source", "common_emitter", "amplifier", "gain"],
+  "module_roles": ["amplifier", "amp", "gain", "cs_stage"],
+  "lanes": [
+    { "match": { "type": "V", "name_regex": ".*(in|vin|sig).*" }, "rank": 0, "lane": -2, "rotation": 90 },
+    { "match": { "type": "R", "name_regex": ".*(bias|pull|rg|rb).*" }, "rank": 0, "lane": -1, "rotation": 90 },
+    { "match": { "type": "M", "name_regex": ".*(m1|mn|nmos|driver).*" }, "rank": 1, "lane": 0 },
+    { "match": { "type": "Q", "name_regex": ".*(q1|npn|driver).*" }, "rank": 1, "lane": 0 },
+    { "match": { "type": "R", "name_regex": ".*(load|rd|rc|collect).*" }, "rank": 2, "lane": 0, "rotation": 90 },
+    { "match": { "type": "R", "name_regex": ".*(source|re|degen|se).*" }, "rank": 0, "lane": 0, "rotation": 90 },
+    { "match": { "type": "C", "name_regex": ".*(out|load|coup).*" }, "rank": 1, "lane": 2 }
+  ],
+  "notes": "Input left, active device center, drain/collector load above, source/emitter degeneration below."
+}

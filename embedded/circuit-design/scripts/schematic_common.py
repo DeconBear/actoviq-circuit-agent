@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Shared helpers for report schematics and KiCad export."""
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import Any
 
 from netlist_to_json import (
     apply_value_resolution,
+    choose_two_terminal_orientation,
     infer_io_nodes,
     is_control_directive,
     merge_continuation_lines,
@@ -942,14 +943,15 @@ def symbol_kind(comp: dict[str, Any]) -> str:
     nodes = component_nodes(comp)
     symbol_hint = str(comp.get("symbol_hint") or "").lower()
     if comp_type == "resistor":
-        return "resistor_v" if sum(1 for n in nodes if is_rail(n)) == 1 else "resistor_h"
+        return f"resistor_{choose_two_terminal_orientation(nodes, comp=comp)}"
     if comp_type == "capacitor":
-        return "capacitor_v" if sum(1 for n in nodes if is_rail(n)) == 1 else "capacitor_h"
+        return f"capacitor_{choose_two_terminal_orientation(nodes, comp=comp)}"
     if comp_type == "inductor":
-        return "inductor_v" if sum(1 for n in nodes if is_rail(n)) == 1 else "inductor_h"
+        return f"inductor_{choose_two_terminal_orientation(nodes, comp=comp)}"
     if comp_type == "diode":
-        return "diode_v" if sum(1 for n in nodes if is_rail(n)) == 1 else "diode_h"
+        return f"diode_{choose_two_terminal_orientation(nodes, comp=comp)}"
     if comp_type in {"voltage_source", "current_source"}:
+        # Sources default vertical in this renderer.
         return "source_v"
     if comp_type == "bjt":
         model = str(comp.get("model") or comp.get("sim_model") or comp.get("sim_value") or "").lower()

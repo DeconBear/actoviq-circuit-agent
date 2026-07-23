@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { layoutVisionModelFingerprint, loadSettings, loadSettingsWithSecrets } from './settings.js';
 import { getActiveWorkspace } from '../workspaceState.js';
 import { generateDesktopTechnicalReport } from '../agent/desktopAgentService.js';
+import { runProjectTool } from '../agent/circuitProjectCli.js';
 
 interface ProjectSummary {
   projectId: string;
@@ -852,57 +853,6 @@ async function createProjectFromTemplate(input: {
 
   const bundle = await runProjectTool(['summary', '--project-root', projectRoot]);
   return enrichProjectBundle(projectRoot, bundle);
-}
-
-function projectScriptPath(): string {
-  const candidates = [
-    path.resolve(app.getAppPath(), 'skills', 'circuit-design-ngspice', 'scripts', 'circuit_project.py'),
-    path.resolve(process.resourcesPath, 'skills', 'circuit-design-ngspice', 'scripts', 'circuit_project.py'),
-  ];
-  const candidate = candidates.find((value) => existsSync(value));
-  if (!candidate) {
-    throw new Error('circuit_project.py is missing from the application bundle.');
-  }
-  return candidate;
-}
-
-function runProjectTool(args: string[]): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const python = process.env.PYTHON_BIN?.trim() || 'python';
-    const child = spawn(python, [projectScriptPath(), ...args], {
-      cwd: app.getAppPath(),
-      windowsHide: true,
-      env: process.env,
-    });
-    let stdout = '';
-    let stderr = '';
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error('Circuit project tool timed out.'));
-    }, 120_000);
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on('error', (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timeout);
-      const line = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? '';
-      let result: Record<string, unknown>;
-      try {
-        result = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        reject(new Error(stderr.trim() || stdout.trim() || `Circuit project tool exited with ${code}`));
-        return;
-      }
-      if (code !== 0 || result.ok !== true) {
-        reject(new Error(String(result.error ?? stderr.trim() ?? `Circuit project tool exited with ${code}`)));
-        return;
-      }
-      resolve(result);
-    });
-  });
 }
 
 const EDA_BRIDGE_PEER_KINDS = new Set(['kicad', 'jlceda']);

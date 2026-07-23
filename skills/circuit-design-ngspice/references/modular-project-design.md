@@ -59,6 +59,10 @@ For a multi-stage design, one `actoviq.command.v1` should typically include:
 3. `connect_ports` (and optional `set_connection_network`) for shared nets.
 4. `set_analog_ic_profile` when `project_kind` is `analog_ic`.
 
+If module `position` is omitted or would overlap another card, `circuit_project.py`
+auto-assigns the next free Arrange-modules grid slot (`100+400·col`,
+`110+340·row`). Explicit non-overlapping positions are preserved.
+
 Then `compile` and, when in scope, `simulate` / `simulate-module`.
 
 ## Reference Reuse

@@ -1,0 +1,15 @@
+{
+  "schema": "actoviq.layout-idiom.v1",
+  "idiom_id": "r2r_bit_tap",
+  "name": "R-2R ladder with bit taps",
+  "topology_tags": ["r2r", "ladder", "dac", "bit_tap"],
+  "module_roles": ["dac", "ladder", "r2r", "stimuli"],
+  "lanes": [
+    { "match": { "type": "V", "name_regex": ".*(vb|bit|b)\\d+.*" }, "rank": 0, "lane": -2, "rotation": 90 },
+    { "match": { "type": "R", "name_regex": ".*(r2[_-]?|rs)\\d*.*" }, "rank": 1, "lane": -1, "rotation": 90 },
+    { "match": { "type": "R", "name_regex": "^r\\d+$|.*series.*|.*ladder.*" }, "rank": 1, "lane": 0, "rotation": 0 },
+    { "match": { "type": "R", "name_regex": ".*(term|rterm).*" }, "rank": 2, "lane": 1, "rotation": 90 },
+    { "match": { "type": "R", "name_regex": ".*(load|rload).*" }, "rank": 2, "lane": 2, "rotation": 90 }
+  ],
+  "notes": "Bit sources and 2R shunts vertical on the left; series R arms horizontal along the ladder; termination/load vertical."
+}
