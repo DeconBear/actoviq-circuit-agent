@@ -1,0 +1,14 @@
+{
+  "schema": "actoviq.layout-idiom.v1",
+  "idiom_id": "diff_pair",
+  "name": "MOS differential pair",
+  "topology_tags": ["diff_pair", "differential", "ota", "amplifier"],
+  "module_roles": ["ota", "amplifier", "amp"],
+  "lanes": [
+    { "match": { "type": "M", "name_regex": ".*(tail|bias|iss).*" }, "rank": 0, "lane": 0 },
+    { "match": { "type": "M", "name_regex": ".*(left|inp|plus|m1|ma).*" }, "rank": 1, "lane": -1 },
+    { "match": { "type": "M", "name_regex": ".*(right|inn|minus|m2|mb).*" }, "rank": 1, "lane": 1 },
+    { "match": { "type": "M", "name_regex": ".*(load|mp).*" }, "rank": 2, "lane": 0 }
+  ],
+  "notes": "Place tail at bottom center, matched pair left/right, loads above."
+}

@@ -29,15 +29,31 @@ python scripts/circuit_project.py workspace-resolve-projects-root
 ## Project contract
 
 - Create or use a project under `<active-workspace>/projects/<project-id>/`.
+- Set `project_kind` on create (`simulation` | `pcb_schematic` | `analog_ic`).
+  Missing legacy values migrate to `simulation`; explicit unknown values fail
+  closed. Kind gates validation, Agent `next_action`, handoff, and LCSC availability.
 - Put user-provided reference files under `<active-workspace>/references/`.
+- Structured reusable assets live in `<active-workspace>/references/catalog/`
+  (`actoviq.reference-asset.v1`): circuit modules/projects, schematic layout
+  snapshots, layout idioms, and layout visuals. See
+  [user-reference-assets.md](user-reference-assets.md).
 - If OCR text exists, read it from `<active-workspace>/references/.ocr/`.
 - Treat `project.circuit.json` and each `modules/<id>/module.circuit.json` as
-  the only editable source of truth.
+  the only editable source of truth. Persist `stable_id` on objects for EDA
+  round-trip (`ACTOVIQ_ID` in peer tools).
 - Use `scripts/circuit_project.py` for deterministic creation, modification,
-  revision, compilation, and simulation. Do not edit generated files under
-  `build/`.
+  revision, compilation, simulation, Bridge, and LCSC bind. Do not edit
+  generated files under `build/`.
+- For `pcb_schematic`, use stable-ID KiCad handoff or the experimental,
+  vendor-unverified JLCEDA exchange plus LCSC binding; peer connectivity
+  reconstruction is not yet lossless. For `analog_ic`, run the PDK
+  audit/simulation loop and use the Virtuoso SPICE/CDL package. See
+  [eda-bridge-lcsc.md](eda-bridge-lcsc.md) and [analog-ic-design.md](analog-ic-design.md).
 - The GUI watches project files and refreshes the corresponding canvas after
   a successful atomic write.
+- Default topology for multi-stage designs is hierarchical modules on the
+  project canvas; see [modular-project-design.md](modular-project-design.md).
+  Read stage schematics one module at a time rather than one dense sheet.
 
 Create a project:
 
@@ -159,7 +175,11 @@ stable `id`.
 The GUI can save reusable design memory under the active workspace's
 `references/design-memory/` folder (*Save template* / *Save flow*).
 `templates/<id>/` contains `template.json`, `agent-guide.md`, `template.cir`
-when the source project was compiled, `project.circuit.json`, and module files.
+when the source project was compiled, `project.circuit.json`, module files, and
+per-module `layout-reference.json` (connectivity-hash guarded placement).
+Saving a template also registers a `references/catalog/` entry. The sidebar
+**Reference catalog** can import `.cir` / layout images, seed projects, insert
+modules, apply layout seeds, and promote visuals after a placement snapshot.
 `flows/<id>/` contains `flow.json`, `design-flow.md`, and applied command logs
 when present. Prefer validated memories during asset reuse, but still run fresh
 ERC and simulation. Deleted projects move to `.trash/projects/`; do not treat
@@ -254,10 +274,14 @@ The older `<workspace-root>/jobs/` manifest workflow remains available only
 for compatibility with existing result bundles. Do not call the legacy
 built-in workflow for a project-canvas design.
 
-For a new AI-generated circuit, prefer one `upsert_module_netlist` operation.
-It accepts module metadata plus `netlist_notebook`, parses supported devices
-into editable symbols, preserves models/directives/unknown legal statements,
-infers ports and stable nets, and commits all outputs as one revision. Use
+For a new AI-generated circuit, **prefer functional modules** (stimuli / stage
+cores / encode-load) with `upsert_module_netlist`, `add_port`, and
+`connect_ports` in one revision. A single `upsert_module_netlist` is only for
+trivial paths (about ≤8 devices). See
+[modular-project-design.md](modular-project-design.md). Each upsert accepts
+module metadata plus `netlist_notebook`, parses supported devices into
+editable symbols, preserves models/directives/unknown legal statements,
+infers ports and stable nets, and commits outputs as one revision. Use
 `set_module_netlist` for an existing module. Do not construct a parallel SVG-
 only representation.
 

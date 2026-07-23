@@ -11,6 +11,7 @@ import {
   resolveReferenceDocument,
   selectWorkspace,
 } from '../workspaceState.js';
+import { ensureProjectsDirectoryWatcher } from './projects.js';
 
 function mimeTypeFor(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
@@ -127,10 +128,16 @@ export function registerWorkspaceHandlers(ipcMain: IpcMain): void {
   ipcMain.handle('workspace:active', async () => getActiveWorkspace());
 
   ipcMain.handle('workspace:create', async (_event, input: { name?: string; root?: string }) => {
-    return createWorkspace(input ?? {});
+    const workspace = await createWorkspace(input ?? {});
+    await ensureProjectsDirectoryWatcher();
+    return workspace;
   });
 
-  ipcMain.handle('workspace:select', async (_event, id: string) => selectWorkspace(id));
+  ipcMain.handle('workspace:select', async (_event, id: string) => {
+    const workspace = await selectWorkspace(id);
+    await ensureProjectsDirectoryWatcher();
+    return workspace;
+  });
 
   ipcMain.handle('workspace:choose-root', async () => {
     const win = BrowserWindow.getAllWindows()[0];

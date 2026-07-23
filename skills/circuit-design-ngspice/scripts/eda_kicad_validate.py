@@ -498,7 +498,7 @@ def validate_kicad_package(
         for page in ir.get("pages", []):
             page_id = str(page.get("id", ""))
             for component in page.get("components", []):
-                component_id = str(component.get("id", ""))
+                component_id = str(component.get("stable_id") or component.get("id", ""))
                 binding = binding_for(symbol_map, "kicad", page_id, component)
                 lib_id = f"{binding['library']}:{binding['cell']}"
                 expected[(page_id, component_id)] = {

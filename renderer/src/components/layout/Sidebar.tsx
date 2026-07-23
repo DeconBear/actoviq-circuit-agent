@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
-import type { CircuitTrashItem, ReferenceDocument, WorkspaceSummary } from '../../types';
+import type { CircuitTrashItem, ProjectKind, ReferenceDocument, WorkspaceSummary } from '../../types';
 import type { CircuitProjectSummary } from '../../types';
 
 interface JobEntry {
@@ -26,7 +26,7 @@ interface Props {
   trashProjects: CircuitTrashItem[];
   activeProjectId: string | null;
   onSelectProject: (projectId: string) => void;
-  onCreateProject: (demo: boolean, name: string) => Promise<void>;
+  onCreateProject: (demo: boolean, name: string, projectKind?: ProjectKind) => Promise<void>;
   onTrashProjects: (projectIds: string[]) => Promise<void>;
   onRestoreProjects: (trashIds: string[]) => Promise<void>;
   onPurgeProjects: (trashIds: string[]) => Promise<void>;
@@ -59,11 +59,13 @@ export function Sidebar({
   const [jobs, setJobs] = useState<JobEntry[]>([]);
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
   const [ocrRunningPath, setOcrRunningPath] = useState<string | null>(null);
+  const [catalogAssets, setCatalogAssets] = useState<Array<Record<string, unknown>>>([]);
+  const [catalogBusy, setCatalogBusy] = useState(false);
   const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [workspaceFormOpen, setWorkspaceFormOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState('');
   const [workspaceRoot, setWorkspaceRoot] = useState('');
-  const [projectForm, setProjectForm] = useState<{ demo: boolean; name: string } | null>(null);
+  const [projectForm, setProjectForm] = useState<{ demo: boolean; name: string; projectKind: ProjectKind } | null>(null);
   const [creating, setCreating] = useState(false);
   const [projectSelectionMode, setProjectSelectionMode] = useState(false);
   const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
@@ -210,6 +212,174 @@ export function Sidebar({
     }
   }, [creating]);
 
+  const refreshCatalog = useCallback(async () => {
+    if (!window.electronAPI) return;
+    try {
+      const result = await window.electronAPI.listReferenceCatalog();
+      setCatalogAssets(Array.isArray(result.assets) ? result.assets : []);
+    } catch {
+      setCatalogAssets([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCatalog();
+  }, [refreshCatalog, activeWorkspace?.id]);
+
+  const handleCatalogImportCircuit = useCallback(async () => {
+    if (!window.electronAPI) return;
+    setCatalogBusy(true);
+    setNotice(null);
+    try {
+      const result = await window.electronAPI.importCircuitReference() as {
+        ok?: boolean;
+        cancelled?: boolean;
+        error?: string;
+      };
+      if (result.cancelled) return;
+      if (result.ok === false) throw new Error(result.error || 'Import failed');
+      setNotice({ type: 'ok', text: 'Circuit reference imported' });
+      await refreshCatalog();
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, [refreshCatalog]);
+
+  const handleCatalogImportVisual = useCallback(async () => {
+    if (!window.electronAPI) return;
+    setCatalogBusy(true);
+    setNotice(null);
+    try {
+      const result = await window.electronAPI.importVisualReference() as {
+        ok?: boolean;
+        cancelled?: boolean;
+        error?: string;
+      };
+      if (result.cancelled) return;
+      if (result.ok === false) throw new Error(result.error || 'Import failed');
+      setNotice({ type: 'ok', text: 'Layout visual reference imported' });
+      await refreshCatalog();
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, [refreshCatalog]);
+
+  const handleCatalogCreateProject = useCallback(async (assetId: string, name: string) => {
+    if (!window.electronAPI) return;
+    setCatalogBusy(true);
+    setNotice(null);
+    try {
+      const result = await window.electronAPI.createProjectFromReference({ assetId, name }) as {
+        ok?: boolean;
+        project_id?: string;
+        error?: string;
+      };
+      if (!result.ok) throw new Error(result.error || 'Create project failed');
+      setNotice({ type: 'ok', text: `Created project ${result.project_id}` });
+      onRefreshReferences();
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, [onRefreshReferences]);
+
+  const handleCatalogInsertModule = useCallback(async (assetId: string) => {
+    if (!window.electronAPI) return;
+    if (!activeProjectId) {
+      setNotice({ type: 'error', text: 'Select a project before inserting a module' });
+      return;
+    }
+    setCatalogBusy(true);
+    setNotice(null);
+    try {
+      const result = await window.electronAPI.insertModuleFromReference({
+        projectId: activeProjectId,
+        assetId,
+      }) as { ok?: boolean; module_id?: string; error?: string };
+      if (!result.ok) throw new Error(result.error || 'Insert failed');
+      setNotice({ type: 'ok', text: `Inserted module ${result.module_id}` });
+      onSelectProject(activeProjectId);
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, [activeProjectId, onSelectProject]);
+
+  const handleCatalogApplyLayout = useCallback(async (assetId: string) => {
+    if (!window.electronAPI) return;
+    if (!activeProjectId) {
+      setNotice({ type: 'error', text: 'Select a project before applying layout' });
+      return;
+    }
+    const moduleId = window.prompt('Module id to apply layout reference');
+    if (!moduleId?.trim()) return;
+    setCatalogBusy(true);
+    setNotice(null);
+    try {
+      const result = await window.electronAPI.applyLayoutReference({
+        projectId: activeProjectId,
+        moduleId: moduleId.trim(),
+        assetId,
+      }) as { ok?: boolean; applied?: boolean; message?: string; error?: string };
+      if (!result.ok) throw new Error(result.error || result.message || 'Apply layout failed');
+      setNotice({
+        type: 'ok',
+        text: result.applied ? 'Layout reference applied' : (result.message || 'Layout prepared without apply'),
+      });
+      onSelectProject(activeProjectId);
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, [activeProjectId, onSelectProject]);
+
+  const handleCatalogPromoteVisual = useCallback(async (assetId: string) => {
+    if (!window.electronAPI) return;
+    if (!activeProjectId) {
+      setNotice({ type: 'error', text: 'Select a project before promoting a visual layout' });
+      return;
+    }
+    const moduleId = window.prompt('Module id whose current placement becomes the layout reference');
+    if (!moduleId?.trim()) return;
+    setCatalogBusy(true);
+    setNotice(null);
+    try {
+      const result = await window.electronAPI.promoteVisualReferenceFromModule({
+        projectId: activeProjectId,
+        moduleId: moduleId.trim(),
+        assetId,
+      }) as { ok?: boolean; error?: string };
+      if (!result.ok) throw new Error(result.error || 'Promote failed');
+      setNotice({ type: 'ok', text: 'Visual reference promoted to schematic_layout' });
+      await refreshCatalog();
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCatalogBusy(false);
+    }
+  }, [activeProjectId, refreshCatalog]);
+
+  const handleCatalogAttachChat = useCallback(async (assetId: string) => {
+    if (!window.electronAPI) return;
+    try {
+      const result = await window.electronAPI.attachReferenceToChat({ assetId }) as {
+        ok?: boolean;
+        attachment?: { summary?: string };
+      };
+      if (!result.ok) throw new Error('Attach failed');
+      setNotice({ type: 'ok', text: `Attached: ${result.attachment?.summary || assetId}` });
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    }
+  }, []);
+
   const handleCreateWorkspace = useCallback(async () => {
     const name = workspaceName.trim();
     if (!name || creating || creatingRef.current) return;
@@ -238,7 +408,7 @@ export function Sidebar({
     setCreating(true);
     setNotice(null);
     try {
-      await onCreateProject(projectForm.demo, name);
+      await onCreateProject(projectForm.demo, name, projectForm.projectKind);
       setProjectForm(null);
       setNotice({ type: 'ok', text: `Project created: ${name}` });
     } catch (error) {
@@ -496,7 +666,7 @@ export function Sidebar({
           type="button"
           onClick={() => {
             if (creating) return;
-            setProjectForm({ demo: true, name: 'Modular analog chain' });
+            setProjectForm({ demo: true, name: 'Modular analog chain', projectKind: 'simulation' });
             setWorkspaceFormOpen(false);
             setNotice(null);
           }}
@@ -512,7 +682,7 @@ export function Sidebar({
           type="button"
           onClick={() => {
             if (creating) return;
-            setProjectForm({ demo: false, name: 'New circuit project' });
+            setProjectForm({ demo: false, name: 'New circuit project', projectKind: 'simulation' });
             setWorkspaceFormOpen(false);
             setNotice(null);
           }}
@@ -542,6 +712,23 @@ export function Sidebar({
             data-testid="project-name-input"
             autoFocus
           />
+          <label style={styles.projectKindField}>
+            <span style={styles.projectKindLabel}>Project kind</span>
+            <select
+              value={projectForm.projectKind}
+              onChange={(event) => setProjectForm({
+                ...projectForm,
+                projectKind: event.target.value as ProjectKind,
+              })}
+              style={styles.projectKindSelect}
+              disabled={creating}
+              data-testid="project-kind-select"
+            >
+              <option value="simulation">仿真/教学</option>
+              <option value="pcb_schematic">PCB 原理图</option>
+              <option value="analog_ic">模拟 IC</option>
+            </select>
+          </label>
           <div style={styles.formActions}>
             <button
               type="button"
@@ -838,6 +1025,100 @@ export function Sidebar({
           </>
         )}
         <div style={styles.sectionHeader}>
+          Reference catalog
+          <div style={styles.sectionActions}>
+            <button
+              onClick={() => { void handleCatalogImportCircuit(); }}
+              style={styles.inlineActionBtn}
+              disabled={catalogBusy}
+              data-testid="sidebar-import-circuit-ref"
+            >
+              +Cir
+            </button>
+            <button
+              onClick={() => { void handleCatalogImportVisual(); }}
+              style={styles.inlineActionBtn}
+              disabled={catalogBusy}
+              data-testid="sidebar-import-visual-ref"
+            >
+              +Img
+            </button>
+            <button
+              onClick={() => { void refreshCatalog(); }}
+              style={styles.inlineActionBtn}
+              disabled={catalogBusy}
+              data-testid="sidebar-refresh-catalog"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+        {catalogAssets.length === 0 && (
+          <div style={styles.empty}>Import .cir or layout images into catalog/</div>
+        )}
+        {catalogAssets.slice(0, 10).map((asset) => {
+          const id = String(asset.id ?? '');
+          const kind = String(asset.kind ?? '');
+          const name = String(asset.name ?? id);
+          const useAs = Array.isArray(asset.use_as) ? asset.use_as.map(String) : [];
+          return (
+            <div key={id} style={styles.refItem} data-testid={`catalog-asset-${id}`}>
+              <div style={styles.refTitle}>{name}</div>
+              <div style={styles.refMeta}>{kind} · {String(asset.trust ?? '')}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                {useAs.includes('seed_new_project') && (
+                  <button
+                    type="button"
+                    style={styles.refOcrBtn}
+                    disabled={catalogBusy}
+                    onClick={() => { void handleCatalogCreateProject(id, name); }}
+                  >
+                    New
+                  </button>
+                )}
+                {useAs.includes('insert_module') && (
+                  <button
+                    type="button"
+                    style={styles.refOcrBtn}
+                    disabled={catalogBusy || !activeProjectId}
+                    onClick={() => { void handleCatalogInsertModule(id); }}
+                  >
+                    Insert
+                  </button>
+                )}
+                {(useAs.includes('apply_layout_seed') || useAs.includes('guide_router')) && (
+                  <button
+                    type="button"
+                    style={styles.refOcrBtn}
+                    disabled={catalogBusy || !activeProjectId}
+                    onClick={() => { void handleCatalogApplyLayout(id); }}
+                  >
+                    Layout
+                  </button>
+                )}
+                {kind === 'layout_visual' && (
+                  <button
+                    type="button"
+                    style={styles.refOcrBtn}
+                    disabled={catalogBusy || !activeProjectId}
+                    onClick={() => { void handleCatalogPromoteVisual(id); }}
+                  >
+                    Promote
+                  </button>
+                )}
+                <button
+                  type="button"
+                  style={styles.refOcrBtn}
+                  disabled={catalogBusy}
+                  onClick={() => { void handleCatalogAttachChat(id); }}
+                >
+                  Chat
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        <div style={styles.sectionHeader}>
           References
           <div style={styles.sectionActions}>
             <button
@@ -1047,6 +1328,26 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: 'uppercase',
   },
   inlineInput: {
+    width: '100%',
+    boxSizing: 'border-box',
+    border: '1px solid #c8cfd7',
+    borderRadius: 4,
+    padding: '6px 7px',
+    fontSize: 12,
+    color: '#253041',
+    backgroundColor: '#ffffff',
+  },
+  projectKindField: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+  },
+  projectKindLabel: {
+    color: '#59636e',
+    fontSize: 11,
+    fontWeight: 600,
+  },
+  projectKindSelect: {
     width: '100%',
     boxSizing: 'border-box',
     border: '1px solid #c8cfd7',

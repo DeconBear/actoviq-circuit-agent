@@ -45,7 +45,7 @@ npm run electron:dev
 
 - **Design**——每个模块都可在基于 `actoviq.module.v2` 的轻量网格原理图编辑器中打开。可以选中并用鼠标左键拖动符号，放置 R/C/L/D/M/Q/V/I 器件或自定义引脚 Block，绘制正交导线，编辑参数，删除对象并撤销/重做。引脚和端口引用稳定的电气 `net_id`；网络名称、别名、电源符号和标签都是显式属性，因此连接两个 MOS 引脚不会再复制 `VIN` 标签或重命名无关网络。一次完整手势只提交一个带版本的事务。
 - **Design memory**——*Save template* 和 *Save flow* 会在 `references/design-memory/` 中保存来源 revision、文档哈希、电路族、仿真覆盖和验证状态。Agent 优先复用已验证记录，但仍会重新执行 ERC 和仿真。
-- **Netlist**——每个模块一份可编辑的 Markdown 笔记本：`spice` 代码块是网表，代码块之外是说明。受支持器件会映射为原生可编辑符号；`.model`、`.param`、分析、测量以及未知但合法的 SPICE 语句会在往返转换中保留。保存会提交统一文档并从同一 revision 重建预览。
+- **Netlist**——每个模块一份可编辑的 Markdown 笔记本：`spice` 代码块是网表，代码块之外是说明。受支持器件会映射为原生可编辑符号；符合当前项目类型的 `.model`、`.param`、分析、测量及 opaque 语句会被保留，禁止的前缀/指令会在解析前失败。保存会提交统一文档并从同一 revision 重建预览。
 - **SVG**——当前模块的 `SchematicDocument` 预览，与 Design 编辑器使用完全相同的几何结果。
 - **统一原理图真源**——Design 和 SVG 都渲染 `actoviq.module.v2` 投影出的 `actoviq.schematic-document.v1`。MOS `D/G/S/B` 等语义引脚锚点、显式导线、标签和布局完全共享。netlistsvg 继续用于兼容导出和独立几何质量检查，但不再是第二份可编辑模型。
 - **Sim**——按 revision 运行 ngspice，支持 OP、DC Sweep、AC、Transient、S 参数、Noise、Pole-Zero、FFT、参数扫描和 Monte Carlo。工作台分别显示执行、测量和规格状态，并提供 Cartesian、Bode、Polar、Smith 和表格视图；在原理图中选中引脚/导线或器件，可添加经 source-map 映射的节点电压或真实器件电流 trace；长波形通过限制点数且支持视口范围的 IPC 读取。
@@ -56,6 +56,35 @@ npm run electron:dev
 **项目生命周期**——删除项目默认移动到 `.trash/projects/`，可在回收站视图中恢复或永久清理；项目列表支持右键删除和批量选择。用户或 Agent 的每个事务都会生成可恢复 revision，记录 actor、父版本、内容哈希、规范化网表、文档快照、构建来源和网表 diff。
 
 **Agent 如何驱动**——Claude Code / Codex 使用 `circuit-design-ngspice` skill 在当前工作空间下创建和修改项目；GUI 监听这些文件并刷新对应卡片。详见 [SKILL.md](./skills/circuit-design-ngspice/SKILL.md) 中的 *GUI Project Canvas Contract*。
+
+### 项目类型、EDA Bridge 与立创商城
+
+创建空白/演示项目时可选择 **项目类型**（旧项目默认 `simulation`）：
+
+| 类型 | 用途 | 默认闭环 |
+| --- | --- | --- |
+| 仿真验证 (`simulation`) | 仅原语 SPICE 验证 | 类型门禁 → ERC → 编译 → ngspice |
+| PCB 原理图 (`pcb_schematic`) | 外部 PCB EDA 交接 + 立创商城元数据 | ERC → 器件/位号就绪 → 已验证 KiCad 交接 / 实验性嘉立创交换；仿真可选 |
+| 模拟 IC (`analog_ic`) | 绑定 PDK 的晶体管尺寸设计 | PDK/W/L 审计 → ERC → 编译 → ngspice → Virtuoso 包 |
+
+**推荐联合用法（PCB 原理图）**
+
+1. 新建项目，选择「PCB 原理图」。
+2. 用 AI 或手工完成原理图。
+3. （可选）Settings →「立创商城 (LCSC)」填 API Key/Secret；无密钥时可开 fallback 做离线演示搜料。
+4. 打开 **Export EDA** 对话框：在 **EDA Bridge** 区 Link KiCad / 嘉立创 EDA 文件夹，Push 写出、Pull 拉回（按 `stable_id`/`ACTOVIQ_ID` 对齐，不覆盖 peer 侧 PCB）。嘉立创 JSON 路径目前是实验性交换格式，尚未经过厂商应用导入验证。
+5. 在外部 EDA 继续改图 / 画板。Pull 当前只对齐已知器件的布局/属性；任意连线修改尚不能无损重建。
+6. 一次性 zip 导出继续用于受控交接以及 Altium-via-KiCad。
+
+**模拟 IC**：配置用户自备的 PDK/模型库与 corner，要求 MOS 明确给出 W/L/M/NF，先运行 `analog-ic-audit` 和 ngspice，再导出绑定 revision/hash 的 SPICE/CDL、映射、manifest 与 SKILL Virtuoso 包；foundry 模型只引用、不打包。Razavi-Bench 的评测材料许可证要求第三方评测套件先取得书面许可，因此当前只提供来源/revision/LICENSE 预检，题目读取与评分执行保持禁用。
+
+**明确不做**：PCB 布局、足迹自动生成、DFM、嘉立创下单。
+
+细节与 CLI：
+
+- [eda-bridge-lcsc.md](./skills/circuit-design-ngspice/references/eda-bridge-lcsc.md)
+- [SKILL.md](./skills/circuit-design-ngspice/SKILL.md)
+- [project-agent-protocol.md](./skills/circuit-design-ngspice/references/project-agent-protocol.md)
 
 ## 快速开始（CLI / TUI）
 

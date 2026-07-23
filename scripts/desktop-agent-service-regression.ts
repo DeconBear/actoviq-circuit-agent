@@ -213,6 +213,7 @@ async function startMockServer(expectedToken: string): Promise<MockServer> {
           isDesignRequest: true,
           isRevisionRequest: false,
           formalizedRequirement: 'Create a mock current limiter.',
+          projectKind: 'simulation',
           projectOperations: [{
             op: 'upsert_module_netlist',
             module_id: 'current-limiter',
@@ -278,6 +279,7 @@ async function startMockServer(expectedToken: string): Promise<MockServer> {
           isRevisionRequest: false,
           formalizedRequirement: 'Create an RC low-pass filter.',
           projectName: 'Mock RC',
+          projectKind: 'simulation',
           projectOperations: [{
             op: 'upsert_module_netlist',
             module_id: 'rc-filter',
@@ -397,6 +399,7 @@ async function runMockRegression(): Promise<void> {
     allResults.push(firstResult);
     assert.equal(firstResult.isError, undefined);
     assert.equal(firstResult.isDesignRequest, true);
+    assert.equal(firstResult.projectKind, 'simulation');
     assert.equal(firstResult.projectOperations?.[0]?.op, 'upsert_module_netlist');
     assert(first.events.some((event) => event.type === 'run-started'));
     assert(first.events.some((event) => event.type === 'status'));

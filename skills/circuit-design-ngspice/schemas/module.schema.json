@@ -8,6 +8,7 @@
     "schema": { "enum": ["actoviq.module.v1", "actoviq.module.v2"] },
     "module_id": { "type": "string", "minLength": 1 },
     "name": { "type": "string", "minLength": 1 },
+    "stable_id": { "type": "string", "minLength": 1 },
     "revision": { "type": "integer", "minimum": 0 },
     "ports": {
       "type": "array",
@@ -41,9 +42,28 @@
         "required": ["id", "type", "name", "value", "position", "rotation", "pins"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "type": { "enum": ["R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK"] },
+          "type": { "enum": ["R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK", "U", "X", "F", "G", "H", "B"] },
           "name": { "type": "string", "minLength": 1 },
           "value": { "type": "string", "minLength": 1 },
+          "stable_id": { "type": "string", "minLength": 1 },
+          "eda": {
+            "type": "object",
+            "properties": {
+              "device_class": { "type": "string" },
+              "refdes": { "type": "string" },
+              "refdes_prefix": { "type": "string" },
+              "footprint_hint": { "type": "string" },
+              "footprint": { "type": "string" },
+              "lcsc_id": { "type": "string" },
+              "mpn": { "type": "string" },
+              "manufacturer": { "type": "string" },
+              "datasheet_url": { "type": "string" },
+              "jlc_basic": { "type": "boolean" },
+              "foreign_symbol": { "type": "string" },
+              "physical": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          },
           "position": {
             "type": "object",
             "required": ["x", "y"],

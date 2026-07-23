@@ -47,6 +47,8 @@ interface SavedDesignMemorySummary {
   guidePath?: string;
   templatePath?: string;
   flowPath?: string;
+  hasLayoutReference?: boolean;
+  layoutPack?: Record<string, unknown> | null;
 }
 
 interface EdaExportRequest {
@@ -107,6 +109,79 @@ let watchPollTimer: NodeJS.Timeout | null = null;
 let watchedProjectRevision: number | null = null;
 let watchPauseDepth = 0;
 const legacyArchivePromises = new Map<string, Promise<void>>();
+
+let projectsDirWatcher: FSWatcher | null = null;
+let projectsDirWatchRoot = '';
+let projectsDirWatchTimer: NodeJS.Timeout | null = null;
+let projectsDirPollTimer: NodeJS.Timeout | null = null;
+let projectsDirSnapshot = '';
+
+function notifyProjectListChanged(): void {
+  if (projectsDirWatchTimer) clearTimeout(projectsDirWatchTimer);
+  projectsDirWatchTimer = setTimeout(() => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send('project:list-changed', { timestamp: Date.now() });
+    }
+  }, 150);
+}
+
+async function snapshotProjectsDirectory(root: string): Promise<string> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort()
+      .join('\n');
+  } catch {
+    return '';
+  }
+}
+
+export async function ensureProjectsDirectoryWatcher(): Promise<void> {
+  const root = await projectsRoot();
+  if (projectsDirWatcher && projectsDirWatchRoot === root) return;
+  try {
+    projectsDirWatcher?.close();
+  } catch {
+    // ignore
+  }
+  projectsDirWatcher = null;
+  if (projectsDirPollTimer) {
+    clearInterval(projectsDirPollTimer);
+    projectsDirPollTimer = null;
+  }
+  projectsDirWatchRoot = root;
+  projectsDirSnapshot = await snapshotProjectsDirectory(root);
+  try {
+    projectsDirWatcher = watch(root, (_eventType, filename) => {
+      const relative = String(filename ?? '').replace(/\\/g, '/');
+      // Only react to top-level project folder create/rename/remove events.
+      if (relative.includes('/')) return;
+      void (async () => {
+        const next = await snapshotProjectsDirectory(root);
+        if (next === projectsDirSnapshot) return;
+        projectsDirSnapshot = next;
+        notifyProjectListChanged();
+      })();
+    });
+    projectsDirWatcher.on('error', (error) => {
+      console.warn('projects directory watcher error:', error);
+    });
+  } catch (error) {
+    console.warn('projects directory watcher failed to start:', error);
+  }
+  // Baidu sync / network drives sometimes miss create events; poll as backup.
+  projectsDirPollTimer = setInterval(() => {
+    void (async () => {
+      if (projectsDirWatchRoot !== root) return;
+      const next = await snapshotProjectsDirectory(root);
+      if (next === projectsDirSnapshot) return;
+      projectsDirSnapshot = next;
+      notifyProjectListChanged();
+    })();
+  }, 2_000);
+}
 
 function pauseProjectWatcher(): void {
   watchPauseDepth += 1;
@@ -511,15 +586,35 @@ async function saveDesignTemplate(projectId: string): Promise<SavedDesignMemoryS
     'utf8',
   );
 
+  const relativePath = relativeReferencePath(workspaceReferencesDir, targetRoot);
+  let layoutPack: Record<string, unknown> | null = null;
+  try {
+    layoutPack = await runProjectTool([
+      'reference-pack-from-project',
+      '--project-root', projectRoot,
+      '--template-root', targetRoot,
+      '--memory-id', memoryId,
+      '--template-relative', relativePath.replace(/\\/g, '/'),
+      '--trust', validationStatus,
+    ]);
+  } catch (error) {
+    layoutPack = {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
   return {
     ok: true,
     id: memoryId,
     kind: 'template',
     name: project.name,
     rootPath: targetRoot,
-    relativePath: relativeReferencePath(workspaceReferencesDir, targetRoot),
+    relativePath,
     guidePath: path.resolve(targetRoot, 'agent-guide.md'),
     templatePath: hasSystemNetlist ? path.resolve(targetRoot, 'template.cir') : undefined,
+    hasLayoutReference: layoutPack?.ok === true,
+    layoutPack,
   };
 }
 
@@ -808,6 +903,32 @@ function runProjectTool(args: string[]): Promise<Record<string, unknown>> {
       resolve(result);
     });
   });
+}
+
+const EDA_BRIDGE_PEER_KINDS = new Set(['kicad', 'jlceda']);
+const PROJECT_KINDS = new Set(['simulation', 'pcb_schematic', 'analog_ic']);
+
+async function appendLcscCliArgs(args: string[]): Promise<string[]> {
+  const settings = await loadSettingsWithSecrets();
+  const next = [...args];
+  if (settings.lcscUseFallback) next.push('--use-fallback');
+  return next;
+}
+
+function assertEdaBridgePeerKind(peerKind: string): 'kicad' | 'jlceda' {
+  if (!EDA_BRIDGE_PEER_KINDS.has(peerKind)) {
+    throw new Error(`Unsupported EDA bridge peer kind: ${peerKind}`);
+  }
+  return peerKind as 'kicad' | 'jlceda';
+}
+
+function assertProjectKind(projectKind: string | undefined): string | undefined {
+  const normalized = typeof projectKind === 'string' ? projectKind.trim() : '';
+  if (!normalized) return undefined;
+  if (!PROJECT_KINDS.has(normalized)) {
+    throw new Error(`Unsupported project kind: ${normalized}`);
+  }
+  return normalized;
 }
 
 function layoutReviewCliArgs(): string[] {
@@ -1543,6 +1664,7 @@ async function readSimulationDataset(
 }
 
 async function listProjects(): Promise<ProjectSummary[]> {
+  await ensureProjectsDirectoryWatcher();
   await archiveLegacyPlaywrightProjects();
   const root = await projectsRoot();
   const entries = await readdir(root, { withFileTypes: true });
@@ -1711,6 +1833,10 @@ async function watchProject(projectId: string): Promise<void> {
 }
 
 export function registerProjectHandlers(ipcMain: IpcMain): void {
+  void ensureProjectsDirectoryWatcher().catch((error) => {
+    console.warn('projects directory watcher bootstrap failed:', error);
+  });
+
   ipcMain.handle('project:list', async () => listProjects());
 
   ipcMain.handle('project:trash', async (_event, projectIds: string[]) => {
@@ -1772,13 +1898,16 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     },
   );
 
-  ipcMain.handle('project:create', async (_event, input: { name: string; demo?: boolean }) => {
+  ipcMain.handle('project:create', async (_event, input: { name: string; demo?: boolean; projectKind?: string }) => {
     const root = await projectsRoot();
-    return runProjectTool([
+    const args = [
       input.demo ? 'create-demo' : 'create',
       '--projects-root', root,
       '--name', input.name,
-    ]);
+    ];
+    const projectKind = typeof input.projectKind === 'string' ? input.projectKind.trim() : '';
+    if (projectKind) args.push('--project-kind', projectKind);
+    return runProjectTool(args);
   });
 
   ipcMain.handle(
@@ -1861,6 +1990,151 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
+
+  ipcMain.handle('project:choose-bridge-peer-root', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select KiCad / 嘉立创 EDA project folder',
+      properties: ['openDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  ipcMain.handle('project:bridge-list', async (_event, projectId: string) => {
+    const root = await resolveProjectRoot(projectId);
+    return runProjectTool(['bridge-list', '--project-root', root]);
+  });
+
+  ipcMain.handle('project:bridge-status', async (_event, projectId: string, peerKind?: string) => {
+    const root = await resolveProjectRoot(projectId);
+    const args = ['bridge-status', '--project-root', root];
+    if (peerKind?.trim()) args.push('--peer-kind', assertEdaBridgePeerKind(peerKind.trim()));
+    return runProjectTool(args);
+  });
+
+  ipcMain.handle(
+    'project:bridge-link',
+    async (_event, projectId: string, input: { peerKind: string; peerRoot: string; policy?: string }) => {
+      const root = await resolveProjectRoot(projectId);
+      const peerKind = assertEdaBridgePeerKind(input.peerKind);
+      const peerRoot = input.peerRoot?.trim();
+      if (!peerRoot) throw new Error('EDA bridge peer root is required.');
+      const args = ['bridge-link', '--project-root', root, '--peer-kind', peerKind, '--peer-root', path.resolve(peerRoot)];
+      if (input.policy?.trim()) args.push('--policy', input.policy.trim());
+      return runProjectTool(args);
+    },
+  );
+
+  ipcMain.handle('project:bridge-unlink', async (_event, projectId: string, peerKind: string) => {
+    const root = await resolveProjectRoot(projectId);
+    return runProjectTool([
+      'bridge-unlink',
+      '--project-root', root,
+      '--peer-kind', assertEdaBridgePeerKind(peerKind),
+    ]);
+  });
+
+  ipcMain.handle('project:bridge-push', async (_event, projectId: string, peerKind: string) => {
+    const root = await resolveProjectRoot(projectId);
+    const summary = await runProjectTool(['summary', '--project-root', root]);
+    const project = summary.project as { revision?: number } | undefined;
+    const sourceRevision = project?.revision;
+    if (!Number.isInteger(sourceRevision) || (sourceRevision ?? -1) < 0) {
+      throw new Error(`Invalid source revision: ${sourceRevision}`);
+    }
+    const args = [
+      'bridge-push',
+      '--project-root', root,
+      '--peer-kind', assertEdaBridgePeerKind(peerKind),
+      '--source-revision', String(sourceRevision),
+    ];
+    return runProjectTool(args);
+  });
+
+  ipcMain.handle(
+    'project:bridge-pull',
+    async (_event, projectId: string, peerKind: string, policy?: string) => {
+      const root = await resolveProjectRoot(projectId);
+      const args = [
+        'bridge-pull',
+        '--project-root', root,
+        '--peer-kind', assertEdaBridgePeerKind(peerKind),
+      ];
+      if (policy?.trim()) args.push('--policy', policy.trim());
+      return withProjectWatchPaused(async () => runProjectTool(args));
+    },
+  );
+
+  ipcMain.handle(
+    'project:bridge-import-cold',
+    async (_event, input: { peerKind: string; peerRoot: string; name?: string; projectKind?: string }) => {
+      const peerKind = assertEdaBridgePeerKind(input.peerKind);
+      const peerRoot = input.peerRoot?.trim();
+      if (!peerRoot) throw new Error('EDA bridge peer root is required.');
+      const projectsRootPath = await projectsRoot();
+      const args = [
+        'bridge-import-cold',
+        '--peer-kind', peerKind,
+        '--peer-root', path.resolve(peerRoot),
+        '--projects-root', projectsRootPath,
+      ];
+      const name = input.name?.trim();
+      if (name) args.push('--name', name);
+      const projectKind = assertProjectKind(input.projectKind);
+      if (projectKind) args.push('--project-kind', projectKind);
+      return runProjectTool(args);
+    },
+  );
+
+  ipcMain.handle(
+    'project:lcsc-search',
+    async (_event, query: string, opts?: { limit?: number; useFallback?: boolean }) => {
+      const trimmed = query?.trim();
+      if (!trimmed) throw new Error('LCSC search query is required.');
+      const args = ['lcsc-search', '--query', trimmed];
+      if (opts?.limit != null) args.push('--limit', String(opts.limit));
+      if (opts?.useFallback) args.push('--use-fallback');
+      return runProjectTool(await appendLcscCliArgs(args));
+    },
+  );
+
+  ipcMain.handle(
+    'project:lcsc-get',
+    async (_event, lcscId: string, opts?: { useFallback?: boolean }) => {
+      const trimmed = lcscId?.trim();
+      if (!trimmed) throw new Error('LCSC part id is required.');
+      const args = ['lcsc-get', '--lcsc-id', trimmed];
+      if (opts?.useFallback) args.push('--use-fallback');
+      return runProjectTool(await appendLcscCliArgs(args));
+    },
+  );
+
+  ipcMain.handle(
+    'project:lcsc-bind',
+    async (
+      _event,
+      projectId: string,
+      moduleId: string,
+      componentId: string,
+      lcscId: string,
+      opts?: { useFallback?: boolean },
+    ) => {
+      assertModuleId(moduleId);
+      const trimmedComponentId = componentId?.trim();
+      const trimmedLcscId = lcscId?.trim();
+      if (!trimmedComponentId) throw new Error('Component id is required.');
+      if (!trimmedLcscId) throw new Error('LCSC part id is required.');
+      const root = await resolveProjectRoot(projectId);
+      const args = [
+        'lcsc-bind',
+        '--project-root', root,
+        '--module-id', moduleId,
+        '--component-id', trimmedComponentId,
+        '--lcsc-id', trimmedLcscId,
+      ];
+      if (opts?.useFallback) args.push('--use-fallback');
+      return withProjectWatchPaused(async () => runProjectTool(await appendLcscCliArgs(args)));
+    },
+  );
 
   ipcMain.handle('project:simulate', async (_event, projectId: string) => {
     const settings = await loadSettings();
@@ -1984,6 +2258,120 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle('project:save-design-flow', async (_event, projectId: string) => {
     return saveDesignFlow(projectId);
+  });
+
+  ipcMain.handle('reference:list-catalog', async () => runProjectTool(['reference-catalog-list']));
+
+  ipcMain.handle('reference:import-circuit', async () => {
+    const picked = await dialog.showOpenDialog({
+      title: 'Import circuit reference',
+      properties: ['openFile'],
+      filters: [{ name: 'SPICE', extensions: ['cir', 'sp', 'spice', 'net'] }],
+    });
+    if (picked.canceled || !picked.filePaths[0]) {
+      return { ok: false, cancelled: true };
+    }
+    return runProjectTool([
+      'reference-import-circuit',
+      '--file', picked.filePaths[0],
+      '--as', 'circuit_module',
+    ]);
+  });
+
+  ipcMain.handle('reference:import-visual', async () => {
+    const picked = await dialog.showOpenDialog({
+      title: 'Import layout visual reference',
+      properties: ['openFile'],
+      filters: [{ name: 'Images / PDF', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf'] }],
+    });
+    if (picked.canceled || !picked.filePaths[0]) {
+      return { ok: false, cancelled: true };
+    }
+    return runProjectTool([
+      'reference-import-visual',
+      '--file', picked.filePaths[0],
+    ]);
+  });
+
+  ipcMain.handle(
+    'reference:create-project-from',
+    async (_event, input: { assetId: string; name?: string; projectKind?: string }) => (
+      runProjectTool([
+        'reference-create-project',
+        '--asset-id', input.assetId,
+        ...(input.name ? ['--name', input.name] : []),
+        ...(input.projectKind ? ['--project-kind', input.projectKind] : []),
+      ])
+    ),
+  );
+
+  ipcMain.handle(
+    'reference:insert-module',
+    async (_event, input: { projectId: string; assetId: string; moduleId?: string }) => (
+      runProjectTool([
+        'reference-insert-module',
+        '--project-root', await resolveProjectRoot(input.projectId),
+        '--asset-id', input.assetId,
+        ...(input.moduleId ? ['--module-id', input.moduleId] : []),
+      ])
+    ),
+  );
+
+  ipcMain.handle(
+    'reference:apply-layout',
+    async (_event, input: { projectId: string; moduleId: string; assetId: string }) => (
+      runProjectTool([
+        'apply-layout-from-reference',
+        '--project-root', await resolveProjectRoot(input.projectId),
+        '--module-id', input.moduleId,
+        '--asset-id', input.assetId,
+      ])
+    ),
+  );
+
+  ipcMain.handle(
+    'reference:prepare-layout',
+    async (_event, input: { projectId: string; moduleId: string; assetId: string }) => (
+      runProjectTool([
+        'prepare-layout-from-reference',
+        '--project-root', await resolveProjectRoot(input.projectId),
+        '--module-id', input.moduleId,
+        '--asset-id', input.assetId,
+      ])
+    ),
+  );
+
+  ipcMain.handle(
+    'reference:promote-visual-from-module',
+    async (_event, input: { projectId: string; moduleId: string; assetId: string; name?: string }) => (
+      runProjectTool([
+        'reference-promote-from-module',
+        '--project-root', await resolveProjectRoot(input.projectId),
+        '--module-id', input.moduleId,
+        '--asset-id', input.assetId,
+        ...(input.name ? ['--name', input.name] : []),
+      ])
+    ),
+  );
+
+  ipcMain.handle('reference:attach-to-chat', async (_event, input: { assetId: string }) => {
+    const catalog = await runProjectTool(['reference-catalog-list']) as {
+      assets?: Array<Record<string, unknown>>;
+    };
+    const asset = (catalog.assets ?? []).find((entry) => entry.id === input.assetId);
+    if (!asset) throw new Error(`Unknown reference asset: ${input.assetId}`);
+    return {
+      ok: true,
+      attachment: {
+        kind: 'reference_asset',
+        id: asset.id,
+        name: asset.name,
+        assetKind: asset.kind,
+        trust: asset.trust,
+        useAs: asset.use_as,
+        summary: `${asset.kind} · ${asset.name} (${asset.id})`,
+      },
+    };
   });
 
   ipcMain.handle('project:list-design-memory', async () => {

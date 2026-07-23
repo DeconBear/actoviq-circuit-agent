@@ -184,9 +184,10 @@ def validate_orcad_edif(
             raise ValueError(f"EDIF instance count differs from EDA IR: {page_id}")
         for component in page["components"]:
             component_id = str(component["id"])
+            identity = str(component.get("stable_id") or component_id)
             instance = _named_form(instances, _edif_identifier(component_id), f"instance in {page_id}")
             properties = _property_values(instance)
-            if properties.get("ACTOVIQ_ID") != component_id or properties.get("ACTOVIQ_PAGE_ID") != page_id:
+            if properties.get("ACTOVIQ_ID") != identity or properties.get("ACTOVIQ_PAGE_ID") != page_id:
                 raise ValueError(f"EDIF instance identity is not reversible: {page_id}:{component_id}")
             binding = binding_for(symbol_map, "orcad", page_id, component)
             view_ref = _children(instance, "viewRef")
@@ -326,7 +327,7 @@ def _expected_spice_lines(ir: dict[str, Any]) -> list[str]:
 def _netlist_instances(path: Path) -> list[str]:
     return [
         line.strip() for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("*") and line.strip().casefold() != ".end"
+        if line.strip() and not line.lstrip().startswith(("*", "."))
     ]
 
 
@@ -337,7 +338,7 @@ def validate_virtuoso_package(
 ) -> dict[str, Any]:
     """Validate flattened netlists, device map, SKILL reconstruction, and fallback symbols."""
     root = Path(package_root)
-    spice_files = list(root.glob("*.spice"))
+    spice_files = [path for path in root.glob("*.spice") if path.name != "model-bindings.spice"]
     cdl_files = list(root.glob("*.cdl"))
     if len(spice_files) != 1 or len(cdl_files) != 1:
         raise ValueError("Virtuoso package must contain exactly one SPICE and one CDL file")
@@ -349,7 +350,69 @@ def validate_virtuoso_package(
     if not map_path.is_file():
         raise ValueError("Virtuoso device-map.json is missing")
     device_map = json.loads(map_path.read_text(encoding="utf-8"))
-    components = device_map.get("components") if isinstance(device_map, dict) else None
+    if not isinstance(device_map, dict):
+        raise ValueError("Virtuoso device-map.json must contain an object")
+    expected_profile = ir.get("project", {}).get("analog_ic_profile")
+    if device_map.get("analog_ic_profile") != expected_profile:
+        raise ValueError("Virtuoso device map analog-IC profile differs from EDA IR")
+    profile_path = root / "analog-ic-profile.json"
+    if isinstance(expected_profile, dict):
+        if not profile_path.is_file() or json.loads(profile_path.read_text(encoding="utf-8")) != expected_profile:
+            raise ValueError("Virtuoso analog-ic-profile.json is missing or differs from EDA IR")
+    elif profile_path.exists():
+        raise ValueError("Virtuoso package contains an unexpected analog-IC profile")
+
+    expected_model_bindings = any(
+        (page.get("spice") or {}).get("models")
+        or re.search(r"(?im)^\s*\.(?:include|lib|model|param|func)\b", str((page.get("spice") or {}).get("source") or ""))
+        for page in ir["pages"]
+        if isinstance(page.get("spice"), dict)
+    )
+    bindings_path = root / "model-bindings.spice"
+    if expected_model_bindings and not bindings_path.is_file():
+        raise ValueError("Virtuoso package is missing preserved PDK/model bindings")
+    binding_lines = []
+    if bindings_path.is_file():
+        binding_lines = [
+            line.strip() for line in bindings_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("*")
+        ]
+        for deck in (*spice_files, *cdl_files):
+            deck_lines = {line.strip() for line in deck.read_text(encoding="utf-8").splitlines()}
+            if any(line not in deck_lines for line in binding_lines):
+                raise ValueError("Virtuoso SPICE/CDL deck does not contain every preserved model binding")
+
+    source_pages = [
+        str(page["id"])
+        for page in ir["pages"]
+        if isinstance(page.get("spice"), dict) and str(page["spice"].get("source") or "").strip()
+    ]
+    source_root = root / "source-spice"
+    for page in ir["pages"]:
+        spice_data = page.get("spice") if isinstance(page.get("spice"), dict) else {}
+        source = str(spice_data.get("source") or "").strip()
+        if not source:
+            continue
+        source_path = source_root / f"{_safe_name(page['id'])}.spice"
+        if not source_path.is_file() or source_path.read_text(encoding="utf-8").strip() != source:
+            raise ValueError(f"Virtuoso source-SPICE sidecar differs for page {page['id']}")
+
+    handoff_path = root / "handoff-manifest.json"
+    if not handoff_path.is_file():
+        raise ValueError("Virtuoso handoff manifest is missing")
+    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    expected_handoff = {
+        "schema": "actoviq.virtuoso-handoff.v1",
+        "source": ir["source"],
+        "connectivity_hash": ir["connectivity"]["hash"],
+        "project_kind": ir.get("project", {}).get("project_kind", "simulation"),
+        "analog_ic_profile_present": isinstance(expected_profile, dict),
+        "model_binding_count": len(binding_lines),
+        "source_pages": source_pages,
+    }
+    if handoff != expected_handoff:
+        raise ValueError("Virtuoso handoff manifest differs from EDA IR/sidecars")
+    components = device_map.get("components")
     expected_keys = {f"{page['id']}:{component['id']}" for page in ir["pages"] for component in page["components"]}
     if not isinstance(components, dict) or set(components) != expected_keys:
         raise ValueError("Virtuoso device map does not contain every component exactly once")
@@ -429,4 +492,6 @@ def validate_virtuoso_package(
         "module_cells": len(ir["pages"]),
         "top_cell": True,
         "wire_paths": expected_wire_count,
+        "model_bindings": len(binding_lines),
+        "source_spice_pages": len(source_pages),
     }

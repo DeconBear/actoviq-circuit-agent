@@ -12,6 +12,8 @@ import {
 } from 'react';
 import { useAppStore } from '../../store/appStore';
 import type {
+  BridgeConflict,
+  BridgeManifest,
   CircuitCommand,
   CircuitConnection,
   CircuitHistoryEntry,
@@ -19,9 +21,12 @@ import type {
   CircuitModule,
   CircuitModuleRef,
   CircuitPort,
+  EdaBridgePeerKind,
   EdaExportResult,
   EdaExportTarget,
   LayoutOptimizationResult,
+  LcscPart,
+  ProjectKind,
   SchematicOverrides,
   SimulationRun,
 } from '../../types';
@@ -31,7 +36,7 @@ import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import { createSchematicDocument } from '../../schematic/schematicDocument';
 
 interface Props {
-  onCreateProject: (demo: boolean, name: string) => Promise<void>;
+  onCreateProject: (demo: boolean, name: string, projectKind?: ProjectKind) => Promise<void>;
   onCreateProjectFromTemplate: (templateId: string, defaultName: string) => Promise<void>;
   onReloadProject: (projectId: string) => Promise<void>;
   onReferencesChanged?: () => Promise<void>;
@@ -50,6 +55,7 @@ interface ModuleEditorState {
 interface EmptyProjectFormState {
   demo: boolean;
   name: string;
+  projectKind: ProjectKind;
 }
 
 interface EdaExportFormState {
@@ -63,6 +69,20 @@ interface EdaExportFormState {
 }
 
 const BOARD_MARGIN = 1200;
+
+const PROJECT_KIND_OPTIONS: Array<{ value: ProjectKind; label: string }> = [
+  { value: 'simulation', label: '仿真/教学' },
+  { value: 'pcb_schematic', label: 'PCB 原理图' },
+  { value: 'analog_ic', label: '模拟 IC' },
+];
+
+function supportsEdaBridge(projectKind?: ProjectKind): boolean {
+  return projectKind === 'pcb_schematic';
+}
+
+function bridgePeerLabel(peerKind: EdaBridgePeerKind): string {
+  return peerKind === 'kicad' ? 'KiCad' : '嘉立创 EDA';
+}
 
 function currentVectorCandidates(instance: string, type?: CircuitModule['components'][number]['type']): string[] {
   const parameter = ({
@@ -402,8 +422,18 @@ export function CircuitWorkbench({
     nativeConvert: 'auto',
     strictLayout: false,
   });
+  const [bridgeManifests, setBridgeManifests] = useState<BridgeManifest[]>([]);
+  const [bridgeConflicts, setBridgeConflicts] = useState<BridgeConflict[]>([]);
+  const [bridgeLoading, setBridgeLoading] = useState(false);
+  const [lcscQuery, setLcscQuery] = useState('');
+  const [lcscResults, setLcscResults] = useState<LcscPart[]>([]);
+  const [lcscSelectedId, setLcscSelectedId] = useState('');
+  const [lcscBindComponentId, setLcscBindComponentId] = useState('');
+  const [lcscSearching, setLcscSearching] = useState(false);
 
   const project = bundle?.project ?? null;
+  const projectKind = project?.project_kind ?? 'simulation';
+  const edaBridgeEnabled = supportsEdaBridge(projectKind);
   const erc = bundle?.erc ?? build?.erc ?? null;
   const currentProjectId = project?.project_id ?? activeProjectId;
   const systemNetworks = useMemo(
@@ -481,6 +511,12 @@ export function CircuitWorkbench({
     setModulePreviewBusy({});
     setEdaExportOpen(false);
     setEdaExportResult(null);
+    setBridgeManifests([]);
+    setBridgeConflicts([]);
+    setLcscQuery('');
+    setLcscResults([]);
+    setLcscSelectedId('');
+    setLcscBindComponentId('');
     modulePreviewBusyRef.current = new Set();
   }, [activeProjectId]);
 
@@ -919,6 +955,135 @@ export function CircuitWorkbench({
     }
   }
 
+  const refreshBridgeStatus = useCallback(async () => {
+    if (!currentProjectId || !edaBridgeEnabled) return;
+    setBridgeLoading(true);
+    try {
+      const result = await window.electronAPI.listEdaBridges(currentProjectId);
+      setBridgeManifests(Array.isArray(result.bridges) ? result.bridges : []);
+    } catch (bridgeError) {
+      setError(bridgeError instanceof Error ? bridgeError.message : String(bridgeError));
+    } finally {
+      setBridgeLoading(false);
+    }
+  }, [currentProjectId, edaBridgeEnabled]);
+
+  useEffect(() => {
+    if (!edaExportOpen || !edaBridgeEnabled || !currentProjectId) return;
+    void refreshBridgeStatus();
+  }, [currentProjectId, edaBridgeEnabled, edaExportOpen, refreshBridgeStatus]);
+
+  async function linkBridgePeer(peerKind: EdaBridgePeerKind): Promise<void> {
+    if (!currentProjectId) return;
+    const peerRoot = await window.electronAPI.chooseEdaBridgePeerRoot();
+    if (!peerRoot) return;
+    setBusy(true);
+    setError('');
+    setBridgeConflicts([]);
+    try {
+      await window.electronAPI.linkEdaBridge(currentProjectId, { peerKind, peerRoot });
+      setNotice(`Linked ${bridgePeerLabel(peerKind)} bridge`);
+      await refreshBridgeStatus();
+    } catch (linkError) {
+      setError(linkError instanceof Error ? linkError.message : String(linkError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlinkBridgePeer(peerKind: EdaBridgePeerKind): Promise<void> {
+    if (!currentProjectId) return;
+    setBusy(true);
+    setError('');
+    try {
+      await window.electronAPI.unlinkEdaBridge(currentProjectId, peerKind);
+      setNotice(`Unlinked ${bridgePeerLabel(peerKind)} bridge`);
+      await refreshBridgeStatus();
+    } catch (unlinkError) {
+      setError(unlinkError instanceof Error ? unlinkError.message : String(unlinkError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pushBridgePeer(peerKind: EdaBridgePeerKind): Promise<void> {
+    if (!currentProjectId) return;
+    setBusy(true);
+    setError('');
+    setBridgeConflicts([]);
+    try {
+      await window.electronAPI.pushEdaBridge(currentProjectId, peerKind);
+      setNotice(`Pushed revision to ${bridgePeerLabel(peerKind)}`);
+      await refreshBridgeStatus();
+    } catch (pushError) {
+      setError(pushError instanceof Error ? pushError.message : String(pushError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pullBridgePeer(peerKind: EdaBridgePeerKind): Promise<void> {
+    if (!currentProjectId) return;
+    setBusy(true);
+    setError('');
+    setBridgeConflicts([]);
+    try {
+      const result = await window.electronAPI.pullEdaBridge(currentProjectId, peerKind);
+      setBridgeConflicts(Array.isArray(result.conflicts) ? result.conflicts : []);
+      setNotice(result.conflicts?.length
+        ? `Pulled from ${bridgePeerLabel(peerKind)} with ${result.conflicts.length} conflict(s)`
+        : `Pulled from ${bridgePeerLabel(peerKind)}`);
+      await refreshBridgeStatus();
+      if (currentProjectId) await onReloadProject(currentProjectId);
+    } catch (pullError) {
+      setError(pullError instanceof Error ? pullError.message : String(pullError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function searchLcscParts(): Promise<void> {
+    const query = lcscQuery.trim();
+    if (!query) return;
+    setLcscSearching(true);
+    setError('');
+    try {
+      const result = await window.electronAPI.searchLcscParts(query, { limit: 20 });
+      const parts = Array.isArray(result.parts) ? result.parts : [];
+      setLcscResults(parts);
+      setLcscSelectedId(parts[0]?.lcsc_id ?? '');
+    } catch (searchError) {
+      setError(searchError instanceof Error ? searchError.message : String(searchError));
+    } finally {
+      setLcscSearching(false);
+    }
+  }
+
+  async function bindSelectedLcscPart(): Promise<void> {
+    if (!currentProjectId || !activeModuleId || !lcscSelectedId) return;
+    const componentId = lcscBindComponentId.trim();
+    if (!componentId) {
+      setError('Enter a schematic component id to bind the LCSC part.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await window.electronAPI.bindLcscPart(
+        currentProjectId,
+        activeModuleId,
+        componentId,
+        lcscSelectedId,
+      );
+      setNotice(`Bound LCSC ${lcscSelectedId} to ${activeModuleId}/${componentId}`);
+      await onReloadProject(currentProjectId);
+    } catch (bindError) {
+      setError(bindError instanceof Error ? bindError.message : String(bindError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createProjectFromSavedTemplate(template: DesignMemoryItem): Promise<void> {
     setError('');
     try {
@@ -1247,7 +1412,7 @@ export function CircuitWorkbench({
     setError('');
     setNotice('');
     try {
-      await onCreateProject(emptyProjectForm.demo, name);
+      await onCreateProject(emptyProjectForm.demo, name, emptyProjectForm.projectKind);
       setEmptyProjectForm(null);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
@@ -1357,7 +1522,7 @@ export function CircuitWorkbench({
             onClick={() => {
               setError('');
               setNotice('');
-              setEmptyProjectForm({ demo: true, name: 'Modular analog chain' });
+              setEmptyProjectForm({ demo: true, name: 'Modular analog chain', projectKind: 'simulation' });
             }}
             disabled={busy}
             title="Create three-module demo project"
@@ -1372,7 +1537,7 @@ export function CircuitWorkbench({
             onClick={() => {
               setError('');
               setNotice('');
-              setEmptyProjectForm({ demo: false, name: 'New circuit project' });
+              setEmptyProjectForm({ demo: false, name: 'New circuit project', projectKind: 'simulation' });
             }}
             disabled={busy}
             title="Create blank project"
@@ -1400,6 +1565,23 @@ export function CircuitWorkbench({
               autoFocus
               data-testid="empty-project-name-input"
             />
+            <label style={styles.emptyProjectKindField}>
+              <span style={styles.emptyProjectKindLabel}>Project kind</span>
+              <select
+                value={emptyProjectForm.projectKind}
+                onChange={(event) => setEmptyProjectForm({
+                  ...emptyProjectForm,
+                  projectKind: event.target.value as ProjectKind,
+                })}
+                style={styles.emptyProjectKindSelect}
+                disabled={busy}
+                data-testid="empty-project-kind-select"
+              >
+                {PROJECT_KIND_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
             <div style={styles.emptyCreateActions}>
               <button
                 type="button"
@@ -1450,6 +1632,7 @@ export function CircuitWorkbench({
           </div>
           <div style={styles.projectMeta} data-testid="project-meta">
             revision {project.revision} | {project.modules.length} modules
+            {projectKind ? ` | ${PROJECT_KIND_OPTIONS.find((entry) => entry.value === projectKind)?.label ?? projectKind}` : ''}
             {build ? ` | ${build.manifest.status}` : ''}
             {build && (build.manifest.source_revision ?? build.manifest.revision) !== project.revision ? ' | build stale' : ''}
             {erc ? ` | ERC ${erc.status}` : ''}
@@ -1635,6 +1818,159 @@ export function CircuitWorkbench({
                   ))}
                 </div>
               ) : null}
+              <div style={styles.edaIntegrationDivider} />
+              {edaBridgeEnabled ? (
+                <>
+                  <div className="av-form-field" data-testid="eda-bridge-panel">
+                    <span>EDA Bridge</span>
+                    <div style={styles.edaBridgeActions}>
+                      <button
+                        type="button"
+                        className="av-btn av-btn--secondary"
+                        onClick={() => void linkBridgePeer('kicad')}
+                        disabled={busy}
+                        data-testid="eda-bridge-link-kicad"
+                      >
+                        Link KiCad
+                      </button>
+                      <button
+                        type="button"
+                        className="av-btn av-btn--secondary"
+                        onClick={() => void linkBridgePeer('jlceda')}
+                        disabled={busy}
+                        data-testid="eda-bridge-link-jlceda"
+                      >
+                        Link 嘉立创EDA
+                      </button>
+                      <button
+                        type="button"
+                        className="av-btn av-btn--secondary"
+                        onClick={() => void refreshBridgeStatus()}
+                        disabled={busy || bridgeLoading}
+                        data-testid="eda-bridge-refresh"
+                      >
+                        {bridgeLoading ? 'Refreshing…' : 'Refresh status'}
+                      </button>
+                    </div>
+                    {bridgeManifests.length === 0 ? (
+                      <p className="av-form-hint">No linked EDA peers yet.</p>
+                    ) : (
+                      bridgeManifests.map((bridge) => (
+                        <div key={bridge.peer_kind} style={styles.edaBridgeRow} data-testid={`eda-bridge-row-${bridge.peer_kind}`}>
+                          <div>
+                            <strong>{bridgePeerLabel(bridge.peer_kind)}</strong>
+                            <div className="av-form-hint">{bridge.peer_root}</div>
+                          </div>
+                          <div style={styles.edaBridgeRowActions}>
+                            <button
+                              type="button"
+                              className="av-btn av-btn--secondary"
+                              onClick={() => void pushBridgePeer(bridge.peer_kind)}
+                              disabled={busy}
+                              data-testid={`eda-bridge-push-${bridge.peer_kind}`}
+                            >
+                              Push
+                            </button>
+                            <button
+                              type="button"
+                              className="av-btn av-btn--secondary"
+                              onClick={() => void pullBridgePeer(bridge.peer_kind)}
+                              disabled={busy}
+                              data-testid={`eda-bridge-pull-${bridge.peer_kind}`}
+                            >
+                              Pull
+                            </button>
+                            <button
+                              type="button"
+                              className="av-btn av-btn--secondary"
+                              onClick={() => void unlinkBridgePeer(bridge.peer_kind)}
+                              disabled={busy}
+                              data-testid={`eda-bridge-unlink-${bridge.peer_kind}`}
+                            >
+                              Unlink
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    {bridgeConflicts.length > 0 ? (
+                      <div className="av-form-status av-form-status--error" data-testid="eda-bridge-conflicts">
+                        <div><strong>Pull conflicts</strong></div>
+                        {bridgeConflicts.map((conflict, index) => (
+                          <div key={`${conflict.field ?? 'conflict'}-${index}`} className="av-form-hint" style={{ marginTop: 4 }}>
+                            {conflict.message ?? `${conflict.field ?? 'field'}: local=${String(conflict.local)} remote=${String(conflict.remote)}`}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="av-form-field" data-testid="lcsc-search-panel">
+                    <span>立创搜料</span>
+                    <div style={styles.edaMappingRow}>
+                      <input
+                        className="av-form-control"
+                        value={lcscQuery}
+                        onChange={(event) => setLcscQuery(event.target.value)}
+                        placeholder="Search LCSC by keyword or part number"
+                        disabled={busy || lcscSearching}
+                        data-testid="lcsc-search-input"
+                      />
+                      <button
+                        type="button"
+                        className="av-btn av-btn--secondary"
+                        onClick={() => void searchLcscParts()}
+                        disabled={busy || lcscSearching || !lcscQuery.trim()}
+                        data-testid="lcsc-search-submit"
+                      >
+                        {lcscSearching ? 'Searching…' : 'Search'}
+                      </button>
+                    </div>
+                    {lcscResults.length > 0 ? (
+                      <div style={styles.lcscResults}>
+                        {lcscResults.map((part) => (
+                          <label key={part.lcsc_id} style={styles.lcscResultRow} data-testid={`lcsc-result-${part.lcsc_id}`}>
+                            <input
+                              type="radio"
+                              name="lcsc-part"
+                              checked={lcscSelectedId === part.lcsc_id}
+                              onChange={() => setLcscSelectedId(part.lcsc_id)}
+                            />
+                            <span>
+                              <strong>{part.lcsc_id}</strong>
+                              {part.mpn ? ` | ${part.mpn}` : ''}
+                              {part.manufacturer ? ` | ${part.manufacturer}` : ''}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                    <label className="av-form-field" style={{ marginTop: 8 }}>
+                      <span>Bind to component</span>
+                      <input
+                        className="av-form-control"
+                        value={lcscBindComponentId}
+                        onChange={(event) => setLcscBindComponentId(event.target.value)}
+                        placeholder={activeModuleId ? `Component id in module ${activeModuleId}` : 'Open a module first'}
+                        disabled={busy || !activeModuleId}
+                        data-testid="lcsc-bind-component-id"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="av-btn av-btn--secondary"
+                      onClick={() => void bindSelectedLcscPart()}
+                      disabled={busy || !lcscSelectedId || !activeModuleId || !lcscBindComponentId.trim()}
+                      data-testid="lcsc-bind-submit"
+                    >
+                      Bind LCSC part
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="av-form-hint" data-testid="eda-bridge-simulation-note">
+                  EDA Bridge 与立创搜料适用于 PCB 原理图 / 模拟 IC 项目；当前为仿真/教学项目。
+                </p>
+              )}
             </div>
             <div className="av-sheet__footer">
               {edaExportResult ? (
@@ -3076,6 +3412,19 @@ const styles: Record<string, CSSProperties> = {
   edaExportField: { display: 'flex', flexDirection: 'column', gap: 7, color: '#3d4651', fontSize: 12, fontWeight: 700 },
   edaExportTargets: { display: 'flex', flexWrap: 'wrap', gap: '8px 18px' },
   edaMappingRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 7 },
+  edaIntegrationDivider: { height: 1, background: '#e3e8ee', margin: '12px 0' },
+  edaBridgeActions: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
+  edaBridgeRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 10,
+    alignItems: 'flex-start',
+    padding: '8px 0',
+    borderTop: '1px solid #edf1f5',
+  },
+  edaBridgeRowActions: { display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' },
+  lcscResults: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8, maxHeight: 180, overflow: 'auto' },
+  lcscResultRow: { display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, color: '#303741' },
   edaExportResult: { border: '1px solid #ccd7ce', borderRadius: 6, padding: 12, background: '#f5faf6', color: '#34433a', fontSize: 12 },
   edaExportStatus: { display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 6, textTransform: 'capitalize' },
   edaExportActions: { display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #dfe3e8' },
@@ -3467,6 +3816,9 @@ const styles: Record<string, CSSProperties> = {
   },
   emptyCreateTitle: { color: '#4f5965', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', textAlign: 'left' },
   emptyProjectInput: { width: '100%', border: '1px solid #c8ced6', borderRadius: 5, padding: '8px 9px', color: '#303741', background: '#fff', fontFamily: 'inherit', fontSize: 12, fontWeight: 400 },
+  emptyProjectKindField: { display: 'flex', flexDirection: 'column', gap: 4 },
+  emptyProjectKindLabel: { color: '#59636e', fontSize: 11, fontWeight: 600 },
+  emptyProjectKindSelect: { width: '100%', border: '1px solid #c8ced6', borderRadius: 5, padding: '8px 9px', color: '#303741', background: '#fff', fontFamily: 'inherit', fontSize: 12 },
   emptyCreateActions: { display: 'flex', justifyContent: 'flex-end', gap: 8 },
   emptyNotice: { width: 'min(420px, 100%)', marginTop: 10, padding: '7px 9px', borderRadius: 5, fontSize: 11, textAlign: 'left' },
   actionRow: { display: 'flex', gap: 8, marginTop: 14 },

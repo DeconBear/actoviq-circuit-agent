@@ -650,6 +650,7 @@ async function createLegacyOpampFeedbackProject() {
     '--projects-root', projectsRoot,
     '--name', `${legacyOpampFeedbackPrefix}${Date.now()}`,
     '--project-id', expectedProjectId,
+    '--project-kind', 'analog_ic',
   ]);
   const projectRoot = created.project_root;
   const project = created.project;

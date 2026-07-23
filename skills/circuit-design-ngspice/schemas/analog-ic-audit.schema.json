@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/analog-ic-audit.schema.json",
+  "title": "Actoviq Analog IC Audit",
+  "type": "object",
+  "required": ["schema", "ok", "project_id", "source_revision", "devices", "errors", "warnings", "summary"],
+  "properties": {
+    "schema": { "const": "actoviq.analog-ic-audit.v1" },
+    "ok": { "type": "boolean" },
+    "project_id": { "type": "string" },
+    "source_revision": { "type": "integer", "minimum": 0 },
+    "profile": {
+      "anyOf": [
+        { "$ref": "analog-ic-profile.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "model_library_resolved": { "type": "string" },
+    "devices": { "type": "array", "items": { "type": "object" } },
+    "errors": { "type": "array", "items": { "type": "object" } },
+    "warnings": { "type": "array", "items": { "type": "object" } },
+    "summary": {
+      "type": "object",
+      "required": ["module_count", "mos_device_count", "error_count", "warning_count"],
+      "properties": {
+        "module_count": { "type": "integer", "minimum": 0 },
+        "mos_device_count": { "type": "integer", "minimum": 0 },
+        "error_count": { "type": "integer", "minimum": 0 },
+        "warning_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,7 +1,15 @@
 import type {
   AppSettings,
+  BridgeListResult,
+  BridgePullResult,
+  BridgeStatusResult,
   ChatModelTier,
+  EdaColdStartImportResult,
   LayoutModelTestResult,
+  LcscBindResult,
+  LcscPartResult,
+  LcscSearchResult,
+  ProjectKind,
   ProviderTestResult,
   DesktopAgentEvent,
   ChatResponse,
@@ -17,6 +25,7 @@ import type {
   CircuitTrashItem,
   CircuitSkillStatus,
   DesignMemoryItem,
+  EdaBridgePeerKind,
   EdaExportRequest,
   EdaExportResult,
   LayoutOptimizationRequest,
@@ -75,6 +84,20 @@ declare global {
       openWorkspaceReferences(): Promise<string>;
       listReferenceDocuments(): Promise<ReferenceDocument[]>;
       runReferenceOcr(relativePath: string): Promise<{ textPath: string; text: string }>;
+      listReferenceCatalog(): Promise<{ ok: boolean; assets: Array<Record<string, unknown>>; count: number }>;
+      importCircuitReference(): Promise<Record<string, unknown>>;
+      importVisualReference(): Promise<Record<string, unknown>>;
+      createProjectFromReference(input: { assetId: string; name?: string; projectKind?: string }): Promise<Record<string, unknown>>;
+      insertModuleFromReference(input: { projectId: string; assetId: string; moduleId?: string }): Promise<Record<string, unknown>>;
+      applyLayoutReference(input: { projectId: string; moduleId: string; assetId: string }): Promise<Record<string, unknown>>;
+      prepareLayoutReference(input: { projectId: string; moduleId: string; assetId: string }): Promise<Record<string, unknown>>;
+      promoteVisualReferenceFromModule(input: {
+        projectId: string;
+        moduleId: string;
+        assetId: string;
+        name?: string;
+      }): Promise<Record<string, unknown>>;
+      attachReferenceToChat(input: { assetId: string }): Promise<Record<string, unknown>>;
       listCircuitProjects(): Promise<CircuitProjectSummary[]>;
       trashCircuitProjects(projectIds: string[]): Promise<CircuitTrashItem[]>;
       listCircuitTrash(): Promise<CircuitTrashItem[]>;
@@ -86,7 +109,7 @@ declare global {
         revision: number;
         changed_modules: string[];
       }>;
-      createCircuitProject(input: { name: string; demo?: boolean }): Promise<CircuitProjectBundle>;
+      createCircuitProject(input: { name: string; demo?: boolean; projectKind?: ProjectKind }): Promise<CircuitProjectBundle>;
       createCircuitProjectFromTemplate(input: { templateId: string; name?: string }): Promise<CircuitProjectBundle>;
       getCircuitProject(projectId: string): Promise<CircuitProjectBundle>;
       applyCircuitCommand(projectId: string, command: CircuitCommand): Promise<{
@@ -106,6 +129,32 @@ declare global {
       optimizeCircuitLayout(projectId: string, input: LayoutOptimizationRequest): Promise<LayoutOptimizationResult>;
       chooseCircuitEdaMapping(): Promise<string | null>;
       chooseCircuitEdaOutputDir(): Promise<string | null>;
+      chooseEdaBridgePeerRoot(): Promise<string | null>;
+      listEdaBridges(projectId: string): Promise<BridgeListResult>;
+      edaBridgeStatus(projectId: string, peerKind?: EdaBridgePeerKind): Promise<BridgeStatusResult>;
+      linkEdaBridge(projectId: string, input: {
+        peerKind: EdaBridgePeerKind;
+        peerRoot: string;
+        policy?: string;
+      }): Promise<BridgeStatusResult>;
+      unlinkEdaBridge(projectId: string, peerKind: EdaBridgePeerKind): Promise<BridgeStatusResult>;
+      pushEdaBridge(projectId: string, peerKind: EdaBridgePeerKind): Promise<BridgeStatusResult>;
+      pullEdaBridge(projectId: string, peerKind: EdaBridgePeerKind, policy?: string): Promise<BridgePullResult>;
+      importEdaColdStart(input: {
+        peerKind: EdaBridgePeerKind;
+        peerRoot: string;
+        name?: string;
+        projectKind?: ProjectKind;
+      }): Promise<EdaColdStartImportResult>;
+      searchLcscParts(query: string, opts?: { limit?: number; useFallback?: boolean }): Promise<LcscSearchResult>;
+      getLcscPart(lcscId: string, opts?: { useFallback?: boolean }): Promise<LcscPartResult>;
+      bindLcscPart(
+        projectId: string,
+        moduleId: string,
+        componentId: string,
+        lcscId: string,
+        opts?: { useFallback?: boolean },
+      ): Promise<LcscBindResult>;
       simulateCircuitProject(projectId: string): Promise<SimulationRun>;
       generateCircuitTechnicalReport(projectId: string, sourceRevision: number): Promise<TechnicalReportResult>;
       compileCircuitModule(projectId: string, moduleId: string): Promise<{
@@ -151,6 +200,9 @@ declare global {
       watchCircuitProject(projectId: string): Promise<void>;
       onCircuitProjectChanged(
         callback: (event: { projectId: string; timestamp: number }) => void,
+      ): () => void;
+      onCircuitProjectListChanged(
+        callback: (event: { timestamp: number }) => void,
       ): () => void;
       openCircuitProjectFolder(projectId: string): Promise<string>;
       openCircuitEdaExportFolder(projectId: string, exportId: string, exportRoot?: string): Promise<string>;

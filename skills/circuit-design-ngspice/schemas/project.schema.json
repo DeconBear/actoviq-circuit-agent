@@ -8,6 +8,13 @@
     "schema": { "enum": ["actoviq.project.v1", "actoviq.project.v2"] },
     "project_id": { "type": "string", "minLength": 1 },
     "name": { "type": "string", "minLength": 1 },
+    "project_kind": {
+      "type": "string",
+      "enum": ["simulation", "pcb_schematic", "analog_ic"],
+      "description": "Project type gate for validation, Agent defaults, and EDA/LCSC capabilities. Missing values migrate to simulation."
+    },
+    "stable_id": { "type": "string", "minLength": 1 },
+    "analog_ic_profile": { "$ref": "analog-ic-profile.schema.json" },
     "revision": { "type": "integer", "minimum": 0 },
     "created_at": { "type": "string" },
     "updated_at": { "type": "string" },

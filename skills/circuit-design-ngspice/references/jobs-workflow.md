@@ -125,14 +125,14 @@ Read `planning/spec.normalized.json` and `design/template.cir`. Write:
   and expected ranges.
 
 - `planning/module-plan.json`: partition strategy. See
-  [references/module-plan-schema.md](references/module-plan-schema.md) for
+  [module-plan-schema.md](module-plan-schema.md) for
   the full schema. Use `"single_block"` for designs with ≤20 components.
   Use `"partitioned"` for large designs, multi-domain designs, or when the
   spec requests it. For partitioned designs, list each module with its
   input/output nets, local net prefix, and component names.
 
 For partitioned designs, read
-[references/partitioned-design.md](references/partitioned-design.md), then
+[partitioned-design.md](partitioned-design.md), then
 run:
 
 ```bash
@@ -221,7 +221,7 @@ Write supporting artifacts:
   functional block walkthrough, signal flow, parameter equations, simulation
   results, limitations, template reuse status.
 - `design/module-manifest.json`: for partitioned designs. See
-  [references/module-plan-schema.md](references/module-plan-schema.md).
+  [module-plan-schema.md](module-plan-schema.md).
 
 **Outputs**: `design/design.final.cir`, `design/design-notes.md`,
 `design/detailed-design-report.md`, `verification/strict-param-check.json`,

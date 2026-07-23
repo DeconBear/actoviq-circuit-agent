@@ -13,7 +13,7 @@ export const PIN_REACH = 12;
 export const BLOCK_PIN_LEAD = 24;
 const ROUTE_OBSTACLE_PADDING = SCHEMATIC_GRID + 4;
 
-export type ToolComponentType = Exclude<CircuitComponent['type'], 'E' | 'BLOCK'>;
+export type ToolComponentType = Exclude<CircuitComponent['type'], 'E' | 'BLOCK' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B'>;
 export type BlockPinSide = NonNullable<CircuitPin['side']>;
 
 export interface BlockDefinition {

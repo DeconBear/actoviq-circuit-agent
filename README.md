@@ -43,7 +43,7 @@ This compiles the Electron main process, starts Vite, and opens the window.
 
 - **Design** — each module opens in a lightweight grid-based schematic editor backed by `actoviq.module.v2`. Select and left-drag symbols, place primitive R/C/L/D/M/Q/V/I devices or custom-pin blocks, draw orthogonal wires, edit values, delete items, and undo/redo. Pins and ports reference stable electrical `net_id` values; visible names, aliases, rail symbols, and labels are explicit properties, so joining two MOS pins cannot silently duplicate a `VIN` label or rename unrelated networks. A completed gesture is committed as one revisioned transaction.
 - **Design memory** — *Save template* and *Save flow* store revision, document hash, circuit family, simulation coverage, and validation status under `references/design-memory/`. Agent reuse prioritizes validated memories and still requires fresh ERC and simulation.
-- **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Supported devices become native editable symbols; `.model`, `.param`, analyses, measurements, and unknown legal statements survive round trips. Saving commits the document and rebuilds previews from the same revision.
+- **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Supported devices become native editable symbols; kind-valid `.model`, `.param`, analyses, measurements, and opaque statements survive round trips, while forbidden prefixes/directives fail before parsing. Saving commits the document and rebuilds previews from the same revision.
 - **SVG** — the selected module's `SchematicDocument` preview, matching the editable module view.
 - **Schematic document source of truth** — Design and SVG render the same `actoviq.schematic-document.v1` projection of `actoviq.module.v2`. Semantic pin anchors, including MOS `D/G/S/B`, explicit wires, labels, and layout are shared. The netlistsvg path remains a compatibility/export build with independent geometry checks, not a second editable model.
 - **Sim** — revision-bound ngspice runs for OP, DC sweep, AC, transient, S-parameter, noise, pole-zero, FFT, parameter sweep, and Monte Carlo. The workbench separates execution, measurement, and specification status and displays Cartesian, Bode, polar, Smith, and table views. Select a schematic pin/wire or component to add its mapped voltage or real device-current trace. Large datasets are read through a bounded, viewport-aware IPC path.
@@ -54,6 +54,35 @@ This compiles the Electron main process, starts Vite, and opens the window.
 **Project lifecycle** — project deletion moves items to `.trash/projects/`; the Trash view can restore or permanently purge them. The project list supports context-menu deletion and multi-select. Every user or Agent transaction produces a restorable revision with actor, parent, content hash, normalized netlist, document snapshot, build provenance, and netlist diff.
 
 **How the agent drives it** — Claude Code / Codex use the `circuit-design-ngspice` skill to create and edit projects under the active workspace; the GUI watches those files and refreshes the affected card. See the *GUI Project Canvas Contract* in [SKILL.md](./skills/circuit-design-ngspice/SKILL.md).
+
+### Project kinds, EDA Bridge, and LCSC
+
+When creating a blank/demo project, choose a **project kind** (legacy projects migrate to `simulation`):
+
+| Kind | Purpose | Default loop |
+| --- | --- | --- |
+| Simulation (`simulation`) | Primitive-only SPICE verification | kind gate → ERC → compile → ngspice |
+| PCB schematic (`pcb_schematic`) | External PCB EDA handoff + LCSC metadata | ERC → part/refdes readiness → validated KiCad handoff / experimental JLCEDA exchange; sim optional |
+| Analog IC (`analog_ic`) | PDK-bound transistor sizing | PDK/W/L audit → ERC → compile → ngspice → Virtuoso package |
+
+**Recommended joint workflow (PCB schematic)**
+
+1. Create a project with kind **PCB schematic**.
+2. Finish the schematic with AI or the manual editor.
+3. Optionally configure LCSC API key/secret under Settings → 立创商城; enable fallback only for offline demo search.
+4. Open **Export EDA**: link KiCad / 嘉立创 EDA folders, then Push / Pull (identity via `stable_id` / `ACTOVIQ_ID`; peer PCB files are never overwritten). The JLCEDA JSON path is experimental and has not yet been validated by the vendor application.
+5. Continue edits / board layout in the external EDA. Pull currently reconciles known layout/property edits; arbitrary peer connectivity edits are not yet reconstructed losslessly.
+6. One-shot zip export remains available for controlled handoff and Altium-via-KiCad.
+
+For **Analog IC**, configure the user-supplied PDK/model library and corner, require explicit MOS W/L/M/NF, run `analog-ic-audit` plus ngspice, then export the revision/hash-bound SPICE/CDL + mapping + SKILL Virtuoso package. Foundry models are referenced, not bundled. Razavi-Bench evaluation remains disabled pending the written permission required by its benchmark-material license; the included command performs provenance preflight only.
+
+**Out of scope**: PCB layout, footprint generation, DFM, LCSC ordering.
+
+Details / CLI:
+
+- [eda-bridge-lcsc.md](./skills/circuit-design-ngspice/references/eda-bridge-lcsc.md)
+- [SKILL.md](./skills/circuit-design-ngspice/SKILL.md)
+- [project-agent-protocol.md](./skills/circuit-design-ngspice/references/project-agent-protocol.md)
 
 ## Quick Start (CLI / TUI)
 

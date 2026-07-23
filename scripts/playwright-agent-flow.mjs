@@ -435,6 +435,7 @@ async function startMockProvider() {
           isRevisionRequest: false,
           formalizedRequirement: 'Create and verify a first-order RC low-pass filter.',
           projectName,
+          projectKind: 'simulation',
           projectOperations: [{
             op: 'upsert_module_netlist',
             module_id: 'filter',
@@ -630,6 +631,7 @@ async function createLayoutLoopFixture() {
     schema: 'actoviq.project.v2',
     project_id: layoutLoopProjectId,
     name: layoutLoopProjectName,
+    project_kind: 'simulation',
     revision: 1,
     created_at: timestamp,
     updated_at: timestamp,
@@ -786,6 +788,7 @@ try {
 
   const { projectRoot, project } = await findProjectByName(projectName);
   assert.equal(project.revision, 1);
+  assert.equal(project.project_kind, 'simulation');
   assert.equal(project.modules.length, 1);
   const module = JSON.parse(await readFile(path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'));
   assert.match(module.spice.source, /\.ac dec 30 10 1meg/i);

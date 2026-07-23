@@ -19,7 +19,46 @@ Output JSON keys: `ok`, `output_path`, `warnings`, `derived_metrics`.
 python scripts/validate_netlist_primitives.py --netlist-path design/design.final.cir
 ```
 Output JSON keys: `ok`, `violations[]`, `summary { allowed_instance_count, forbidden_instance_count, forbidden_directive_count, missing_param_count }`.
-The `ok` field is `true` only when `forbidden_instance_count == 0`.
+The `ok` field is `true` only when all counts are zero. The same gate runs at
+the desktop notebook transaction boundary, so forbidden statements cannot hide
+in `spice.opaque` or `spice.models`.
+
+### Analog IC project audit
+
+```bash
+python scripts/circuit_project.py analog-ic-audit --project-root <analog-project>
+```
+
+Requires `project_kind=analog_ic`, `actoviq.analog-ic-profile.v1`, an existing
+PDK model library/corner reference, and explicit valid MOS W/L (plus positive
+M and integer NF when present). It reconciles AI instance names and GUI-compiled
+instance aliases against the exact notebook used by compile. `simulate` and
+Virtuoso export rerun this gate automatically.
+
+### Razavi-Bench provenance preflight
+
+```bash
+python scripts/razavi_bench.py --repo <canonical-upstream-checkout>
+```
+
+Returns canonical remote/revision/LICENSE provenance and a license policy. It
+does not read tasks or execute the evaluator; integration remains blocked until
+written permission is obtained.
+
+### PCB handoff and LCSC
+
+```bash
+python scripts/circuit_project.py lcsc-get --lcsc-id C21190 --use-fallback
+python scripts/circuit_project.py lcsc-bind --project-root <pcb-project> --module-id <m> --component-id <c> --lcsc-id C21190 --use-fallback
+python scripts/circuit_project.py bridge-push --project-root <pcb-project> --peer-kind kicad --source-revision <n>
+```
+
+The examples use the non-production fallback catalog; omit `--use-fallback`
+only when LCSC credentials are configured. These commands require
+`project_kind=pcb_schematic`. A C-number binding carries
+catalog metadata into KiCad handoff or the experimental JLCEDA exchange; target symbol/pin/footprint mapping
+still requires verification. Bridge pull currently synchronizes stable-ID
+layout/properties, not arbitrary connectivity edits.
 
 ### `strict_param_check.py`
 

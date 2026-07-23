@@ -16,6 +16,7 @@ export interface SavedDesignTemplateSummary {
   templateNetlistPath: string;
   agentGuidePath: string;
   manifestPath: string;
+  hasLayoutReference?: boolean;
 }
 
 export interface SavedDesignFlowSummary {
@@ -93,6 +94,10 @@ export async function listSavedDesignTemplates(
       templateNetlistPath,
       agentGuidePath,
       manifestPath,
+      hasLayoutReference: Boolean(
+        (manifest as { module_layout_refs?: unknown[] }).module_layout_refs?.length
+        || (manifest as { layout_coverage?: { modules_with_layout?: number } }).layout_coverage?.modules_with_layout,
+      ),
     });
   }
   return templates.sort((left, right) => (

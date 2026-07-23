@@ -24,12 +24,16 @@ Rules:
 3. For a request to modify, tune, fix, optimize, rerun, or validate the selected design, set isRevisionRequest to true and include revisionRequest.
 4. For a new circuit, set isDesignRequest to true and include formalizedRequirement.
 5. Never set both request flags to true. Prefer revision when activeProject exists and the user refers to the current design.
-6. Project transactions are the default design path. If enough information exists, include projectOperations using only operations listed in activeProject.transaction.allowed_operations. For a new design, normally use upsert_module_netlist with a fenced SPICE notebook. For a revision, use stable IDs from activeProject.
+6. Project transactions are the default design path. If enough information exists, include projectOperations using only operations listed in activeProject.transaction.allowed_operations. For a new design, prefer functional modules: several upsert_module_netlist ops (stimuli / stage cores / encode-load), then add_port and connect_ports for shared nets (vdd, vin, thresholds, etc.). Use a single upsert_module_netlist only for trivial paths (about ≤8 devices, one signal chain). For a revision, use stable IDs from activeProject. Honor project_kind: simulation stays primitive-only; pcb_schematic may use packaged parts and LCSC binding; analog_ic requires SPICE/PDK-aware transistor sizing and Virtuoso export. Honor activeProject.modularity guidance and oversized_module ERC warnings by splitting rather than packing more devices into one sheet.
 7. Never include project_id, base_revision, generated SVG, or build files in projectOperations. Never claim a transaction or simulation succeeded; the host reports the result after validation.
-8. Set compileAfterApply true after electrical changes. Set simulateAfterApply true only when the design includes a valid analysis and stimulus.
+8. Set compileAfterApply true after electrical changes. Set simulateAfterApply true only when the design includes a valid analysis and stimulus, and when project_kind requires or requests simulation (simulation kind: usually yes; pcb_schematic: optional).
 9. If the request cannot be translated safely, return no projectOperations and ask one concise clarification question.
 10. targetStage, when present, must be one of: solution-analyst, doc-writer, librarian, architect, netlist-designer, simulation-verifier, netlistsvg-renderer, workflow-lead.
-
+11. For every new design, set projectKind to simulation, pcb_schematic, or analog_ic from the user's requested workflow. For pcb_schematic part selection, prefer bind_lcsc_part when LCSC tools are available in agent context. Do not invent LCSC C-numbers.
+12. For analog_ic, never invent a PDK name, model-library path, corner, or foundry device. If they are missing, ask for them before returning electrical projectOperations. When supplied, include set_analog_ic_profile and reference the exact library/corner in SPICE.
+13. Every analog_ic MOS primitive or MOS-like subcircuit must give explicit positive W and L with SPICE scale suffixes. Preserve M and NF as separate positive design variables; NF is an integer. State in text what is held fixed when proposing a channel-size change. Do not emit user-authored .control/.endc blocks.
+14. Treat KiCad/JLCEDA pull as stable-ID layout/property handoff, not lossless connectivity co-editing. A canonical LCSC C-number carries catalog metadata but does not prove symbol/pin/footprint compatibility.
+15. Prefer workspace reference_catalog assets (circuit_module / circuit_project / schematic_layout / layout_idiom) before inventing topology. Layout references are not electrical truth: only apply when connectivity_hash matches; otherwise use them as agent_context_only. Never treat layout_visual images as a source write path.
 Return only one JSON object with this shape:
 {
   "text": "Natural-language response",
@@ -39,6 +43,7 @@ Return only one JSON object with this shape:
   "revisionRequest": "optional",
   "targetStage": "optional",
   "projectName": "optional",
+  "projectKind": "simulation | pcb_schematic | analog_ic (required for a new design)",
   "projectOperations": [{"op": "supported operation"}],
   "compileAfterApply": boolean,
   "simulateAfterApply": boolean
@@ -79,10 +84,24 @@ const ChatResponseSchema = z.object({
   revisionRequest: z.string().optional(),
   targetStage: z.string().optional(),
   projectName: z.string().optional(),
+  projectKind: z.enum(['simulation', 'pcb_schematic', 'analog_ic']).optional(),
   projectOperations: z.array(ProjectOperationSchema).optional(),
   compileAfterApply: z.boolean().optional(),
   simulateAfterApply: z.boolean().optional(),
-}).passthrough();
+}).passthrough().superRefine((value, context) => {
+  if (
+    value.isDesignRequest
+    && !value.isRevisionRequest
+    && (value.projectOperations?.length ?? 0) > 0
+    && !value.projectKind
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['projectKind'],
+      message: 'projectKind is required when creating a new project transaction',
+    });
+  }
+});
 
 export interface DesktopAgentConfig {
   provider: 'anthropic' | 'openai';
@@ -113,6 +132,7 @@ export interface DesktopAgentChatResponse {
   revisionRequest?: string;
   targetStage?: string;
   projectName?: string;
+  projectKind?: 'simulation' | 'pcb_schematic' | 'analog_ic';
   projectOperations?: Array<Record<string, unknown>>;
   compileAfterApply?: boolean;
   simulateAfterApply?: boolean;
@@ -381,6 +401,7 @@ function parseChatResponse(raw: string): DesktopAgentChatResponse {
     revisionRequest: parsed.revisionRequest,
     targetStage: parsed.targetStage,
     projectName: parsed.projectName,
+    projectKind: parsed.projectKind,
     projectOperations: parsed.projectOperations,
     compileAfterApply: parsed.compileAfterApply,
     simulateAfterApply: parsed.simulateAfterApply,

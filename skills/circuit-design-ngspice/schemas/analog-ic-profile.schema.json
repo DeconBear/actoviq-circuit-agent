@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/analog-ic-profile.schema.json",
+  "title": "Actoviq Analog IC Profile",
+  "type": "object",
+  "required": ["schema", "simulator", "pdk"],
+  "properties": {
+    "schema": { "const": "actoviq.analog-ic-profile.v1" },
+    "simulator": { "const": "ngspice" },
+    "pdk": {
+      "type": "object",
+      "required": ["name", "model_library"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "model_library": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Project-relative or absolute SPICE model-library path."
+        },
+        "corner": { "type": "string", "minLength": 1 },
+        "temperature_c": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "sizing": {
+      "type": "object",
+      "properties": {
+        "require_explicit_w_l": { "const": true, "default": true },
+        "require_scale_suffix": { "const": true, "default": true }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

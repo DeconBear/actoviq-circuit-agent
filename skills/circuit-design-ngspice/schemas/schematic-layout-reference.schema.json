@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/schematic-layout-reference.schema.json",
+  "title": "Actoviq Schematic Layout Reference",
+  "type": "object",
+  "required": ["schema", "connectivity_hash", "placements"],
+  "properties": {
+    "schema": { "const": "actoviq.schematic-layout-reference.v1" },
+    "module_id": { "type": "string" },
+    "connectivity_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "view": { "type": "string", "enum": ["design", "simulation"], "default": "design" },
+    "placements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["component_id", "x", "y"],
+        "properties": {
+          "component_id": { "type": "string", "minLength": 1 },
+          "x": { "type": "number" },
+          "y": { "type": "number" },
+          "rotation": { "type": "integer", "enum": [0, 90, 180, 270] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "port_placements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["port_id", "x", "y"],
+        "properties": {
+          "port_id": { "type": "string" },
+          "x": { "type": "number" },
+          "y": { "type": "number" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "readability_score": { "type": "number", "minimum": 0, "maximum": 100 },
+    "preview": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

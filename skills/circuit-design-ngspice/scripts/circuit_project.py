@@ -20,7 +20,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from workspace_paths import (
     get_active_workspace,
@@ -28,7 +28,49 @@ from workspace_paths import (
     resolve_projects_root,
     select_workspace,
 )
-from eda_export import connectivity_hash, evaluate_layout_patches, export_eda, prepare_layout_review
+from eda_export import (
+    _evaluate_layout_candidate,
+    connectivity_hash,
+    evaluate_layout_patches,
+    export_eda,
+    prepare_layout_review,
+)
+from eda_bridge import (
+    bridge_status,
+    link_bridge,
+    list_bridges,
+    pull_bridge,
+    push_bridge,
+    unlink_bridge,
+)
+from reference_assets import (
+    apply_placements_to_components,
+    catalog_summary_for_agent,
+    import_circuit_reference,
+    import_visual_reference,
+    list_catalog,
+    load_asset,
+    prepare_layout_from_reference,
+    promote_visual_to_layout,
+)
+from project_kinds import (
+    DEFAULT_PROJECT_KIND,
+    allowed_component_types,
+    ensure_project_kind,
+    kind_summary,
+    normalize_project_kind,
+    requires_simulation,
+    supports_eda_bridge,
+    supports_lcsc_binding,
+    supports_virtuoso_export,
+)
+from analog_ic import (
+    audit_project as audit_analog_ic_project,
+    rewrite_model_paths as rewrite_analog_ic_model_paths,
+    validate_profile as validate_analog_ic_profile,
+)
+from stable_ids import ensure_module_stable_ids, ensure_project_stable_ids
+from validate_netlist_primitives import validate_netlist_text
 
 
 PROJECT_SCHEMA = "actoviq.project.v2"
@@ -39,7 +81,7 @@ COMMAND_SCHEMA = "actoviq.command.v1"
 ERC_SCHEMA = "actoviq.erc.v1"
 AGENT_PROTOCOL_VERSION = "actoviq.project-agent.v2"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
-ALLOWED_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK"}
+ALLOWED_COMPONENT_TYPES = allowed_component_types("analog_ic")  # union used for CLI help / broad checks
 BLOCK_PIN_SIDES = {"left", "right", "top", "bottom"}
 EDITABLE_PIN_NAMES = {
     "R": [("a", "1"), ("b", "2")],
@@ -49,6 +91,10 @@ EDITABLE_PIN_NAMES = {
     "V": [("p", "+"), ("n", "-")],
     "I": [("p", "+"), ("n", "-")],
     "E": [("p", "OUT+"), ("n", "OUT-"), ("cp", "+"), ("cn", "-")],
+    "F": [("p", "OUT+"), ("n", "OUT-")],
+    "G": [("p", "OUT+"), ("n", "OUT-"), ("cp", "+"), ("cn", "-")],
+    "H": [("p", "OUT+"), ("n", "OUT-")],
+    "B": [("p", "+"), ("n", "-")],
     "Q": [("c", "C"), ("b", "B"), ("e", "E")],
     "M": [("d", "D"), ("g", "G"), ("s", "S"), ("b", "B")],
 }
@@ -60,9 +106,17 @@ EDITABLE_NODE_COUNTS = {
     "V": 2,
     "I": 2,
     "E": 4,
+    "F": 2,
+    "G": 4,
+    "H": 2,
+    "B": 2,
     "Q": 3,
     "M": 4,
 }
+# Soft modularity heuristics for desktop readability (non-blocking ERC).
+OVERSIZED_MODULE_COMPONENT_LIMIT = 16
+MONOLITHIC_COMPLEX_COMPONENT_LIMIT = 8
+ACTIVE_COMPONENT_TYPES = frozenset({"V", "I", "M", "Q", "D", "E", "F", "G", "H", "B"})
 EDITABLE_TESTBENCH_PREFIXES = ("vtest_", "rload_")
 
 # SPICE control/analysis/measurement directives that a notebook module may
@@ -153,6 +207,14 @@ def validate_project(project: dict[str, Any]) -> None:
         raise ValueError("project_id is required")
     if not isinstance(project.get("revision"), int) or project["revision"] < 0:
         raise ValueError("project revision must be a non-negative integer")
+    kind = ensure_project_kind(project)
+    analog_profile = project.get("analog_ic_profile")
+    if analog_profile is not None:
+        if kind != "analog_ic":
+            raise ValueError("analog_ic_profile requires project_kind=analog_ic")
+        profile_errors = validate_analog_ic_profile(analog_profile)
+        if profile_errors:
+            raise ValueError(profile_errors[0]["message"])
     modules = project.get("modules")
     if not isinstance(modules, list):
         raise ValueError("project modules must be an array")
@@ -180,11 +242,13 @@ def validate_project(project: dict[str, Any]) -> None:
                 raise ValueError(f"connection references unknown port: {key}")
 
 
-def validate_module(module: dict[str, Any]) -> None:
+def validate_module(module: dict[str, Any], project_kind: str | None = None) -> None:
     if module.get("schema") not in LEGACY_MODULE_SCHEMAS:
         raise ValueError(f"module schema must be one of {sorted(LEGACY_MODULE_SCHEMAS)}")
     if not isinstance(module.get("module_id"), str) or not module["module_id"]:
         raise ValueError("module_id is required")
+    kind = normalize_project_kind(project_kind or DEFAULT_PROJECT_KIND)
+    allowed_types = allowed_component_types(kind)
     nets = module.get("nets", [])
     if not isinstance(nets, list):
         raise ValueError("module nets must be an array")
@@ -231,8 +295,11 @@ def validate_module(module: dict[str, Any]) -> None:
         component_type = component.get("type")
         if not component_id or component_id in component_ids:
             raise ValueError("component ids must be present and unique")
-        if component_type not in ALLOWED_COMPONENT_TYPES:
-            raise ValueError(f"unsupported component type: {component_type}")
+        if component_type not in allowed_types:
+            raise ValueError(
+                f"unsupported component type for project_kind={kind}: {component_type} "
+                f"(allowed: {', '.join(sorted(allowed_types))})"
+            )
         component_ids.add(component_id)
         pins = component.get("pins", [])
         if not isinstance(pins, list) or not pins:
@@ -528,8 +595,12 @@ def schematic_position(value: Any, name: str) -> float:
 
 def load_project(root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     project = read_json(project_path(root))
+    migrated_kind = "project_kind" not in project
+    ensure_project_kind(project)
     validate_project(project)
+    kind = project["project_kind"]
     modules: dict[str, dict[str, Any]] = {}
+    migrated_stable = False
     for module_ref in project["modules"]:
         path = module_path(root, module_ref["id"])
         ensure_inside(root, path)
@@ -541,12 +612,20 @@ def load_project(root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]
             repair_legacy_wire_endpoints=True,
             repair_invalid_net_ids=True,
         )
-        validate_module(module)
+        before = json.dumps(module, sort_keys=True, ensure_ascii=False)
+        ensure_module_stable_ids(module)
+        if json.dumps(module, sort_keys=True, ensure_ascii=False) != before:
+            migrated_stable = True
+            atomic_write_json(path, module)
+        validate_module(module, kind)
         if module["module_id"] != module_ref["id"]:
             raise ValueError(f"module id mismatch: {module_ref['id']}")
         modules[module_ref["id"]] = module
         module_ref["ports"] = modules[module_ref["id"]].get("ports", [])
     project["schema"] = PROJECT_SCHEMA
+    ensure_project_stable_ids(project, modules)
+    if migrated_kind or migrated_stable or not project.get("stable_id"):
+        atomic_write_json(project_path(root), project)
     return project, modules
 
 
@@ -703,8 +782,15 @@ def demo_modules() -> list[tuple[dict[str, Any], dict[str, Any]]]:
     return [(power_ref, power), (amplifier_ref, amplifier), (filter_ref, filter_module)]
 
 
-def initialize_project(projects_root: Path, name: str, project_id: str | None, demo: bool) -> Path:
+def initialize_project(
+    projects_root: Path,
+    name: str,
+    project_id: str | None,
+    demo: bool,
+    project_kind: str = DEFAULT_PROJECT_KIND,
+) -> Path:
     base_id = slugify(project_id or name)
+    kind = normalize_project_kind(project_kind)
     selected_id = base_id
     suffix = 2
     while (projects_root / selected_id).exists():
@@ -721,6 +807,7 @@ def initialize_project(projects_root: Path, name: str, project_id: str | None, d
         "schema": PROJECT_SCHEMA,
         "project_id": selected_id,
         "name": name.strip() or selected_id,
+        "project_kind": kind,
         "revision": 0,
         "created_at": now,
         "updated_at": now,
@@ -769,11 +856,15 @@ def initialize_project(projects_root: Path, name: str, project_id: str | None, d
                 "network": "GND",
             },
         ]
+    modules_by_id = {module["module_id"]: module for _, module in module_pairs}
+    for module in modules_by_id.values():
+        ensure_module_stable_ids(module)
+    ensure_project_stable_ids(project, modules_by_id)
     validate_project(project)
     atomic_write_json(project_path(root), project)
     atomic_write_json(root / "project.settings.json", {"schema": "actoviq.project-settings.v1"})
     for module_ref, module in module_pairs:
-        validate_module(module)
+        validate_module(module, kind)
         atomic_write_json(module_path(root, module_ref["id"]), module)
     return root
 
@@ -901,6 +992,67 @@ def module_spice_text(module: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def editable_component_count(module: dict[str, Any]) -> int:
+    return sum(
+        1
+        for component in module.get("components", []) or []
+        if str(component.get("type", "")).upper() != "BLOCK"
+    )
+
+
+def module_has_active_devices(module: dict[str, Any]) -> bool:
+    return any(
+        str(component.get("type", "")).upper() in ACTIVE_COMPONENT_TYPES
+        for component in module.get("components", []) or []
+        if str(component.get("type", "")).upper() != "BLOCK"
+    )
+
+
+def modularity_summary(
+    project: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    module_counts: list[dict[str, Any]] = []
+    oversized: list[dict[str, Any]] = []
+    substantial: list[dict[str, Any]] = []
+    for module_ref in project.get("modules", []):
+        module_id = str(module_ref.get("id", ""))
+        module = modules.get(module_id) or {}
+        count = editable_component_count(module)
+        entry = {
+            "module_id": module_id,
+            "component_count": count,
+            "has_active_devices": module_has_active_devices(module),
+        }
+        module_counts.append(entry)
+        if count > OVERSIZED_MODULE_COMPONENT_LIMIT:
+            oversized.append(entry)
+        if count > MONOLITHIC_COMPLEX_COMPONENT_LIMIT and entry["has_active_devices"]:
+            substantial.append(entry)
+    guidance = (
+        "Prefer functional modules (stimuli / stage cores / encode-load) with connect_ports; "
+        "keep each module near 16 editable devices or fewer."
+    )
+    if oversized:
+        guidance = (
+            "Split oversized modules by electrical responsibility before relying on auto-layout; "
+            "see modular-project-design.md."
+        )
+    elif len(substantial) == 1 and len(project.get("modules", [])) == 1:
+        guidance = (
+            "This design is still a single substantial module; split stimuli and functional stages "
+            "unless it is a trivial ≤8-device path."
+        )
+    return {
+        "module_count": len(project.get("modules", []) or []),
+        "oversized_limit": OVERSIZED_MODULE_COMPONENT_LIMIT,
+        "monolithic_complex_limit": MONOLITHIC_COMPLEX_COMPONENT_LIMIT,
+        "modules": module_counts,
+        "oversized_modules": oversized,
+        "guidance": guidance,
+    }
+
+
 def evaluate_erc(
     project: dict[str, Any],
     modules: dict[str, dict[str, Any]],
@@ -932,7 +1084,23 @@ def evaluate_erc(
         if port.get("direction") in {"output", "bidirectional"}
     }
 
+    substantial_modules: list[str] = []
     for module_id, module in modules.items():
+        component_count = editable_component_count(module)
+        if component_count > OVERSIZED_MODULE_COMPONENT_LIMIT:
+            erc_diagnostic(
+                diagnostics,
+                "warning",
+                "oversized_module",
+                (
+                    f"Module {module_id} has {component_count} editable devices "
+                    f"(limit {OVERSIZED_MODULE_COMPONENT_LIMIT}); split by electrical responsibility."
+                ),
+                module_id=module_id,
+            )
+        if component_count > MONOLITHIC_COMPLEX_COMPONENT_LIMIT and module_has_active_devices(module):
+            substantial_modules.append(module_id)
+
         net_usage: dict[str, list[dict[str, str]]] = {}
         local_driven_nets: set[str] = set()
         net_names: dict[str, str] = {}
@@ -1060,6 +1228,23 @@ def evaluate_erc(
                     net_id=net_id,
                 )
 
+    if (
+        len(project.get("modules", []) or []) == 1
+        and len(substantial_modules) == 1
+    ):
+        only_id = substantial_modules[0]
+        count = editable_component_count(modules.get(only_id) or {})
+        erc_diagnostic(
+            diagnostics,
+            "warning",
+            "monolithic_complex_design",
+            (
+                f"Project has a single substantial module {only_id} with {count} devices; "
+                "prefer stimuli + functional stage modules unless this is a trivial path."
+            ),
+            module_id=only_id,
+        )
+
     if any_components and not has_ground:
         erc_diagnostic(
             diagnostics,
@@ -1092,7 +1277,9 @@ def evaluate_erc(
             )
         elif lowered.startswith(".dc"):
             tokens = directive.split()
-            if len(tokens) > 1 and tokens[1].lower() not in source_names:
+            # ngspice allows sweeping independent sources or special vars (TEMP, ...).
+            special_dc = {"temp", "res", "rtemp"}
+            if len(tokens) > 1 and tokens[1].lower() not in source_names and tokens[1].lower() not in special_dc:
                 erc_diagnostic(
                     diagnostics,
                     "error",
@@ -1199,8 +1386,20 @@ def module_from_netlist_notebook(
     module_id: str,
     notebook: str,
     current: dict[str, Any],
+    project_kind: str | None = None,
 ) -> dict[str, Any]:
     netlist_text = extract_notebook_netlist(notebook)
+    netlist_validation = validate_netlist_text(
+        netlist_text,
+        project_kind or DEFAULT_PROJECT_KIND,
+        source=f"module:{module_id}",
+    )
+    if not netlist_validation["ok"]:
+        first = netlist_validation["violations"][0]
+        raise ValueError(
+            f"netlist is not valid for project_kind={netlist_validation['project_kind']}: "
+            f"line {first['line']}: {first['message']}"
+        )
     parsed_components = parse_editable_netlist_components(module_id, netlist_text, current)
     parsed_ids = {str(component.get("id")) for component in parsed_components}
     schematic_blocks = [
@@ -1219,7 +1418,8 @@ def module_from_netlist_notebook(
         "ports": ports,
         "spice": parse_spice_source(module_id, netlist_text, components),
     })
-    validate_module(next_module)
+    ensure_module_stable_ids(next_module)
+    validate_module(next_module, project_kind or DEFAULT_PROJECT_KIND)
     return next_module
 
 
@@ -1291,11 +1491,12 @@ def apply_operation(
         module_id = module_ref["id"]
         if module.get("module_id") != module_id:
             raise ValueError("upsert_module ids do not match")
-        validate_module(module)
+        validate_module(module, project.get("project_kind"))
         project["modules"] = [
             entry for entry in project["modules"] if entry.get("id") != module_id
         ]
         project["modules"].append(module_ref)
+        ensure_module_stable_ids(module)
         modules[module_id] = module
         changed_modules.add(module_id)
         return
@@ -1341,7 +1542,9 @@ def apply_operation(
         if any(entry.get("id") == port.get("id") for entry in module.get("ports", [])):
             raise ValueError(f"port already exists: {module_id}.{port.get('id')}")
         module.setdefault("ports", []).append(port)
-        find_module_ref(project, module_id).setdefault("ports", []).append(port)
+        # module_ref["ports"] may be the same list object as module["ports"]
+        # after upsert_module_netlist; sync by assignment to avoid duplicate ids.
+        find_module_ref(project, module_id)["ports"] = list(module.get("ports", []))
         changed_modules.add(module_id)
         return
     if op == "move_module":
@@ -1389,6 +1592,15 @@ def apply_operation(
                 str(key): str(value) for key, value in parameters.items()
             }
         return
+    if op == "set_analog_ic_profile":
+        if normalize_project_kind(project.get("project_kind")) != "analog_ic":
+            raise ValueError("set_analog_ic_profile requires project_kind=analog_ic")
+        profile = operation.get("profile")
+        profile_errors = validate_analog_ic_profile(profile)
+        if profile_errors:
+            raise ValueError(profile_errors[0]["message"])
+        project["analog_ic_profile"] = json.loads(json.dumps(profile))
+        return
     if op == "set_component_value":
         module_id = operation["module_id"]
         component = find_component(modules[module_id], operation["component_id"])
@@ -1426,7 +1638,12 @@ def apply_operation(
             **existing,
             "name": str(operation.get("name") or existing.get("name") or module_id).strip(),
         }
-        next_module = module_from_netlist_notebook(module_id, notebook, existing)
+        next_module = module_from_netlist_notebook(
+            module_id,
+            notebook,
+            existing,
+            project.get("project_kind"),
+        )
         modules[module_id] = next_module
         previous_ref = next(
             (entry for entry in project.get("modules", []) if entry.get("id") == module_id),
@@ -1499,10 +1716,22 @@ def apply_operation(
             if not isinstance(notebook, str):
                 raise ValueError("set_module_schematic netlist_notebook must be text")
             netlist_text = extract_notebook_netlist(notebook)
+            netlist_validation = validate_netlist_text(
+                netlist_text,
+                project.get("project_kind") or DEFAULT_PROJECT_KIND,
+                source=f"module:{module_id}",
+            )
+            if not netlist_validation["ok"]:
+                first = netlist_validation["violations"][0]
+                raise ValueError(
+                    f"netlist is not valid for project_kind={netlist_validation['project_kind']}: "
+                    f"line {first['line']}: {first['message']}"
+                )
             next_module["spice"] = parse_spice_source(module_id, netlist_text, components)
             notebook_writes[module_id] = notebook
         next_module = upgrade_module_document(next_module)
-        validate_module(next_module)
+        ensure_module_stable_ids(next_module)
+        validate_module(next_module, project.get("project_kind"))
         if expected_connectivity_hash is not None:
             next_connectivity_hash = connectivity_hash(
                 project,
@@ -1530,10 +1759,44 @@ def apply_operation(
         notebook = operation.get("netlist_notebook")
         if not isinstance(notebook, str):
             raise ValueError("set_module_netlist netlist_notebook must be text")
-        next_module = module_from_netlist_notebook(module_id, notebook, module)
+        next_module = module_from_netlist_notebook(
+            module_id,
+            notebook,
+            module,
+            project.get("project_kind"),
+        )
         modules[module_id] = next_module
         find_module_ref(project, module_id)["ports"] = next_module["ports"]
         notebook_writes[module_id] = notebook
+        changed_modules.add(module_id)
+        return
+    if op == "bind_lcsc_part":
+        from lcsc_search import bind_part_to_component, get_part
+
+        if not supports_lcsc_binding(project.get("project_kind", DEFAULT_PROJECT_KIND)):
+            raise ValueError("LCSC binding requires project_kind=pcb_schematic")
+        module_id = str(operation["module_id"])
+        component_id = str(operation["component_id"])
+        module = modules[module_id]
+        component = next((entry for entry in module.get("components", []) if entry.get("id") == component_id), None)
+        if component is None:
+            raise ValueError(f"unknown component: {component_id}")
+        part = operation.get("part")
+        if not isinstance(part, dict):
+            lcsc_id = str(operation.get("lcsc_id") or "").strip()
+            if not lcsc_id:
+                raise ValueError("bind_lcsc_part requires part or lcsc_id")
+            looked_up = get_part(
+                lcsc_id,
+                api_key=os.environ.get("ACTOVIQ_LCSC_API_KEY", ""),
+                api_secret=os.environ.get("ACTOVIQ_LCSC_API_SECRET", ""),
+                use_fallback=bool(operation.get("use_fallback", False)),
+            )
+            if not looked_up.get("ok"):
+                raise ValueError(looked_up.get("error") or f"LCSC part not found: {lcsc_id}")
+            part = looked_up["part"]
+        bind_part_to_component(component, part)
+        ensure_module_stable_ids(module)
         changed_modules.add(module_id)
         return
     if op == "move_schematic_item":
@@ -1743,8 +2006,9 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
     project["updated_at"] = utc_now()
     for module_id in changed_modules:
         modules[module_id] = upgrade_module_document(modules[module_id])
+        ensure_module_stable_ids(modules[module_id])
         modules[module_id]["revision"] = int(modules[module_id].get("revision", 0)) + 1
-        validate_module(modules[module_id])
+        validate_module(modules[module_id], project.get("project_kind"))
     validate_project(project)
     for module_id, notebook in notebook_writes.items():
         notebook_path = root / "modules" / module_id / "netlist-notebook.md"
@@ -1861,6 +2125,109 @@ def compiled_component_name(module_id: str, component: dict[str, Any]) -> str:
     return component_name
 
 
+def compiled_instance_name_map(module_id: str, components: list[dict[str, Any]]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for component in components:
+        if component.get("type") == "BLOCK":
+            continue
+        compiled_name = compiled_component_name(module_id, component)
+        names[str(component["name"]).casefold()] = compiled_name
+        names[compiled_name.casefold()] = compiled_name
+    return names
+
+
+def rewrite_compiled_value_references(
+    component_type: str,
+    value: Any,
+    instance_names: dict[str, str],
+    node_name: Callable[[str], str],
+) -> str:
+    compiled_value = str(value)
+    if component_type in {"F", "H"}:
+        match = re.match(r"^(\s*)(\S+)(.*)$", compiled_value, flags=re.DOTALL)
+        if match:
+            control_source = instance_names.get(match.group(2).casefold(), match.group(2))
+            compiled_value = f"{match.group(1)}{control_source}{match.group(3)}"
+    if component_type != "B":
+        return compiled_value
+
+    def replace_behavior_reference(match: re.Match[str]) -> str:
+        function = match.group(1)
+        arguments = [argument.strip() for argument in match.group(2).split(",")]
+        if function.casefold() == "v" and 1 <= len(arguments) <= 2 and all(arguments):
+            return f"{function}({','.join(node_name(argument) for argument in arguments)})"
+        if function.casefold() == "i" and len(arguments) == 1 and arguments[0]:
+            reference = instance_names.get(arguments[0].casefold(), arguments[0])
+            return f"{function}({reference})"
+        return match.group(0)
+
+    return re.sub(
+        r"(?i)(?<![A-Za-z0-9_])([vi])\s*\(\s*([^()]*)\s*\)",
+        replace_behavior_reference,
+        compiled_value,
+    )
+
+
+_DC_RESERVED_SWEEP = frozenset({"temp", "data", "param"})
+
+
+def rewrite_analysis_directive(
+    directive: str,
+    instance_names: dict[str, str] | None,
+    node_names: dict[str, str] | None,
+) -> str:
+    """Rewrite hoisted analysis directives to compiled system instance/node names."""
+    if not instance_names and not node_names:
+        return directive
+    instance_names = instance_names or {}
+    node_names = node_names or {}
+    text = str(directive).strip()
+    if not text:
+        return directive
+
+    def map_node(name: str) -> str:
+        key = name.casefold()
+        if key in {"", "0"}:
+            return name if name else "0"
+        return node_names.get(key, name)
+
+    def map_instance(name: str) -> str:
+        return instance_names.get(name.casefold(), name)
+
+    def replace_vi(match: re.Match[str]) -> str:
+        function = match.group(1)
+        arguments = [argument.strip() for argument in match.group(2).split(",")]
+        if function.casefold() == "v" and arguments and all(arguments):
+            return f"{function}({','.join(map_node(argument) for argument in arguments)})"
+        if function.casefold() == "i" and len(arguments) == 1 and arguments[0]:
+            return f"{function}({map_instance(arguments[0])})"
+        return match.group(0)
+
+    text = re.sub(
+        r"(?i)(?<![A-Za-z0-9_])([vi])\s*\(\s*([^()]*)\s*\)",
+        replace_vi,
+        text,
+    )
+    text = re.sub(
+        r"(?i)@([A-Za-z_][\w.]*)\[([^\]]+)\]",
+        lambda match: f"@{map_instance(match.group(1))}[{match.group(2)}]",
+        text,
+    )
+
+    if text.casefold().startswith(".dc"):
+        parts = text.split()
+        rewritten_parts = [parts[0]]
+        for token in parts[1:]:
+            if token.casefold() in _DC_RESERVED_SWEEP:
+                rewritten_parts.append(token)
+            elif token.casefold() in instance_names:
+                rewritten_parts.append(instance_names[token.casefold()])
+            else:
+                rewritten_parts.append(token)
+        text = " ".join(rewritten_parts)
+    return text
+
+
 def editable_component_name(module_id: str, instance_name: str) -> str:
     component_type = instance_name[:1].upper()
     rest = instance_name[1:]
@@ -1909,15 +2276,33 @@ def parse_editable_netlist_components(
             continue
         instance = tokens[0]
         component_type = instance[:1].upper()
-        if component_type not in EDITABLE_NODE_COUNTS:
+        variable_node_count = component_type in {"X", "U"}
+        if component_type not in EDITABLE_NODE_COUNTS and not variable_node_count:
             continue
         if instance.lower().startswith(EDITABLE_TESTBENCH_PREFIXES):
             continue
-        node_count = EDITABLE_NODE_COUNTS[component_type]
-        if len(tokens) < 1 + node_count:
-            continue
-        nodes = tokens[1:1 + node_count]
-        value = " ".join(tokens[1 + node_count:]).strip() or "1"
+        if variable_node_count:
+            assignment_index = next(
+                (index for index, token in enumerate(tokens[1:], start=1) if "=" in token),
+                len(tokens),
+            )
+            params_index = next(
+                (index for index, token in enumerate(tokens[1:], start=1) if token.casefold() == "params:"),
+                -1,
+            )
+            model_index = (params_index if params_index >= 0 else assignment_index) - 1
+            if assignment_index == len(tokens) and params_index < 0:
+                model_index = len(tokens) - 1
+            if model_index < 2:
+                continue
+            nodes = tokens[1:model_index]
+            value = " ".join(tokens[model_index:]).strip()
+        else:
+            node_count = EDITABLE_NODE_COUNTS[component_type]
+            if len(tokens) < 1 + node_count:
+                continue
+            nodes = tokens[1:1 + node_count]
+            value = " ".join(tokens[1 + node_count:]).strip() or "1"
         name = editable_component_name(module_id, instance)
         existing = existing_by_compiled.get(instance.lower()) or existing_by_name.get(name.lower())
         if existing:
@@ -1936,7 +2321,7 @@ def parse_editable_netlist_components(
             }
             rotation = 0
         grid_index += 1
-        pin_names = EDITABLE_PIN_NAMES[component_type]
+        pin_names = EDITABLE_PIN_NAMES.get(component_type, [])
         pins = [
             {
                 "id": pin_names[index][0] if index < len(pin_names) else f"p{index + 1}",
@@ -2077,7 +2462,7 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
         "wires": module.get("wires", []),
         "annotations": module.get("annotations", []),
     }
-    validate_module(next_module)
+    validate_module(next_module, project.get("project_kind"))
 
     comparable_keys = ("components", "ports", "wires", "annotations")
     before = {key: module.get(key) for key in comparable_keys}
@@ -2097,7 +2482,8 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
             "annotations": module.get("annotations", []),
             "revision": int(module.get("revision", 0)) + 1,
         }
-        validate_module(next_module)
+        ensure_module_stable_ids(next_module)
+        validate_module(next_module, project.get("project_kind"))
         modules[module_id] = next_module
         module_ref = find_module_ref(project, module_id)
         module_ref["ports"] = ports
@@ -2153,9 +2539,12 @@ def hydrated_summary_module(root: Path, module_id: str, module: dict[str, Any]) 
         "annotations": module.get("annotations", []),
     }
     try:
-        validate_module(next_module)
+        validate_module(next_module, DEFAULT_PROJECT_KIND)
     except ValueError:
-        return module
+        try:
+            validate_module(next_module, "analog_ic")
+        except ValueError:
+            return module
     return next_module
 
 
@@ -2420,13 +2809,15 @@ def compile_project(root: Path) -> dict[str, Any]:
         "* Generated from actoviq.project.v1 by circuit_project.py",
     ]
     model_lines: list[str] = []
-    notebook_directives: list[str] = []
+    notebook_directives: list[dict[str, Any]] = []
     output_nodes: list[str] = []
     input_nodes: list[str] = []
     for module_ref in project["modules"]:
         module_id = module_ref["id"]
         module = modules[module_id]
         lines.append(f"* MODULE: {module_id} - {module['name']}")
+        module_instance_names: dict[str, str] | None = None
+        module_node_names: dict[str, str] | None = None
         if module["components"]:
             local_node_map: dict[str, str] = {"0": "0"}
             for port in module.get("ports", []):
@@ -2436,10 +2827,25 @@ def compile_project(root: Path) -> dict[str, Any]:
                     output_nodes.append(global_names[root_key])
                 if port.get("direction") == "input" and port.get("signal_type") == "analog":
                     input_nodes.append(global_names[root_key])
+            local_node_names = {local_net.casefold(): node for local_net, node in local_node_map.items()}
+
+            def compiled_node_name(local_net: str) -> str:
+                local_net = str(local_net)
+                if local_net in local_node_map:
+                    return local_node_map[local_net]
+                folded = local_net.casefold()
+                if folded in local_node_names:
+                    return local_node_names[folded]
+                node = sanitize_node(f"{module_id}_{local_net}")
+                local_node_map[local_net] = node
+                local_node_names[folded] = node
+                return node
+
+            instance_names = compiled_instance_name_map(module_id, module["components"])
             for component in module["components"]:
-                component_name = sanitize_node(f"{module_id}_{component['name']}")
                 component_type = component["type"]
                 if component_type == "BLOCK":
+                    component_name = sanitize_node(f"{module_id}_{component['name']}")
                     pin_summary = ", ".join(
                         f"{pin.get('name', pin.get('id', 'PIN'))}={pin.get('net', '')}"
                         for pin in component.get("pins", [])
@@ -2451,23 +2857,26 @@ def compile_project(root: Path) -> dict[str, Any]:
                         "pins": component.get("pins", []),
                     }
                     continue
-                if not component_name.upper().startswith(component_type):
-                    component_name = f"{component_type}{component_name}"
-                node_values = []
-                for pin in component["pins"]:
-                    local_net = pin["net"]
-                    node = local_node_map.get(local_net)
-                    if node is None:
-                        node = sanitize_node(f"{module_id}_{local_net}")
-                        local_node_map[local_net] = node
-                    node_values.append(node)
-                lines.append(" ".join([component_name, *node_values, str(component["value"])]))
+                component_name = compiled_component_name(module_id, component)
+                node_values = [compiled_node_name(pin["net"]) for pin in component["pins"]]
+                compiled_value = rewrite_compiled_value_references(
+                    component_type,
+                    component["value"],
+                    instance_names,
+                    compiled_node_name,
+                )
+                lines.append(" ".join([component_name, *node_values, compiled_value]))
                 source_map["components"][component_name] = {
                     "module_id": module_id,
                     "component_id": component["id"],
                 }
             for local_net, global_node in local_node_map.items():
                 source_map["nodes"][global_node] = {"module_id": module_id, "local_net": local_net}
+            module_instance_names = instance_names
+            module_node_names = {
+                str(local_net).casefold(): global_node
+                for local_net, global_node in local_node_map.items()
+            }
         else:
             # Notebook-backed module: splice its SPICE body (devices + models)
             # and hoist its analysis/measurement directives to the system deck so
@@ -2489,7 +2898,11 @@ def compile_project(root: Path) -> dict[str, Any]:
                         if stripped not in model_lines:
                             model_lines.append(stripped)
                     elif low.startswith(ANALYSIS_DIRECTIVE_PREFIXES):
-                        notebook_directives.append(stripped)
+                        notebook_directives.append({
+                            "text": stripped,
+                            "instance_names": None,
+                            "node_names": None,
+                        })
                     else:
                         lines.append(stripped)
 
@@ -2509,19 +2922,36 @@ def compile_project(root: Path) -> dict[str, Any]:
         if not generated_testbench:
             for raw in spice.get("directives", []):
                 stripped = str(raw).strip()
-                if stripped and stripped.lower() != ".end" and stripped not in notebook_directives:
-                    notebook_directives.append(stripped)
+                if (
+                    stripped
+                    and stripped.lower() != ".end"
+                    and stripped not in {entry["text"] for entry in notebook_directives}
+                ):
+                    notebook_directives.append({
+                        "text": stripped,
+                        "instance_names": module_instance_names,
+                        "node_names": module_node_names,
+                    })
 
     if model_lines:
         lines.append("* Device models")
         lines.extend(model_lines)
 
     if notebook_directives:
-        # The design author specified the analysis; use it verbatim.
+        # Structured modules prefix instance/node names; rewrite hoisted analyses
+        # so system-level `.dc VIN` resolves to `Vflash_core_VIN`, etc.
+        rewritten_directives = [
+            rewrite_analysis_directive(
+                str(entry["text"]),
+                entry.get("instance_names"),
+                entry.get("node_names"),
+            )
+            for entry in notebook_directives
+        ]
         lines.append("* Analysis (from module notebooks)")
-        lines.extend(notebook_directives)
+        lines.extend(rewritten_directives)
         probed = re.findall(
-            r"(?i)v(?:db)?\(\s*([a-z0-9_.:+\-]+)", " ".join(notebook_directives)
+            r"(?i)v(?:db)?\(\s*([a-z0-9_.:+\-]+)", " ".join(rewritten_directives)
         )
         if probed:
             source_map["primary_output_node"] = probed[-1]
@@ -2726,31 +3156,45 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
         raise ValueError(f"unknown module: {module_id}")
     module = modules[module_id]
     node_map: dict[str, str] = {"0": "0"}
+    node_names: dict[str, str] = {"0": "0"}
 
     def node_name(local_net: str) -> str:
-        if local_net not in node_map:
-            node_map[local_net] = sanitize_node(local_net)
-        return node_map[local_net]
+        local_net = str(local_net)
+        if local_net in node_map:
+            return node_map[local_net]
+        folded = local_net.casefold()
+        if folded in node_names:
+            return node_names[folded]
+        node = sanitize_node(local_net)
+        node_map[local_net] = node
+        node_names[folded] = node
+        return node
 
     body_lines = [
         f"* {project['name']} / {module['name']}",
         "* Standalone module testbench generated by circuit_project.py",
     ]
     driven_nodes: set[str] = set()
+    instance_names = compiled_instance_name_map(module_id, module["components"])
     for component in module["components"]:
-        component_name = sanitize_node(f"{module_id}_{component['name']}")
         component_type = component["type"]
         if component_type == "BLOCK":
+            component_name = sanitize_node(f"{module_id}_{component['name']}")
             pin_summary = ", ".join(
                 f"{pin.get('name', pin.get('id', 'PIN'))}={pin.get('net', '')}"
                 for pin in component.get("pins", [])
             )
             body_lines.append(f"* BLOCK {component_name}: {component.get('value', '')} [{pin_summary}]")
             continue
-        if not component_name.upper().startswith(component_type):
-            component_name = f"{component_type}{component_name}"
+        component_name = compiled_component_name(module_id, component)
         nodes = [node_name(pin["net"]) for pin in component["pins"]]
-        body_lines.append(" ".join([component_name, *nodes, str(component["value"])]))
+        compiled_value = rewrite_compiled_value_references(
+            component_type,
+            component["value"],
+            instance_names,
+            node_name,
+        )
+        body_lines.append(" ".join([component_name, *nodes, compiled_value]))
         if component_type in {"V", "I"} and component["pins"]:
             driven_nodes.add(node_name(component["pins"][0]["net"]))
 
@@ -3991,9 +4435,22 @@ def execute_simulation_run(
 
 
 def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
+    project, modules = load_project(root)
+    analog_ic = normalize_project_kind(project.get("project_kind")) == "analog_ic"
+    if analog_ic:
+        audit = audit_analog_ic_project(root, project, modules)
+        atomic_write_json(root / "build" / "analog-ic" / "audit.json", audit)
+        if not audit.get("ok"):
+            codes = ", ".join(str(item.get("code")) for item in audit.get("errors", []))
+            raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_project(root)
     executable = resolve_ngspice(ngspice_bin)
     netlist_path = Path(compile_result["netlist_path"])
+    if analog_ic:
+        atomic_write_text(
+            netlist_path,
+            rewrite_analog_ic_model_paths(netlist_path.read_text(encoding="utf-8"), root),
+        )
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path)
     result = execute_simulation_run(
@@ -4020,9 +4477,22 @@ def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
 
 
 def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, Any]:
+    project, modules = load_project(root)
+    analog_ic = normalize_project_kind(project.get("project_kind")) == "analog_ic"
+    if analog_ic:
+        audit = audit_analog_ic_project(root, project, modules)
+        atomic_write_json(root / "build" / "analog-ic" / "audit.json", audit)
+        if not audit.get("ok"):
+            codes = ", ".join(str(item.get("code")) for item in audit.get("errors", []))
+            raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_module(root, module_id)
     executable = resolve_ngspice(ngspice_bin)
     netlist_path = Path(compile_result["netlist_path"])
+    if analog_ic:
+        atomic_write_text(
+            netlist_path,
+            rewrite_analog_ic_model_paths(netlist_path.read_text(encoding="utf-8"), root),
+        )
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path)
     result = execute_simulation_run(
@@ -4064,8 +4534,11 @@ def project_summary(root: Path) -> dict[str, Any]:
     }
 
 
+
 def agent_context(root: Path) -> dict[str, Any]:
     project, modules = load_project(root)
+    kind = ensure_project_kind(project)
+    kind_info = kind_summary(kind)
     erc = write_erc_result(root, project, modules)
     document_hash = project_document_hash(project, modules)
     manifest_path = root / "build" / "build-manifest.json"
@@ -4082,16 +4555,48 @@ def agent_context(root: Path) -> dict[str, Any]:
         and int(simulation.get("source_revision", -1)) == project["revision"]
         and str(simulation.get("document_hash", "")) == document_hash
     )
-    if erc["blocking"]:
+    bridges = list_bridges(root)
+    pcb_readiness = pcb_export_readiness(project, modules) if supports_eda_bridge(kind) else None
+    analog_ic_audit = audit_analog_ic_project(root, project, modules) if kind == "analog_ic" else None
+    if kind == "analog_ic" and not project.get("analog_ic_profile"):
+        next_action = "configure_analog_ic"
+    elif analog_ic_audit and not analog_ic_audit.get("ok"):
+        next_action = "fix_analog_ic_audit"
+    elif erc["blocking"]:
         next_action = "fix_erc"
     elif not build_current:
         next_action = "compile"
-    elif not simulation_current:
+    elif requires_simulation(kind) and not simulation_current:
         next_action = "simulate"
-    elif simulation and simulation.get("specification_status") == "not_evaluated":
+    elif requires_simulation(kind) and simulation and simulation.get("specification_status") == "not_evaluated":
         next_action = "evaluate_specifications"
+    elif supports_eda_bridge(kind) and pcb_readiness and not pcb_readiness.get("ready"):
+        next_action = "complete_pcb_readiness"
+    elif supports_eda_bridge(kind) and not bridges:
+        next_action = "link_bridge"
     else:
         next_action = "ready"
+    allowed_operations = [
+        "upsert_module_netlist",
+        "set_module_netlist",
+        "set_module_schematic",
+        "upsert_module",
+        "remove_module",
+        "add_component",
+        "remove_component",
+        "add_port",
+        "connect_pins",
+        "connect_ports",
+        "set_connection_network",
+        "set_component_value",
+        "move_component",
+        "set_module_metadata",
+        "set_module_note",
+    ]
+    if supports_lcsc_binding(kind):
+        allowed_operations.append("bind_lcsc_part")
+    if kind == "analog_ic":
+        allowed_operations.append("set_analog_ic_profile")
     return {
         "ok": True,
         "protocol_version": AGENT_PROTOCOL_VERSION,
@@ -4105,6 +4610,19 @@ def agent_context(root: Path) -> dict[str, Any]:
         "workspace_root": str(root.parent.parent.resolve()),
         "project_root": str(root.resolve()),
         "project_id": project["project_id"],
+        "project_kind": kind,
+        "kind": kind_info,
+        "bridges": bridges,
+        "lcsc": {
+            "supported": supports_lcsc_binding(kind),
+            "tools": ["search_lcsc_parts", "get_lcsc_part", "bind_lcsc_part"] if supports_lcsc_binding(kind) else [],
+        },
+        "analog_ic": {
+            "supported": kind == "analog_ic",
+            "audit": analog_ic_audit,
+            "virtuoso_export": supports_virtuoso_export(kind),
+        },
+        "pcb_readiness": pcb_readiness,
         "base_revision": project["revision"],
         "document_hash": document_hash,
         "project": project,
@@ -4117,30 +4635,696 @@ def agent_context(root: Path) -> dict[str, Any]:
         "simulation": {
             "state": "current" if simulation_current else "stale" if simulation else "missing",
             "run": simulation,
+            "required": requires_simulation(kind),
         },
         "next_action": next_action,
+        "modularity": modularity_summary(project, modules),
+        "reference_catalog": catalog_summary_for_agent(
+            project,
+            modules,
+            connectivity_hash_fn=connectivity_hash,
+        ),
         "transaction": {
             "schema": COMMAND_SCHEMA,
             "project_id": project["project_id"],
             "base_revision": project["revision"],
-            "allowed_operations": [
-                "upsert_module_netlist",
-                "set_module_netlist",
-                "set_module_schematic",
-                "upsert_module",
-                "remove_module",
-                "add_component",
-                "remove_component",
-                "add_port",
-                "connect_pins",
-                "connect_ports",
-                "set_connection_network",
-                "set_component_value",
-                "move_component",
-                "set_module_metadata",
-                "set_module_note",
-            ],
+            "allowed_operations": allowed_operations,
         },
+    }
+
+
+def apply_layout_from_reference_command(
+    root: Path,
+    *,
+    module_id: str,
+    asset_id: str,
+) -> dict[str, Any]:
+    """Apply a schematic_layout snapshot or layout_idiom guide without changing SPICE."""
+    project, modules = load_project(root)
+    if module_id not in modules:
+        raise ValueError(f"unknown module: {module_id}")
+    prepared = prepare_layout_from_reference(
+        project,
+        modules,
+        module_id=module_id,
+        asset_id=asset_id,
+        connectivity_hash_fn=connectivity_hash,
+    )
+    if prepared.get("mode") == "snapshot":
+        if not prepared.get("hash_match"):
+            return {**prepared, "applied": False, "ok": False, "error": prepared.get("message")}
+        layout_ref = prepared["layout_reference"]
+        module = modules[module_id]
+        components = apply_placements_to_components(module, layout_ref)
+        try:
+            candidate = _evaluate_layout_candidate(
+                module_id,
+                module,
+                components,
+                prepared["connectivity_hash"],
+            )
+        except ValueError as error:
+            return {
+                "ok": False,
+                "applied": False,
+                "mode": "snapshot",
+                "asset_id": asset_id,
+                "module_id": module_id,
+                "connectivity_hash": prepared["connectivity_hash"],
+                "hash_match": True,
+                "error": f"layout snapshot matched connectivity but reroute failed: {error}",
+            }
+        command = {
+            "schema": COMMAND_SCHEMA,
+            "command_id": f"apply-layout-ref-{asset_id}-{int(time.time())}",
+            "actor": "agent",
+            "project_id": project["project_id"],
+            "base_revision": project["revision"],
+            "message": f"Apply schematic layout reference {asset_id} to {module_id}",
+            "operations": [
+                {
+                    "op": "set_module_schematic",
+                    "module_id": module_id,
+                    "expected_connectivity_hash": prepared["connectivity_hash"],
+                    "connectivity_view": "design",
+                    "components": candidate["components"],
+                    "ports": candidate["ports"],
+                    "wires": candidate["wires"],
+                    "nets": candidate["nets"],
+                    "annotations": module.get("annotations", []),
+                }
+            ],
+        }
+        applied = apply_command(root, command)
+        return {
+            "ok": True,
+            "applied": True,
+            "mode": "snapshot",
+            "asset_id": asset_id,
+            "module_id": module_id,
+            "connectivity_hash": prepared["connectivity_hash"],
+            "quality": candidate.get("quality"),
+            "revision": applied.get("revision"),
+            "apply_result": applied,
+        }
+
+    if prepared.get("mode") == "idiom":
+        if prepared.get("use_as") != "guide_router":
+            return {**prepared, "applied": False, "ok": False, "error": prepared.get("message")}
+        patch = prepared.get("layout_patch") or {"schema": "actoviq.layout-patch.v1", "operations": []}
+        if not patch.get("operations"):
+            return {**prepared, "applied": False, "ok": False, "error": "idiom produced no layout operations"}
+        output_dir = root / "build" / "layout-reviews" / f"idiom-{asset_id}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        document_hash = project_document_hash(project, modules)
+        state = prepare_layout_review(
+            project,
+            modules,
+            module_id=module_id,
+            view="design",
+            document_hash=document_hash,
+            source_revision=int(project["revision"]),
+            output_dir=output_dir,
+        )
+        patch_set = {
+            "schema": "actoviq.layout-patch-set.v1",
+            "source_revision": int(project["revision"]),
+            "connectivity_hash": state["connectivity_hash"],
+            "candidates": [patch],
+        }
+        evaluated = evaluate_layout_patches(
+            project,
+            modules,
+            read_json(Path(state["state_path"])),
+            patch_set,
+            module_id=module_id,
+            document_hash=document_hash,
+            source_revision=int(project["revision"]),
+            output_dir=output_dir,
+            view="design",
+        )
+        applied_result = None
+        if evaluated.get("improved") and isinstance(evaluated.get("module_schematic"), dict):
+            winner = evaluated["module_schematic"]
+            command = {
+                "schema": COMMAND_SCHEMA,
+                "command_id": f"apply-idiom-{asset_id}-{int(time.time())}",
+                "actor": "agent",
+                "project_id": project["project_id"],
+                "base_revision": project["revision"],
+                "message": f"Apply layout idiom {asset_id} to {module_id}",
+                "operations": [
+                    {
+                        "op": "set_module_schematic",
+                        "module_id": module_id,
+                        "expected_connectivity_hash": state["connectivity_hash"],
+                        "connectivity_view": "design",
+                        "components": winner.get("components", []),
+                        "ports": winner.get("ports", []),
+                        "wires": winner.get("wires", []),
+                        "nets": winner.get("nets", []),
+                        "annotations": modules[module_id].get("annotations", []),
+                    }
+                ],
+            }
+            applied_result = apply_command(root, command)
+        return {
+            "ok": True,
+            "applied": bool(applied_result),
+            "mode": "idiom",
+            "asset_id": asset_id,
+            "module_id": module_id,
+            "prepare": prepared,
+            "evaluate": evaluated,
+            "apply_result": applied_result,
+            "message": (
+                "idiom guide applied after quality improvement"
+                if applied_result
+                else "idiom guide evaluated without improvement; source unchanged"
+            ),
+        }
+
+    return {**prepared, "applied": False, "ok": False, "error": prepared.get("message") or "cannot apply layout reference"}
+
+
+def insert_module_from_circuit_reference(
+    root: Path,
+    *,
+    asset_id: str,
+    module_id: str | None = None,
+) -> dict[str, Any]:
+    asset = load_asset(asset_id)
+    if asset.get("kind") not in {"circuit_module", "circuit_project"}:
+        raise ValueError("insert-module requires a circuit_module or circuit_project asset")
+    files = (asset.get("payload") or {}).get("files") or {}
+    notebook_rel = files.get("netlist_notebook") or "netlist-notebook.md"
+    notebook_path = Path(asset["root_path"]) / "payload" / notebook_rel
+    if not notebook_path.exists():
+        raise ValueError(f"circuit reference notebook missing: {notebook_path}")
+    notebook = notebook_path.read_text(encoding="utf-8")
+    project, _modules = load_project(root)
+    mid = module_id or _slugify_module_id(str(asset.get("name") or asset_id))
+    command = {
+        "schema": COMMAND_SCHEMA,
+        "command_id": f"insert-ref-{asset_id}-{int(time.time())}",
+        "actor": "agent",
+        "project_id": project["project_id"],
+        "base_revision": project["revision"],
+        "message": f"Insert circuit reference {asset_id} as module {mid}",
+        "operations": [
+            {
+                "op": "upsert_module_netlist",
+                "module_id": mid,
+                "name": str(asset.get("name") or mid),
+                "kind": "imported",
+                "function": f"Imported from reference {asset_id}",
+                "netlist_notebook": notebook,
+                "preview_enabled": True,
+                "position": {"x": 120, "y": 120},
+                "size": {"width": 380, "height": 300},
+            }
+        ],
+    }
+    applied = apply_command(root, command)
+    return {"ok": True, "module_id": mid, "asset_id": asset_id, "apply_result": applied}
+
+
+def create_project_from_circuit_reference(
+    *,
+    asset_id: str,
+    name: str | None = None,
+    project_kind: str = DEFAULT_PROJECT_KIND,
+    projects_root: Path | None = None,
+) -> dict[str, Any]:
+    asset = load_asset(asset_id)
+    if asset.get("kind") not in {"circuit_module", "circuit_project"}:
+        raise ValueError("create-project requires a circuit_module or circuit_project asset")
+    files = (asset.get("payload") or {}).get("files") or {}
+    notebook_rel = files.get("netlist_notebook") or "netlist-notebook.md"
+    notebook_path = Path(asset["root_path"]) / "payload" / notebook_rel
+    if not notebook_path.exists():
+        raise ValueError(f"circuit reference notebook missing: {notebook_path}")
+    notebook = notebook_path.read_text(encoding="utf-8")
+    resolved = resolve_projects_root(projects_root=str(projects_root) if projects_root else None)
+    project_name = name or str(asset.get("name") or asset_id)
+    root = initialize_project(
+        Path(resolved["projects_root"]),
+        project_name,
+        None,
+        False,
+        project_kind=project_kind,
+    )
+    project, _modules = load_project(root)
+    mid = "core"
+    command = {
+        "schema": COMMAND_SCHEMA,
+        "command_id": f"seed-ref-{asset_id}-001",
+        "actor": "agent",
+        "project_id": project["project_id"],
+        "base_revision": project["revision"],
+        "message": f"Seed project from circuit reference {asset_id}",
+        "operations": [
+            {
+                "op": "upsert_module_netlist",
+                "module_id": mid,
+                "name": project_name,
+                "kind": "imported",
+                "function": f"Seeded from reference {asset_id}",
+                "netlist_notebook": notebook,
+                "preview_enabled": True,
+                "position": {"x": 100, "y": 100},
+                "size": {"width": 420, "height": 320},
+                "parameters": {
+                    "reference_asset_id": asset_id,
+                    **({f"model_hint_{i}": hint for i, hint in enumerate((asset.get("model_hints") or [])[:4])}),
+                },
+            }
+        ],
+    }
+    applied = apply_command(root, command)
+    return {
+        "ok": True,
+        "project_id": project["project_id"],
+        "project_root": str(root.resolve()),
+        "module_id": mid,
+        "asset_id": asset_id,
+        "workspace_resolution": resolved,
+        "apply_result": applied,
+        "model_hints": asset.get("model_hints") or [],
+    }
+
+
+def promote_visual_from_module(
+    root: Path,
+    *,
+    module_id: str,
+    visual_asset_id: str,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Snapshot current module placement and promote a layout_visual to schematic_layout."""
+    project, modules = load_project(root)
+    if module_id not in modules:
+        raise ValueError(f"unknown module: {module_id}")
+    from reference_assets import build_layout_reference
+
+    module = modules[module_id]
+    hash_value = connectivity_hash(project, {module_id: module}, module_id, "design")
+    layout_ref = build_layout_reference(module_id, module, connectivity_hash_value=hash_value)
+    return promote_visual_to_layout(
+        visual_asset_id=visual_asset_id,
+        layout_ref=layout_ref,
+        name=name or f"{module_id}-from-visual",
+    )
+
+
+def pack_template_layouts_from_project(
+    project_root: Path,
+    template_root: Path,
+    *,
+    memory_id: str,
+    template_relative: str,
+    trust: str,
+) -> dict[str, Any]:
+    """Write per-module layout-reference.json into a saved template and register catalog."""
+    from reference_assets import (
+        build_layout_reference,
+        register_project_template_catalog,
+        write_json as ref_write_json,
+    )
+
+    project, modules = load_project(project_root)
+    layout_refs: list[dict[str, Any]] = []
+    module_layout_refs: list[dict[str, Any]] = []
+    for module_id, module in modules.items():
+        hash_value = connectivity_hash(project, {module_id: module}, module_id, "design")
+        layout = build_layout_reference(module_id, module, connectivity_hash_value=hash_value)
+        module_dir = template_root / "modules" / module_id
+        module_dir.mkdir(parents=True, exist_ok=True)
+        ref_write_json(module_dir / "layout-reference.json", layout)
+        layout_refs.append({"module_id": module_id, "layout": layout})
+        module_layout_refs.append(
+            {
+                "module_id": module_id,
+                "path": f"modules/{module_id}/layout-reference.json",
+                "connectivity_hash": hash_value,
+            }
+        )
+
+    catalog = register_project_template_catalog(
+        memory_id=memory_id,
+        project_name=str(project.get("name") or memory_id),
+        template_relative=template_relative,
+        layout_refs=layout_refs,
+        trust=trust,
+        source_project_id=str(project.get("project_id") or ""),
+        source_revision=int(project.get("revision") or 0),
+    )
+
+    manifest_path = template_root / "template.json"
+    if manifest_path.exists():
+        manifest = read_json(manifest_path)
+        manifest["schema"] = "actoviq.design-template.v3"
+        manifest["layout_coverage"] = {
+            "module_count": len(module_layout_refs),
+            "modules_with_layout": len(module_layout_refs),
+        }
+        manifest["module_layout_refs"] = module_layout_refs
+        manifest["catalog_asset_id"] = memory_id
+        atomic_write_json(manifest_path, manifest)
+
+    return {
+        "ok": True,
+        "memory_id": memory_id,
+        "module_layout_refs": module_layout_refs,
+        "catalog": catalog,
+    }
+
+
+def _slugify_module_id(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._-")
+    if not text:
+        return "imported"
+    if text[0].isdigit():
+        text = f"m_{text}"
+    return text[:48]
+
+
+def pcb_export_readiness(project: dict[str, Any], modules: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Check whether a pcb_schematic project is ready for an EDA handoff."""
+    missing_lcsc: list[dict[str, str]] = []
+    missing_refdes: list[dict[str, str]] = []
+    for module_id, module in modules.items():
+        for component in module.get("components", []) or []:
+            if not isinstance(component, dict):
+                continue
+            component_type = str(component.get("type", "")).upper()
+            if component_type in {"V", "I"} and component.get("mount_policy") != "design_include":
+                continue
+            eda = component.get("eda") if isinstance(component.get("eda"), dict) else {}
+            if not str(eda.get("lcsc_id") or "").strip() and component_type in {
+                "R", "C", "L", "D", "Q", "M", "U", "BLOCK", "X",
+            }:
+                missing_lcsc.append({"module_id": module_id, "component_id": str(component.get("id", ""))})
+            if not str(eda.get("refdes") or component.get("name") or "").strip():
+                missing_refdes.append({"module_id": module_id, "component_id": str(component.get("id", ""))})
+    ready = not missing_lcsc and not missing_refdes
+    return {
+        "ready": ready,
+        "missing_lcsc_id": missing_lcsc,
+        "missing_refdes": missing_refdes,
+        "hints": (
+            []
+            if ready
+            else [
+                "Bind LCSC parts (eda.lcsc_id) for physical components before bridge push.",
+                "Ensure each exportable component has a refdes/name.",
+            ]
+        ),
+    }
+
+
+def persist_bridge_pull(root: Path, pull_result: dict[str, Any]) -> dict[str, Any]:
+    conflicts = pull_result.get("conflicts") or []
+    if pull_result.get("ok") is not True or pull_result.get("requires_review"):
+        return {**pull_result, "persisted": False}
+    if pull_result.get("policy") == "manual_review" and conflicts:
+        return {**pull_result, "requires_review": True, "persisted": False}
+    updated = pull_result.get("updated_modules") or {}
+    if not updated:
+        return {**pull_result, "persisted": False}
+
+    with ProjectLock(root):
+        project, modules = load_project(root)
+        original_project = json.loads(json.dumps(project))
+        original_modules = {
+            str(module_id): json.loads(json.dumps(modules[module_id])) if module_id in modules else None
+            for module_id in updated
+        }
+        next_project = json.loads(json.dumps(project))
+        next_modules = {module_id: json.loads(json.dumps(module)) for module_id, module in modules.items()}
+        kind = next_project.get("project_kind")
+        changed_module_ids: list[str] = []
+
+        for raw_module_id, raw_module in updated.items():
+            module_id = str(raw_module_id)
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", module_id):
+                raise ValueError(f"invalid bridge module id: {module_id!r}")
+            if not isinstance(raw_module, dict):
+                raise ValueError(f"bridge module must be an object: {module_id}")
+            incoming = upgrade_module_document(json.loads(json.dumps(raw_module)))
+            incoming["module_id"] = module_id
+            previous_revision = int(next_modules.get(module_id, {}).get("revision", -1))
+            incoming["revision"] = previous_revision + 1
+            ensure_module_stable_ids(incoming)
+            validate_module(incoming, kind)
+            next_modules[module_id] = incoming
+            changed_module_ids.append(module_id)
+
+            module_ref = next((entry for entry in next_project.get("modules", []) if entry.get("id") == module_id), None)
+            if module_ref is None:
+                next_project["modules"].append({
+                    "id": module_id,
+                    "name": incoming.get("name", module_id),
+                    "kind": "imported",
+                    "function": "",
+                    "parameters": {},
+                    "notes": "Imported via EDA bridge",
+                    "preview_enabled": True,
+                    "source": f"modules/{module_id}/module.circuit.json",
+                    "position": {"x": 100, "y": 100},
+                    "size": {"width": 360, "height": 280},
+                    "ports": incoming.get("ports", []),
+                })
+            else:
+                module_ref["name"] = incoming.get("name", module_ref.get("name", module_id))
+                module_ref["ports"] = incoming.get("ports", [])
+
+        next_project["revision"] = int(next_project.get("revision", 0)) + 1
+        next_project["updated_at"] = utc_now()
+        ensure_project_stable_ids(next_project, next_modules)
+        validate_project(next_project)
+
+        written_modules: list[str] = []
+        try:
+            for module_id in changed_module_ids:
+                atomic_write_json(module_path(root, module_id), next_modules[module_id])
+                written_modules.append(module_id)
+            atomic_write_json(project_path(root), next_project)
+        except OSError:
+            for module_id in written_modules:
+                original = original_modules[module_id]
+                if original is None:
+                    module_path(root, module_id).unlink(missing_ok=True)
+                else:
+                    atomic_write_json(module_path(root, module_id), original)
+            atomic_write_json(project_path(root), original_project)
+            raise
+
+    return {
+        **pull_result,
+        "updated_modules": {module_id: next_modules[module_id] for module_id in changed_module_ids},
+        "revision": next_project["revision"],
+        "persisted": True,
+    }
+
+
+def run_lcsc_bind(
+    root: Path,
+    module_id: str,
+    component_id: str,
+    lcsc_id: str,
+    *,
+    api_key: str = "",
+    api_secret: str = "",
+    use_fallback: bool = False,
+) -> dict[str, Any]:
+    from lcsc_search import bind_part_to_component, get_part
+
+    project, modules = load_project(root)
+    if not supports_lcsc_binding(project.get("project_kind", DEFAULT_PROJECT_KIND)):
+        raise ValueError("LCSC binding requires project_kind=pcb_schematic")
+    if module_id not in modules:
+        raise ValueError(f"unknown module: {module_id}")
+    module = modules[module_id]
+    component = next((entry for entry in module.get("components", []) if entry.get("id") == component_id), None)
+    if component is None:
+        raise ValueError(f"unknown component: {component_id}")
+    looked_up = get_part(lcsc_id, api_key=api_key, api_secret=api_secret, use_fallback=use_fallback)
+    if not looked_up.get("ok"):
+        raise ValueError(looked_up.get("error") or f"LCSC part not found: {lcsc_id}")
+    bind_part_to_component(component, looked_up["part"])
+    ensure_module_stable_ids(module)
+    module["revision"] = int(module.get("revision", 0)) + 1
+    project["revision"] = int(project.get("revision", 0)) + 1
+    project["updated_at"] = utc_now()
+    validate_module(module, project.get("project_kind"))
+    validate_project(project)
+    atomic_write_json(module_path(root, module_id), module)
+    atomic_write_json(project_path(root), project)
+    return {
+        "ok": True,
+        "project_id": project["project_id"],
+        "revision": project["revision"],
+        "module_id": module_id,
+        "component_id": component_id,
+        "lcsc_id": str(looked_up["part"].get("lcsc_id") or lcsc_id).upper(),
+        "part": looked_up["part"],
+        "component": component,
+    }
+
+
+def materialize_kicad_unknowns(
+    root: Path,
+    peer_root: Path,
+    project: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+    pull_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Create disconnected BLOCK components for cold-imported foreign KiCad symbols."""
+    from eda_kicad_import import (
+        _collect_peer_instances,
+        _component_key,
+        _kicad_rotation_to_internal,
+        _load_coordinate_transform,
+        _mm_to_internal,
+        _page_offset,
+    )
+
+    instances, _warnings = _collect_peer_instances(Path(peer_root))
+    transform = _load_coordinate_transform(Path(peer_root))
+    known = {
+        _component_key(component)
+        for module in modules.values()
+        for component in module.get("components", []) or []
+        if isinstance(component, dict)
+    }
+    known.update(
+        str(component.get("id", ""))
+        for module in modules.values()
+        for component in module.get("components", []) or []
+        if isinstance(component, dict)
+    )
+    created = 0
+    created_keys: list[str] = []
+    target_id = next(iter(modules), "sheet1")
+    module = modules.setdefault(target_id, {
+        "schema": MODULE_SCHEMA,
+        "module_id": target_id,
+        "name": target_id,
+        "revision": 0,
+        "ports": [],
+        "components": [],
+        "nets": [],
+        "wires": [],
+        "annotations": [],
+    })
+    page_proxy = {"id": target_id, "components": module.get("components", []), "ports": []}
+    for instance in instances:
+        stable_id = str(instance.get("stable_id") or "").strip()
+        if not stable_id or stable_id in known:
+            continue
+        page_id = str(instance.get("page_id") or target_id).strip() or target_id
+        if page_id in modules:
+            module = modules[page_id]
+            target_id = page_id
+        offset_x, offset_y = _page_offset(page_id, page_proxy, transform)
+        position = _mm_to_internal(float(instance["x_mm"]), float(instance["y_mm"]), offset_x, offset_y)
+        component_id = f"imp_{created + 1}"
+        component = {
+            "id": component_id,
+            "stable_id": stable_id,
+            "type": "BLOCK",
+            "name": instance.get("refdes") or component_id,
+            "value": instance.get("value") or instance.get("lib_id") or "imported",
+            "position": position,
+            "rotation": _kicad_rotation_to_internal(int(instance.get("rotation_kicad", 0))),
+            "pins": [{"id": "1", "name": "1", "net": "NC", "side": "left"}],
+            "block": {"width": 120, "height": 80},
+            "eda": {
+                "foreign_symbol": instance.get("lib_id", ""),
+                "refdes": instance.get("refdes") or "",
+                "physical": True,
+            },
+        }
+        module.setdefault("components", []).append(component)
+        known.add(stable_id)
+        created += 1
+        created_key = f"{target_id}:{stable_id}:foreign"
+        created_keys.append(created_key)
+        pull_result.setdefault("id_map", {})[stable_id] = {
+            "peer_kind": "kicad",
+            "page_id": target_id,
+            "component_id": component_id,
+            "refdes": instance.get("refdes") or "",
+            "source_file": instance.get("source_file", ""),
+        }
+        pull_result.setdefault("updated_modules", {})[target_id] = module
+    if created_keys:
+        pull_result.setdefault("applied", []).extend(created_keys)
+    pull_result["cold_start_created"] = created
+    return pull_result
+
+
+def bridge_import_cold(
+    *,
+    projects_root: Path,
+    peer_kind: str,
+    peer_root: Path,
+    name: str,
+    project_kind: str = "pcb_schematic",
+    policy: str = "layout_wins",
+) -> dict[str, Any]:
+    """Create a PCB schematic project and pull an existing KiCad/JLCEDA peer (cold start)."""
+    kind = normalize_project_kind(project_kind)
+    if not supports_eda_bridge(kind):
+        raise ValueError("cold-start import requires project_kind=pcb_schematic")
+    root = initialize_project(projects_root, name, None, False, project_kind=kind)
+    seed_module = {
+        "schema": MODULE_SCHEMA,
+        "module_id": "sheet1",
+        "name": "Imported sheet",
+        "revision": 0,
+        "ports": [],
+        "components": [],
+        "nets": [],
+        "wires": [],
+        "annotations": [],
+    }
+    ensure_module_stable_ids(seed_module)
+    project, modules = load_project(root)
+    modules["sheet1"] = seed_module
+    project["modules"] = [{
+        "id": "sheet1",
+        "name": seed_module["name"],
+        "kind": "imported",
+        "function": "",
+        "parameters": {},
+        "notes": "Cold-start import sheet",
+        "preview_enabled": True,
+        "source": "modules/sheet1/module.circuit.json",
+        "position": {"x": 100, "y": 100},
+        "size": {"width": 360, "height": 280},
+        "ports": [],
+    }]
+    validate_module(seed_module, kind)
+    validate_project(project)
+    atomic_write_json(module_path(root, "sheet1"), seed_module)
+    atomic_write_json(project_path(root), project)
+    link_bridge(root, peer_kind, peer_root, policy=policy)
+    pull_result = pull_bridge(root, peer_kind, project=project, modules=modules, policy=policy)
+    if peer_kind == "kicad":
+        pull_result = materialize_kicad_unknowns(root, peer_root, project, modules, pull_result)
+    pull_result = persist_bridge_pull(root, pull_result)
+    imported_count = len(pull_result.get("applied") or [])
+    cold_ok = bool(pull_result.get("ok")) and imported_count > 0
+    return {
+        **project_summary(root),
+        "ok": cold_ok,
+        "project_root": str(root),
+        "project_id": project["project_id"],
+        "project_kind": kind,
+        "peer_kind": peer_kind,
+        "pull": pull_result,
     }
 
 
@@ -4170,6 +5354,12 @@ def build_parser() -> argparse.ArgumentParser:
         )
         subparser.add_argument("--name", required=True)
         subparser.add_argument("--project-id", default="")
+        subparser.add_argument(
+            "--project-kind",
+            default=DEFAULT_PROJECT_KIND,
+            choices=["simulation", "pcb_schematic", "analog_ic"],
+            help="Project type gate for validation, Agent defaults, and Bridge/LCSC.",
+        )
         subparser.set_defaults(demo=demo)
 
     workspace_list = subparsers.add_parser(
@@ -4232,6 +5422,13 @@ def build_parser() -> argparse.ArgumentParser:
     simulate_module_parser.add_argument("--module-id", required=True)
     simulate_module_parser.add_argument("--ngspice-bin", default="")
 
+    analog_ic_audit_parser = subparsers.add_parser(
+        "analog-ic-audit",
+        help="Validate PDK binding and explicit MOS W/L/M/NF sizing before simulation.",
+    )
+    analog_ic_audit_parser.add_argument("--project-root", required=True)
+    analog_ic_audit_parser.add_argument("--output-path", default="")
+
     export_parser = subparsers.add_parser(
         "export-eda",
         help="Export editable schematic packages from the current structured project revision.",
@@ -4274,7 +5471,164 @@ def build_parser() -> argparse.ArgumentParser:
     patch_source = evaluate_layout_parser.add_mutually_exclusive_group(required=True)
     patch_source.add_argument("--patch-set-json", default="")
     patch_source.add_argument("--patch-set-file", default="")
+
+    subparsers.add_parser("reference-catalog-list", help="List workspace reference catalog assets.")
+
+    ref_import_cir = subparsers.add_parser(
+        "reference-import-circuit",
+        help="Import a .cir/.sp file into the reference catalog (flattened).",
+    )
+    ref_import_cir.add_argument("--file", required=True)
+    ref_import_cir.add_argument("--as", dest="as_kind", choices=["circuit_module", "circuit_project"], default="circuit_module")
+    ref_import_cir.add_argument("--name", default="")
+    ref_import_cir.add_argument("--subckt-name", default="")
+
+    ref_import_vis = subparsers.add_parser(
+        "reference-import-visual",
+        help="Import a schematic screenshot/PDF page as layout_visual reference.",
+    )
+    ref_import_vis.add_argument("--file", required=True)
+    ref_import_vis.add_argument("--name", default="")
+
+    ref_prepare = subparsers.add_parser(
+        "prepare-layout-from-reference",
+        help="Check whether a layout/idiom/visual reference can be applied to a module.",
+    )
+    ref_prepare.add_argument("--project-root", required=True)
+    ref_prepare.add_argument("--module-id", required=True)
+    ref_prepare.add_argument("--asset-id", required=True)
+
+    ref_apply = subparsers.add_parser(
+        "apply-layout-from-reference",
+        help="Apply schematic_layout snapshot or layout_idiom guide (never changes SPICE).",
+    )
+    ref_apply.add_argument("--project-root", required=True)
+    ref_apply.add_argument("--module-id", required=True)
+    ref_apply.add_argument("--asset-id", required=True)
+
+    ref_insert = subparsers.add_parser(
+        "reference-insert-module",
+        help="Insert a circuit reference as a new module into an existing project.",
+    )
+    ref_insert.add_argument("--project-root", required=True)
+    ref_insert.add_argument("--asset-id", required=True)
+    ref_insert.add_argument("--module-id", default="")
+
+    ref_create = subparsers.add_parser(
+        "reference-create-project",
+        help="Create a new project seeded from a circuit reference.",
+    )
+    ref_create.add_argument("--asset-id", required=True)
+    ref_create.add_argument("--name", default="")
+    ref_create.add_argument("--project-kind", default=DEFAULT_PROJECT_KIND)
+    ref_create.add_argument("--projects-root", default="")
+
+    ref_promote = subparsers.add_parser(
+        "reference-promote-visual-layout",
+        help="Promote a layout_visual into a schematic_layout asset using a layout-reference JSON.",
+    )
+    ref_promote.add_argument("--asset-id", required=True)
+    ref_promote.add_argument("--layout-reference-json", default="")
+    ref_promote.add_argument("--layout-reference-file", default="")
+    ref_promote.add_argument("--name", default="")
+
+    ref_pack = subparsers.add_parser(
+        "reference-pack-from-project",
+        help="Write layout-reference.json into a design-memory template and register catalog.",
+    )
+    ref_pack.add_argument("--project-root", required=True)
+    ref_pack.add_argument("--template-root", required=True)
+    ref_pack.add_argument("--memory-id", required=True)
+    ref_pack.add_argument("--template-relative", required=True)
+    ref_pack.add_argument("--trust", default="unverified")
+
+    ref_promote_mod = subparsers.add_parser(
+        "reference-promote-from-module",
+        help="Promote layout_visual using the current module placement snapshot.",
+    )
+    ref_promote_mod.add_argument("--project-root", required=True)
+    ref_promote_mod.add_argument("--module-id", required=True)
+    ref_promote_mod.add_argument("--asset-id", required=True)
+    ref_promote_mod.add_argument("--name", default="")
+
+    bridge_list = subparsers.add_parser("bridge-list", help="List linked EDA bridges.")
+    bridge_list.add_argument("--project-root", required=True)
+
+    bridge_status_parser = subparsers.add_parser("bridge-status", help="Show bridge link status.")
+    bridge_status_parser.add_argument("--project-root", required=True)
+    bridge_status_parser.add_argument("--peer-kind", choices=["kicad", "jlceda"], default="")
+
+    bridge_link_parser = subparsers.add_parser("bridge-link", help="Link a KiCad or JLCEDA peer folder.")
+    bridge_link_parser.add_argument("--project-root", required=True)
+    bridge_link_parser.add_argument("--peer-kind", choices=["kicad", "jlceda"], required=True)
+    bridge_link_parser.add_argument("--peer-root", required=True)
+    bridge_link_parser.add_argument(
+        "--policy",
+        choices=["layout_wins", "connectivity_wins", "manual_review"],
+        default="manual_review",
+    )
+
+    bridge_unlink_parser = subparsers.add_parser("bridge-unlink", help="Remove an EDA bridge link.")
+    bridge_unlink_parser.add_argument("--project-root", required=True)
+    bridge_unlink_parser.add_argument("--peer-kind", choices=["kicad", "jlceda"], required=True)
+
+    bridge_push_parser = subparsers.add_parser("bridge-push", help="Push Actoviq schematic to a linked peer.")
+    bridge_push_parser.add_argument("--project-root", required=True)
+    bridge_push_parser.add_argument("--peer-kind", choices=["kicad", "jlceda"], required=True)
+    bridge_push_parser.add_argument("--source-revision", type=int, required=True)
+
+    bridge_pull_parser = subparsers.add_parser("bridge-pull", help="Pull peer edits into Actoviq by stable_id.")
+    bridge_pull_parser.add_argument("--project-root", required=True)
+    bridge_pull_parser.add_argument("--peer-kind", choices=["kicad", "jlceda"], required=True)
+    bridge_pull_parser.add_argument(
+        "--policy",
+        choices=["layout_wins", "connectivity_wins", "manual_review"],
+        default="",
+    )
+
+    bridge_cold = subparsers.add_parser(
+        "bridge-import-cold",
+        help="Create a new project from an existing KiCad/JLCEDA peer (cold start).",
+    )
+    bridge_cold.add_argument("--projects-root", default="")
+    bridge_cold.add_argument("--workspace-id", default="")
+    bridge_cold.add_argument("--peer-kind", choices=["kicad", "jlceda"], required=True)
+    bridge_cold.add_argument("--peer-root", required=True)
+    bridge_cold.add_argument("--name", required=True)
+    bridge_cold.add_argument(
+        "--project-kind",
+        default="pcb_schematic",
+        choices=["pcb_schematic"],
+    )
+    bridge_cold.add_argument(
+        "--policy",
+        choices=["layout_wins", "connectivity_wins", "manual_review"],
+        default="layout_wins",
+    )
+
+    lcsc_search_parser = subparsers.add_parser("lcsc-search", help="Search LCSC / 立创商城 parts.")
+    lcsc_search_parser.add_argument("--query", required=True)
+    lcsc_search_parser.add_argument("--limit", type=int, default=20)
+    lcsc_search_parser.add_argument("--api-key", default=os.environ.get("ACTOVIQ_LCSC_API_KEY", ""))
+    lcsc_search_parser.add_argument("--api-secret", default=os.environ.get("ACTOVIQ_LCSC_API_SECRET", ""))
+    lcsc_search_parser.add_argument("--use-fallback", action="store_true")
+
+    lcsc_get_parser = subparsers.add_parser("lcsc-get", help="Fetch one LCSC part by C-number.")
+    lcsc_get_parser.add_argument("--lcsc-id", required=True)
+    lcsc_get_parser.add_argument("--api-key", default=os.environ.get("ACTOVIQ_LCSC_API_KEY", ""))
+    lcsc_get_parser.add_argument("--api-secret", default=os.environ.get("ACTOVIQ_LCSC_API_SECRET", ""))
+    lcsc_get_parser.add_argument("--use-fallback", action="store_true")
+
+    lcsc_bind_parser = subparsers.add_parser("lcsc-bind", help="Bind an LCSC part onto a module component.")
+    lcsc_bind_parser.add_argument("--project-root", required=True)
+    lcsc_bind_parser.add_argument("--module-id", required=True)
+    lcsc_bind_parser.add_argument("--component-id", required=True)
+    lcsc_bind_parser.add_argument("--lcsc-id", required=True)
+    lcsc_bind_parser.add_argument("--api-key", default=os.environ.get("ACTOVIQ_LCSC_API_KEY", ""))
+    lcsc_bind_parser.add_argument("--api-secret", default=os.environ.get("ACTOVIQ_LCSC_API_SECRET", ""))
+    lcsc_bind_parser.add_argument("--use-fallback", action="store_true")
     return parser
+
 
 
 def main() -> int:
@@ -4301,6 +5655,7 @@ def main() -> int:
                 args.name,
                 args.project_id or None,
                 bool(args.demo),
+                project_kind=getattr(args, "project_kind", DEFAULT_PROJECT_KIND),
             )
             result = {
                 **project_summary(root),
@@ -4328,11 +5683,27 @@ def main() -> int:
                 args.module_id,
                 args.ngspice_bin,
             )
+        elif args.command == "analog-ic-audit":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            result = audit_analog_ic_project(root, project, modules)
+            output_path = (
+                Path(args.output_path).resolve()
+                if args.output_path
+                else root / "build" / "analog-ic" / "audit.json"
+            )
+            atomic_write_json(output_path, result)
         elif args.command == "export-eda":
             root = Path(args.project_root).resolve()
             project, modules = load_project(root)
             erc = evaluate_erc(project, modules)
             requested_targets = [target.strip().lower() for target in args.targets.split(",") if target.strip()]
+            if "virtuoso" in requested_targets and normalize_project_kind(project.get("project_kind")) == "analog_ic":
+                analog_audit = audit_analog_ic_project(root, project, modules)
+                atomic_write_json(root / "build" / "analog-ic" / "audit.json", analog_audit)
+                if not analog_audit.get("ok"):
+                    codes = ", ".join(str(item.get("code")) for item in analog_audit.get("errors", []))
+                    raise ValueError(f"analog IC audit failed before Virtuoso export: {codes}")
             result = export_eda(
                 root,
                 project,
@@ -4376,10 +5747,156 @@ def main() -> int:
                 output_dir=Path(args.output_dir).resolve(),
                 view=args.view,
             )
+        elif args.command == "reference-catalog-list":
+            result = list_catalog()
+        elif args.command == "reference-import-circuit":
+            result = import_circuit_reference(
+                Path(args.file),
+                as_kind=args.as_kind,
+                name=args.name or None,
+                subckt_name=args.subckt_name or None,
+            )
+        elif args.command == "reference-import-visual":
+            result = import_visual_reference(Path(args.file), name=args.name or None)
+        elif args.command == "prepare-layout-from-reference":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            result = prepare_layout_from_reference(
+                project,
+                modules,
+                module_id=args.module_id,
+                asset_id=args.asset_id,
+                connectivity_hash_fn=connectivity_hash,
+            )
+        elif args.command == "apply-layout-from-reference":
+            result = apply_layout_from_reference_command(
+                Path(args.project_root).resolve(),
+                module_id=args.module_id,
+                asset_id=args.asset_id,
+            )
+        elif args.command == "reference-insert-module":
+            result = insert_module_from_circuit_reference(
+                Path(args.project_root).resolve(),
+                asset_id=args.asset_id,
+                module_id=args.module_id or None,
+            )
+        elif args.command == "reference-create-project":
+            result = create_project_from_circuit_reference(
+                asset_id=args.asset_id,
+                name=args.name or None,
+                project_kind=args.project_kind,
+                projects_root=Path(args.projects_root).resolve() if args.projects_root else None,
+            )
+        elif args.command == "reference-promote-visual-layout":
+            layout_ref = (
+                json.loads(args.layout_reference_json)
+                if args.layout_reference_json
+                else read_json(Path(args.layout_reference_file).resolve())
+            )
+            result = promote_visual_to_layout(
+                visual_asset_id=args.asset_id,
+                layout_ref=layout_ref,
+                name=args.name or None,
+            )
+        elif args.command == "reference-pack-from-project":
+            result = pack_template_layouts_from_project(
+                Path(args.project_root).resolve(),
+                Path(args.template_root).resolve(),
+                memory_id=args.memory_id,
+                template_relative=args.template_relative,
+                trust=args.trust,
+            )
+        elif args.command == "reference-promote-from-module":
+            result = promote_visual_from_module(
+                Path(args.project_root).resolve(),
+                module_id=args.module_id,
+                visual_asset_id=args.asset_id,
+                name=args.name or None,
+            )
+        elif args.command == "bridge-list":
+            result = {"ok": True, "bridges": list_bridges(Path(args.project_root).resolve())}
+        elif args.command == "bridge-status":
+            result = bridge_status(Path(args.project_root).resolve(), args.peer_kind or None)
+        elif args.command == "bridge-link":
+            root = Path(args.project_root).resolve()
+            project, _modules = load_project(root)
+            if not supports_eda_bridge(project.get("project_kind", DEFAULT_PROJECT_KIND)):
+                raise ValueError("KiCad/JLCEDA handoff requires project_kind=pcb_schematic")
+            result = link_bridge(root, args.peer_kind, args.peer_root, policy=args.policy)
+        elif args.command == "bridge-unlink":
+            result = unlink_bridge(Path(args.project_root).resolve(), args.peer_kind)
+        elif args.command == "bridge-push":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            if not supports_eda_bridge(project.get("project_kind", DEFAULT_PROJECT_KIND)):
+                raise ValueError("KiCad/JLCEDA handoff requires project_kind=pcb_schematic")
+            result = push_bridge(
+                root,
+                args.peer_kind,
+                project=project,
+                modules=modules,
+                document_hash=project_document_hash(project, modules),
+                source_revision=args.source_revision,
+            )
+        elif args.command == "bridge-pull":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            if not supports_eda_bridge(project.get("project_kind", DEFAULT_PROJECT_KIND)):
+                raise ValueError("KiCad/JLCEDA handoff requires project_kind=pcb_schematic")
+            result = pull_bridge(
+                root,
+                args.peer_kind,
+                project=project,
+                modules=modules,
+                policy=args.policy or None,
+            )
+            result = persist_bridge_pull(root, result)
+        elif args.command == "bridge-import-cold":
+            resolved = resolve_projects_root(
+                projects_root=args.projects_root or None,
+                workspace_id=args.workspace_id or None,
+            )
+            result = bridge_import_cold(
+                projects_root=Path(resolved["projects_root"]),
+                peer_kind=args.peer_kind,
+                peer_root=Path(args.peer_root),
+                name=args.name,
+                project_kind=args.project_kind,
+                policy=args.policy,
+            )
+        elif args.command == "lcsc-search":
+            from lcsc_search import search_parts
+
+            result = search_parts(
+                args.query,
+                api_key=args.api_key,
+                api_secret=args.api_secret,
+                use_fallback=bool(args.use_fallback),
+                limit=args.limit,
+            )
+        elif args.command == "lcsc-get":
+            from lcsc_search import get_part
+
+            result = get_part(
+                args.lcsc_id,
+                api_key=args.api_key,
+                api_secret=args.api_secret,
+                use_fallback=bool(args.use_fallback),
+            )
+        elif args.command == "lcsc-bind":
+            result = run_lcsc_bind(
+                Path(args.project_root).resolve(),
+                args.module_id,
+                args.component_id,
+                args.lcsc_id,
+                api_key=args.api_key,
+                api_secret=args.api_secret,
+                use_fallback=bool(args.use_fallback),
+            )
         else:
             raise ValueError(f"unknown command: {args.command}")
         print(json.dumps(result, ensure_ascii=False))
-        return 0
+        return 0 if args.command != "analog-ic-audit" or result.get("ok") else 1
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 1

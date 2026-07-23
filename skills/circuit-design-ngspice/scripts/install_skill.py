@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -18,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scope", choices=["user", "project"], default="user")
     parser.add_argument("--project-root", default=".", help="Project root for project installs")
     parser.add_argument("--force", action="store_true", help="Replace an installed copy")
-    parser.add_argument("--check", action="store_true", help="Check protocol versions without copying")
+    parser.add_argument("--check", action="store_true", help="Check versions and installed content without copying")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -34,8 +35,28 @@ def target_roots(agent: str, scope: str, project_root: Path) -> list[Path]:
 
 
 def ignore_file(_directory: str, names: list[str]) -> set[str]:
-    ignored = {"__pycache__", ".DS_Store"}
+    ignored = {"__pycache__", ".DS_Store", "parts-cache"}
     return {name for name in names if name in ignored or name.endswith((".pyc", ".pyo"))}
+
+
+def content_hash(root: Path) -> str:
+    digest = hashlib.sha256()
+    if not root.is_dir():
+        return ""
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root)
+        if any(part in {"__pycache__", "parts-cache"} for part in relative.parts):
+            continue
+        if path.name == ".DS_Store" or path.suffix in {".pyc", ".pyo"}:
+            continue
+        relative_text = relative.as_posix()
+        digest.update(relative_text.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def main() -> int:
@@ -43,6 +64,7 @@ def main() -> int:
     source = Path(__file__).resolve().parents[1]
     project_root = Path(args.project_root).resolve()
     source_manifest = json.loads((source / "skill-version.json").read_text(encoding="utf-8"))
+    source_hash = content_hash(source)
     outdated = False
     written_targets: set[Path] = set()
 
@@ -55,10 +77,12 @@ def main() -> int:
                 installed_manifest = json.loads(installed_manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 installed_manifest = None
+        installed_hash = content_hash(effective_target)
         current = bool(
             installed_manifest
             and installed_manifest.get("skill_version") == source_manifest.get("skill_version")
             and installed_manifest.get("protocol_version") == source_manifest.get("protocol_version")
+            and installed_hash == source_hash
         )
         print(json.dumps({
             "source": str(source),
@@ -68,6 +92,8 @@ def main() -> int:
             "source_version": source_manifest.get("skill_version"),
             "installed_version": (installed_manifest or {}).get("skill_version"),
             "protocol_version": source_manifest.get("protocol_version"),
+            "source_content_hash": source_hash,
+            "installed_content_hash": installed_hash,
         }))
         outdated = outdated or not current
         if args.check:

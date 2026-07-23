@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/reference-asset.schema.json",
+  "title": "Actoviq Reference Asset",
+  "type": "object",
+  "required": ["schema", "id", "kind", "name", "trust", "use_as", "payload"],
+  "properties": {
+    "schema": { "const": "actoviq.reference-asset.v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "kind": {
+      "enum": [
+        "circuit_project",
+        "circuit_module",
+        "schematic_layout",
+        "layout_idiom",
+        "layout_visual",
+        "spec",
+        "document",
+        "pdk_binding"
+      ]
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "trust": {
+      "enum": ["user_upload", "verified_sim", "verified_layout", "agent_draft"]
+    },
+    "use_as": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "seed_new_project",
+          "insert_module",
+          "apply_layout_seed",
+          "guide_router",
+          "agent_context_only",
+          "bind_pdk"
+        ]
+      }
+    },
+    "binds_to": {
+      "type": "object",
+      "properties": {
+        "connectivity_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "module_role": { "type": "string" },
+        "topology_tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "preferred_for_agent_reuse": { "type": "boolean" },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "source": { "type": "string" },
+        "source_project_id": { "type": "string" },
+        "source_revision": { "type": "integer", "minimum": 0 },
+        "parent_asset_id": { "type": "string" },
+        "created_at": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "license": { "type": "string" },
+    "payload": {
+      "type": "object",
+      "required": ["root"],
+      "properties": {
+        "root": { "type": "string", "minLength": 1 },
+        "files": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "null"] }
+        }
+      },
+      "additionalProperties": true
+    },
+    "model_hints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "children": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

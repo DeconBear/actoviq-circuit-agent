@@ -1,0 +1,14 @@
+{
+  "schema": "actoviq.layout-idiom.v1",
+  "idiom_id": "feedback_right",
+  "name": "Feedback network on the right",
+  "topology_tags": ["feedback", "ldo", "regulator", "opamp"],
+  "module_roles": ["ldo", "regulator", "amplifier"],
+  "lanes": [
+    { "match": { "type": "M", "name_regex": ".*(pass|power|mpass).*" }, "rank": 1, "lane": -1 },
+    { "match": { "type": "Q", "name_regex": ".*(err|amp).*" }, "rank": 1, "lane": 0 },
+    { "match": { "type": "R", "name_regex": ".*(fb|top|bot|div).*" }, "rank": 1, "lane": 2 },
+    { "match": { "type": "C", "name_regex": ".*(out|load|comp).*" }, "rank": 2, "lane": 1 }
+  ],
+  "notes": "Keep power path left-center and resistive feedback on the right."
+}

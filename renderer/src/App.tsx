@@ -15,7 +15,7 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AppToolbar, type AppToolbarAction } from './components/layout/AppToolbar';
 import { useAppStore, type SimulationMetric, type TabKey } from './store/appStore';
 import { loadPersistedChatHistory, persistChatHistory } from './store/chatHistoryPersistence';
-import type { CircuitTrashItem, DesktopAgentEvent, ModuleManifest, StageDef } from './types';
+import type { CircuitTrashItem, DesktopAgentEvent, ModuleManifest, ProjectKind, StageDef } from './types';
 import type { ChatModelTier } from './modelTiers';
 import {
   CircuitBoard,
@@ -500,6 +500,14 @@ export function App() {
   }, [loadCircuitProject, refreshCircuitProjects]);
 
   useEffect(() => {
+    if (!window.electronAPI?.onCircuitProjectListChanged) return;
+    return window.electronAPI.onCircuitProjectListChanged(() => {
+      void refreshCircuitProjects();
+      void refreshCircuitTrash();
+    });
+  }, [refreshCircuitProjects, refreshCircuitTrash]);
+
+  useEffect(() => {
     if (store.circuitBusy) return;
     const projectId = pendingProjectReloadRef.current;
     if (!projectId || projectId !== store.activeProjectId) return;
@@ -514,7 +522,11 @@ export function App() {
     }
   }, [store.circuitProjects, loadCircuitProject]);
 
-  const handleCreateCircuitProject = useCallback(async (demo: boolean, name: string) => {
+  const handleCreateCircuitProject = useCallback(async (
+    demo: boolean,
+    name: string,
+    projectKind?: ProjectKind,
+  ) => {
     if (!window.electronAPI) return;
     if (!name.trim()) return;
     if (circuitCreateRequestRef.current) return;
@@ -523,7 +535,11 @@ export function App() {
     state.setCircuitBusy(true);
     state.setCircuitError('');
     try {
-      const bundle = await window.electronAPI.createCircuitProject({ name: name.trim(), demo });
+      const bundle = await window.electronAPI.createCircuitProject({
+        name: name.trim(),
+        demo,
+        projectKind,
+      });
       for (const module of bundle.project.modules) {
         await window.electronAPI.compileCircuitModule(bundle.project.project_id, module.id);
       }
@@ -992,9 +1008,13 @@ export function App() {
             targetProjectId = agentContext.project_id;
             baseRevision = agentContext.base_revision;
           } else {
+            if (!result.projectKind) {
+              throw new Error('The Agent must classify a new project as simulation, pcb_schematic, or analog_ic.');
+            }
             const created = await window.electronAPI.createCircuitProject({
               name: result.projectName?.trim() || `Agent Circuit ${new Date().toLocaleString()}`,
               demo: false,
+              projectKind: result.projectKind,
             });
             targetProjectId = created.project.project_id;
             baseRevision = created.project.revision;

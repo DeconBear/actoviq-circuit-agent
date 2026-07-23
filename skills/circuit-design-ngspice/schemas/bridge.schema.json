@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/bridge.schema.json",
+  "title": "Actoviq EDA Bridge Manifest",
+  "type": "object",
+  "required": ["schema", "peer_root", "peer_kind", "policy", "id_map"],
+  "properties": {
+    "schema": { "const": "actoviq.bridge.v1" },
+    "peer_root": { "type": "string", "minLength": 1 },
+    "peer_kind": { "enum": ["kicad", "jlceda"] },
+    "last_push_at": { "type": "string" },
+    "last_push_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "last_pull_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "id_map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "policy": { "enum": ["layout_wins", "connectivity_wins", "manual_review"] }
+  },
+  "additionalProperties": true
+}

@@ -40,6 +40,8 @@
               "set_module_note",
               "set_module_preview",
               "set_module_metadata",
+              "set_analog_ic_profile",
+              "bind_lcsc_part",
               "restore_revision"
             ]
           }

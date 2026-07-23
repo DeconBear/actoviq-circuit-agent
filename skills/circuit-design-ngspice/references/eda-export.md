@@ -1,6 +1,10 @@
 # EDA schematic export
 
-`export-eda` creates non-destructive editable schematic packages from the current `actoviq.module.v2` project revision. It never writes source modules, generated SVG placement overrides, or connectivity changes.
+`export-eda` creates **one-shot** editable schematic packages from the current `actoviq.module.v2` project revision. It never writes source modules, generated SVG placement overrides, or connectivity changes.
+
+For `pcb_schematic`, the Bridge CLI / GUI path in [eda-bridge-lcsc.md](eda-bridge-lcsc.md) provides controlled stable-ID layout/property handoff with KiCad. The JLCEDA path currently emits an experimental Actoviq exchange JSON that has not been validated in the vendor application. Neither path is a lossless connectivity co-editor. For `analog_ic`, use the audit-gated Virtuoso SPICE/CDL handoff described in [analog-ic-design.md](analog-ic-design.md). Export packages remain useful for Altium-via-KiCad and ad-hoc handoff.
+
+Identity uses persistent `stable_id`, written as peer property `ACTOVIQ_ID` (plus LCSC/MPN fields when bound).
 
 ```powershell
 python scripts/circuit_project.py export-eda `
@@ -23,7 +27,7 @@ The command runs ERC, rejects blocking diagnostics and stale revisions, generate
 
 **Artifacts and target status**
 
-Artifacts are written under `build/exports/<export-id>/` by default (or under `--output-dir`). KiCad is generated directly with a portable `Actoviq_Standard` symbol library. Altium receives an exact, validated copy of that KiCad import source. OrCAD receives EDIF 2.0.0. Virtuoso receives SPICE/CDL, mapping data (including deterministic generic-symbol fallbacks), module schematics, a top-level hierarchy, and a SKILL bootstrap.
+Artifacts are written under `build/exports/<export-id>/` by default (or under `--output-dir`). KiCad is generated directly with a portable `Actoviq_Standard` symbol library. Altium receives an exact, validated copy of that KiCad import source. OrCAD receives EDIF 2.0.0. Virtuoso receives SPICE/CDL with preserved model bindings, the analog profile, source-SPICE sidecars, a revision/hash handoff manifest, mapping data (including deterministic generic-symbol fallbacks), module schematics, a top-level hierarchy, and a SKILL bootstrap. Foundry models are referenced, never copied into the package.
 
 The public `targets.<target>.status` contract is:
 
@@ -41,7 +45,7 @@ Internal validation is stricter than a file-presence check:
 - KiCad cross-checks every instance against embedded and project-local symbol definitions, pin numbers, UUIDs, and normalized connectivity; `kicad-cli`, when available, additionally runs ERC and netlist round-trip.
 - Altium verifies that every KiCad project/schematic/library/table file is copied byte-for-byte. Altium-specific mapping is retained as advisory metadata because the first-stage importer consumes the KiCad bindings.
 - OrCAD parses the EDIF libraries, symbol ports, pin locations, instances, transforms, page nets, stored wire coordinates, and top hierarchy against EDA IR.
-- Virtuoso compares both SPICE and CDL with the IR pin order/net partition, verifies device-map and generic fallback coverage, and checks that SKILL reconstructs every module, terminal, wire path, component, and top-level connection.
+- Virtuoso compares both SPICE and CDL with the IR pin order/net partition, verifies profile/model/source sidecars and the revision/hash handoff manifest, verifies device-map and generic fallback coverage, and checks that SKILL reconstructs every module, terminal, wire path, component, and top-level connection.
 
 Without Altium, OrCAD Capture, or Virtuoso installed, Actoviq can prove package structure and normalized connectivity but cannot claim that a particular vendor release has imported and re-saved its native database. Those targets remain `import_ready`, not `native`.
 

@@ -49,6 +49,8 @@
     "test:schematic-quality": "node scripts/schematic-quality-regression.mjs",
     "test:eda-export": "python scripts/eda-export-regression.py",
     "test:simulation-regression": "python scripts/simulation-regression.py",
+    "test:analog-ic": "python scripts/analog-ic-regression.py",
+    "test:pcb-integration": "python scripts/pcb-integration-regression.py",
     "typecheck": "npm run typecheck:src && npm run typecheck:electron && npm run typecheck:renderer",
     "typecheck:src": "tsc -p tsconfig.json --noEmit",
     "typecheck:electron": "tsc -p tsconfig.electron.json --noEmit",

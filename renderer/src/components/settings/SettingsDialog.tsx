@@ -487,6 +487,36 @@ export function SettingsDialog({ onClose }: Props) {
               </section>
 
               <section className="av-form-section">
+                <h3 className="av-form-section__title">立创商城 (LCSC)</h3>
+                <SecretField
+                  label="LCSC API key"
+                  value={settings.lcscApiKey}
+                  onChange={(v) => update('lcscApiKey', v)}
+                  placeholder="Enter LCSC API key"
+                  testId="settings-lcsc-api-key"
+                />
+                <SecretField
+                  label="LCSC API secret"
+                  value={settings.lcscApiSecret}
+                  onChange={(v) => update('lcscApiSecret', v)}
+                  placeholder="Enter LCSC API secret"
+                  testId="settings-lcsc-api-secret"
+                />
+                <label className="av-form-check">
+                  <input
+                    type="checkbox"
+                    checked={settings.lcscUseFallback}
+                    onChange={(event) => update('lcscUseFallback', event.target.checked)}
+                    data-testid="settings-lcsc-use-fallback"
+                  />
+                  Use non-production fallback search when API credentials are missing
+                </label>
+                <p className="av-form-hint">
+                  Fallback mode is for development only and may return incomplete or stale part data.
+                </p>
+              </section>
+
+              <section className="av-form-section">
                 <h3 className="av-form-section__title">Yunzhisheng OCR</h3>
                 <Field label="OCR endpoint" value={settings.yunzhishengOcrBaseUrl} onChange={(v) => update('yunzhishengOcrBaseUrl', v)} placeholder="https://.../ocr" />
                 <SecretField

@@ -47,6 +47,7 @@ export interface ChatResponse {
   revisionRequest?: string;
   targetStage?: string;
   projectName?: string;
+  projectKind?: ProjectKind;
   projectOperations?: Array<Record<string, unknown>>;
   compileAfterApply?: boolean;
   simulateAfterApply?: boolean;
@@ -139,6 +140,24 @@ export interface WorkspaceSummary {
   lastOpenedAt: string;
 }
 
+export type ProjectKind = 'simulation' | 'pcb_schematic' | 'analog_ic';
+export type EdaBridgePeerKind = 'kicad' | 'jlceda';
+
+export interface AnalogIcProfile {
+  schema: 'actoviq.analog-ic-profile.v1';
+  simulator: 'ngspice';
+  pdk: {
+    name: string;
+    model_library: string;
+    corner?: string;
+    temperature_c?: number;
+  };
+  sizing?: {
+    require_explicit_w_l?: boolean;
+    require_scale_suffix?: boolean;
+  };
+}
+
 export type PortDirection = 'input' | 'output' | 'bidirectional';
 export type SignalType = 'analog' | 'digital' | 'power' | 'ground';
 
@@ -195,6 +214,9 @@ export interface CircuitProject {
   revision: number;
   created_at: string;
   updated_at: string;
+  project_kind?: ProjectKind;
+  analog_ic_profile?: AnalogIcProfile;
+  stable_id?: string;
   modules: CircuitModuleRef[];
   connections: CircuitConnection[];
   analyses?: Record<string, unknown>;
@@ -242,14 +264,28 @@ export interface CircuitWire {
   source?: 'stored' | 'net';
 }
 
+export interface CircuitComponentEda {
+  lcsc_id?: string;
+  mpn?: string;
+  manufacturer?: string;
+  datasheet_url?: string;
+  jlc_basic?: boolean;
+  footprint_hint?: string;
+  refdes?: string;
+  foreign_symbol?: string;
+  [k: string]: unknown;
+}
+
 export interface CircuitComponent {
   id: string;
-  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E' | 'BLOCK';
+  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E' | 'BLOCK' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B';
   name: string;
   value: string;
   position: CircuitPosition;
   rotation: number;
   pins: CircuitPin[];
+  stable_id?: string;
+  eda?: CircuitComponentEda;
   block?: CircuitBlockStyle;
   spice?: { raw?: string; simulated?: boolean };
 }
@@ -547,6 +583,79 @@ export interface SavedDesignMemorySummary extends DesignMemoryItem {
 
 export type EdaExportTarget = 'kicad' | 'altium' | 'orcad' | 'virtuoso';
 
+export interface BridgeManifest {
+  peer_kind: EdaBridgePeerKind;
+  peer_root: string;
+  linked_at?: string;
+  policy?: string;
+  source_revision?: number;
+  [k: string]: unknown;
+}
+
+export interface BridgeConflict {
+  field?: string;
+  local?: unknown;
+  remote?: unknown;
+  message?: string;
+  [k: string]: unknown;
+}
+
+export interface BridgeListResult {
+  ok: true;
+  bridges: BridgeManifest[];
+  [k: string]: unknown;
+}
+
+export interface BridgeStatusResult {
+  ok: true;
+  bridges?: BridgeManifest[];
+  bridge?: BridgeManifest | null;
+  conflicts?: BridgeConflict[];
+  [k: string]: unknown;
+}
+
+export interface BridgePullResult extends BridgeStatusResult {
+  changed?: boolean;
+}
+
+export interface LcscPart {
+  lcsc_id: string;
+  mpn?: string;
+  manufacturer?: string;
+  description?: string;
+  datasheet_url?: string;
+  jlc_basic?: boolean;
+  footprint_hint?: string;
+  [k: string]: unknown;
+}
+
+export interface LcscSearchResult {
+  ok: true;
+  parts: LcscPart[];
+  [k: string]: unknown;
+}
+
+export interface LcscPartResult {
+  ok: true;
+  part: LcscPart;
+  [k: string]: unknown;
+}
+
+export interface LcscBindResult {
+  ok: true;
+  module_id: string;
+  component_id: string;
+  lcsc_id: string;
+  [k: string]: unknown;
+}
+
+export interface EdaColdStartImportResult {
+  ok: true;
+  project: CircuitProject;
+  project_root: string;
+  [k: string]: unknown;
+}
+
 export interface LayoutOptimizationRequest {
   moduleId: string;
   sourceRevision: number;
@@ -668,6 +777,10 @@ export interface AppSettings {
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;
+  /** LCSC Open API credentials — MVP stores plaintext in desktop settings file. */
+  lcscApiKey: string;
+  lcscApiSecret: string;
+  lcscUseFallback: boolean;
 }
 
 export interface ProviderTestResult {

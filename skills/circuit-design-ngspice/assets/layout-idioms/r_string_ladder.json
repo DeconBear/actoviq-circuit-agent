@@ -1,0 +1,14 @@
+{
+  "schema": "actoviq.layout-idiom.v1",
+  "idiom_id": "r_string_ladder",
+  "name": "Resistor string ladder",
+  "topology_tags": ["r_string", "ladder", "dac", "adc", "reference"],
+  "module_roles": ["reference", "rstring", "ladder"],
+  "lanes": [
+    { "match": { "type": "R", "name_regex": ".*l1.*|.*r1.*" }, "rank": 0, "lane": 0, "rotation": 90 },
+    { "match": { "type": "R", "name_regex": ".*l2.*|.*r2.*" }, "rank": 1, "lane": 0, "rotation": 90 },
+    { "match": { "type": "R", "name_regex": ".*l3.*|.*r3.*" }, "rank": 2, "lane": 0, "rotation": 90 },
+    { "match": { "type": "R", "name_regex": ".*l4.*|.*r4.*" }, "rank": 3, "lane": 0, "rotation": 90 }
+  ],
+  "notes": "Stack equal resistors vertically for flash/R-string DAC taps."
+}

@@ -2170,7 +2170,13 @@ def build_eda_ir(project: dict[str, Any], modules: dict[str, dict[str, Any]], *,
         "schema": EDA_IR_SCHEMA,
         "source": {"project_id": project["project_id"], "revision": project["revision"], "document_hash": document_hash, "scope": scope, "module_id": module_id, "view": view},
         "coordinate_system": {"unit": "actoviq", "grid": GRID, "mm_per_unit": MM_PER_UNIT},
-        "project": {"id": project["project_id"], "name": project.get("name", project["project_id"]), "connections": project.get("connections", [])},
+        "project": {
+            "id": project["project_id"],
+            "name": project.get("name", project["project_id"]),
+            "project_kind": project.get("project_kind", "simulation"),
+            "analog_ic_profile": project.get("analog_ic_profile"),
+            "connections": project.get("connections", []),
+        },
         "pages": pages,
         "connectivity": {"records": _connectivity_records(project, selected, module_id if scope == "module" else None, view), "hash": source_connectivity_hash},
     }
@@ -3323,11 +3329,19 @@ def _kicad_page_lines(project_name: str, page: dict[str, Any], all_components: l
             f"  (symbol (lib_id {_sexpr_string(lib_id)}) (at {component_x*MM_PER_UNIT:.4f} {component_y*MM_PER_UNIT:.4f} {kicad_rotation}) (unit 1) (exclude_from_sim no) (in_bom {'yes' if physical else 'no'}) (on_board {'yes' if physical else 'no'}) (dnp no) (uuid {_stable_uuid(page['id'], component['id'])})",
             f"    (property \"Reference\" {_sexpr_string(refdes)} (at {reference_at[0]:.4f} {reference_at[1]:.4f} 0) (effects (font (size 1.27 1.27))))",
             f"    (property \"Value\" {_sexpr_string(component.get('value', ''))} (at {value_at[0]:.4f} {value_at[1]:.4f} 0) (effects (font (size 1.27 1.27))))",
-            f"    (property \"ACTOVIQ_ID\" {_sexpr_string(component['id'])} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
+            f"    (property \"ACTOVIQ_ID\" {_sexpr_string(str(component.get('stable_id') or component['id']))} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
             f"    (property \"ACTOVIQ_PAGE_ID\" {_sexpr_string(page['id'])} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
             f"    (property \"ACTOVIQ_NAME\" {_sexpr_string(component['name'])} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
             f"    (property \"ACTOVIQ_DEVICE_CLASS\" {_sexpr_string(eda.get('device_class', 'generic'))} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
         ])
+        if eda.get("lcsc_id"):
+            lines.append(
+                f"    (property \"LCSC\" {_sexpr_string(eda.get('lcsc_id'))} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))"
+            )
+        if eda.get("mpn"):
+            lines.append(
+                f"    (property \"MPN\" {_sexpr_string(eda.get('mpn'))} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))"
+            )
         for pin in component.get("pins", []):
             target_pin = str(binding["pin_map"][str(pin["id"])])
             lines.append(f"    (pin {_sexpr_string(target_pin)} (uuid {_stable_uuid(page['id'], component['id'], pin['id'])}))")
@@ -3504,7 +3518,7 @@ def _write_orcad(root: Path, project_name: str, ir: dict[str, Any], resolved_map
                 f"(property REFDES (string {_sexpr_string(eda.get('refdes', component['name']))})) "
                 f"(property VALUE (string {_sexpr_string(component.get('value', ''))})) "
                 f"(property DEVICE (string {_sexpr_string(binding['cell'])})) "
-                f"(property ACTOVIQ_ID (string {_sexpr_string(component['id'])})) "
+                f"(property ACTOVIQ_ID (string {_sexpr_string(str(component.get('stable_id') or component['id']))})) "
                 f"(property ACTOVIQ_PAGE_ID (string {_sexpr_string(page['id'])})))"
             )
         for net in page["nets"]:
@@ -3546,8 +3560,14 @@ def _write_orcad(root: Path, project_name: str, ir: dict[str, Any], resolved_map
     return [edif, symbol_map, readme, target / "connectivity.json"]
 
 
-def _spice_lines(ir: dict[str, Any], cdl: bool = False) -> list[str]:
+def _spice_lines(
+    ir: dict[str, Any],
+    cdl: bool = False,
+    model_bindings: list[str] | None = None,
+) -> list[str]:
     lines = [f"* Actoviq {'CDL' if cdl else 'SPICE'} export", f"* connectivity_hash={ir['connectivity']['hash']}"]
+    if model_bindings:
+        lines.extend(["* PDK/model bindings", *model_bindings])
     global_net_by_endpoint = {(record.get("module_id"), record.get("component_id"), record.get("pin_id")): record["net"] for record in ir["connectivity"]["records"] if record.get("component_id")}
     for page in ir["pages"]:
         for component in page["components"]:
@@ -3562,6 +3582,38 @@ def _spice_lines(ir: dict[str, Any], cdl: bool = False) -> list[str]:
                 value = _safe_name(value, "ACTOVIQ_BLOCK")
             lines.append(" ".join([_safe_name(name), *(_safe_name(net, "0") for net in nets), str(value)]))
     lines.append(".END")
+    return lines
+
+
+def _model_binding_lines(ir: dict[str, Any], project_root: Path | None = None) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for page in ir["pages"]:
+        spice = page.get("spice") if isinstance(page.get("spice"), dict) else {}
+        candidates = list(spice.get("models") or [])
+        if not candidates:
+            candidates = [
+                line.strip()
+                for line in str(spice.get("source") or "").splitlines()
+                if line.strip().casefold().startswith((".include", ".lib", ".model", ".param", ".func"))
+            ]
+        for candidate in candidates:
+            text = str(candidate).strip()
+            path_match = re.match(
+                r"^(\s*\.(?:include|lib)\s+)(?:\"([^\"]+)\"|'([^']+)'|([^\s;]+))(.*)$",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if path_match and project_root is not None:
+                raw_path = next((value for value in path_match.groups()[1:4] if value is not None), "")
+                expanded = Path(os.path.expandvars(os.path.expanduser(raw_path)))
+                resolved = (expanded if expanded.is_absolute() else project_root / expanded).resolve()
+                text = f'{path_match.group(1)}"{resolved.as_posix()}"{path_match.group(5)}'
+            key = text.casefold()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            lines.append(text)
     return lines
 
 
@@ -3587,21 +3639,61 @@ def _virtuoso_fallback_binding(binding: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _write_virtuoso(root: Path, project_name: str, ir: dict[str, Any], resolved_map: dict[str, Any]) -> list[Path]:
+def _write_virtuoso(
+    root: Path,
+    project_name: str,
+    ir: dict[str, Any],
+    resolved_map: dict[str, Any],
+    project_root: Path | None = None,
+) -> list[Path]:
     target = root / "virtuoso"
     target.mkdir(parents=True, exist_ok=True)
+    model_lines = _model_binding_lines(ir, project_root)
     spice = target / f"{project_name}.spice"
     cdl = target / f"{project_name}.cdl"
-    _write_text(spice, "\n".join(_spice_lines(ir)) + "\n")
-    _write_text(cdl, "\n".join(_spice_lines(ir, True)) + "\n")
+    _write_text(spice, "\n".join(_spice_lines(ir, model_bindings=model_lines)) + "\n")
+    _write_text(cdl, "\n".join(_spice_lines(ir, True, model_lines)) + "\n")
     device_map = target / "device-map.json"
     virtuoso_map = json.loads(json.dumps(resolved_map["targets"]["virtuoso"]))
+    virtuoso_map["analog_ic_profile"] = ir.get("project", {}).get("analog_ic_profile")
     for page in ir["pages"]:
         for component in page["components"]:
             key = f"{page['id']}:{component['id']}"
             binding = binding_for(resolved_map, "virtuoso", page["id"], component)
             virtuoso_map["components"][key]["generic_fallback"] = _virtuoso_fallback_binding(binding)
     _write_json(device_map, virtuoso_map)
+    extra_files: list[Path] = []
+    analog_profile = ir.get("project", {}).get("analog_ic_profile")
+    if isinstance(analog_profile, dict):
+        profile_path = target / "analog-ic-profile.json"
+        _write_json(profile_path, analog_profile)
+        extra_files.append(profile_path)
+    if model_lines:
+        bindings_path = target / "model-bindings.spice"
+        _write_text(bindings_path, "* PDK/model statements preserved from Actoviq module sources\n" + "\n".join(model_lines) + "\n")
+        extra_files.append(bindings_path)
+    source_root = target / "source-spice"
+    source_pages: list[str] = []
+    for page in ir["pages"]:
+        page_spice = page.get("spice") if isinstance(page.get("spice"), dict) else {}
+        spice_source = str(page_spice.get("source") or "").strip()
+        if not spice_source:
+            continue
+        source_path = source_root / f"{_safe_name(page['id'])}.spice"
+        _write_text(source_path, spice_source + "\n")
+        extra_files.append(source_path)
+        source_pages.append(str(page["id"]))
+    handoff_manifest = target / "handoff-manifest.json"
+    _write_json(handoff_manifest, {
+        "schema": "actoviq.virtuoso-handoff.v1",
+        "source": ir["source"],
+        "connectivity_hash": ir["connectivity"]["hash"],
+        "project_kind": ir.get("project", {}).get("project_kind", "simulation"),
+        "analog_ic_profile_present": isinstance(analog_profile, dict),
+        "model_binding_count": len(model_lines),
+        "source_pages": source_pages,
+    })
+    extra_files.append(handoff_manifest)
     skill = target / "create_schematic.il"
     skill_lines = [
         "; Actoviq Virtuoso reconstruction script",
@@ -3649,7 +3741,7 @@ def _write_virtuoso(root: Path, project_name: str, ir: dict[str, Any], resolved_
             orientation = f"R{int(component.get('rotation', 0)) % 360}"
             refdes = str((component.get("eda") or {}).get("refdes", component["name"]))
             skill_lines.append(f'inst{component_index}=dbCreateInst(cv master {_skill_string(_safe_name(refdes))} list({float(position.get("x", 0))*MM_PER_UNIT:.4f}:{float(position.get("y", 0))*MM_PER_UNIT:.4f}) "{orientation}")')
-            skill_lines.append(f'dbReplaceProp(inst{component_index} "ACTOVIQ_ID" "string" {_skill_string(component["id"])})')
+            skill_lines.append(f'dbReplaceProp(inst{component_index} "ACTOVIQ_ID" "string" {_skill_string(str(component.get("stable_id") or component["id"]))})')
             skill_lines.append(f'dbReplaceProp(inst{component_index} "ACTOVIQ_PAGE_ID" "string" {_skill_string(page["id"])})')
             skill_lines.append(f'dbReplaceProp(inst{component_index} "ACTOVIQ_VALUE" "string" {_skill_string(component.get("value", ""))})')
             for pin_index, pin in enumerate(component.get("pins", [])):
@@ -3698,9 +3790,9 @@ def _write_virtuoso(root: Path, project_name: str, ir: dict[str, Any], resolved_
     cds = target / "cds.lib.example"
     _write_text(cds, "DEFINE ACTOVIQ ./ACTOVIQ\n")
     readme = target / "IMPORT_VIRTUOSO.md"
-    _write_text(readme, f"# Import {project_name} into Cadence Virtuoso\n\nImport `{spice.name}` or `{cdl.name}` with your reference libraries and `device-map.json`. Alternatively load `create_schematic.il` in CIW after configuring the destination library. Missing cells must be replaced by generic symbols with the same pins.\n")
+    _write_text(readme, f"# Import {project_name} into Cadence Virtuoso\n\nImport `{spice.name}` or `{cdl.name}` with your licensed PDK/reference libraries and `device-map.json`. For analog-IC projects, review `analog-ic-profile.json`, `model-bindings.spice`, and `source-spice/`; the SPICE/CDL import is authoritative for device parameters such as W/L/M/NF. `create_schematic.il` is a connectivity/geometry bootstrap and does not reproduce ADE state, CDF callbacks, PCells, layout, or foundry models. Missing cells must be mapped through the target PDK or replaced by generic symbols with the same pins.\n")
     _write_json(target / "connectivity.json", ir["connectivity"])
-    return [spice, cdl, device_map, skill, cds, readme, target / "connectivity.json"]
+    return [spice, cdl, device_map, skill, cds, readme, target / "connectivity.json", *extra_files]
 
 
 def _balanced_sexpr(text: str) -> bool:
@@ -3892,7 +3984,11 @@ def export_eda(root: Path, project: dict[str, Any], modules: dict[str, dict[str,
     for target in ordered_targets:
         if target == "altium" and not (export_root / "kicad").exists():
             _write_kicad(export_root, project_name, ir, symbol_map)
-        files = writers[target](export_root, project_name, ir, symbol_map)
+        files = (
+            _write_virtuoso(export_root, project_name, ir, symbol_map, root)
+            if target == "virtuoso"
+            else writers[target](export_root, project_name, ir, symbol_map)
+        )
         structural_status = _validate_generated_target(target, export_root, ir, symbol_map)
         status, target_warnings, native_files, native_details = _native_status(
             target, native_convert, export_root, project_name, ir, symbol_map

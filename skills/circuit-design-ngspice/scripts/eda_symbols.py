@@ -22,6 +22,9 @@ _DEVICE_SPECS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
     "Q": ("bjt", "npn", "Q", ("collector", "base", "emitter")),
     "V": ("voltage_source", "voltage_source", "V", ("positive", "negative")),
     "I": ("current_source", "current_source", "I", ("positive", "negative")),
+    "E": ("vcvs", "vcvs", "E", ("positive", "negative", "control_p", "control_n")),
+    "U": ("ic", "ic", "U", ()),
+    "X": ("subcircuit", "subcircuit", "X", ()),
     "BLOCK": ("block", "block", "U", ()),
 }
 
@@ -174,8 +177,8 @@ def prepare_component(component: dict[str, Any]) -> dict[str, Any]:
     model = _model_name(result, component_type)
     subtype = _subtype(result, component_type, default_subtype, model)
     footprint = result.get("footprint") or existing_eda.get("footprint")
-    physical = component_type in {"R", "C", "L", "D", "M", "Q"} or (
-        component_type == "BLOCK"
+    physical = component_type in {"R", "C", "L", "D", "M", "Q", "U"} or (
+        component_type in {"BLOCK", "X"}
         and ((bool(footprint) and bool(str(footprint).strip())) or result.get("mount_policy") == "design_include")
     )
     side_counts = {side: 0 for side in _SIDES}

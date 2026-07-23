@@ -54,6 +54,10 @@ export interface AppSettings {
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;
+  /** LCSC Open API credentials — MVP stores plaintext in desktop settings file. */
+  lcscApiKey: string;
+  lcscApiSecret: string;
+  lcscUseFallback: boolean;
 }
 
 export type PersistedAppSettings = Omit<
@@ -115,6 +119,9 @@ const defaultSettings: PersistedAppSettings = {
   yunzhishengOcrBaseUrl: '',
   yunzhishengOcrApiKey: '',
   yunzhishengOcrModel: '',
+  lcscApiKey: '',
+  lcscApiSecret: '',
+  lcscUseFallback: false,
 };
 
 const successfulLayoutVisionProbes = new Map<string, string>();
@@ -243,6 +250,9 @@ function normalizeStoredSettings(raw: StoredSettings, authToken: string, storage
     yunzhishengOcrBaseUrl: typeof raw.yunzhishengOcrBaseUrl === 'string' ? raw.yunzhishengOcrBaseUrl : '',
     yunzhishengOcrApiKey: typeof raw.yunzhishengOcrApiKey === 'string' ? raw.yunzhishengOcrApiKey : '',
     yunzhishengOcrModel: typeof raw.yunzhishengOcrModel === 'string' ? raw.yunzhishengOcrModel : '',
+    lcscApiKey: typeof raw.lcscApiKey === 'string' ? raw.lcscApiKey : '',
+    lcscApiSecret: typeof raw.lcscApiSecret === 'string' ? raw.lcscApiSecret : '',
+    lcscUseFallback: Boolean(raw.lcscUseFallback),
   };
 }
 
@@ -401,6 +411,8 @@ export function applySettingsToEnvironment(settings: PersistedAppSettings): void
       : '',
   );
   setOrDelete('NGSPICE_BIN', settings.ngspiceBin);
+  setOrDelete('ACTOVIQ_LCSC_API_KEY', settings.lcscApiKey);
+  setOrDelete('ACTOVIQ_LCSC_API_SECRET', settings.lcscApiSecret);
 }
 
 function sanitizeProviderError(error: unknown, token: string): string {

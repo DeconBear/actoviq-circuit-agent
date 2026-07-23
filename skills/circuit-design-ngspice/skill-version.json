@@ -1,7 +1,7 @@
 {
   "schema": "actoviq.skill-version.v1",
   "skill": "circuit-design-ngspice",
-  "skill_version": "2.3.1",
+  "skill_version": "2.4.0",
   "protocol_version": "actoviq.project-agent.v2",
   "compatibility": {
     "project": ["actoviq.project.v1", "actoviq.project.v2"],
@@ -13,6 +13,11 @@
     "layout_quality": ["actoviq.layout-quality.v1"],
     "layout_patch": ["actoviq.layout-patch.v1", "actoviq.layout-patch-set.v1"],
     "eda_symbol_map": ["actoviq.eda-symbol-map.v1"],
-    "vision_layout_image": ["actoviq.vision-layout-image.v1"]
+    "vision_layout_image": ["actoviq.vision-layout-image.v1"],
+    "analog_ic_profile": ["actoviq.analog-ic-profile.v1"],
+    "analog_ic_audit": ["actoviq.analog-ic-audit.v1"],
+    "eda_bridge": ["actoviq.bridge.v1"],
+    "virtuoso_handoff": ["actoviq.virtuoso-handoff.v1"],
+    "razavi_bench": ["actoviq.razavi-bench-preflight.v1"]
   }
 }

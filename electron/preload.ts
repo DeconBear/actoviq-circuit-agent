@@ -99,6 +99,9 @@ export interface AppSettings {
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;
+  lcscApiKey: string;
+  lcscApiSecret: string;
+  lcscUseFallback: boolean;
 }
 
 export interface ProviderTestResult {
@@ -289,7 +292,7 @@ const electronAPI = {
     return ipcRenderer.invoke('project:restore-revision', projectId, revision, baseRevision);
   },
 
-  createCircuitProject(input: { name: string; demo?: boolean }): Promise<unknown> {
+  createCircuitProject(input: { name: string; demo?: boolean; projectKind?: string }): Promise<unknown> {
     return ipcRenderer.invoke('project:create', input);
   },
 
@@ -346,6 +349,65 @@ const electronAPI = {
     return ipcRenderer.invoke('project:choose-eda-output-dir');
   },
 
+  chooseEdaBridgePeerRoot(): Promise<string | null> {
+    return ipcRenderer.invoke('project:choose-bridge-peer-root');
+  },
+
+  listEdaBridges(projectId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:bridge-list', projectId);
+  },
+
+  edaBridgeStatus(projectId: string, peerKind?: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:bridge-status', projectId, peerKind);
+  },
+
+  linkEdaBridge(projectId: string, input: {
+    peerKind: 'kicad' | 'jlceda';
+    peerRoot: string;
+    policy?: string;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:bridge-link', projectId, input);
+  },
+
+  unlinkEdaBridge(projectId: string, peerKind: 'kicad' | 'jlceda'): Promise<unknown> {
+    return ipcRenderer.invoke('project:bridge-unlink', projectId, peerKind);
+  },
+
+  pushEdaBridge(projectId: string, peerKind: 'kicad' | 'jlceda'): Promise<unknown> {
+    return ipcRenderer.invoke('project:bridge-push', projectId, peerKind);
+  },
+
+  pullEdaBridge(projectId: string, peerKind: 'kicad' | 'jlceda', policy?: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:bridge-pull', projectId, peerKind, policy);
+  },
+
+  importEdaColdStart(input: {
+    peerKind: 'kicad' | 'jlceda';
+    peerRoot: string;
+    name?: string;
+    projectKind?: string;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:bridge-import-cold', input);
+  },
+
+  searchLcscParts(query: string, opts?: { limit?: number; useFallback?: boolean }): Promise<unknown> {
+    return ipcRenderer.invoke('project:lcsc-search', query, opts);
+  },
+
+  getLcscPart(lcscId: string, opts?: { useFallback?: boolean }): Promise<unknown> {
+    return ipcRenderer.invoke('project:lcsc-get', lcscId, opts);
+  },
+
+  bindLcscPart(
+    projectId: string,
+    moduleId: string,
+    componentId: string,
+    lcscId: string,
+    opts?: { useFallback?: boolean },
+  ): Promise<unknown> {
+    return ipcRenderer.invoke('project:lcsc-bind', projectId, moduleId, componentId, lcscId, opts);
+  },
+
   simulateCircuitProject(projectId: string): Promise<unknown> {
     return ipcRenderer.invoke('project:simulate', projectId);
   },
@@ -389,6 +451,47 @@ const electronAPI = {
     return ipcRenderer.invoke('project:save-design-flow', projectId);
   },
 
+  listReferenceCatalog(): Promise<unknown> {
+    return ipcRenderer.invoke('reference:list-catalog');
+  },
+
+  importCircuitReference(): Promise<unknown> {
+    return ipcRenderer.invoke('reference:import-circuit');
+  },
+
+  importVisualReference(): Promise<unknown> {
+    return ipcRenderer.invoke('reference:import-visual');
+  },
+
+  createProjectFromReference(input: { assetId: string; name?: string; projectKind?: string }): Promise<unknown> {
+    return ipcRenderer.invoke('reference:create-project-from', input);
+  },
+
+  insertModuleFromReference(input: { projectId: string; assetId: string; moduleId?: string }): Promise<unknown> {
+    return ipcRenderer.invoke('reference:insert-module', input);
+  },
+
+  applyLayoutReference(input: { projectId: string; moduleId: string; assetId: string }): Promise<unknown> {
+    return ipcRenderer.invoke('reference:apply-layout', input);
+  },
+
+  prepareLayoutReference(input: { projectId: string; moduleId: string; assetId: string }): Promise<unknown> {
+    return ipcRenderer.invoke('reference:prepare-layout', input);
+  },
+
+  promoteVisualReferenceFromModule(input: {
+    projectId: string;
+    moduleId: string;
+    assetId: string;
+    name?: string;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('reference:promote-visual-from-module', input);
+  },
+
+  attachReferenceToChat(input: { assetId: string }): Promise<unknown> {
+    return ipcRenderer.invoke('reference:attach-to-chat', input);
+  },
+
   listCircuitDesignMemory(): Promise<unknown> {
     return ipcRenderer.invoke('project:list-design-memory');
   },
@@ -408,6 +511,15 @@ const electronAPI = {
     ): void => callback(data);
     ipcRenderer.on('project:changed', handler);
     return () => ipcRenderer.removeListener('project:changed', handler);
+  },
+
+  onCircuitProjectListChanged(callback: (event: { timestamp: number }) => void): () => void {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { timestamp: number },
+    ): void => callback(data);
+    ipcRenderer.on('project:list-changed', handler);
+    return () => ipcRenderer.removeListener('project:list-changed', handler);
   },
 
   openCircuitProjectFolder(projectId: string): Promise<string> {
@@ -483,6 +595,7 @@ export interface ChatResponse {
   revisionRequest?: string;
   targetStage?: string;
   projectName?: string;
+  projectKind?: 'simulation' | 'pcb_schematic' | 'analog_ic';
   projectOperations?: Array<Record<string, unknown>>;
   compileAfterApply?: boolean;
   simulateAfterApply?: boolean;
