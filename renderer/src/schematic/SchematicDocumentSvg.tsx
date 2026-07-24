@@ -178,15 +178,20 @@ export function SchematicDocumentSvg({
         </>
       ) : null}
       <g data-layer="wires">
-        {document.wires.map((wire) => (
-          <WirePath
-            key={wire.id}
-            wire={wire}
-            selected={selection?.kind === 'wire' && selection.id === wire.id}
-            hovered={hoverSelection?.kind === 'wire' && hoverSelection.id === wire.id && !(selection?.kind === 'wire' && selection.id === wire.id)}
-            rubberBand={rubberBandWireIds?.has(wire.id) ?? false}
-          />
-        ))}
+        {document.wires.map((wire) => {
+          const selected = (selection?.kind === 'wire' && selection.id === wire.id) ||
+            (selection?.kind === 'wires' && selection.ids.includes(wire.id));
+          const hovered = hoverSelection?.kind === 'wire' && hoverSelection.id === wire.id && !selected;
+          return (
+            <WirePath
+              key={wire.id}
+              wire={wire}
+              selected={selected}
+              hovered={hovered}
+              rubberBand={rubberBandWireIds?.has(wire.id) ?? false}
+            />
+          );
+        })}
         {previewPoints.length >= 2 ? (
           <polyline
             points={pointsAttribute(previewPoints)}

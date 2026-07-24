@@ -3251,6 +3251,140 @@ try {
   assert.ok(await isWireVisible(page, drawnWire.id), 'undo did not restore the Backspace-deleted visible wire');
   console.log('[e2e] wire delete undo redo isolated');
 
+  // Multi-wire selection: Shift+click toggles membership, marquee over a
+  // component-free wiring region selects all intersecting wires, Delete removes
+  // them together, and undo restores them.
+  const chainedWirePoint = await wireScreenPointAwayFromComponents(page, chainedWire.id);
+  await page.mouse.click(chainedWirePoint.x, chainedWirePoint.y);
+  await page.waitForFunction((wireId) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `wire:${wireId}`
+  ), chainedWire.id);
+  const dblEndWire = (await editorWires(page)).filter((wire) => wire.source === 'stored').at(-1);
+  assert.ok(dblEndWire && dblEndWire.id !== chainedWire.id, 'expected the double-click-ended wire to exist');
+  const dblEndWirePoint = await wireScreenPointAwayFromComponents(page, dblEndWire.id);
+  await page.keyboard.down('Shift');
+  await page.mouse.click(dblEndWirePoint.x, dblEndWirePoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForFunction(({ firstId, secondId }) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `wires:${firstId},${secondId}` &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-wire-count') === '2'
+  ), { firstId: chainedWire.id, secondId: dblEndWire.id });
+  await page.keyboard.down('Shift');
+  await page.mouse.click(dblEndWirePoint.x, dblEndWirePoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForFunction((wireId) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `wire:${wireId}`
+  ), chainedWire.id);
+  await page.keyboard.down('Shift');
+  await page.mouse.click(dblEndWirePoint.x, dblEndWirePoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForFunction(({ firstId, secondId }) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `wires:${firstId},${secondId}`
+  ), { firstId: chainedWire.id, secondId: dblEndWire.id });
+  // Plural marquee selection on controlled geometry: two free-space wires are
+  // drawn in the empty far-right region (derived from occupied extents), both
+  // are enclosed by one marquee, deleted together, and restored.
+  const freeWireArea = await page.getByTestId('schematic-editor-svg').evaluate((svg) => {
+    if (!(svg instanceof SVGSVGElement)) throw new Error('schematic editor svg missing');
+    const editor = document.querySelector('[data-testid="schematic-editor"]');
+    const wires = JSON.parse(editor?.getAttribute('data-wires') ?? '[]');
+    const components = Object.values(JSON.parse(editor?.getAttribute('data-component-positions') ?? '{}'));
+    const ports = Object.values(JSON.parse(editor?.getAttribute('data-port-positions') ?? '{}'));
+    const occupied = [...components, ...ports, ...wires.flatMap((wire) => wire.points ?? [])];
+    const [minX, minY, width, height] = (svg.getAttribute('viewBox') ?? '0 0 1 1').split(/\s+/).map(Number);
+    const snap20 = (value) => Math.round(value / 20) * 20;
+    const contentMinX = Math.min(...occupied.map((point) => point.x));
+    const contentMinY = Math.min(...occupied.map((point) => point.y));
+    const contentMaxY = Math.max(...occupied.map((point) => point.y));
+    // Left of all content: right-side space is blocked by the OUT port's
+    // interaction bounds; the IN port zone only reaches y≈214, so mid-Y is safe.
+    let x2 = snap20(contentMinX - 60);
+    let x1 = snap20(contentMinX - 140);
+    const minAllowedX = minX + 20;
+    if (x1 < minAllowedX) {
+      x1 = snap20(minAllowedX);
+      x2 = x1 + 80;
+    }
+    if (x2 - x1 < 60) throw new Error('no free left-side region for the marquee test');
+    const y1 = snap20((contentMinY + contentMaxY) / 2);
+    const y2 = y1 + 60;
+    const matrix = svg.getScreenCTM();
+    if (!matrix) throw new Error('schematic editor svg has no screen matrix');
+    const toScreen = (x, y) => {
+      const point = svg.createSVGPoint();
+      point.x = x;
+      point.y = y;
+      const screen = point.matrixTransform(matrix);
+      return { x: screen.x, y: screen.y };
+    };
+    return {
+      aFrom: toScreen(x1, y1),
+      aTo: toScreen(x2, y1),
+      bFrom: toScreen(x1, y2),
+      bTo: toScreen(x2, y2),
+      marqueeFrom: toScreen(x1 - 20, y1 - 20),
+      marqueeTo: toScreen(x2 + 20, y2 + 20),
+    };
+  });
+  const storedIdsBeforeFreeWires = new Set(
+    (await editorWires(page)).filter((wire) => wire.source === 'stored').map((wire) => wire.id),
+  );
+  for (const endpoints of [
+    { from: freeWireArea.aFrom, to: freeWireArea.aTo },
+    { from: freeWireArea.bFrom, to: freeWireArea.bTo },
+  ]) {
+    await page.getByTestId('schematic-editor-wire').click();
+    await page.mouse.move(endpoints.from.x, endpoints.from.y);
+    await page.mouse.down();
+    await page.mouse.move(endpoints.to.x, endpoints.to.y, { steps: 6 });
+    await page.mouse.up();
+    await page.mouse.click(endpoints.to.x, endpoints.to.y, { button: 'right' });
+  }
+  await page.waitForFunction((beforeCount) => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return wires.filter((wire) => wire.source === 'stored').length === beforeCount + 2;
+  }, storedIdsBeforeFreeWires.size);
+  const freeWireIds = (await editorWires(page))
+    .filter((wire) => wire.source === 'stored' && !storedIdsBeforeFreeWires.has(wire.id))
+    .map((wire) => wire.id);
+  assert.equal(freeWireIds.length, 2, 'expected two free-space wires for the marquee test');
+  const marqueeOverFreeWires = async () => {
+    await page.getByTestId('schematic-editor-select').click();
+    await page.mouse.move(freeWireArea.marqueeFrom.x, freeWireArea.marqueeFrom.y);
+    await page.mouse.down();
+    await page.mouse.move(freeWireArea.marqueeTo.x, freeWireArea.marqueeTo.y, { steps: 8 });
+    await page.mouse.up();
+  };
+  const waitForFreeWiresSelected = () => page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('wires:') &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-wire-count') === '2'
+  ));
+  const waitForFreeWiresGone = () => page.waitForFunction((ids) => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return ids.every((id) => !wires.some((wire) => wire.id === id));
+  }, freeWireIds);
+  await marqueeOverFreeWires();
+  await waitForFreeWiresSelected();
+  const marqueeSelected = (await editor.getAttribute('data-selected')) ?? '';
+  for (const wireId of freeWireIds) {
+    assert.ok(marqueeSelected.includes(wireId), `marquee should include ${wireId}, got ${marqueeSelected}`);
+  }
+  await page.keyboard.press('Delete');
+  await waitForFreeWiresGone();
+  assert.ok(await isWireVisible(page, drawnWire.id), 'multi-wire delete removed an unselected wire');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((ids) => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return ids.every((id) => wires.some((wire) => wire.id === id));
+  }, freeWireIds);
+  // Remove the scratch wires so later sections see the pre-test document.
+  await marqueeOverFreeWires();
+  await waitForFreeWiresSelected();
+  await page.keyboard.press('Delete');
+  await waitForFreeWiresGone();
+  await page.keyboard.press('Escape');
+  console.log('[e2e] multi-wire selection (shift-click, marquee, delete, undo) verified');
+
   const positionsBeforeBlockPlacement = await componentPositions(page);
   await page.getByTestId('schematic-editor-place-block').click();
   await page.getByTestId('schematic-block-dialog').waitFor();

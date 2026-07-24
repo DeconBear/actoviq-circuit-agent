@@ -663,6 +663,17 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
 
     const wireSegmentHit = hitEditableWireSegment(document.wires, draft, world);
     if (wireSegmentHit) {
+      if (event.shiftKey) {
+        // Shift+click toggles wires in/out of a multi-wire selection without
+        // starting a segment drag (component group drag stays mouse-only).
+        const currentWireIds = wireIdsForSelection(selection);
+        const nextWireIds = currentWireIds.includes(wireSegmentHit.wire.id)
+          ? currentWireIds.filter((wireId) => wireId !== wireSegmentHit.wire.id)
+          : [...currentWireIds, wireSegmentHit.wire.id];
+        setSelection(selectionForWireIds(nextWireIds));
+        setInteractionCursor('default');
+        return;
+      }
       setSelection({ kind: 'wire', id: wireSegmentHit.wire.id });
       const materializedWire = isStoredWire(wireSegmentHit.wire, draft)
         ? undefined
@@ -975,9 +986,16 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       wireStart || tool !== 'select' || dragRef.current || portDragRef.current || wireDragRef.current || wirePointDragRef.current || wireSegmentDragRef.current || marqueeRef.current || panRef.current,
     );
     const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
-    const menuSelection = activeGesture
+    const hitSelection = activeGesture
       ? null
       : contextMenuSelectionForTarget(document, draft, event.target, world);
+    // Right-clicking a member of the current multi-wire selection keeps the
+    // group so the menu's Delete applies to all of them.
+    const menuSelection = hitSelection?.kind === 'wire' &&
+      selection?.kind === 'wires' &&
+      selection.ids.includes(hitSelection.id)
+      ? selection
+      : hitSelection;
     cancelActiveDrag();
     setWireStart(null);
     setHoverWorld(null);
@@ -1436,6 +1454,22 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       next.components = updated.components;
       next.ports = updated.ports;
       next.wires = updated.wires;
+    } else if (targetSelection.kind === 'wires') {
+      for (const wireId of targetSelection.ids) {
+        const selectedWire = document.wires.find((wire) => wire.id === wireId);
+        if (selectedWire && !isStoredWire(selectedWire, next)) {
+          next.wires = [
+            ...(next.wires ?? []),
+            ...document.wires
+              .filter((wire) => wire.id !== selectedWire.id && wire.net === selectedWire.net && !isStoredWire(wire, next))
+              .map(materializeEditableWire),
+          ];
+        }
+        const updated = removeWireAndUpdateConnectivity(next, selectedWire ?? wireId);
+        next.components = updated.components;
+        next.ports = updated.ports;
+        next.wires = updated.wires;
+      }
     }
     commitDraft(next);
     setSelection(null);
@@ -1592,6 +1626,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-place-rotation={tool === 'place' ? String(placeRotation) : ''}
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}
+      data-selected-wire-count={String(wireIdsForSelection(selection).length)}
       data-clipboard-component-count={String(clipboardComponentCount)}
       data-hover-target={selectionAttribute(hoverSelection)}
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
@@ -1901,6 +1936,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             </>
           ) : selection?.kind === 'components' ? (
             <div style={styles.emptyText}>{selection.ids.length} components selected</div>
+          ) : selection?.kind === 'wires' ? (
+            <div style={styles.emptyText} data-testid="schematic-editor-wires-panel">{selection.ids.length} wires selected</div>
           ) : selectedPort ? (
             <div style={styles.pinList} data-testid="schematic-editor-port-panel">
               <div style={styles.pinRow}>
@@ -1966,11 +2003,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}
           data-testid="schematic-context-menu"
           data-menu-target={selectionAttribute(contextMenu.selection)}
-          data-menu-kind={contextMenu.selection.kind === 'wire' ? 'wire' : 'component'}
+          data-menu-kind={contextMenu.selection.kind === 'wire' || contextMenu.selection.kind === 'wires' ? 'wire' : 'component'}
           onPointerDown={(event) => event.stopPropagation()}
           onContextMenu={(event) => event.preventDefault()}
         >
-          {contextMenu.selection.kind !== 'wire' ? (
+          {contextMenu.selection.kind === 'component' || contextMenu.selection.kind === 'components' ? (
             <>
               <button
                 type="button"
@@ -2710,14 +2747,30 @@ function selectionForMarquee(
     return componentId ? { kind: 'component', id: componentId } : null;
   }
   if (componentIds.length > 1) return { kind: 'components', ids: componentIds };
-  const wire = document.wires.find((entry) => wireIntersectsBounds(entry, bounds));
-  return wire ? { kind: 'wire', id: wire.id } : null;
+  const wireIds = document.wires
+    .filter((entry) => wireIntersectsBounds(entry, bounds))
+    .map((entry) => entry.id);
+  return selectionForWireIds(wireIds);
 }
 
 function componentIdsForSelection(selection: SchematicSelection): string[] {
   if (selection?.kind === 'component') return [selection.id];
   if (selection?.kind === 'components') return selection.ids;
   return [];
+}
+
+function wireIdsForSelection(selection: SchematicSelection): string[] {
+  if (selection?.kind === 'wire') return [selection.id];
+  if (selection?.kind === 'wires') return selection.ids;
+  return [];
+}
+
+function selectionForWireIds(wireIds: string[]): SchematicSelection {
+  const uniqueIds = [...new Set(wireIds)].filter(Boolean);
+  if (uniqueIds.length === 0) return null;
+  const firstId = uniqueIds[0];
+  if (uniqueIds.length === 1 && firstId) return { kind: 'wire', id: firstId };
+  return { kind: 'wires', ids: uniqueIds };
 }
 
 function selectionForComponentIds(componentIds: string[]): SchematicSelection {
@@ -2731,6 +2784,7 @@ function selectionForComponentIds(componentIds: string[]): SchematicSelection {
 function selectionAttribute(selection: SchematicSelection): string {
   if (!selection) return '';
   if (selection.kind === 'components') return `components:${selection.ids.join(',')}`;
+  if (selection.kind === 'wires') return `wires:${selection.ids.join(',')}`;
   return `${selection.kind}:${selection.id}`;
 }
 

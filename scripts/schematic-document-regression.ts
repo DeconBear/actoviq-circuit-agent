@@ -1340,6 +1340,24 @@ function assertManualWireTopology() {
     'the continued free point must be a shared semantic node',
   );
 
+  // Two fresh free endpoints in one commit are distinct graph nodes: junction
+  // ids must not collide (previously both ends of a free-to-free wire received
+  // the same id and topology validation rejected the module on save/delete).
+  const freePair = moduleFixture('manual_free_pair', [], []);
+  const freeStart = pointEndpoint({ x: 100, y: 100 });
+  const freeEnd = pointEndpoint({ x: 200, y: 100 });
+  const freeChainEnd = addWire(freePair, freeStart, freeEnd);
+  assert.ok(freeChainEnd?.junction_id, 'a free-to-free wire end should receive a junction id');
+  const freeWire = freePair.wires.at(-1)!;
+  assert.ok(freeWire.from?.junction_id, 'free-to-free wire start should receive a junction id');
+  assert.notEqual(
+    freeWire.from?.junction_id,
+    freeWire.to?.junction_id,
+    'the two endpoints of a free-to-free wire must not share a junction id',
+  );
+  const afterFreeWireRemoval = removeWireAndUpdateConnectivity(freePair, freeWire);
+  assert.equal(afterFreeWireRemoval.wires.length, 0, 'removing a free-to-free wire should leave no wires');
+
   const branch = moduleFixture('manual_branch', [
     component('rleft', 'R', '1k', 100, 200, [['a', '1', 'left_open'], ['b', '2', 'trunk_left']]),
     component('rright', 'R', '1k', 500, 200, [['a', '1', 'trunk_right'], ['b', '2', 'right_open']]),

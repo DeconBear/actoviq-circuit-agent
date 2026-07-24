@@ -29,6 +29,7 @@ export type SchematicSelection =
   | { kind: 'components'; ids: string[] }
   | { kind: 'port'; id: string }
   | { kind: 'wire'; id: string }
+  | { kind: 'wires'; ids: string[] }
   | null;
 
 type SignalPortSide = 'left' | 'right';
@@ -2931,7 +2932,14 @@ export function addWire(
 ): EndpointHit | null {
   ensureStableNetModel(module);
   const attachedStart = ensureWireNode(module, start, visibleWires);
-  const attachedEnd = ensureWireNode(module, end, visibleWires);
+  // Reserve the start junction so two fresh free endpoints in the same commit
+  // never collide on one id (a wire's two endpoints are distinct graph nodes).
+  const attachedEnd = ensureWireNode(
+    module,
+    end,
+    visibleWires,
+    attachedStart.junction_id ? new Set([attachedStart.junction_id]) : undefined,
+  );
   const startPoint = endpointDrawPoint(attachedStart);
   const endPoint = endpointDrawPoint(attachedEnd);
   if (sameCoordinate(startPoint, endPoint)) return null;
@@ -2977,6 +2985,7 @@ function ensureWireNode(
   module: CircuitModule,
   endpoint: EndpointHit,
   visibleWires: CircuitWire[],
+  reservedJunctionIds?: ReadonlySet<string>,
 ): EndpointHit {
   if (endpoint.kind === 'pin' || endpoint.kind === 'port' || endpoint.junction_id) return endpoint;
   if (endpoint.wire_id) {
@@ -3006,7 +3015,7 @@ function ensureWireNode(
     kind: 'junction',
     x: point.x,
     y: point.y,
-    junction_id: makeJunctionId(module),
+    junction_id: makeJunctionId(module, reservedJunctionIds),
   };
 }
 
@@ -3095,8 +3104,8 @@ function junctionEndpoint(point: CircuitPosition, junctionId: string): CircuitWi
   return { x: point.x, y: point.y, junction_id: junctionId };
 }
 
-function makeJunctionId(module: CircuitModule): string {
-  const ids = new Set<string>();
+function makeJunctionId(module: CircuitModule, reservedIds: ReadonlySet<string> = new Set()): string {
+  const ids = new Set<string>(reservedIds);
   for (const wire of module.wires) {
     if (wire.from?.junction_id) ids.add(wire.from.junction_id);
     if (wire.to?.junction_id) ids.add(wire.to.junction_id);
