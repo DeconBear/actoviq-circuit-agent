@@ -2399,6 +2399,59 @@ try {
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count)
     ), expectedCount);
   }
+
+  // qucs-style placement UX: ghost preview, rotate-while-placing (R / right-click),
+  // and persistent place mode until Escape.
+  await page.getByTestId('schematic-editor-place-R').click();
+  assert.equal(await editor.getAttribute('data-tool'), 'place', 'place tool did not reactivate for ghost checks');
+  const ghostProbePoint = {
+    x: box.x + Math.min(690, box.width * 0.8),
+    y: box.y + Math.min(430, box.height * 0.72),
+  };
+  await page.mouse.move(ghostProbePoint.x, ghostProbePoint.y);
+  await page.getByTestId('schematic-place-ghost').waitFor();
+  await editor.focus();
+  await page.keyboard.press('r');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-place-rotation') === '90'
+  ));
+  await page.mouse.click(ghostProbePoint.x, ghostProbePoint.y, { button: 'right' });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-place-rotation') === '180'
+  ));
+  assert.equal(await editor.getAttribute('data-tool'), 'place', 'right-click must rotate the pending symbol, not cancel place mode');
+  const countBeforeRotatedPlacement = Number(await editor.getAttribute('data-component-count'));
+  await page.mouse.click(ghostProbePoint.x, ghostProbePoint.y);
+  await page.waitForFunction((count) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count)
+  ), countBeforeRotatedPlacement + 1);
+  assert.equal(await editor.getAttribute('data-tool'), 'place', 'place mode should persist after placing a component (qucs parity)');
+  assert.equal(await editor.getAttribute('data-place-rotation'), '0', 'ghost rotation should reset for the next pending symbol');
+  const rotationsAfterRotatedPlacement = await componentRotations(page);
+  const rotatedPlacementId = Object.keys(rotationsAfterRotatedPlacement)
+    .filter((id) => id.startsWith('r') && id !== 'r1' && id !== 'r_filter')
+    .pop();
+  assert.ok(rotatedPlacementId, 'rotated placement did not add a resistor');
+  assert.equal(
+    Number(rotationsAfterRotatedPlacement[rotatedPlacementId]) % 360,
+    180,
+    'placed component should inherit the ghost rotation',
+  );
+  await editor.focus();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-tool') === 'select'
+  ));
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((count) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count)
+  ), countBeforeRotatedPlacement);
+  console.log('[e2e] qucs placement UX (ghost, rotate, persistence) verified');
+
+  await page.getByTestId('schematic-editor-select').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-tool') === 'select'
+  ));
   const rtrimPointAfterToolbarPlacement = await componentScreenPoint(page, 'r1');
   await page.mouse.click(rtrimPointAfterToolbarPlacement.x, rtrimPointAfterToolbarPlacement.y);
   await page.waitForFunction(() => (
@@ -2556,6 +2609,13 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
   ));
+  // qucs parity: double-clicking a component focuses the inspector value editor.
+  await page.mouse.dblclick(r1PlacePoint.x, r1PlacePoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1' &&
+    document.activeElement?.getAttribute('data-testid') === 'schematic-editor-component-value'
+  ));
+  await editor.focus();
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 1, 'component selection frame is missing');
   const componentSelectionFrame = page.getByTestId('schematic-selected-component-frame').first();
   assert.equal(await componentSelectionFrame.evaluate((node) => node.tagName.toLowerCase()), 'rect', 'component selection should use a frame rectangle');
@@ -2616,6 +2676,13 @@ try {
   assertPositionEqual(filterPositionsAfterFramePaddingDrag.r_filter, filterPositionsAfterNudge.r_filter, 'dragging selected-frame padding moved r_filter');
   assertPositionEqual(filterPositionsAfterFramePaddingDrag.c_filter, filterPositionsAfterNudge.c_filter, 'dragging selected-frame padding moved c_filter');
   assertPositionEqual(filterPositionsAfterFramePaddingDrag.r1, filterPositionsAfterNudge.r1, 'dragging selected-frame padding moved r1');
+  // The padding-area marquee may legitimately graze the overlapping neighbours'
+  // bounding boxes (r1 sits 40 units from c_filter); clear the selection before
+  // re-selecting r1 for the frame-corner drag below.
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  ));
   await page.mouse.click(r1PlacePoint.x, r1PlacePoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
@@ -2794,6 +2861,66 @@ try {
   assertWireOrthogonal(chainedWire, 'continuous wire segment should be orthogonal');
   assert.ok(await isWireVisible(page, chainedWire.id), 'continuous wire segment is not visibly drawn');
   await assertRenderedWirePolylinesOrthogonal(page, 'after continuous wire drawing');
+  // qucs/KiCad parity: double-click ends the in-progress wire chain.
+  // The end point must be free (no wire/pin snap) AND inside the occupied
+  // document region — a wire expanding the document bounds would rescale the
+  // viewport and change the world-space delta of the segment drags below.
+  const dblEnd = await page.getByTestId('schematic-editor-svg').evaluate((svg) => {
+    if (!(svg instanceof SVGSVGElement)) throw new Error('schematic editor svg missing');
+    const editor = document.querySelector('[data-testid="schematic-editor"]');
+    const wires = JSON.parse(editor?.getAttribute('data-wires') ?? '[]');
+    const components = Object.values(JSON.parse(editor?.getAttribute('data-component-positions') ?? '{}'));
+    const ports = Object.values(JSON.parse(editor?.getAttribute('data-port-positions') ?? '{}'));
+    const extent = (values) => values.flatMap((wire) => (wire.points ?? []));
+    const occupiedPoints = [...components, ...ports, ...extent(wires)];
+    const box = {
+      minX: Math.min(...occupiedPoints.map((p) => p.x)),
+      maxX: Math.max(...occupiedPoints.map((p) => p.x)),
+      minY: Math.min(...occupiedPoints.map((p) => p.y)),
+      maxY: Math.max(...occupiedPoints.map((p) => p.y)),
+    };
+    const segmentDistance = (px, py, a, b) => {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lengthSquared = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / lengthSquared));
+      return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+    };
+    let best = null;
+    for (let x = Math.ceil(box.minX / 20) * 20; x <= box.maxX; x += 20) {
+      for (let y = Math.ceil(box.minY / 20) * 20; y <= box.maxY; y += 20) {
+        let clearance = Math.min(
+          ...components.map((p) => Math.hypot(x - p.x, y - p.y)),
+          ...ports.map((p) => Math.hypot(x - p.x, y - p.y)),
+        );
+        if (clearance < 60) continue;
+        for (const wire of wires) {
+          const points = wire.points ?? [];
+          for (let index = 1; index < points.length; index += 1) {
+            clearance = Math.min(clearance, segmentDistance(x, y, points[index - 1], points[index]));
+          }
+        }
+        if (clearance < 30) continue;
+        if (!best || clearance > best.clearance) best = { x, y, clearance };
+      }
+    }
+    if (!best) throw new Error('no free in-bounds point for the double-click wire end');
+    const matrix = svg.getScreenCTM();
+    if (!matrix) throw new Error('schematic editor svg has no screen matrix');
+    const point = svg.createSVGPoint();
+    point.x = best.x;
+    point.y = best.y;
+    const screen = point.matrixTransform(matrix);
+    return { x: screen.x, y: screen.y };
+  });
+  const wireCountBeforeDblEnd = Number(await editor.getAttribute('data-wire-count'));
+  await page.mouse.dblclick(dblEnd.x, dblEnd.y);
+  await page.waitForFunction((count) => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') === count + 1
+  ), wireCountBeforeDblEnd);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-start') === ''
+  ));
   const positionsBeforeWireDrag = await componentPositions(page);
   const wirePointsBeforeDrag = drawnWire.points;
   const wireDragPoint = await wireScreenPointAwayFromComponents(page, drawnWire.id);
@@ -2906,9 +3033,11 @@ try {
     selectedPanelWire.points.length,
     'wire selection panel should show the current route point count',
   );
-  assert.ok(
-    await page.getByTestId('schematic-wire-point-handle').count() >= 4,
-    'selected stored wire should expose visible point handles after segment drag',
+  const visiblePointHandleCount = await page.getByTestId('schematic-wire-point-handle').count();
+  assert.equal(
+    visiblePointHandleCount,
+    selectedPanelWire.points.length,
+    `selected stored wire should expose one point handle per route point (got ${visiblePointHandleCount} handles for ${drawnWire.id} with ${JSON.stringify(selectedPanelWire.points)})`,
   );
   assert.equal(
     await page.getByTestId('schematic-wire-point-handle').first().getAttribute('data-selection-handle-shape'),
@@ -3084,7 +3213,7 @@ try {
     const node = document.querySelector('[data-testid="schematic-editor"]');
     const components = JSON.parse(node?.getAttribute('data-components') ?? '[]');
     return node?.getAttribute('data-component-count') === '4' &&
-      node?.getAttribute('data-tool') === 'select' &&
+      node?.getAttribute('data-tool') === 'place-block' &&
       components.some((component) => component.type === 'BLOCK' && component.name === 'U_CTRL');
   });
   const componentsAfterBlockPlacement = JSON.parse(await editor.getAttribute('data-components') ?? '[]');
@@ -3121,6 +3250,11 @@ try {
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-custom-block.png') });
   console.log('[e2e] custom block placement and pin editing isolated');
 
+  // Block placement mode persists (qucs parity); return to the select tool before port tests.
+  await page.getByTestId('schematic-editor-select').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-tool') === 'select'
+  ));
   await waitForEditorIdle(page);
   const componentPositionsBeforePortMoves = await componentPositions(page);
   const portPositionsBeforeMoves = await portPositions(page);

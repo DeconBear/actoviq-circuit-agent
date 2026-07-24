@@ -763,8 +763,8 @@ export function CircuitWorkbench({
     }
   }
 
-  async function saveModuleSchematic(moduleId: string, moduleData: CircuitModule): Promise<void> {
-    if (!currentProjectId) return;
+  async function saveModuleSchematic(moduleId: string, moduleData: CircuitModule): Promise<boolean> {
+    if (!currentProjectId) return false;
     const operationProjectId = currentProjectId;
     const saved = await applyOperations(`Edit schematic ${moduleId}`, [{
       op: 'set_module_schematic',
@@ -786,6 +786,7 @@ export function CircuitWorkbench({
         if (isActiveProject(operationProjectId)) setBusy(false);
       }
     }
+    return saved;
   }
 
   async function openModule(moduleId: string): Promise<void> {
@@ -2599,7 +2600,7 @@ function ModuleSchematic({
   onBuild: () => void;
   onOptimize: () => Promise<void>;
   layoutFeedback?: LayoutOptimizationResult;
-  onSaveSchematic: (moduleData: CircuitModule) => Promise<void>;
+  onSaveSchematic: (moduleData: CircuitModule) => Promise<boolean | void>;
   onMoveItem: (itemId: string, x: number, y: number) => Promise<void>;
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;

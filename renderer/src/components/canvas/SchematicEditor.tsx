@@ -88,7 +88,7 @@ interface Props {
   module: CircuitModule;
   busy: boolean;
   buildBusy?: boolean;
-  onSave: (module: CircuitModule) => Promise<void>;
+  onSave: (module: CircuitModule) => Promise<boolean | void>;
   onBuild: () => void;
   onProbe?: (probe: SchematicProbeSelection) => void;
   onDirtyChange?: (dirty: boolean) => void;
@@ -188,6 +188,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
   const [placeType, setPlaceType] = useState<ToolComponentType>('R');
+  const [placeRotation, setPlaceRotation] = useState(0);
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
   const [blockDraft, setBlockDraft] = useState<BlockDraft>(() => defaultBlockDraft());
   const [pendingBlock, setPendingBlock] = useState<BlockDefinition | null>(null);
@@ -204,6 +205,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [spacePanActive, setSpacePanActive] = useState(false);
   const [dragPreviewPositions, setDragPreviewPositions] = useState<Record<string, CircuitPosition> | null>(null);
   const [clipboardComponentCount, setClipboardComponentCount] = useState(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const editorShellRef = useRef<HTMLDivElement | null>(null);
@@ -262,6 +264,19 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const wirePreview = hoverWorld
     ? hoverEndpoint ?? pointEndpoint(snapPoint(hoverWorld))
     : null;
+  // qucs-style placement ghost: the pending symbol follows the cursor (grid-snapped,
+  // rotated by placeRotation) until placement mode is exited via Esc/right tool.
+  const placeGhost = useMemo(() => {
+    if (busy || contextMenu) return null;
+    if (tool === 'place-block') {
+      if (!pendingBlock || !hoverWorld) return null;
+      return makePlacedBlock(cloneModule(draft), snapPoint(hoverWorld), pendingBlock);
+    }
+    if (tool !== 'place' || !hoverWorld) return null;
+    const ghost = makePlacedComponent(cloneModule(draft), placeType, snapPoint(hoverWorld));
+    ghost.rotation = normalizeRotation(ghost.rotation + placeRotation);
+    return ghost;
+  }, [busy, contextMenu, tool, pendingBlock, hoverWorld, draft, placeType, placeRotation]);
   const editorCursor: EditorCursor = (() => {
     if (interactionCursor === 'grabbing') return 'grabbing';
     if (spacePanActive) return 'grab';
@@ -280,6 +295,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setDraft(createSchematicDocument(module).module);
     setDirty(false);
     setTool('select');
+    setPlaceRotation(0);
     setSelection(null);
     setBlockDialogOpen(false);
     setBlockDraft(defaultBlockDraft());
@@ -294,6 +310,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setMarqueeBounds(null);
     setSpacePanActive(false);
     setDragPreviewPositions(null);
+    setSaveError(null);
     componentClipboardRef.current = [];
     pasteSerialRef.current = 0;
     setClipboardComponentCount(0);
@@ -306,6 +323,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setFuture([]);
     setDraft(next);
     setDirty(true);
+    setSaveError(null);
   }, [draft]);
 
   function scheduleDraftUpdate(update: DraftUpdate) {
@@ -517,20 +535,21 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       next.components.push(component);
       commitDraft(next);
       setSelection({ kind: 'component', id: component.id });
-      setPendingBlock(null);
-      setTool('select');
-      setInteractionCursor('grab');
+      // Keep place-block mode armed (qucs-style continuous placement); Esc or the
+      // select tool exits, and the pending block definition stays for the next click.
       return;
     }
 
     if (tool === 'place') {
       const next = cloneModule(draft);
       const component = makePlacedComponent(next, placeType, snapPoint(world));
+      component.rotation = normalizeRotation((component.rotation ?? 0) + placeRotation);
       next.components.push(component);
       commitDraft(next);
       setSelection({ kind: 'component', id: component.id });
-      setTool('select');
-      setInteractionCursor('grab');
+      // Stay in place mode so another symbol can be placed right away (qucs parity);
+      // the next pending symbol starts from its default orientation again.
+      setPlaceRotation(0);
       return;
     }
 
@@ -697,7 +716,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return;
     }
     const world = screenToWorld(event);
-    if (tool === 'wire' || tool === 'place' || wireStart) {
+    if (tool === 'wire' || tool === 'place' || tool === 'place-block' || wireStart) {
       setHoverSelection(null);
       const hit = hitEndpoint(document, world);
       setHoverEndpoint((current) => (
@@ -946,6 +965,12 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   function handleContextMenu(event: ReactMouseEvent<SVGSVGElement>) {
     event.preventDefault();
     event.stopPropagation();
+    if (tool === 'place') {
+      // qucs parity: right-click rotates the pending symbol during placement
+      // (Esc exits place mode); it must not cancel the placement gesture.
+      setPlaceRotation((current) => normalizeRotation(current + 90));
+      return;
+    }
     const activeGesture = Boolean(
       wireStart || tool !== 'select' || dragRef.current || portDragRef.current || wireDragRef.current || wirePointDragRef.current || wireSegmentDragRef.current || marqueeRef.current || panRef.current,
     );
@@ -969,6 +994,42 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setSelection(null);
       setContextMenu(null);
     }
+  }
+
+  function handleDoubleClick(event: ReactMouseEvent<SVGSVGElement>) {
+    if (busy) return;
+    if (tool === 'wire') {
+      // qucs/KiCad parity: double-click ends the in-progress wire. The clicks
+      // themselves already committed the final segment (or were rejected as
+      // zero-length), so this only has to close the chain.
+      if (!wireStart) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setWireStart(null);
+      setHoverWorld(null);
+      setHoverEndpoint(null);
+      wireDragRef.current = null;
+      return;
+    }
+    if (tool !== 'select') return;
+    const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
+    const component = componentFromPointerTarget(document, event.target)
+      ?? hitComponent(document, world)
+      ?? componentFromNetLabelPointerTarget(document, event.target)
+      ?? hitNetLabelComponent(document, world);
+    if (!component) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSelection({ kind: 'component', id: component.id });
+    // qucs parity: double-click edits the component. The property editor lives in
+    // the side panel, so focus the value field and select its current text.
+    window.requestAnimationFrame(() => {
+      const input = editorShellRef.current?.querySelector<HTMLInputElement>(
+        '[data-testid="schematic-editor-component-value"]',
+      );
+      input?.focus();
+      input?.select();
+    });
   }
 
   function cancelActiveDrag() {
@@ -1125,6 +1186,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setSelection(null);
       setContextMenu(null);
       setTool('select');
+      setPlaceRotation(0);
       setBlockDialogOpen(false);
       setPendingBlock(null);
       setSpacePanActive(false);
@@ -1218,6 +1280,13 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       fitViewport();
       return;
     }
+    if (key === 'r' && tool === 'place') {
+      // While placing, R rotates the pending symbol (qucs parity) instead of
+      // rotating whatever component happens to be selected.
+      event.preventDefault();
+      setPlaceRotation((current) => normalizeRotation(current + 90));
+      return;
+    }
     if (key === 'r' && selectedComponentIds.length > 0) {
       event.preventDefault();
       setTool('select');
@@ -1256,6 +1325,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       event.preventDefault();
       setTool('place');
       setPlaceType(componentType);
+      setPlaceRotation(0);
       setWireStart(null);
       setHoverEndpoint(null);
       setHoverSelection(null);
@@ -1494,11 +1564,19 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   }
 
   async function saveAndRebuild() {
-    const normalized = normalizeConnectivity(draft);
-    await onSave(normalized);
-    setDirty(false);
-    setHistory([]);
-    setFuture([]);
+    try {
+      const normalized = normalizeConnectivity(draft);
+      const saved = await onSave(normalized);
+      if (saved === false) throw new Error('Apply command was rejected');
+      setSaveError(null);
+      setDirty(false);
+      setHistory([]);
+      setFuture([]);
+    } catch (error) {
+      // Keep the draft dirty and surface the failure — previously a topology
+      // validation throw or a rejected apply left no trace (silent data loss).
+      setSaveError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   return (
@@ -1510,6 +1588,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-busy={busy ? 'true' : 'false'}
       data-preview-busy={buildBusy ? 'true' : 'false'}
       data-dirty={dirty ? 'true' : 'false'}
+      data-save-error={saveError ?? ''}
+      data-place-rotation={tool === 'place' ? String(placeRotation) : ''}
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}
       data-clipboard-component-count={String(clipboardComponentCount)}
@@ -1559,15 +1639,22 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         hasSelection={Boolean(selection)}
         dirty={dirty}
         buildBusy={buildBusy}
-        status={wireStart
-          ? `Wire from ${wireStart.label}${hoverEndpoint ? ` to ${hoverEndpoint.label}` : ''}`
-          : hoverEndpoint
-            ? `Snap ${hoverEndpoint.label}`
-            : dirty ? 'Unsaved' : 'Saved'}
+        status={saveError
+          ? `Save failed: ${saveError}`
+          : wireStart
+            ? `Wire from ${wireStart.label}${hoverEndpoint ? ` to ${hoverEndpoint.label}` : ''}`
+            : tool === 'place'
+              ? `Placing ${placeType}: click to place, R / right-click rotates, Esc to exit`
+              : tool === 'place-block'
+                ? 'Placing block: click to place, Esc to exit'
+                : hoverEndpoint
+                  ? `Snap ${hoverEndpoint.label}`
+                  : dirty ? 'Unsaved' : 'Saved'}
         zoom={zoom}
         onSelect={() => {
           setTool('select');
           setPendingBlock(null);
+          setPlaceRotation(0);
           setWireStart(null);
           setHoverEndpoint(null);
           setHoverSelection(null);
@@ -1575,6 +1662,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         onWire={() => {
           setTool('wire');
           setPendingBlock(null);
+          setPlaceRotation(0);
           setWireStart(null);
           setHoverEndpoint(null);
           setHoverSelection(null);
@@ -1597,6 +1685,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
               setTool('place');
               setPendingBlock(null);
               setPlaceType(type);
+              setPlaceRotation(0);
               setWireStart(null);
               setHoverEndpoint(null);
               setHoverSelection(null);
@@ -1615,6 +1704,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             cursor={editorCursor}
             viewBoxOverride={activeViewBox}
             rubberBandWireIds={rubberBandWireIds}
+            placeGhost={placeGhost}
             testId="schematic-editor-svg"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -1622,6 +1712,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             onPointerCancel={handlePointerCancel}
             onPointerLeave={handlePointerLeave}
             onContextMenu={handleContextMenu}
+            onDoubleClick={handleDoubleClick}
             svgRef={svgRef}
           />
         </div>

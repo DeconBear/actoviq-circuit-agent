@@ -71,6 +71,7 @@ interface Props {
   cursor?: CSSCursor;
   viewBoxOverride?: SchematicBounds;
   rubberBandWireIds?: Set<string>;
+  placeGhost?: CircuitComponent | null;
   testId?: string;
   onPointerDown?: PointerEventHandler<SVGSVGElement>;
   onPointerMove?: PointerEventHandler<SVGSVGElement>;
@@ -78,6 +79,7 @@ interface Props {
   onPointerCancel?: PointerEventHandler<SVGSVGElement>;
   onPointerLeave?: PointerEventHandler<SVGSVGElement>;
   onContextMenu?: MouseEventHandler<SVGSVGElement>;
+  onDoubleClick?: MouseEventHandler<SVGSVGElement>;
   svgRef?: Ref<SVGSVGElement>;
 }
 
@@ -93,6 +95,7 @@ export function SchematicDocumentSvg({
   cursor = 'default',
   viewBoxOverride,
   rubberBandWireIds,
+  placeGhost = null,
   testId = 'schematic-document-svg',
   onPointerDown,
   onPointerMove,
@@ -100,6 +103,7 @@ export function SchematicDocumentSvg({
   onPointerCancel,
   onPointerLeave,
   onContextMenu,
+  onDoubleClick,
   svgRef,
 }: Props) {
   const viewBox = viewBoxOverride ?? document.viewBox;
@@ -126,6 +130,7 @@ export function SchematicDocumentSvg({
       onPointerCancel={onPointerCancel}
       onPointerLeave={onPointerLeave}
       onContextMenu={onContextMenu}
+      onDoubleClick={onDoubleClick}
     >
       <defs>
         <style>{`
@@ -295,6 +300,7 @@ export function SchematicDocumentSvg({
           />
         ))}
       </g>
+      {placeGhost ? <PlaceGhostSymbol component={placeGhost} /> : null}
       <g data-layer="junctions" pointerEvents="none">
         {junctions(document).map(({ point, net }) => (
           <circle
@@ -634,6 +640,58 @@ function ComponentSymbol({ component, selected, hovered }: { component: CircuitC
           pointerEvents="none"
           data-testid="schematic-component-value-label"
           data-full-value={component.value}
+        >
+          {displayComponentValue(component.value)}
+        </text>
+      ) : null}
+    </g>
+  );
+}
+
+function PlaceGhostSymbol({ component }: { component: CircuitComponent }) {
+  const labels = componentLabelPositions(component);
+  return (
+    <g opacity={0.45} pointerEvents="none" data-testid="schematic-place-ghost" data-ghost-type={component.type}>
+      <LeadLines component={component} />
+      <SymbolBody component={component} />
+      {component.pins.map((pin, index) => {
+        const point = pinWorld(component, pin, index);
+        return (
+          <circle
+            key={`ghost-pin-${pin.id}`}
+            cx={point.x}
+            cy={point.y}
+            r="3.2"
+            fill="#cc0000"
+            opacity="0.9"
+          />
+        );
+      })}
+      <text
+        x={labels.name.x}
+        y={labels.name.y}
+        textAnchor={labels.name.anchor}
+        fontSize={COMPONENT_NAME_FONT_SIZE}
+        fontFamily={LABEL_FONT}
+        fontWeight="700"
+        fill={LABEL_COLOR}
+        stroke={LABEL_HALO_COLOR}
+        strokeWidth="3"
+        paintOrder="stroke"
+      >
+        {component.name}
+      </text>
+      {component.type !== 'BLOCK' ? (
+        <text
+          x={labels.value.x}
+          y={labels.value.y}
+          textAnchor={labels.value.anchor}
+          fontSize={COMPONENT_VALUE_FONT_SIZE}
+          fontFamily={LABEL_FONT}
+          fill={LABEL_COLOR}
+          stroke={LABEL_HALO_COLOR}
+          strokeWidth="3"
+          paintOrder="stroke"
         >
           {displayComponentValue(component.value)}
         </text>
