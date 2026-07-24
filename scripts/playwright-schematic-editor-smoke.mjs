@@ -984,6 +984,82 @@ async function createJunctionInteractionProject() {
   return { projectId: project.project_id, projectName: project.name, projectRoot };
 }
 
+async function createUnconnectedPortProject() {
+  const expectedProjectId = legacyProjectId('ports');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${projectPrefix}ports-${Date.now()}`,
+    '--project-id', expectedProjectId,
+  ]);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  assert.equal(project.project_id, expectedProjectId, 'unconnected-port fixture project id should be stable');
+  const nets = [
+    { id: 'net_in', name: 'in_net', kind: 'signal', aliases: [] },
+    { id: 'net_tail', name: 'tail_net', kind: 'signal', aliases: [] },
+    { id: 'net_spare', name: 'spare_net', kind: 'signal', aliases: [] },
+  ];
+  const ports = [
+    { id: 'inp', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in_net', net_id: 'net_in', position: { x: 100, y: 200 } },
+    { id: 'spare', name: 'SPARE', direction: 'output', signal_type: 'analog', net: 'spare_net', net_id: 'net_spare', position: { x: 520, y: 200 } },
+  ];
+  const moduleRef = {
+    id: 'ports',
+    name: 'Unconnected port fixture',
+    kind: 'test',
+    function: 'One wired port and one dangling port to verify dimmed rendering and wire snapping.',
+    parameters: {},
+    notes: '',
+    preview_enabled: true,
+    source: 'modules/ports/module.circuit.json',
+    position: { x: 120, y: 120 },
+    size: { width: 420, height: 260 },
+    ports,
+  };
+  const module = {
+    schema: 'actoviq.module.v2',
+    module_id: 'ports',
+    name: 'Unconnected port fixture',
+    revision: 0,
+    ports,
+    nets,
+    components: [
+      {
+        id: 'r1',
+        type: 'R',
+        name: 'R1',
+        value: '1k',
+        position: { x: 300, y: 200 },
+        rotation: 0,
+        pins: [
+          { id: 'a', name: '1', net: 'in_net', net_id: 'net_in' },
+          { id: 'b', name: '2', net: 'tail_net', net_id: 'net_tail' },
+        ],
+      },
+    ],
+    wires: [
+      {
+        id: 'w_in',
+        net: 'in_net',
+        net_id: 'net_in',
+        source: 'stored',
+        from: { x: 100, y: 200, port_id: 'inp' },
+        to: { x: 248, y: 200, component_id: 'r1', pin_id: 'a' },
+        points: [{ x: 100, y: 200 }, { x: 248, y: 200 }],
+      },
+    ],
+    annotations: [],
+  };
+  project.modules = [moduleRef];
+  project.updated_at = new Date().toISOString();
+  const moduleRoot = path.resolve(projectRoot, 'modules', 'ports');
+  await mkdir(moduleRoot, { recursive: true });
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  return { projectId: project.project_id, projectName: project.name, projectRoot };
+}
+
 async function componentPositions(page) {
   const raw = await page.getByTestId('schematic-editor').getAttribute('data-component-positions');
   return JSON.parse(raw || '{}');
@@ -1461,6 +1537,7 @@ const legacyOpampFeedbackProject = await createLegacyOpampFeedbackProject();
 const legacyCascodeProject = await createLegacyCascodeProject();
 const legacyBuckConverterProject = await createLegacyBuckConverterProject();
 const junctionInteractionProject = await createJunctionInteractionProject();
+const unconnectedPortProject = await createUnconnectedPortProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -1554,11 +1631,14 @@ try {
   await page.getByTestId('schematic-editor-svg').waitFor({ timeout: 20_000 });
   assert.equal(await editor.getAttribute('data-schematic-source'), 'document');
   assert.equal(await page.getByTestId('schematic-editor-svg').getAttribute('data-schematic-source'), 'document');
-  assert.equal(
-    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id][data-connected="false"]').count(),
-    0,
-    'unconnected module ports should not be visible or influence the editor plot bounds',
-  );
+  // Unconnected ports render as dimmed wire targets (qucs-style dangling pins);
+  // connected ports stay fully opaque.
+  const unconnectedPortGroups = page.getByTestId('schematic-editor-svg').locator('g[data-port-id][data-connected="false"]');
+  const unconnectedPortCount = await unconnectedPortGroups.count();
+  for (let index = 0; index < unconnectedPortCount; index += 1) {
+    const opacity = Number(await unconnectedPortGroups.nth(index).getAttribute('opacity'));
+    assert.ok(opacity < 1, 'unconnected module ports should render dimmed as wire targets');
+  }
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="gnd"]').count(),
     0,
@@ -1971,14 +2051,27 @@ try {
     0,
     'rubber-band wire feedback should disappear after cancelling a drag',
   );
-  const multiMarqueeStart = {
-    x: Math.min(rFilterScreenPoint.x, cFilterScreenPoint.x) - 90,
-    y: Math.min(rFilterScreenPoint.y, cFilterScreenPoint.y) - 40,
+  const multiMarqueeRect = async () => {
+    // Recompute per use: drags in between can auto-pan/zoom the viewport,
+    // which would silently shift a cached screen rect off the components.
+    const [rPoint, cPoint] = [
+      await componentScreenPoint(page, 'r_filter'),
+      await componentScreenPoint(page, 'c_filter'),
+    ];
+    return {
+      start: {
+        x: Math.min(rPoint.x, cPoint.x) - 90,
+        y: Math.min(rPoint.y, cPoint.y) - 40,
+      },
+      end: {
+        x: Math.max(rPoint.x, cPoint.x) + 120,
+        y: Math.max(rPoint.y, cPoint.y) + 120,
+      },
+    };
   };
-  const multiMarqueeEnd = {
-    x: Math.max(rFilterScreenPoint.x, cFilterScreenPoint.x) + 120,
-    y: Math.max(rFilterScreenPoint.y, cFilterScreenPoint.y) + 120,
-  };
+  let multiMarquee = await multiMarqueeRect();
+  let multiMarqueeStart = multiMarquee.start;
+  let multiMarqueeEnd = multiMarquee.end;
   await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
   await page.mouse.down();
   await page.mouse.move(multiMarqueeEnd.x, multiMarqueeEnd.y, { steps: 10 });
@@ -2015,6 +2108,9 @@ try {
     filterPositionsInitial,
     'cancelled selection-frame-edge drag should restore schematic components',
   );
+  multiMarquee = await multiMarqueeRect();
+  multiMarqueeStart = multiMarquee.start;
+  multiMarqueeEnd = multiMarquee.end;
   await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
   await page.mouse.down();
   await page.mouse.move(multiMarqueeEnd.x, multiMarqueeEnd.y, { steps: 10 });
@@ -2050,6 +2146,9 @@ try {
     filterPositionsInitial,
     'cancelled direct drag from a multi-selection should restore schematic components',
   );
+  multiMarquee = await multiMarqueeRect();
+  multiMarqueeStart = multiMarquee.start;
+  multiMarqueeEnd = multiMarquee.end;
   await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
   await page.mouse.down();
   await page.mouse.move(multiMarqueeEnd.x, multiMarqueeEnd.y, { steps: 10 });
@@ -2134,6 +2233,9 @@ try {
     filterPositionsInitial,
     'cancelled selection-handle group drag should restore schematic components',
   );
+  multiMarquee = await multiMarqueeRect();
+  multiMarqueeStart = multiMarquee.start;
+  multiMarqueeEnd = multiMarquee.end;
   await page.mouse.move(multiMarqueeStart.x, multiMarqueeStart.y);
   await page.mouse.down();
   await page.mouse.move(multiMarqueeEnd.x, multiMarqueeEnd.y, { steps: 10 });
@@ -5091,6 +5193,64 @@ try {
   assertPositionEqual(powerPositionsAfterDrag.v_supply, powerPositionsAfterPlace.v_supply, 'dragging resistor moved VDD source');
   assertPositionChanged(powerPositionsAfterDrag.r1, powerPositionsAfterPlace.r1, 'power-module resistor did not move');
   console.log('[e2e] power module drag isolated');
+
+  // Unconnected ports render dimmed as wire targets and accept connections.
+  await page.getByTestId(`sidebar-project-${unconnectedPortProject.projectId}`).click();
+  await waitForWorkbenchProject(page, unconnectedPortProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(unconnectedPortProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-ports').dblclick();
+  await editor.waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'ports'
+  ));
+  await waitForEditorIdle(page);
+  const sparePortGroup = page.getByTestId('schematic-editor-svg').locator('g[data-port-id="spare"]');
+  await sparePortGroup.waitFor();
+  assert.equal(await sparePortGroup.getAttribute('data-connected'), 'false', 'spare port should start unconnected');
+  assert.ok(Number(await sparePortGroup.getAttribute('opacity')) < 1, 'unconnected spare port should render dimmed');
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-unconnected-port.png') });
+  const sparePortWorld = (await portPositions(page)).spare;
+  assert.ok(sparePortWorld, 'spare port position is not exposed');
+  const spareCanvasBox = await canvas.boundingBox();
+  assert.ok(spareCanvasBox);
+  const sparePortAnchor = worldToScreen(sparePortWorld, await editorViewBox(page), spareCanvasBox);
+  const r1TailPins = await componentPinWorldPoints(page, 'r1');
+  const r1TailPinScreen = worldToScreen(r1TailPins.b, await editorViewBox(page), spareCanvasBox);
+  await page.getByTestId('schematic-editor-wire').click();
+  await page.mouse.move(r1TailPinScreen.x, r1TailPinScreen.y);
+  await page.mouse.down();
+  await page.mouse.move(sparePortAnchor.x, sparePortAnchor.y, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForFunction(() => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return wires.some((wire) => wire.from?.port_id === 'spare' || wire.to?.port_id === 'spare');
+  });
+  const wiresWithSpare = (await editorWires(page)).filter((wire) => wire.from?.port_id === 'spare' || wire.to?.port_id === 'spare');
+  assert.equal(wiresWithSpare.length, 1, 'wiring to a dimmed unconnected port should create exactly one wire');
+  assert.equal(wiresWithSpare[0].net, 'spare_net', 'wiring an unconnected port should pull the connected pin onto the port net');
+  assert.equal(
+    await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="spare"]').getAttribute('data-connected'),
+    'true',
+    'spare port should become connected once wired',
+  );
+  assert.deepEqual(await componentPinNets(page, 'r1'), ['in_net', 'spare_net'], 'resistor tail pin should adopt the spare port net');
+  await page.getByTestId('schematic-editor-save').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
+  ));
+  const savedPortsModule = JSON.parse(await readFile(
+    path.resolve(unconnectedPortProject.projectRoot, 'modules', 'ports', 'module.circuit.json'),
+    'utf8',
+  ));
+  assert.ok(
+    savedPortsModule.wires.some((wire) => wire.from?.port_id === 'spare' || wire.to?.port_id === 'spare'),
+    'saving should persist the wire attached to the previously unconnected port',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-unconnected-port-wired.png') });
+  console.log('[e2e] unconnected port renders dimmed, snaps, and persists after wiring');
 
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-smoke.png') });
   assert.deepEqual(

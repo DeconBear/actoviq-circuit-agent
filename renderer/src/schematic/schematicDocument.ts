@@ -136,7 +136,14 @@ export function createSchematicDocument(
   const connectedPortIds = computeConnectedPortIds(next);
   const netLabels = createNetLabels(next, portPositions);
   const wires = materializeNetWires(next, portPositions);
-  const bounds = moduleBounds(next, filterPortPositions(portPositions, connectedPortIds), wires, netLabels);
+  // Unconnected ports render dimmed as wire targets, so they also belong to the
+  // plot bounds; only rail ports already represented by net-label stubs drop out.
+  const visiblePortIds = new Set(
+    next.ports
+      .filter((port) => portVisibleForNetLabels(netLabels, port))
+      .map((port) => port.id),
+  );
+  const bounds = moduleBounds(next, filterPortPositions(portPositions, visiblePortIds), wires, netLabels);
   const viewBox = padBounds(bounds, viewBoxPadding(bounds));
   return {
     schema: 'actoviq.schematic-document.v1',
@@ -2577,9 +2584,16 @@ export function portInteractionBounds(position: CircuitPosition, side: Schematic
 }
 
 export function isSchematicPortVisible(document: SchematicDocument, port: CircuitPort): boolean {
-  if (!document.connectedPortIds.has(port.id)) return false;
+  return portVisibleForNetLabels(document.netLabels, port);
+}
+
+/**
+ * Ports render even while unconnected (dimmed) so users can see and wire them;
+ * rail ports stay hidden whenever the rail already renders as net-label stubs.
+ */
+function portVisibleForNetLabels(netLabels: SchematicNetLabel[], port: CircuitPort): boolean {
   const isRailPort = isGroundPort(port) || port.signal_type === 'power';
-  return !isRailPort || !document.netLabels.some((label) => label.net === port.net);
+  return !isRailPort || !netLabels.some((label) => label.net === port.net);
 }
 
 function signalPortSide(port: CircuitPort, points: CircuitPosition[], bounds: SchematicBounds): SignalPortSide {
@@ -3736,7 +3750,7 @@ export function hitEndpoint(document: SchematicDocument, world: CircuitPosition)
     }
   }
   for (const port of document.module.ports) {
-    if (!document.connectedPortIds.has(port.id)) continue;
+    if (!isSchematicPortVisible(document, port)) continue;
     const point = document.portPositions.get(port.id);
     if (point && distance(point, world) <= PIN_REACH + 3) {
       return {
