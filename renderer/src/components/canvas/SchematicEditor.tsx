@@ -2175,10 +2175,81 @@ function appendCopiedComponents(
   offset: number,
 ): string[] {
   const existingIds = new Set(module.components.map((component) => component.id));
+  const sourceIds = new Set(sourceComponents.map((component) => component.id));
+  const netTable = new Map((module.nets ?? []).map((net) => [net.name, net]));
+  const railPortNets = new Set(
+    module.ports
+      .filter((port) => port.signal_type === 'ground' || port.signal_type === 'power')
+      .map((port) => port.net),
+  );
+  // Nets referenced by anything outside the copied set must not be joined by the
+  // paste (that would short the copy into the original circuit). Pure junction
+  // wires do not prove externality on their own: their net's membership derives
+  // from the pins/ports reachable on it.
+  const externalNets = new Set<string>([
+    ...module.components
+      .filter((component) => !sourceIds.has(component.id))
+      .flatMap((component) => component.pins.map((pin) => pin.net)),
+    ...module.ports.map((port) => port.net),
+    ...(module.wires ?? [])
+      .filter((wire) => [wire.from, wire.to].some((endpoint) => {
+        if (!endpoint) return false;
+        if (endpoint.port_id) return true;
+        if (endpoint.component_id) return !sourceIds.has(endpoint.component_id);
+        return false;
+      }))
+      .map((wire) => wire.net ?? ''),
+  ].filter(Boolean));
+  const usedNetNames = new Set<string>([
+    ...externalNets,
+    ...sourceComponents.flatMap((component) => component.pins.map((pin) => pin.net)),
+    ...(module.nets ?? []).flatMap((net) => [net.name, ...(net.aliases ?? [])]),
+  ].filter(Boolean));
+  const isRailNet = (netName: string) => {
+    if (netName === '0') return true;
+    const entry = netTable.get(netName);
+    if (entry && (entry.kind === 'ground' || entry.kind === 'power')) return true;
+    return railPortNets.has(netName);
+  };
+  const sourceNetUse = new Map<string, number>();
+  for (const component of sourceComponents) {
+    for (const pin of component.pins) {
+      sourceNetUse.set(pin.net, (sourceNetUse.get(pin.net) ?? 0) + 1);
+    }
+  }
+  const makeFreshNetName = () => {
+    let index = 1;
+    while (usedNetNames.has(`n_paste_${index}`)) index += 1;
+    const name = `n_paste_${index}`;
+    usedNetNames.add(name);
+    return name;
+  };
+  const sharedFreshNets = new Map<string, string>();
+  const pinNetFor = (pin: CircuitPin, newComponentId: string, pinIndex: number): string => {
+    const sourceNet = pin.net;
+    // Ground / power rails stay shared so the pasted copy keeps its supplies
+    // connected (qucs pastes power symbols as-is).
+    if (isRailNet(sourceNet)) return sourceNet;
+    // A net used only inside the copied set keeps its connectivity through one
+    // fresh shared net; everything else dangles with a per-pin net (previous
+    // behavior for all pins).
+    if ((sourceNetUse.get(sourceNet) ?? 0) >= 2 && !externalNets.has(sourceNet)) {
+      let fresh = sharedFreshNets.get(sourceNet);
+      if (!fresh) {
+        fresh = makeFreshNetName();
+        sharedFreshNets.set(sourceNet, fresh);
+      }
+      return fresh;
+    }
+    return `n_${newComponentId}_${pinIndex + 1}`;
+  };
   const componentIds: string[] = [];
+  const componentIdMap = new Map<string, string>();
+  const pinNetAssignments = new Map<string, string>();
   for (const source of sourceComponents) {
     const id = makeId(source.type.toLowerCase(), existingIds);
     existingIds.add(id);
+    componentIdMap.set(source.id, id);
     const component: CircuitComponent = {
       ...cloneComponent(source),
       id,
@@ -2187,13 +2258,58 @@ function appendCopiedComponents(
         x: source.position.x + offset,
         y: source.position.y + offset,
       }),
-      pins: source.pins.map((pin, index) => ({
-        ...pin,
-        net: `n_${id}_${index + 1}`,
-      })),
+      pins: source.pins.map((pin, index) => {
+        const net = pinNetFor(pin, id, index);
+        pinNetAssignments.set(`${source.id}:${pin.id}`, net);
+        return { ...pin, net };
+      }),
     };
     module.components.push(component);
     componentIds.push(id);
+  }
+  // Re-create stored wires that connected two copied components, keeping their
+  // routed geometry. A stored wire merges its endpoint nets, so it is only
+  // copied when both pins received the same paste net; junction-mediated chains
+  // are preserved implicitly through the shared net (auto-routed).
+  const storedWiresToCopy = (module.wires ?? []).filter((wire) => {
+    const fromComponentId = wire.from?.component_id;
+    const toComponentId = wire.to?.component_id;
+    if (!fromComponentId || !toComponentId || fromComponentId === toComponentId) return false;
+    if (!componentIdMap.has(fromComponentId) || !componentIdMap.has(toComponentId)) return false;
+    const fromNet = pinNetAssignments.get(`${fromComponentId}:${wire.from?.pin_id}`);
+    const toNet = pinNetAssignments.get(`${toComponentId}:${wire.to?.pin_id}`);
+    return Boolean(fromNet) && fromNet === toNet;
+  });
+  if (storedWiresToCopy.length > 0) {
+    const existingWireIds = new Set((module.wires ?? []).map((wire) => wire.id));
+    const translate = (point: CircuitPosition) => snapPoint({ x: point.x + offset, y: point.y + offset });
+    const nextWires = [...(module.wires ?? [])];
+    for (const wire of storedWiresToCopy) {
+      const id = makeId('w', existingWireIds);
+      existingWireIds.add(id);
+      const net = pinNetAssignments.get(`${wire.from?.component_id}:${wire.from?.pin_id}`) ?? wire.net;
+      nextWires.push({
+        ...cloneWire(wire),
+        id,
+        points: (wire.points ?? []).map(translate),
+        from: wire.from ? {
+          ...wire.from,
+          ...translate(wire.from),
+          component_id: componentIdMap.get(wire.from.component_id ?? ''),
+          junction_id: undefined,
+        } : undefined,
+        to: wire.to ? {
+          ...wire.to,
+          ...translate(wire.to),
+          component_id: componentIdMap.get(wire.to.component_id ?? ''),
+          junction_id: undefined,
+        } : undefined,
+        net,
+        net_id: undefined,
+        source: 'stored',
+      });
+    }
+    module.wires = nextWires;
   }
   return componentIds;
 }

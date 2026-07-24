@@ -2535,8 +2535,87 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3' &&
     !document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions')?.includes('"r2"')
   ));
-  const r1AfterDuplicateUndo = await componentScreenPoint(page, 'r1');
-  await page.mouse.click(r1AfterDuplicateUndo.x, r1AfterDuplicateUndo.y);
+  // Duplicating a wired selection preserves intra-selection wiring: the copied
+  // pair shares one fresh net on the wired pins (no short to the original) and
+  // the stored wire route is recreated with the duplicate offset.
+  const copyPairViewBox = await editorViewBox(page);
+  const copyPairCanvasBox = await canvas.boundingBox();
+  assert.ok(copyPairCanvasBox);
+  const copyPairPointA = worldToScreen({ x: 340, y: 480 }, copyPairViewBox, copyPairCanvasBox);
+  const copyPairPointB = worldToScreen({ x: 460, y: 480 }, copyPairViewBox, copyPairCanvasBox);
+  await page.getByTestId('schematic-editor-place-R').click();
+  await page.mouse.click(copyPairPointA.x, copyPairPointA.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '4' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r2'
+  ));
+  await page.getByTestId('schematic-editor-place-C').click();
+  await page.mouse.click(copyPairPointB.x, copyPairPointB.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '5' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c1'
+  ));
+  await page.getByTestId('schematic-editor-wire').click();
+  const copyPairPinsR = await componentPinWorldPoints(page, 'r2');
+  const copyPairPinsC = await componentPinWorldPoints(page, 'c1');
+  const copyPairWireFrom = worldToScreen(copyPairPinsR.b, await editorViewBox(page), copyPairCanvasBox);
+  const copyPairWireTo = worldToScreen(copyPairPinsC.a, await editorViewBox(page), copyPairCanvasBox);
+  await page.mouse.move(copyPairWireFrom.x, copyPairWireFrom.y);
+  await page.mouse.down();
+  await page.mouse.move(copyPairWireTo.x, copyPairWireTo.y, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForFunction(() => {
+    const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+    return wires.some((wire) => wire.from?.component_id === 'r2' && wire.to?.component_id === 'c1');
+  });
+  const r2NetsAfterWire = await componentPinNets(page, 'r2');
+  const c1NetsAfterWire = await componentPinNets(page, 'c1');
+  assert.equal(r2NetsAfterWire[1], c1NetsAfterWire[0], 'wired pins should share a net before duplicating');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('schematic-editor-select').click();
+  const r2BodyPoint = await componentScreenPoint(page, 'r2');
+  await page.mouse.click(r2BodyPoint.x, r2BodyPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r2'
+  ));
+  const c1BodyPoint = await componentScreenPoint(page, 'c1');
+  await page.keyboard.down('Shift');
+  await page.mouse.click(c1BodyPoint.x, c1BodyPoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
+  ));
+  await editor.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+D' : 'Control+D');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '7' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'components:r3,c2'
+  ));
+  const r3Nets = await componentPinNets(page, 'r3');
+  const c2Nets = await componentPinNets(page, 'c2');
+  assert.equal(r3Nets[1], c2Nets[0], 'duplicated wired pair should keep a shared net on the wired pins');
+  assert.notEqual(r3Nets[1], r2NetsAfterWire[1], 'duplicated shared net must not short to the original net');
+  assert.notEqual(r3Nets[0], c2Nets[1], 'unwired pins of the duplicated pair should keep dangling nets');
+  const copyPairWires = await editorWires(page);
+  const originalPairWire = copyPairWires.find((wire) => wire.from?.component_id === 'r2' && wire.to?.component_id === 'c1');
+  const copiedPairWire = copyPairWires.find((wire) => wire.from?.component_id === 'r3' && wire.to?.component_id === 'c2');
+  assert.ok(copiedPairWire, 'duplicating a wired selection should recreate the stored wire between the copies');
+  assert.equal(copiedPairWire.source, 'stored', 'copied wire should stay a stored wire');
+  assert.deepEqual(
+    copiedPairWire.points,
+    (originalPairWire?.points ?? []).map((point) => ({ x: point.x + schematicGrid * 2, y: point.y + schematicGrid * 2 })),
+    'copied wire should keep the original route translated by the duplicate offset',
+  );
+  for (let undoCopyPair = 0; undoCopyPair < 4; undoCopyPair += 1) {
+    await editor.focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  }
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3'
+  ));
+  console.log('[e2e] duplicate preserves intra-selection wiring verified');
+  const r1ForNudge = await componentScreenPoint(page, 'r1');
+  await page.mouse.click(r1ForNudge.x, r1ForNudge.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
   ));
