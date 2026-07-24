@@ -153,6 +153,82 @@ async function main() {
     assert.ok(transcript.includes(reply2), 'reply2 missing from transcript');
     assert.ok(transcript.includes('create_circuit_project'), 'tool timeline missing from turn 1');
 
+    // Chat column must be a layout sibling (not an absolute overlay over the canvas).
+    const layout = await page.evaluate(() => {
+      const chat = document.querySelector('[data-testid="chat-drawer"]');
+      const workbench = document.querySelector('[data-testid="circuit-workbench"]')
+        || document.querySelector('[data-testid="schematic-canvas"]')
+        || document.querySelector('.tab-content');
+      const chatBox = chat?.getBoundingClientRect();
+      const workBox = workbench?.getBoundingClientRect();
+      const chatStyle = chat ? getComputedStyle(chat) : null;
+      const overlapPx = chatBox && workBox
+        ? Math.max(0, Math.min(chatBox.right, workBox.right) - Math.max(chatBox.left, workBox.left))
+          * (Math.max(0, Math.min(chatBox.bottom, workBox.bottom) - Math.max(chatBox.top, workBox.top)) > 0 ? 1 : 0)
+        : null;
+      return {
+        chatPosition: chatStyle?.position ?? null,
+        chatLeft: chatBox?.left ?? null,
+        workRight: workBox?.right ?? null,
+        overlapPx,
+      };
+    });
+    assert.ok(
+      layout.chatPosition === 'relative' || layout.chatPosition === 'static',
+      `chat drawer should participate in flex layout, got position=${layout.chatPosition}`,
+    );
+    if (layout.overlapPx != null) {
+      assert.ok(
+        layout.overlapPx < 8,
+        `chat must not cover schematic; overlap=${layout.overlapPx}px layout=${JSON.stringify(layout)}`,
+      );
+    }
+
+    // Message text must be selectable and copyable (Ctrl+C), including while the
+    // schematic editor's window keydown listener is mounted on the Design tab.
+    const assistantText = page.locator('.chat-message-row--assistant .chat-md-prose').first();
+    await assistantText.waitFor({ state: 'visible' });
+    const userSelect = await assistantText.evaluate((el) => getComputedStyle(el).userSelect);
+    assert.ok(
+      userSelect === 'text' || userSelect === 'auto' || userSelect === 'contain',
+      `assistant message user-select should allow selection, got ${userSelect}`,
+    );
+
+    await assistantText.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    const selectedBeforeCopy = await page.evaluate(() => window.getSelection()?.toString() ?? '');
+    assert.ok(selectedBeforeCopy.includes(reply1), 'assistant reply should be selectable with the mouse/DOM selection APIs');
+
+    await page.evaluate(() => {
+      window.__actoviqChatCopyResult = null;
+      const onCopy = (event) => {
+        document.removeEventListener('copy', onCopy);
+        const fromEvent = event.clipboardData?.getData('text/plain') ?? '';
+        const fromSelection = window.getSelection()?.toString() ?? '';
+        window.__actoviqChatCopyResult = { text: fromEvent || fromSelection, timedOut: false };
+      };
+      document.addEventListener('copy', onCopy);
+      window.setTimeout(() => {
+        if (window.__actoviqChatCopyResult == null) {
+          document.removeEventListener('copy', onCopy);
+          window.__actoviqChatCopyResult = { text: '', timedOut: true };
+        }
+      }, 2000);
+    });
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+C' : 'Control+C');
+    await page.waitForFunction(() => window.__actoviqChatCopyResult != null, null, { timeout: 3000 });
+    const copyResult = await page.evaluate(() => window.__actoviqChatCopyResult);
+    assert.equal(copyResult?.timedOut, false, 'Ctrl+C should emit a copy event for selected chat text');
+    assert.ok(
+      String(copyResult?.text ?? '').includes(reply1),
+      `Ctrl+C should copy selected chat text; got ${JSON.stringify(String(copyResult?.text ?? '').slice(0, 120))}`,
+    );
+
     const summary = {
       ok: true,
       userRows,

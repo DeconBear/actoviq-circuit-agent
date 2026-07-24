@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, type MenuItemConstructorOptions } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildMenu } from './menu.js';
@@ -49,6 +49,25 @@ function createWindow(): void {
   const menu = buildMenu(mainWindow);
   Menu.setApplicationMenu(menu);
   mainWindow.setMenuBarVisibility(false);
+
+  // Native copy/paste context menu for selected text and editable fields
+  // (chat transcript, composer). Skip empty right-clicks so canvas menus win.
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const template: MenuItemConstructorOptions[] = [];
+    if (params.isEditable) {
+      template.push(
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { type: 'separator' },
+        { role: 'selectAll' },
+      );
+    } else if (params.selectionText?.trim()) {
+      template.push({ role: 'copy' });
+    }
+    if (template.length === 0 || !mainWindow) return;
+    Menu.buildFromTemplate(template).popup({ window: mainWindow });
+  });
 
   if (!app.isPackaged) {
     mainWindow.loadURL(process.env.ACTOVIQ_RENDERER_URL ?? 'http://127.0.0.1:5173');

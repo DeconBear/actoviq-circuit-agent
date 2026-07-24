@@ -6,6 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { useAppStore } from '../renderer/src/store/appStore.ts';
+import { mergeChatTranscript } from '../renderer/src/store/chatHistoryPersistence.ts';
 import type { ChatMessage } from '../renderer/src/types.ts';
 
 function msg(
@@ -89,10 +90,28 @@ function main(): void {
   assert.equal(patched.messages.length, 4);
   assert.match(patched.messages.find((entry) => entry.id === 'a2')?.content ?? '', /patched/);
 
+  // healActiveTranscript restores a wiped live buffer without appending.
+  useAppStore.setState({ messages: [] });
+  useAppStore.getState().healActiveTranscript();
+  assert.equal(useAppStore.getState().messages.length, 4);
+
+  // merge by id keeps both sides when each has unique turns.
+  const merged = mergeChatTranscript(
+    [msg({ id: 'u1', role: 'user', content: 'old' }), msg({ id: 'a1', role: 'assistant', content: 'reply' })],
+    [msg({ id: 'a1', role: 'assistant', content: 'reply patched' }), msg({ id: 'u2', role: 'user', content: 'next' })],
+  );
+  assert.equal(merged.length, 3);
+  assert.equal(merged.find((entry) => entry.id === 'a1')?.content, 'reply patched');
+  assert.ok(merged.some((entry) => entry.id === 'u2'));
+
+  // resetWorkflow must not orphan-wipe the live transcript.
+  useAppStore.getState().resetWorkflow();
+  assert.equal(useAppStore.getState().messages.length, 4, 'resetWorkflow should heal, not wipe history');
+
   console.log(JSON.stringify({
     ok: true,
     conversationId: cid,
-    messageCount: patched.messages.length,
+    messageCount: useAppStore.getState().messages.length,
   }));
 }
 

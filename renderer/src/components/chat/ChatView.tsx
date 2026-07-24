@@ -16,7 +16,12 @@ import {
   X,
 } from 'lucide-react';
 import { useAppStore } from '../../store/appStore';
-import { conversationsForProject, conversationHasContent } from '../../store/chatHistoryPersistence';
+import {
+  conversationBelongsToProjectScope,
+  conversationsForProject,
+  conversationHasContent,
+  mergeChatTranscript,
+} from '../../store/chatHistoryPersistence';
 import { CHAT_MODEL_TIER_OPTIONS, type ChatModelTier } from '../../modelTiers';
 import type { ChatMessage, ChatMessageTool } from '../../types';
 import { createSafeMarkdownParser, escapeHtml } from '../../utils/markdown';
@@ -82,18 +87,34 @@ function renderMarkdown(content: string): string {
 
 function ToolTimeline({ tools }: { tools: Array<ChatRunToolView | ChatMessageTool> }) {
   if (tools.length === 0) return null;
+  const running = tools.some((tool) => tool.status === 'running');
+  const done = tools.filter((tool) => tool.status === 'done').length;
+  const errored = tools.filter((tool) => tool.status === 'error').length;
+  const summary = running
+    ? `Running tools · ${tools.length}`
+    : errored > 0
+      ? `Tools · ${done} done · ${errored} failed`
+      : `Called ${tools.length} tool${tools.length === 1 ? '' : 's'}`;
+
   return (
-    <div className="chat-tool-list" data-testid="chat-tool-list" aria-label="Tool calls">
-      {tools.map((tool) => (
-        <div className={`chat-tool chat-tool--${tool.status}`} key={tool.id} title={tool.detail || tool.label || tool.name}>
-          <span className="chat-tool__icon" aria-hidden="true"><Wrench size={14} /></span>
-          <span className="chat-tool__name">{tool.name}</span>
-          <span className="chat-tool__label">{tool.label || tool.status}</span>
-          <span className="chat-tool__dot" aria-hidden="true" />
-          {tool.detail ? <span className="chat-tool__detail">{tool.detail}</span> : null}
-        </div>
-      ))}
-    </div>
+    <details className="chat-tool-group" data-testid="chat-tool-list" open={running || tools.length <= 3}>
+      <summary className="chat-tool-group__summary" aria-label="Tool calls">
+        <span className="chat-tool-group__icon" aria-hidden="true"><Wrench size={14} /></span>
+        <span className="chat-tool-group__title">{summary}</span>
+        {running ? <span className="chat-run-status__spinner" aria-hidden="true" /> : null}
+      </summary>
+      <div className="chat-tool-list">
+        {tools.map((tool) => (
+          <div className={`chat-tool chat-tool--${tool.status}`} key={tool.id} title={tool.detail || tool.label || tool.name}>
+            <span className="chat-tool__icon" aria-hidden="true"><Wrench size={14} /></span>
+            <span className="chat-tool__name">{tool.name}</span>
+            <span className="chat-tool__label">{tool.label || tool.status}</span>
+            <span className="chat-tool__dot" aria-hidden="true" />
+            {tool.detail ? <span className="chat-tool__detail">{tool.detail}</span> : null}
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -177,11 +198,11 @@ export function ChatView({
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeWorkspace = useAppStore((state) => state.activeWorkspace);
   const currentConversation = conversations.find((entry) => entry.id === conversationId);
-  // Canonical transcript: prefer the longer of live vs stored so a desynced
-  // `messages` wipe cannot hide earlier turns while conversationMessages still has them.
+  // Canonical transcript: merge live + stored by id so a wiped `messages`
+  // array cannot hide earlier turns while conversationMessages still has them.
   const transcriptMessages = useMemo(() => {
     const stored = conversationId ? (conversationMessages[conversationId] ?? []) : [];
-    return stored.length >= messages.length ? stored : messages;
+    return mergeChatTranscript(stored, messages);
   }, [conversationId, conversationMessages, messages]);
   const runIsActive = Boolean(run && ['starting', 'streaming', 'repairing'].includes(run.status));
   const selectedTier = CHAT_MODEL_TIER_OPTIONS.find((option) => option.id === modelTier)
@@ -192,12 +213,16 @@ export function ChatView({
     const query = historyQuery.trim().toLowerCase();
     const scoped = conversationsForProject(conversations, activeProjectId, conversationMessages);
     const current = conversations.find((entry) => entry.id === conversationId);
-    // Always keep the open thread visible in History, even before project binding catches up.
-    const merged = current && !scoped.some((entry) => entry.id === conversationId)
+    // Keep the open thread in History only when it belongs to this project scope
+    // (or is unscoped legacy). Never surface another project's conversation after a left-nav switch.
+    const merged = current
+      && conversationBelongsToProjectScope(current, activeProjectId)
+      && !scoped.some((entry) => entry.id === conversationId)
       ? [current, ...scoped]
       : scoped;
     const visible = merged.filter((entry) => (
-      conversationHasContent(entry, conversationMessages) || entry.id === conversationId
+      conversationHasContent(entry, conversationMessages)
+      || (entry.id === conversationId && conversationBelongsToProjectScope(entry, activeProjectId))
     ));
     if (!query) return visible;
     return visible.filter((entry) => (
@@ -209,23 +234,48 @@ export function ChatView({
   const projectConversations = useMemo(() => {
     const scoped = conversationsForProject(conversations, activeProjectId, conversationMessages);
     const current = conversations.find((entry) => entry.id === conversationId);
-    const merged = current && !scoped.some((entry) => entry.id === conversationId)
+    const merged = current
+      && conversationBelongsToProjectScope(current, activeProjectId)
+      && !scoped.some((entry) => entry.id === conversationId)
       ? [current, ...scoped]
       : scoped;
     return merged.filter((entry) => (
-      conversationHasContent(entry, conversationMessages) || entry.id === conversationId
+      conversationHasContent(entry, conversationMessages)
+      || (entry.id === conversationId && conversationBelongsToProjectScope(entry, activeProjectId))
     ));
   }, [activeProjectId, conversationId, conversationMessages, conversations]);
 
   const visibleMessages = useMemo(() => {
-    // While the live run panel shows tools/text, hide the empty assistant draft to avoid duplicates.
-    if (!runIsActive) return transcriptMessages;
-    return transcriptMessages.filter((msg) => !(
-      msg.role === 'assistant'
-      && !msg.content
-      && (msg.tools?.length ?? 0) > 0
-    ));
+    // While the live run panel shows tools/text, hide only the trailing empty
+    // assistant draft so prior turns (including tool-only replies) stay visible.
+    if (!runIsActive || transcriptMessages.length === 0) return transcriptMessages;
+    const last = transcriptMessages[transcriptMessages.length - 1];
+    if (last?.role === 'assistant' && !last.content) {
+      return transcriptMessages.slice(0, -1);
+    }
+    return transcriptMessages;
   }, [transcriptMessages, runIsActive]);
+
+  // Heal live store when stored history is longer (e.g. after project reload).
+  useEffect(() => {
+    if (!conversationId) return;
+    const stored = conversationMessages[conversationId] ?? [];
+    if (stored.length > messages.length) {
+      useAppStore.getState().healActiveTranscript();
+    }
+  }, [conversationId, conversationMessages, messages.length]);
+
+  // If the open conversation is bound to another project (stale after left-nav switch),
+  // snap Chat onto the active project session. Skip while a run is in flight so
+  // soft-bind-ahead-of-navigation does not tear down the live thread.
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const current = conversations.find((entry) => entry.id === conversationId);
+    if (!current?.projectId || current.projectId === activeProjectId) return;
+    if (isPending || runIsActive) return;
+    const nextId = useAppStore.getState().switchProjectChatContext(activeProjectId);
+    onConversationChange?.(nextId);
+  }, [activeProjectId, conversationId, conversations, isPending, onConversationChange, runIsActive]);
 
   const updateJumpVisibility = useCallback(() => {
     const el = messagesRef.current;
@@ -258,12 +308,13 @@ export function ChatView({
   }, []);
 
   useEffect(() => {
+    // AgentScope-style stickiness: only auto-scroll when the user is already near the bottom.
     if (!stickRef.current) {
       updateJumpVisibility();
       return;
     }
     jumpToBottom(runIsActive ? 'auto' : 'smooth');
-  }, [visibleMessages, outputText, run?.text, run?.thinking, run?.tools, runIsActive, jumpToBottom, updateJumpVisibility]);
+  }, [visibleMessages.length, outputText, run?.text, run?.thinking, run?.tools?.length, runIsActive, jumpToBottom, updateJumpVisibility]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -551,10 +602,16 @@ export function ChatView({
             </div>
           )}
 
-          {visibleMessages.map((message) => (
+          {visibleMessages.map((message, index) => (
             <article
               key={message.id}
-              className={`chat-message-row chat-message-row--${message.role === 'user' ? 'user' : 'assistant'}${message.isError ? ' chat-message-row--error' : ''}`}
+              className={[
+                'chat-message-row',
+                `chat-message-row--${message.role === 'user' ? 'user' : 'assistant'}`,
+                message.isError ? 'chat-message-row--error' : '',
+                message.role === 'user' && index > 0 ? 'chat-message-row--turn-start' : '',
+              ].filter(Boolean).join(' ')}
+              data-testid={message.role === 'user' ? 'chat-user-message' : 'chat-assistant-message'}
             >
               <div className="chat-message-row__meta">
                 <span>{message.role === 'user' ? 'You' : message.isError ? 'Actoviq · error' : 'Actoviq'}</span>
@@ -568,25 +625,31 @@ export function ChatView({
 
           {runIsActive && run && (
             <article className="chat-message-row chat-message-row--assistant chat-message-row--stream" data-testid="chat-streaming-message">
-              <div className="chat-run-status">
-                <span className="chat-run-status__spinner" />
-                <span>{run.label || (run.status === 'repairing' ? 'Validating response' : 'Thinking')}</span>
+              <div className="chat-message-row__meta">
+                <span>Actoviq</span>
+                <time>now</time>
               </div>
-              {run.thinking && (
-                <details className="chat-thinking" open>
-                  <summary>
-                    {runIsActive ? 'Thinking…' : `Thought · ${thinkingChars} chars`}
-                  </summary>
-                  <pre>{run.thinking}</pre>
-                </details>
-              )}
-              {run.text && (
-                <div
-                  className="chat-md-prose markdown-content chat-run-text is-streaming"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(run.text) }}
-                />
-              )}
-              {run.tools && run.tools.length > 0 ? <ToolTimeline tools={run.tools} /> : null}
+              <div className="chat-message-row__body chat-stream-card">
+                <div className="chat-run-status">
+                  <span className="chat-run-status__spinner" />
+                  <span>{run.label || (run.status === 'repairing' ? 'Validating response' : 'Thinking')}</span>
+                </div>
+                {run.thinking && (
+                  <details className="chat-thinking" open>
+                    <summary>
+                      {runIsActive ? 'Thinking…' : `Thought · ${thinkingChars} chars`}
+                    </summary>
+                    <pre>{run.thinking}</pre>
+                  </details>
+                )}
+                {run.tools && run.tools.length > 0 ? <ToolTimeline tools={run.tools} /> : null}
+                {run.text && (
+                  <div
+                    className="chat-md-prose markdown-content chat-run-text is-streaming"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(run.text) }}
+                  />
+                )}
+              </div>
             </article>
           )}
 

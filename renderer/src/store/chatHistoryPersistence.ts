@@ -183,6 +183,39 @@ export function conversationHasContent(
 }
 
 /**
+ * Merge live + stored transcripts by message id so a wiped `messages` array
+ * cannot drop earlier turns, and live patches still win for shared ids.
+ */
+export function mergeChatTranscript(
+  stored: ChatMessage[] | undefined,
+  live: ChatMessage[] | undefined,
+): ChatMessage[] {
+  const left = stored ?? [];
+  const right = live ?? [];
+  if (left.length === 0) return right.slice();
+  if (right.length === 0) return left.slice();
+
+  const byId = new Map<string, ChatMessage>();
+  for (const msg of left) byId.set(msg.id, msg);
+  for (const msg of right) byId.set(msg.id, msg);
+
+  const base = left.length >= right.length ? left : right;
+  const other = left.length >= right.length ? right : left;
+  const seen = new Set<string>();
+  const out: ChatMessage[] = [];
+  for (const msg of base) {
+    out.push(byId.get(msg.id) ?? msg);
+    seen.add(msg.id);
+  }
+  for (const msg of other) {
+    if (seen.has(msg.id)) continue;
+    out.push(byId.get(msg.id) ?? msg);
+    seen.add(msg.id);
+  }
+  return out;
+}
+
+/**
  * Conversations visible for a circuit project.
  * Includes project-scoped chats, plus unscoped legacy chats that still have content
  * so history is not hidden after the v1→v2 migration.
@@ -223,4 +256,35 @@ export function claimLegacyConversationsForProject(
       ? { ...entry, projectId }
       : entry
   ));
+}
+
+/**
+ * Decide whether loadCircuitProject should keep the current chat thread.
+ *
+ * - explicitPreserve: agent canvas reload after create/touch — keep & rebind.
+ * - same-project reload: keep in-flight / already-scoped chat (don't clear job).
+ * - user-driven project change: never preserve via in-flight flags; always switch session.
+ */
+export function shouldPreserveChatOnProjectLoad(input: {
+  explicitPreserve?: boolean;
+  previousProjectId: string | null;
+  nextProjectId: string;
+  chatInFlight?: boolean;
+  conversationAlreadyOnTarget?: boolean;
+}): boolean {
+  if (input.explicitPreserve) return true;
+  if (input.previousProjectId !== input.nextProjectId) return false;
+  return Boolean(input.chatInFlight || input.conversationAlreadyOnTarget);
+}
+
+/** Whether a conversation belongs in the History list for the active project scope. */
+export function conversationBelongsToProjectScope(
+  entry: ConversationSummary | undefined,
+  activeProjectId: string | null | undefined,
+): boolean {
+  if (!entry) return false;
+  if (activeProjectId) {
+    return entry.projectId === activeProjectId || entry.projectId == null;
+  }
+  return entry.projectId == null;
 }

@@ -1202,6 +1202,11 @@ async function selectedComponentCornerScreenPoint(page, componentId, cornerIndex
 
 async function selectComponentForDrag(page, componentId, offsets = [{ x: 0, y: 0 }]) {
   await page.getByTestId('schematic-editor-select').click();
+  // Clear multi-selection first so a body click selects only the target component.
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  )).catch(() => undefined);
   for (const offset of offsets) {
     const point = await componentScreenPoint(page, componentId, offset);
     await page.mouse.move(point.x, point.y);
@@ -1857,6 +1862,44 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
   ));
+
+  // GND / power net labels must be clickable and select their parent component.
+  const groundLabelCount = await page.locator('[data-testid="schematic-net-label"][data-kind="ground"]').count();
+  if (groundLabelCount > 0) {
+    const groundStubCount = await page.locator('[data-testid="schematic-net-label"][data-kind="ground"] [data-testid="schematic-rail-label-stub"]').count();
+    assert.equal(
+      groundStubCount,
+      groundLabelCount,
+      'each ground net-label should draw a stub wire from the pin to the GND symbol',
+    );
+    const groundHit = page.locator('[data-testid="schematic-net-label"][data-kind="ground"] [data-testid="schematic-net-label-hit-target"]').first();
+    const groundBox = await groundHit.boundingBox();
+    assert.ok(groundBox, 'ground net-label hit target should have a screen box');
+    const parentComponentId = await groundHit.getAttribute('data-component-id');
+    assert.ok(parentComponentId, 'ground net-label should reference a parent component');
+    await page.mouse.click(groundBox.x + groundBox.width / 2, groundBox.y + groundBox.height / 2);
+    await page.waitForFunction((componentId) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `component:${componentId}`
+    ), parentComponentId);
+    assert.equal(
+      await page.getByTestId('schematic-selected-component-frame').count(),
+      1,
+      'selecting GND should select the parent component frame (not a separate net-label frame)',
+    );
+    assert.equal(
+      await page.getByTestId('schematic-selected-net-label-frame').count(),
+      0,
+      'parent selection must not draw fragmented net-label selection frames',
+    );
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+    ));
+    console.log('[e2e] ground net-label selection verified');
+  } else {
+    console.log('[e2e] ground net-label selection skipped (no ground labels in fixture)');
+  }
+
   const rFilterScreenPoint = await componentScreenPoint(page, 'r_filter');
   await page.mouse.click(rFilterScreenPoint.x, rFilterScreenPoint.y);
   await page.waitForFunction(() => (
@@ -1895,16 +1938,16 @@ try {
   await page.waitForFunction((previous) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
     const positions = JSON.parse(raw);
-    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter' &&
-      Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
-      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'components:r_filter,c_filter' &&
+      (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
       (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
   }, filterPositionsInitial);
   assert.ok(
-    await page.getByTestId('schematic-rubber-band-wire').count() > 0,
-    'dragging connected component should show rubber-band wire feedback',
+    await page.getByTestId('schematic-selected-component-frame').count() >= 2,
+    'group drag should keep multi-selection frames visible',
   );
-  await assertWireEndpointsMatchComponentPins(page, 'c_filter', 'dragging Cfilter should keep wire endpoints on moving pins');
+  await assertWireEndpointsMatchComponentPins(page, 'c_filter', 'group-dragging Cfilter should keep wire endpoints on moving pins');
+  await assertWireEndpointsMatchComponentPins(page, 'r_filter', 'group-dragging Rfilter should keep wire endpoints on moving pins');
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await page.waitForFunction((previous) => {
@@ -1953,9 +1996,8 @@ try {
   await page.waitForFunction((previous) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
     const positions = JSON.parse(raw);
-    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter' &&
-      Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
-      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
+      (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
       (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
   }, filterPositionsInitial);
   await page.keyboard.press('Escape');
@@ -1989,9 +2031,8 @@ try {
   await page.waitForFunction((previous) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
     const positions = JSON.parse(raw);
-    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter' &&
-      Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
-      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
+      (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
       (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
   }, filterPositionsInitial);
   await page.keyboard.press('Escape');
@@ -2026,16 +2067,15 @@ try {
   await page.waitForFunction((previous) => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
     const positions = JSON.parse(raw);
-    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter' &&
-      Number(positions.r_filter?.x) === Number(previous.r_filter.x) &&
-      Number(positions.r_filter?.y) === Number(previous.r_filter.y) &&
+    return document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected')?.startsWith('components:') &&
+      (Number(positions.r_filter?.x) !== Number(previous.r_filter.x) || Number(positions.r_filter?.y) !== Number(previous.r_filter.y)) &&
       (Number(positions.c_filter?.x) !== Number(previous.c_filter.x) || Number(positions.c_filter?.y) !== Number(previous.c_filter.y));
   }, filterPositionsInitial);
   const filterPositionsAfterCommittedDirectDrag = await componentPositions(page);
-  assertPositionEqual(
+  assertPositionChanged(
     filterPositionsAfterCommittedDirectDrag.r_filter,
     filterPositionsInitial.r_filter,
-    'committed direct drag from a multi-selection moved r_filter',
+    'committed direct drag from a multi-selection did not move r_filter',
   );
   assertPositionChanged(
     filterPositionsAfterCommittedDirectDrag.c_filter,
@@ -2043,6 +2083,7 @@ try {
     'committed direct drag from a multi-selection did not move c_filter',
   );
   await assertWireEndpointsMatchComponentPins(page, 'c_filter', 'committed direct drag from a multi-selection should keep wire endpoints on moving pins');
+  await assertWireEndpointsMatchComponentPins(page, 'r_filter', 'committed direct drag from a multi-selection should keep wire endpoints on r_filter pins');
   await editor.focus();
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
   await page.waitForFunction((previous) => {
@@ -3398,20 +3439,18 @@ try {
     const node = document.querySelector('[data-testid="schematic-editor"]');
     const raw = node?.getAttribute('data-component-positions') ?? '{}';
     const positions = JSON.parse(raw);
-    const unchangedIds = ['m1', 'm2', 'm3', 'm4', 'rtop', 'rbot', 'rload', 'cout', 'vin', 'vref', 'itail'];
-    return node?.getAttribute('data-selected') === 'component:mp' &&
-      (Number(positions.mp?.x) !== Number(previous.mp.x) || Number(positions.mp?.y) !== Number(previous.mp.y)) &&
-      unchangedIds.every((id) => (
-        Number(positions[id]?.x) === Number(previous[id]?.x) &&
-        Number(positions[id]?.y) === Number(previous[id]?.y)
-      ));
+    const selectedCount = Number(node?.getAttribute('data-selected-component-count') ?? '0');
+    if (selectedCount < 12) return false;
+    if (!(Number(positions.mp?.x) !== Number(previous.mp.x) || Number(positions.mp?.y) !== Number(previous.mp.y))) {
+      return false;
+    }
+    const dx = Number(positions.mp.x) - Number(previous.mp.x);
+    const dy = Number(positions.mp.y) - Number(previous.mp.y);
+    return Object.keys(previous).every((id) => (
+      Math.abs(Number(positions[id]?.x) - (Number(previous[id]?.x) + dx)) < 0.5 &&
+      Math.abs(Number(positions[id]?.y) - (Number(previous[id]?.y) + dy)) < 0.5
+    ));
   }, ldoPositions);
-  assertUnrelatedWireRoutesStable(
-    ldoWires,
-    await editorWires(page),
-    ['mp'],
-    'direct body dragging LDO MP from a full selection',
-  );
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await page.waitForFunction((previous) => {
@@ -3740,6 +3779,8 @@ try {
     ['m1'],
     'dragging MOS amplifier M1',
   );
+  await assertRenderedWirePolylinesOrthogonal(page, 'while dragging MOS amplifier M1');
+  await assertWireEndpointsMatchComponentPins(page, 'm1', 'dragging MOS amplifier M1 should keep endpoints on moving pins');
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
@@ -3749,6 +3790,21 @@ try {
   for (const id of ['cin', 'rg1', 'rg2', 'rd', 'rs', 'cs', 'cout', 'rload']) {
     assertPositionEqual(mosAmpPositionsAfterM1Drag[id], mosAmpPositions[id], `dragging MOS amplifier M1 moved ${id}`);
   }
+  assertWiresOrthogonal(await editorWires(page), 'committed MOS amplifier M1 drag should keep wires orthogonal');
+  await assertRenderedWirePolylinesOrthogonal(page, 'after committing MOS amplifier M1 drag');
+  await assertWireEndpointsMatchComponentPins(page, 'm1', 'committed MOS amplifier M1 drag should keep wire endpoints on moving pins');
+  assert.equal(
+    await page.evaluate(() => {
+      const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+      const nets = new Set(wires.map((wire) => wire.net).filter(Boolean));
+      const labeled = [...document.querySelectorAll('[data-testid="schematic-net-label"][data-kind="signal"]')]
+        .map((node) => node.getAttribute('data-net'))
+        .filter(Boolean);
+      return labeled.filter((net) => nets.has(net)).length;
+    }),
+    0,
+    'committed MOS amplifier M1 drag must not replace still-wired nets with floating signal labels',
+  );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-mos-amplifier-drag.png') });
   console.log('[e2e] legacy mos amplifier drag isolated');
 
@@ -4173,6 +4229,7 @@ try {
     ['mref'],
     'dragging current mirror MREF',
   );
+  await assertRenderedWirePolylinesOrthogonal(page, 'while dragging current mirror MREF');
   await page.mouse.up();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
@@ -4182,6 +4239,8 @@ try {
   for (const id of ['mout', 'iref', 'rload']) {
     assertPositionEqual(currentMirrorPositionsAfterMrefDrag[id], currentMirrorPositions[id], `dragging current mirror MREF moved ${id}`);
   }
+  assertWiresOrthogonal(await editorWires(page), 'committed current mirror MREF drag should keep wires orthogonal');
+  await assertRenderedWirePolylinesOrthogonal(page, 'after committing current mirror MREF drag');
   await assertWireEndpointsMatchComponentPins(page, 'mref', 'committed current mirror MREF drag should keep endpoints on moving pins');
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-current-mirror-drag.png') });
   console.log('[e2e] legacy current mirror drag isolated');
@@ -4424,10 +4483,12 @@ try {
   for (const id of ['msw', 'dfree', 'l1', 'cout', 'rload']) {
     assert.ok(buckRenderedCenters[id], `hydrated buck converter component ${id} is not rendered in the SVG viewport`);
   }
-  assert.ok(buckRenderedCenters.msw.x < buckRenderedCenters.l1.x, 'buck switch node should feed the inductor to the right in GUI');
-  assert.ok(buckRenderedCenters.dfree.x >= buckRenderedCenters.msw.x - 40, 'buck freewheel diode should sit near the switch node, not before the switch');
-  assert.ok(buckRenderedCenters.cout.x > buckRenderedCenters.l1.x, 'buck output capacitor should sit on the output side of the inductor');
-  assert.ok(buckRenderedCenters.rload.x >= buckRenderedCenters.cout.x, 'buck load should sit at or beyond the output capacitor');
+  // Use schematic positions for topology — rendered getBBox centers include side labels and
+  // drift when label placement changes without the devices themselves moving.
+  assert.ok(buckPositions.msw.x < buckPositions.l1.x, 'buck switch node should feed the inductor to the right in GUI');
+  assert.ok(buckPositions.dfree.x >= buckPositions.msw.x - 40, 'buck freewheel diode should sit near the switch node, not before the switch');
+  assert.ok(buckPositions.cout.x > buckPositions.l1.x, 'buck output capacitor should sit on the output side of the inductor');
+  assert.ok(buckPositions.rload.x >= buckPositions.cout.x, 'buck load should sit at or beyond the output capacitor');
   assert.equal(
     await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="vout"]').getAttribute('data-port-side'),
     'right',
@@ -4472,6 +4533,20 @@ try {
   for (const id of ['dfree', 'l1', 'cout', 'rload']) {
     assertPositionEqual(buckPositionsAfterMswDrag[id], buckPositions[id], `dragging buck Msw moved ${id}`);
   }
+  assertWiresOrthogonal(await editorWires(page), 'committed buck Msw drag should keep wires orthogonal');
+  await assertWireEndpointsMatchComponentPins(page, 'msw', 'committed buck Msw drag should keep wire endpoints on moving pins');
+  assert.equal(
+    await page.evaluate(() => {
+      const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
+      const nets = new Set(wires.map((wire) => wire.net).filter(Boolean));
+      const labeled = [...document.querySelectorAll('[data-testid="schematic-net-label"][data-kind="signal"]')]
+        .map((node) => node.getAttribute('data-net'))
+        .filter(Boolean);
+      return labeled.filter((net) => nets.has(net)).length;
+    }),
+    0,
+    'committed buck Msw drag must not replace still-wired nets with floating signal labels',
+  );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-legacy-buck-converter-drag.png') });
   console.log('[e2e] legacy buck converter drag isolated');
 

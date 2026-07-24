@@ -32,6 +32,12 @@ Protocol loop (actoviq.project-agent.v2):
 6. Prefer reference_catalog_list / reference_insert_module / prepare_layout_from_reference before inventing topology.
 7. For pcb_schematic part selection, use lcsc_search / lcsc_bind. For analog_ic, run analog_ic_audit before simulation.
 
+apply_circuit_command operations MUST be flat objects with an "op" field, e.g.
+{"op":"upsert_module_netlist","module_id":"power_stage","name":"Power Stage","netlist_notebook":"..."}.
+Do NOT nest as {"upsert_module":{...}} or {"add_component":{...}} — that fails apply and leaves 0 modules on the canvas.
+Prefer upsert_module_netlist (netlist_notebook as a single string) over many add_component calls.
+After apply, verify tool JSON shows ok/revision/module count before claiming the canvas has modules.
+
 Module composition (default for desktop canvas):
 - Prefer functional modules: stimuli / cores / encode-load, then add_port + connect_ports.
 - A single upsert_module_netlist is ONLY for trivial paths (about ≤8 devices, one signal chain).

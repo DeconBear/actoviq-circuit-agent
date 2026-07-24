@@ -31,6 +31,56 @@ function textResult(payload: Record<string, unknown>): string {
   return summarizeToolResult(payload);
 }
 
+const NESTED_OPERATION_NAMES = new Set([
+  'restore_revision',
+  'upsert_module',
+  'remove_module',
+  'add_component',
+  'remove_component',
+  'add_port',
+  'move_module',
+  'resize_module',
+  'set_module_note',
+  'set_module_preview',
+  'set_module_metadata',
+  'set_analog_ic_profile',
+  'set_component_value',
+  'move_component',
+  'upsert_module_netlist',
+  'set_module_schematic',
+  'set_module_netlist',
+  'bind_lcsc_part',
+  'move_schematic_item',
+  'reset_schematic_item',
+  'connect_ports',
+  'set_connection_network',
+  'connect_pins',
+]);
+
+/** Flatten LLM nestings like {upsert_module:{...}} into {op, ...}. */
+export function normalizeDesktopOperation(operation: Record<string, unknown>): Record<string, unknown> {
+  const op = operation.op;
+  if (typeof op === 'string' && op.trim()) return operation;
+  const alt = operation.operation;
+  if (typeof alt === 'string' && alt.trim()) {
+    const { operation: _drop, ...rest } = operation;
+    return { op: alt.trim(), ...rest };
+  }
+  const nestedKeys = Object.keys(operation).filter(
+    (key) => NESTED_OPERATION_NAMES.has(key) && operation[key] && typeof operation[key] === 'object' && !Array.isArray(operation[key]),
+  );
+  if (nestedKeys.length === 1) {
+    const key = nestedKeys[0]!;
+    return { op: key, ...(operation[key] as Record<string, unknown>) };
+  }
+  if (nestedKeys.length > 1) {
+    throw new Error(
+      `operation nests multiple ops ${nestedKeys.join(', ')}; use one flat {op, ...} object per array entry`,
+    );
+  }
+  return operation;
+}
+
 async function run(args: string[], timeoutMs?: number): Promise<string> {
   const result = await runProjectTool(args, timeoutMs ? { timeoutMs } : undefined);
   return textResult(result);
@@ -126,6 +176,8 @@ export function createDesktopCircuitTools(options: DesktopCircuitToolsOptions = 
         description: [
           'Apply one actoviq.command.v1 transaction to a project.',
           'Provide either command (full object) or operations + base_revision + message.',
+          'Each operation MUST be flat: {"op":"upsert_module_netlist","module_id":"...","netlist_notebook":"..."}',
+          'Do not nest as {"upsert_module":{...}}. Prefer upsert_module_netlist with a string notebook.',
           'Never invent base_revision — read it from agent_context first.',
         ].join(' '),
         inputSchema: z.object({
@@ -156,6 +208,13 @@ export function createDesktopCircuitTools(options: DesktopCircuitToolsOptions = 
             base_revision: input.base_revision,
             message: input.message || 'Desktop agent transaction',
             operations: input.operations,
+          };
+        }
+        // Defense in depth: flatten LLM nested ops before writing the command file.
+        if (Array.isArray(command.operations)) {
+          command = {
+            ...command,
+            operations: (command.operations as Record<string, unknown>[]).map(normalizeDesktopOperation),
           };
         }
         const dir = path.join(tmpdir(), 'actoviq-desktop-commands');

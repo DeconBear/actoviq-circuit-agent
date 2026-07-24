@@ -14,7 +14,11 @@ import { SetupWizard } from './components/settings/SetupWizard';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AppToolbar, type AppToolbarAction } from './components/layout/AppToolbar';
 import { useAppStore, type SimulationMetric, type TabKey } from './store/appStore';
-import { loadPersistedChatHistory, persistChatHistory } from './store/chatHistoryPersistence';
+import {
+  loadPersistedChatHistory,
+  persistChatHistory,
+  shouldPreserveChatOnProjectLoad,
+} from './store/chatHistoryPersistence';
 import type { ChatMessageTool, CircuitTrashItem, DesktopAgentEvent, ModuleManifest, ProjectKind, StageDef } from './types';
 import type { ChatModelTier } from './modelTiers';
 import type { ChatRunToolView } from './components/chat/ChatView';
@@ -183,20 +187,27 @@ export function App() {
     return null;
   }
 
+  const chatHistoryReadyRef = useRef(false);
+
   useEffect(() => {
     const saved = loadPersistedChatHistory();
-    if (!saved || saved.conversations.length === 0) return;
-    useAppStore.getState().hydrateChatHistory({
-      conversationId: saved.conversationId,
-      conversations: saved.conversations,
-      conversationMessages: saved.conversationMessages,
-      activeConversationByProject: saved.activeConversationByProject,
-    });
+    if (saved && saved.conversations.length > 0) {
+      useAppStore.getState().hydrateChatHistory({
+        conversationId: saved.conversationId,
+        conversations: saved.conversations,
+        conversationMessages: saved.conversationMessages,
+        activeConversationByProject: saved.activeConversationByProject,
+      });
+    }
+    // Mark ready after hydrate so the persist subscriber cannot overwrite
+    // localStorage with the empty pre-hydrate store snapshot.
+    chatHistoryReadyRef.current = true;
   }, []);
 
   useEffect(() => {
     let timer: number | undefined;
     const unsubscribe = useAppStore.subscribe((state) => {
+      if (!chatHistoryReadyRef.current) return;
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         persistChatHistory({
@@ -493,12 +504,18 @@ export function App() {
     const state = useAppStore.getState();
     const previousProjectId = state.activeProjectId;
     const activeConversation = state.conversations.find((entry) => entry.id === state.conversationId);
-    // Keep the ReAct thread visible when chat is in flight, caller asks to preserve,
-    // or the open conversation is already bound to this project (reload / sidebar re-click).
-    const preserveChat = Boolean(options?.preserveChat)
-      || Boolean(activeChatConversationRef.current)
-      || isChatPendingRef.current
-      || Boolean(activeConversation?.projectId && activeConversation.projectId === projectId);
+    // User left-nav project switches always change chat sessions.
+    // Only explicit preserveChat (agent follow-into-new-project) keeps the thread
+    // across a project id change. Same-project reloads still keep in-flight chat.
+    const preserveChat = shouldPreserveChatOnProjectLoad({
+      explicitPreserve: options?.preserveChat,
+      previousProjectId,
+      nextProjectId: projectId,
+      chatInFlight: Boolean(activeChatConversationRef.current) || isChatPendingRef.current,
+      conversationAlreadyOnTarget: Boolean(
+        activeConversation?.projectId && activeConversation.projectId === projectId,
+      ),
+    });
     state.setCircuitBusy(true);
     state.setCircuitError('');
     state.setActiveProjectId(projectId);
@@ -531,10 +548,14 @@ export function App() {
       }
     }
     if (openDesign) state.setActiveTab('design');
+    // Heal any live/stored transcript desync before canvas IO so ChatView
+    // never briefly renders only the latest turn after a project reload.
+    useAppStore.getState().healActiveTranscript();
     try {
       const bundle = await window.electronAPI.getCircuitProject(projectId);
       if (requestId !== circuitLoadRequestRef.current) return;
       const latest = useAppStore.getState();
+      latest.healActiveTranscript();
       latest.setCircuitProject(bundle);
       latest.setActiveModuleId(
         bundle.project.modules.some((module) => module.id === latest.activeModuleId)
@@ -1317,6 +1338,7 @@ export function App() {
         {store.chatOpen && (
           <div
             className="av-chat-drawer"
+            data-testid="chat-drawer"
             style={{ ...styles.chatDrawer, '--av-chat-width': `${chatWidth}px` } as React.CSSProperties}
           >
             <div
@@ -1481,17 +1503,16 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
   chatDrawer: {
-    position: 'absolute',
-    top: 'var(--av-toolbar-height)',
-    right: 0,
+    position: 'relative',
+    flex: '0 0 auto',
+    alignSelf: 'stretch',
     minWidth: 0,
-    height: 'calc(100% - var(--av-toolbar-height))',
+    height: '100%',
     backgroundColor: 'var(--av-surface-raised, #ffffff)',
     borderLeft: '1px solid var(--av-stroke, #dfe3e8)',
     display: 'flex',
     flexDirection: 'column',
-    boxShadow: '-8px 0 24px rgba(32,42,56,0.12)',
-    zIndex: 20,
+    zIndex: 2,
   },
   chatResizeHandle: {
     position: 'absolute',
@@ -1505,6 +1526,9 @@ const styles: Record<string, React.CSSProperties> = {
   chatDrawerBody: {
     flex: 1,
     minHeight: 0,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
   },
   dragHandle: {
     width: 4,

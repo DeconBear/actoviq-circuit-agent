@@ -1585,6 +1585,62 @@ def resolve_module_canvas_position(
     }
 
 
+# Ops that LLMs often nest as {"upsert_module": {...}} instead of {"op":"upsert_module", ...}.
+NESTED_OPERATION_NAMES = frozenset({
+    "restore_revision",
+    "upsert_module",
+    "remove_module",
+    "add_component",
+    "remove_component",
+    "add_port",
+    "move_module",
+    "resize_module",
+    "set_module_note",
+    "set_module_preview",
+    "set_module_metadata",
+    "set_analog_ic_profile",
+    "set_component_value",
+    "move_component",
+    "upsert_module_netlist",
+    "set_module_schematic",
+    "set_module_netlist",
+    "bind_lcsc_part",
+    "move_schematic_item",
+    "reset_schematic_item",
+    "connect_ports",
+    "set_connection_network",
+    "connect_pins",
+})
+
+
+def normalize_operation(operation: Any) -> dict[str, Any]:
+    """Accept flat {op,...} and common LLM nestings; return a flat operation dict."""
+    if not isinstance(operation, dict):
+        raise ValueError("operation must be an object")
+    op = operation.get("op")
+    if isinstance(op, str) and op.strip():
+        return operation
+    # {"operation": "upsert_module", "module_id": ...}
+    alt = operation.get("operation")
+    if isinstance(alt, str) and alt.strip():
+        rest = {key: value for key, value in operation.items() if key != "operation"}
+        return {"op": alt.strip(), **rest}
+    # {"upsert_module": {"module_id": ...}} or {"upsert_module_netlist": {...}}
+    nested_keys = [
+        key for key, value in operation.items()
+        if key in NESTED_OPERATION_NAMES and isinstance(value, dict)
+    ]
+    if len(nested_keys) == 1:
+        key = nested_keys[0]
+        return {"op": key, **operation[key]}
+    if len(nested_keys) > 1:
+        raise ValueError(
+            "operation object nests multiple ops "
+            f"{nested_keys}; use one flat {{op, ...}} object per array entry"
+        )
+    return operation
+
+
 def apply_operation(
     root: Path,
     project: dict[str, Any],
@@ -1594,6 +1650,7 @@ def apply_operation(
     schematic_override_writes: dict[str, dict[str, Any]],
     notebook_writes: dict[str, str | None],
 ) -> None:
+    operation = normalize_operation(operation)
     op = operation.get("op")
     if op == "restore_revision":
         target_revision = int(operation.get("revision", -1))

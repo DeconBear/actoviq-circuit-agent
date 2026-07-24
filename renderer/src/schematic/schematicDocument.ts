@@ -56,7 +56,9 @@ export interface SchematicNetLabel {
   kind: 'power' | 'ground' | 'signal';
   net: string;
   name: string;
+  /** Symbol / text anchor (offset from the pin for rail labels). */
   position: CircuitPosition;
+  /** Pin or port attachment point that the stub wire connects to. */
   endpoint: CircuitWireEndpoint;
   side?: 'left' | 'right' | 'top' | 'bottom';
 }
@@ -2367,6 +2369,40 @@ export function componentBounds(component: CircuitComponent): SchematicBounds {
   };
 }
 
+/** Hit / marquee bounds for power / ground / signal net-label artwork. */
+export function netLabelBounds(label: SchematicNetLabel): SchematicBounds {
+  const { position, endpoint } = label;
+  if (label.kind === 'ground') {
+    return {
+      minX: Math.min(position.x, endpoint.x) - 24,
+      minY: Math.min(position.y, endpoint.y) - 4,
+      maxX: Math.max(position.x, endpoint.x) + 24,
+      maxY: Math.max(position.y + 42, endpoint.y),
+    };
+  }
+  if (label.kind === 'power') {
+    return {
+      minX: Math.min(position.x, endpoint.x) - 24,
+      minY: Math.min(position.y - 24, endpoint.y),
+      maxX: Math.max(position.x, endpoint.x) + 24,
+      maxY: Math.max(position.y, endpoint.y) + 6,
+    };
+  }
+  const side = label.side ?? 'right';
+  const stub = 34;
+  const endX = position.x + (side === 'left' ? -stub : side === 'right' ? stub : 0);
+  const endY = position.y + (side === 'top' ? -stub : side === 'bottom' ? stub : 0);
+  return {
+    minX: Math.min(position.x, endX, endpoint.x) - 28,
+    minY: Math.min(position.y, endY, endpoint.y) - 18,
+    maxX: Math.max(position.x, endX, endpoint.x) + 28,
+    maxY: Math.max(position.y, endY, endpoint.y) + 18,
+  };
+}
+
+/** Length of the drawn stub between a rail pin and its local GND/VDD symbol. */
+export const RAIL_LABEL_STUB = SCHEMATIC_GRID * 2;
+
 function pinPointsByNetName(module: CircuitModule): Map<string, CircuitPosition[]> {
   const points = new Map<string, CircuitPosition[]>();
   for (const component of module.components) {
@@ -3611,14 +3647,28 @@ function syncWireEndpointPoints(
   if (points.length < 2) {
     return rerouteWire(module, wire, portPositions);
   }
-  points[0] = start;
-  points[points.length - 1] = end;
+  const oldStart = points[0];
+  const oldEnd = points[points.length - 1];
+  // Component/port moves leave stored paths anchored to stale endpoints. Stretching only the
+  // first/last vertex (rubber-band sync) creates diagonals that cut through symbols/labels.
+  // When either pin drifted, rebuild a Manhattan route instead of preserving midpoints.
+  if (routeEndpointDrifted(oldStart, start) || routeEndpointDrifted(oldEnd, end)) {
+    return rerouteWire(module, wire, portPositions);
+  }
   return {
     ...wire,
     from: wire.from ? { ...wire.from, x: start.x, y: start.y } : wire.from,
     to: wire.to ? { ...wire.to, x: end.x, y: end.y } : wire.to,
     points: compactRoute(points),
   };
+}
+
+function routeEndpointDrifted(
+  pathPoint: CircuitPosition | undefined,
+  resolved: CircuitPosition,
+): boolean {
+  if (!pathPoint) return true;
+  return Math.abs(pathPoint.x - resolved.x) > 0.5 || Math.abs(pathPoint.y - resolved.y) > 0.5;
 }
 
 export function rerouteStoredWires(
@@ -3982,6 +4032,8 @@ function materializeNetWires(
 
   for (const component of module.components) {
     component.pins.forEach((pin, index) => {
+      // Body/bulk pins sit inside the MOSFET artwork; wiring them creates loops through the symbol.
+      if (isMosBodyPin(component, pin)) return;
       const point = pinWorld(component, pin, index);
       remember(pin.net, {
         kind: 'pin',
@@ -4287,6 +4339,7 @@ function createNetLabels(module: CircuitModule, portPositions: Map<string, Circu
 
   for (const component of module.components) {
     component.pins.forEach((pin, index) => {
+      if (isMosBodyPin(component, pin)) return;
       const position = pinWorld(component, pin, index);
       remember(pin.net, {
         kind: 'pin',
@@ -4299,12 +4352,17 @@ function createNetLabels(module: CircuitModule, portPositions: Map<string, Circu
       });
       if (!shouldRepresentNetWithLocalLabel(module, pin.net)) return;
       if (!shouldLabelRailPin(component, pin)) return;
+      const kind = isGroundNet(pin.net, module) ? 'ground' : 'power';
+      const stub = RAIL_LABEL_STUB;
+      const symbolPosition = kind === 'ground'
+        ? { x: position.x, y: position.y + stub }
+        : { x: position.x, y: position.y - stub };
       labels.push({
         id: `label_${wireIdToken(pin.net)}_${component.id}_${pin.id}`,
-        kind: isGroundNet(pin.net, module) ? 'ground' : 'power',
+        kind,
         net: pin.net,
         name: railLabelName(module, pin.net),
-        position,
+        position: symbolPosition,
         endpoint: {
           x: position.x,
           y: position.y,
@@ -4379,14 +4437,56 @@ function shouldRepresentSignalNetWithLocalLabel(module: CircuitModule, net: stri
   if (isCmosRingSignalNet(module, net)) return false;
   if (isCurrentMirrorGateNet(module, net)) return false;
   if (isCascodeBiasNet(module, net)) return true;
-  const xs = endpoints.map((endpoint) => endpoint.x);
-  const ys = endpoints.map((endpoint) => endpoint.y);
+  // Stored physical wires win. After a drag commit we persist touched routes; emitting local
+  // labels for the same nets leaves duplicate floating stubs beside the kept wires.
+  if ((module.wires ?? []).some((wire) => wire.net === net && (wire.points ?? []).length >= 2)) {
+    return false;
+  }
+  const uniqueEndpoints = uniqueNetEndpoints(endpoints);
+  if (uniqueEndpoints.length < 2) return false;
+  const xs = uniqueEndpoints.map((endpoint) => endpoint.x);
+  const ys = uniqueEndpoints.map((endpoint) => endpoint.y);
   const spanX = Math.max(...xs) - Math.min(...xs);
   const spanY = Math.max(...ys) - Math.min(...ys);
   if (isLdoInternalLabelNet(module, net)) {
     return spanX > 360 || spanY > 340;
   }
+  // MOSFET switch / phase nodes must stay as continuous wires. Promoting them to local
+  // labels after a manual drag leaves floating stubs (orphan "SW" segments).
+  if (isSwitchStageSignalNet(module, net, uniqueEndpoints)) return false;
   return spanX > 260 || spanY > 180;
+}
+
+function uniqueNetEndpoints(endpoints: EndpointHit[]): EndpointHit[] {
+  return endpoints.filter((endpoint, index) => (
+    endpoints.findIndex((candidate) => distance(endpointDrawPoint(endpoint), endpointDrawPoint(candidate)) < 1) === index
+  ));
+}
+
+/** Compact power-stage switch nodes (e.g. SW between high/low-side MOS drains). */
+function isSwitchStageSignalNet(
+  module: CircuitModule,
+  net: string,
+  endpoints: EndpointHit[],
+): boolean {
+  if (endpoints.length > 4) return false;
+  if (/^(sw|switch|ph|phase|lx|vsw|mid|node_?sw)$/i.test(net)) return true;
+  const mosDrainOwners = new Set<string>();
+  for (const component of module.components) {
+    if (component.type !== 'M') continue;
+    for (const pin of component.pins) {
+      if (pin.net !== net) continue;
+      if (!/drain|\bd\b/i.test(`${pin.id} ${pin.name}`)) continue;
+      mosDrainOwners.add(component.id);
+    }
+  }
+  return mosDrainOwners.size >= 2;
+}
+
+/** MOSFET body/bulk terminal — drawn inside the symbol, not a schematic wiring endpoint. */
+export function isMosBodyPin(component: CircuitComponent, pin: CircuitPin): boolean {
+  if (component.type !== 'M') return false;
+  return /body|bulk|\bb\b/i.test(`${pin.id} ${pin.name}`);
 }
 
 function isCmosRingSignalNet(module: CircuitModule, net: string): boolean {

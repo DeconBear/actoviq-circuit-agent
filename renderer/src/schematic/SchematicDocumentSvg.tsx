@@ -8,6 +8,7 @@ import {
   isPmosComponent,
   isGroundPort,
   isSchematicPortVisible,
+  netLabelBounds,
   pinWorld,
   portInteractionBounds,
   portRenderSide,
@@ -197,6 +198,9 @@ export function SchematicDocumentSvg({
       </g>
       <g data-layer="net-labels">
         {document.netLabels.map((label) => (
+          // Net-label hit targets still select the parent component, but selection/hover
+          // chrome stays on the component frame only — extra dashed boxes around every
+          // attached GND/VDD stub made dense MOS stages look fragmented.
           <NetLabelSymbol key={label.id} label={label} />
         ))}
       </g>
@@ -348,20 +352,48 @@ function MarqueeRect({ bounds }: { bounds: SchematicBounds }) {
 }
 
 function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
-  const { position } = label;
-  const nameY = label.kind === 'power' ? position.y - 52 : position.y + 54;
+  const { position, endpoint } = label;
+  const nameY = label.kind === 'power' ? position.y - 18 : position.y + 54;
+  const hit = netLabelBounds(label);
   if (label.kind === 'signal') {
     return <SignalNetLabelSymbol label={label} />;
   }
+  const hasStub = Math.abs(endpoint.x - position.x) > 0.5 || Math.abs(endpoint.y - position.y) > 0.5;
   return (
     <g
       data-testid="schematic-net-label"
       data-net-label-id={label.id}
       data-net={label.net}
       data-kind={label.kind}
-      pointerEvents="none"
+      data-component-id={label.endpoint.component_id || undefined}
+      data-pin-id={label.endpoint.pin_id || undefined}
     >
-      {label.kind === 'ground' ? <GroundSymbol position={position} /> : <PowerFlagSymbol position={position} />}
+      <rect
+        x={hit.minX}
+        y={hit.minY}
+        width={Math.max(1, hit.maxX - hit.minX)}
+        height={Math.max(1, hit.maxY - hit.minY)}
+        fill="transparent"
+        pointerEvents="all"
+        data-testid="schematic-net-label-hit-target"
+        data-net-label-id={label.id}
+        data-component-id={label.endpoint.component_id || undefined}
+      />
+      {hasStub ? (
+        <line
+          x1={endpoint.x}
+          y1={endpoint.y}
+          x2={position.x}
+          y2={position.y}
+          stroke={WIRE_COLOR}
+          strokeWidth={WIRE_STROKE}
+          pointerEvents="none"
+          data-testid="schematic-rail-label-stub"
+        />
+      ) : null}
+      {label.kind === 'ground'
+        ? <GroundSymbol position={position} />
+        : <PowerFlagSymbol position={position} includeLead={false} />}
       <text
         x={position.x}
         y={nameY}
@@ -373,6 +405,7 @@ function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
         stroke={LABEL_HALO_COLOR}
         strokeWidth="3"
         paintOrder="stroke"
+        pointerEvents="none"
         data-testid="schematic-net-label-text"
       >
         {label.name}
@@ -390,14 +423,27 @@ function SignalNetLabelSymbol({ label }: { label: SchematicNetLabel }) {
     y: position.y + (side === 'top' ? -stubLength : side === 'bottom' ? stubLength : 0),
   };
   const text = signalLabelTextPosition(end, side);
+  const hit = netLabelBounds(label);
   return (
     <g
       data-testid="schematic-net-label"
       data-net-label-id={label.id}
       data-net={label.net}
       data-kind={label.kind}
-      pointerEvents="none"
+      data-component-id={label.endpoint.component_id || undefined}
+      data-pin-id={label.endpoint.pin_id || undefined}
     >
+      <rect
+        x={hit.minX}
+        y={hit.minY}
+        width={Math.max(1, hit.maxX - hit.minX)}
+        height={Math.max(1, hit.maxY - hit.minY)}
+        fill="transparent"
+        pointerEvents="all"
+        data-testid="schematic-net-label-hit-target"
+        data-net-label-id={label.id}
+        data-component-id={label.endpoint.component_id || undefined}
+      />
       <line
         x1={position.x}
         y1={position.y}
@@ -405,8 +451,9 @@ function SignalNetLabelSymbol({ label }: { label: SchematicNetLabel }) {
         y2={end.y}
         stroke={WIRE_COLOR}
         strokeWidth={WIRE_STROKE}
+        pointerEvents="none"
       />
-      <circle cx={position.x} cy={position.y} r="3.8" fill="#9aa3ad" stroke="#ffffff" strokeWidth="1" />
+      <circle cx={position.x} cy={position.y} r="3.8" fill="#9aa3ad" stroke="#ffffff" strokeWidth="1" pointerEvents="none" />
       <text
         x={text.x}
         y={text.y}
@@ -418,6 +465,7 @@ function SignalNetLabelSymbol({ label }: { label: SchematicNetLabel }) {
         stroke={LABEL_HALO_COLOR}
         strokeWidth="3"
         paintOrder="stroke"
+        pointerEvents="none"
         data-testid="schematic-net-label-text"
       >
         {label.name}
@@ -447,7 +495,7 @@ function WirePath({ wire, selected, hovered, rubberBand }: { wire: CircuitWire; 
         points={points}
         fill="none"
         stroke="transparent"
-        strokeWidth="16"
+        strokeWidth="10"
         strokeLinecap="round"
         strokeLinejoin="round"
         data-wire-hitbox="true"
@@ -457,11 +505,11 @@ function WirePath({ wire, selected, hovered, rubberBand }: { wire: CircuitWire; 
           points={points}
           fill="none"
           stroke="#22c55e"
-          strokeWidth="12"
+          strokeWidth="5"
           strokeLinecap="round"
           strokeLinejoin="round"
-          strokeDasharray="14 9"
-          opacity="0.28"
+          strokeDasharray="10 8"
+          opacity="0.35"
           pointerEvents="none"
           data-testid="schematic-rubber-band-wire"
         />
@@ -585,8 +633,9 @@ function ComponentSymbol({ component, selected, hovered }: { component: CircuitC
           paintOrder="stroke"
           pointerEvents="none"
           data-testid="schematic-component-value-label"
+          data-full-value={component.value}
         >
-          {component.value}
+          {displayComponentValue(component.value)}
         </text>
       ) : null}
     </g>
@@ -623,7 +672,7 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
     { x: bounds.minX - inset, y: bounds.maxY + inset },
   ];
   return (
-    <g data-testid="schematic-selected-component-handles" pointerEvents="none">
+    <g data-testid="schematic-selected-component-handles">
       <rect
         x={bounds.minX - inset}
         y={bounds.minY - inset}
@@ -634,7 +683,7 @@ function ComponentSelectionHandles({ bounds }: { bounds: ReturnType<typeof compo
         stroke={COMPONENT_SELECTION_COLOR}
         strokeWidth="1.8"
         strokeDasharray="8 6"
-        pointerEvents="none"
+        pointerEvents="all"
         data-testid="schematic-selected-component-frame"
         data-selection-kind="component"
         data-selection-shape="frame"
@@ -682,13 +731,22 @@ function componentLabelPositions(component: CircuitComponent): {
   const { x, y } = component.position;
   const rotation = ((component.rotation ?? 0) % 360 + 360) % 360;
   const isVerticalTwoPin = component.pins.length === 2 && (rotation === 90 || rotation === 270);
+  // Gate-drive V/I sources sit left of MOSFET gates. Keep their text on the upper-left so
+  // long PULSE(...) strings do not collide with the local GND stub under the negative pin.
   if (isVerticalTwoPin) {
     return {
-      name: { x: x + 46, y: y - 22, anchor: 'start' },
-      value: { x: x + 46, y: y + 24, anchor: 'start' },
+      name: { x: x - 46, y: y - 28, anchor: 'end' },
+      value: { x: x - 46, y: y - 6, anchor: 'end' },
     };
   }
-  const isActive = component.type === 'M' || component.type === 'Q' || component.type === 'E';
+  if (component.type === 'M') {
+    // Name above the outline; value to the right of the channel so bottom rail stubs stay clear
+    // and side-by-side MOS stages do not stack value text on neighboring gate drivers.
+    return {
+      name: { x, y: y - 66, anchor: 'middle' },
+      value: { x: x + 52, y: y + 8, anchor: 'start' },
+    };
+  }
   if (component.type === 'Q') {
     return {
       name: { x: x + 52, y: y - 52, anchor: 'start' },
@@ -708,10 +766,32 @@ function componentLabelPositions(component: CircuitComponent): {
       value: { x, y, anchor: 'middle' },
     };
   }
+  if ((component.type === 'V' || component.type === 'I') && (component.value ?? '').length > 14) {
+    return {
+      name: { x: x + 46, y: y - 22, anchor: 'start' },
+      value: { x: x + 46, y: y + 24, anchor: 'start' },
+    };
+  }
   return {
-    name: { x, y: y - (isActive ? 68 : 42), anchor: 'middle' },
-    value: { x, y: y + (isActive ? 74 : 44), anchor: 'middle' },
+    name: { x, y: y - 42, anchor: 'middle' },
+    value: { x, y: y + 44, anchor: 'middle' },
   };
+}
+
+/** Compact long SPICE sources so canvas labels stay readable without changing stored values. */
+function displayComponentValue(value: string | undefined): string {
+  const text = (value ?? '').trim();
+  if (!text) return '';
+  if (text.length <= 22) return text;
+  const pulse = text.match(/^PULSE\s*\(/i);
+  if (pulse) return 'PULSE(...)';
+  const pwl = text.match(/^PWL\s*\(/i);
+  if (pwl) return 'PWL(...)';
+  const sin = text.match(/^SIN\s*\(/i);
+  if (sin) return 'SIN(...)';
+  const exp = text.match(/^EXP\s*\(/i);
+  if (exp) return 'EXP(...)';
+  return `${text.slice(0, 20)}…`;
 }
 
 function LeadLines({ component }: { component: CircuitComponent }) {
@@ -1083,12 +1163,22 @@ function PortSymbol({ position, side }: { position: CircuitPosition; side: 'left
   return <polygon points={points.join(' ')} fill="#fff" stroke={SYMBOL_COLOR} strokeWidth="2" pointerEvents="none" />;
 }
 
-function PowerFlagSymbol({ position }: { position: CircuitPosition }) {
+function PowerFlagSymbol({
+  position,
+  includeLead = true,
+}: {
+  position: CircuitPosition;
+  /** When false, the pin→flag stub is drawn separately (rail net labels). */
+  includeLead?: boolean;
+}) {
+  const barY = includeLead ? position.y - 34 : position.y;
   return (
     <g fill="none" pointerEvents="none">
-      <line x1={position.x} y1={position.y} x2={position.x} y2={position.y - 34} stroke={WIRE_COLOR} strokeWidth="2.4" />
-      <line x1={position.x - 18} y1={position.y - 34} x2={position.x + 18} y2={position.y - 34} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
-      <line x1={position.x} y1={position.y - 34} x2={position.x} y2={position.y - 46} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
+      {includeLead ? (
+        <line x1={position.x} y1={position.y} x2={position.x} y2={barY} stroke={WIRE_COLOR} strokeWidth="2.4" />
+      ) : null}
+      <line x1={position.x - 18} y1={barY} x2={position.x + 18} y2={barY} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
+      <line x1={position.x} y1={barY} x2={position.x} y2={barY - 12} stroke={SYMBOL_COLOR} strokeWidth="2.4" />
     </g>
   );
 }
@@ -1157,6 +1247,7 @@ export function junctions(document: SchematicDocument): RenderedJunction[] {
   }
   for (const component of document.module?.components ?? []) {
     component.pins.forEach((pin, index) => {
+      if (component.type === 'M' && /body|bulk|\bb\b/i.test(`${pin.id} ${pin.name}`)) return;
       const net = pin.net ?? '';
       const netKey = pin.net_id ?? net;
       if (!netKey) return;

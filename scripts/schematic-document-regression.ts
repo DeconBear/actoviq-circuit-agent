@@ -509,6 +509,103 @@ assert.equal(
   'VIN power labels must not materialize on MOS gate pins',
 );
 
+// Moving a component while leaving stale stored midpoints must rematerialize Manhattan
+// routes (not rubber-band diagonals through other symbols).
+{
+  const dragModule = JSON.parse(JSON.stringify(mosWireModule)) as typeof mosWireModule;
+  const moved = dragModule.components.find((entry) => entry.id === 'm3');
+  assert.ok(moved, 'm3 should exist for stale-endpoint rematerialize coverage');
+  moved.position = { x: moved.position.x - 120, y: moved.position.y + 160 };
+  // Keep the original bent path coordinates so endpoints no longer match pins.
+  const staleDoc = createSchematicDocument(dragModule, { autoLayout: false });
+  for (const wire of staleDoc.wires) {
+    const points = wire.points ?? [];
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      assert.ok(start && end, `${wire.id} segment ${index} missing endpoints after component move`);
+      assert.ok(
+        start.x === end.x || start.y === end.y,
+        `${wire.id} segment ${index} stayed non-orthogonal after component move (${JSON.stringify(start)} -> ${JSON.stringify(end)})`,
+      );
+    }
+  }
+  const gateWire = staleDoc.wires.find((wire) => (
+    (wire.from?.component_id === 'm3' && wire.to?.component_id === 'm4')
+    || (wire.from?.component_id === 'm4' && wire.to?.component_id === 'm3')
+  ));
+  assert.ok(gateWire, 'gate interconnect should remain after moving m3');
+  const m3 = mustComponent(staleDoc.module, 'm3');
+  const m3GatePin = m3.pins.find((pin) => pin.id === 'g');
+  assert.ok(m3GatePin, 'moved m3 should still expose a gate pin');
+  const m3Gate = pinWorld(m3, m3GatePin, m3.pins.findIndex((pin) => pin.id === 'g'));
+  const first = gateWire.points?.[0];
+  const last = gateWire.points?.at(-1);
+  assert.ok(
+    (first && Math.abs(first.x - m3Gate.x) < 0.5 && Math.abs(first.y - m3Gate.y) < 0.5)
+    || (last && Math.abs(last.x - m3Gate.x) < 0.5 && Math.abs(last.y - m3Gate.y) < 0.5),
+    'rerouted gate wire must terminate on the moved m3 gate pin',
+  );
+}
+
+// Spreading a compact named switch net (≤4 endpoints) must keep physical wires — not
+// replace them with floating local signal labels after a single-device drag.
+{
+  const switchModule = moduleFixture('switch_spread', [
+    component('m1', 'M', 'PMOS W=100u L=1u', 200, 200, [
+      ['d', 'D', 'sw'], ['g', 'G', 'vg1'], ['s', 'S', 'vin'], ['b', 'B', 'vin'],
+    ]),
+    component('m2', 'M', 'NMOS W=100u L=1u', 320, 280, [
+      ['d', 'D', 'sw'], ['g', 'G', 'vg2'], ['s', 'S', '0'], ['b', 'B', '0'],
+    ]),
+    component('l1', 'L', '10u', 420, 200, [['p', '1', 'sw'], ['n', '2', 'out']]),
+  ], [
+    { id: 'vin', name: 'VIN', direction: 'input', signal_type: 'power', net: 'vin' },
+    { id: 'out', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ]);
+  const before = createSchematicDocument(switchModule, { autoLayout: false });
+  assert.ok(before.wires.some((wire) => wire.net === 'sw'), 'compact SW net should start as physical wires');
+  assert.equal(
+    before.netLabels.some((label) => label.kind === 'signal' && label.net === 'sw'),
+    false,
+    'compact SW net should not use local signal labels before drag',
+  );
+  const moved = switchModule.components.find((entry) => entry.id === 'm2');
+  assert.ok(moved, 'm2 should exist for switch-spread coverage');
+  moved.position = { x: moved.position.x + 280, y: moved.position.y + 220 };
+  const after = createSchematicDocument(switchModule, { autoLayout: false });
+  assert.ok(
+    after.wires.some((wire) => wire.net === 'sw'),
+    'dragging one MOSFET must keep SW as physical wires (not orphan label stubs)',
+  );
+  assert.equal(
+    after.netLabels.some((label) => label.kind === 'signal' && label.net === 'sw'),
+    false,
+    'dragging one MOSFET must not replace SW with floating local signal labels',
+  );
+  const m2 = mustComponent(after.module, 'm2');
+  const m2Drain = m2.pins.find((pin) => pin.id === 'd');
+  assert.ok(m2Drain, 'm2 drain pin missing');
+  const drainPoint = pinWorld(m2, m2Drain, m2.pins.findIndex((pin) => pin.id === 'd'));
+  const touchesMovedDrain = after.wires.some((wire) => {
+    const points = wire.points ?? [];
+    if (wire.net !== 'sw' || points.length < 2) return false;
+    const first = points[0];
+    const last = points.at(-1);
+    return Boolean(
+      (first && Math.abs(first.x - drainPoint.x) < 0.5 && Math.abs(first.y - drainPoint.y) < 0.5)
+      || (last && Math.abs(last.x - drainPoint.x) < 0.5 && Math.abs(last.y - drainPoint.y) < 0.5),
+    );
+  });
+  assert.ok(touchesMovedDrain, 'SW wires must still terminate on the moved m2 drain');
+  assert.equal(
+    after.wires.some((wire) => wire.from?.pin_id === 'b' || wire.to?.pin_id === 'b'),
+    false,
+    'MOS body pins must not participate in generated net wires',
+  );
+}
+
 console.log(JSON.stringify({
   ok: true,
   fixtureCount: fixtures.length,
@@ -970,6 +1067,17 @@ function assertRailLabels(module: CircuitModule, netLabels: ReturnType<typeof cr
   if (railPins.length === 0) return;
 
   assert.ok(netLabels.length > 0, `${module.module_id} should expose local rail labels`);
+  for (const label of netLabels) {
+    if (label.kind !== 'ground' && label.kind !== 'power') continue;
+    const separated = Math.abs(label.position.x - label.endpoint.x) > 0.5
+      || Math.abs(label.position.y - label.endpoint.y) > 0.5;
+    assert.ok(separated, `${module.module_id}.${label.id} rail label should sit off the pin with a stub`);
+    if (label.kind === 'ground') {
+      assert.ok(label.position.y > label.endpoint.y, `${module.module_id}.${label.id} GND symbol should sit below its pin`);
+    } else {
+      assert.ok(label.position.y < label.endpoint.y, `${module.module_id}.${label.id} power symbol should sit above its pin`);
+    }
+  }
   for (const wire of wires) {
     assert.ok(!railNets.has(wire.net ?? ''), `${module.module_id}.${wire.id} should not render a generated rail bus for ${wire.net}`);
   }

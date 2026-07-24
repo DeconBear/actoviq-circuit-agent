@@ -15,6 +15,7 @@ import type {
 } from '../types';
 import {
   conversationHasContent,
+  mergeChatTranscript,
 } from './chatHistoryPersistence';
 
 export type TabKey = 'design' | 'netlist' | 'svg' | 'simulation' | 'report';
@@ -101,6 +102,8 @@ interface AppState {
   patchMessage: (id: string, patch: Partial<ChatMessage> | ((msg: ChatMessage) => Partial<ChatMessage>)) => void;
   upsertMessageTool: (messageId: string, tool: ChatMessageTool) => void;
   clearMessages: () => void;
+  /** Re-sync live messages from stored conversationMessages for the active thread. */
+  healActiveTranscript: () => void;
   setStages: (stages: StageState[]) => void;
   updateStage: (key: string, status: StageState['status']) => void;
   addToolCall: (tc: ToolCallEntry) => void;
@@ -199,13 +202,15 @@ export const useAppStore = create<AppState>((set) => ({
         return { messages: [...s.messages, message] };
       }
 
-      // Prefer the longer of live vs stored history so a wiped `messages` array
-      // cannot truncate conversationMessages (and the visible transcript) to the
-      // latest turn only on the next append.
+      // Merge live + stored first so a wiped `messages` array cannot truncate
+      // conversationMessages (and the visible transcript) to the latest turn.
       const stored = s.conversationMessages[conversationId] ?? [];
       const live = conversationId === s.conversationId ? s.messages : [];
-      const prior = stored.length >= live.length ? stored : live;
-      const savedMessages = [...prior, message];
+      const prior = mergeChatTranscript(stored, live);
+      const already = prior.some((entry) => entry.id === message.id);
+      const savedMessages = already
+        ? prior.map((entry) => (entry.id === message.id ? { ...entry, ...message } : entry))
+        : [...prior, message];
       const messages = conversationId === s.conversationId ? savedMessages : s.messages;
       const existing = s.conversations.find((conv) => conv.id === conversationId);
       const autoTitle = savedMessages.find((entry) => entry.role === 'user')?.content
@@ -252,10 +257,12 @@ export const useAppStore = create<AppState>((set) => ({
       }
       const messagesApplied = s.messages.map((msg) => (msg.id === id ? apply(msg) : msg));
       const activeId = s.conversationId;
-      const canonical = activeId ? conversationMessages[activeId] : undefined;
-      const messages = canonical && canonical.length >= messagesApplied.length
-        ? canonical
+      const messages = activeId
+        ? mergeChatTranscript(conversationMessages[activeId], messagesApplied)
         : messagesApplied;
+      if (activeId) {
+        conversationMessages[activeId] = messages;
+      }
       return { messages, conversationMessages };
     }),
   upsertMessageTool: (messageId, tool) =>
@@ -274,10 +281,12 @@ export const useAppStore = create<AppState>((set) => ({
       }
       const messagesApplied = s.messages.map(apply);
       const activeId = s.conversationId;
-      const canonical = activeId ? conversationMessages[activeId] : undefined;
-      const messages = canonical && canonical.length >= messagesApplied.length
-        ? canonical
+      const messages = activeId
+        ? mergeChatTranscript(conversationMessages[activeId], messagesApplied)
         : messagesApplied;
+      if (activeId) {
+        conversationMessages[activeId] = messages;
+      }
       return { messages, conversationMessages };
     }),
   clearMessages: () =>
@@ -289,6 +298,26 @@ export const useAppStore = create<AppState>((set) => ({
         conversationMessages: {
           ...s.conversationMessages,
           [conversationId]: [],
+        },
+      };
+    }),
+  /** Re-sync live `messages` from the longer stored transcript for the active thread. */
+  healActiveTranscript: () =>
+    set((s) => {
+      const conversationId = s.conversationId;
+      if (!conversationId) return {};
+      const merged = mergeChatTranscript(s.conversationMessages[conversationId], s.messages);
+      if (
+        merged.length === s.messages.length
+        && merged.every((msg, index) => msg === s.messages[index])
+      ) {
+        return {};
+      }
+      return {
+        messages: merged,
+        conversationMessages: {
+          ...s.conversationMessages,
+          [conversationId]: merged,
         },
       };
     }),
@@ -309,7 +338,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSimulationProbeRequest: (request) => set({ simulationProbeRequest: request }),
   setModuleManifest: (manifest) => set({ moduleManifest: manifest }),
   resetWorkflow: (options) =>
-    set({
+    set((s) => ({
       outputText: '',
       toolCalls: [],
       netlistContent: '',
@@ -318,9 +347,15 @@ export const useAppStore = create<AppState>((set) => ({
       simulationData: null,
       simulationProbeRequest: null,
       moduleManifest: null,
-      ...(options?.preserveMessages ? {} : { messages: [] }),
+      // Never orphan-wipe live messages while conversationMessages still has turns.
+      // Callers that truly want a blank thread use newConversation / clearMessages.
+      messages: options?.preserveMessages
+        ? s.messages
+        : (s.conversationId
+          ? mergeChatTranscript(s.conversationMessages[s.conversationId], s.messages)
+          : s.messages),
       stages: [],
-    }),
+    })),
   setConversationId: (id) =>
     set((s) => {
       const conv = s.conversations.find((entry) => entry.id === id);

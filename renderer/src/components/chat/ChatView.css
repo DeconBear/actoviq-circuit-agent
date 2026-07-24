@@ -364,6 +364,21 @@
 .chat-message-row--user { margin-bottom: 14px; }
 .chat-message-row--assistant { margin-bottom: 10px; }
 .chat-message-row--stream { margin-bottom: 12px; }
+.chat-message-row--turn-start {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--chat-border) 80%, transparent);
+}
+
+.chat-stream-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--chat-accent) 18%, var(--chat-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chat-accent) 4%, var(--chat-bg));
+}
 
 .chat-message-row__meta {
   display: flex;
@@ -385,6 +400,15 @@
   padding: 0;
   background: transparent;
   border: 0;
+}
+
+/* Message bodies must remain selectable/copyable (Ctrl+C / context menu). */
+.chat-message-row__body,
+.chat-message-row__plain,
+.chat-md-prose,
+.chat-thinking pre {
+  user-select: text;
+  -webkit-user-select: text;
 }
 .chat-message-row--error .chat-message-row__body {
   padding: 12px 14px;
@@ -547,11 +571,50 @@
   min-width: 0;
 }
 
+.chat-tool-group {
+  margin: 4px 0 6px;
+  border: 1px solid var(--chat-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chat-bg-muted) 70%, var(--chat-bg));
+  overflow: hidden;
+}
+.chat-tool-group__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--chat-text-2);
+  font-size: 12px;
+  user-select: none;
+}
+.chat-tool-group__summary::-webkit-details-marker { display: none; }
+.chat-tool-group__summary:hover { background: var(--chat-hover); }
+.chat-tool-group[open] > .chat-tool-group__summary {
+  border-bottom: 1px solid var(--chat-border);
+  color: var(--chat-text);
+}
+.chat-tool-group__icon {
+  display: inline-flex;
+  opacity: 0.75;
+}
+.chat-tool-group__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
 .chat-tool-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
   margin: 2px 0 4px;
+  padding: 4px 6px 6px;
 }
 
 /* Tool timeline cards */

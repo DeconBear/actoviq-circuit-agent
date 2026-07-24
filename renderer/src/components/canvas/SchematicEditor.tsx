@@ -27,6 +27,7 @@ import {
   makePlacedBlock,
   makePlacedComponent,
   moduleBounds,
+  netLabelBounds,
   normalizeConnectivity,
   normalizeRotation,
   padBounds,
@@ -120,6 +121,7 @@ interface DragState {
   originalModule: CircuitModule;
   originalDirty: boolean;
   moved: boolean;
+  originalWires: CircuitWire[];
 }
 
 interface PortDragState {
@@ -591,7 +593,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
 
     const selectedHandleHit = selectedComponentHandleFromPointerTarget(document, event.target);
-    const directComponentHit = componentFromPointerTarget(document, event.target) ?? hitComponent(document, world);
+    const netLabelComponentHit = componentFromNetLabelPointerTarget(document, event.target)
+      ?? hitNetLabelComponent(document, world);
+    const directComponentHit = componentFromPointerTarget(document, event.target)
+      ?? hitComponent(document, world)
+      ?? netLabelComponentHit;
     const selectedFrameHit = selectedHandleHit ?? (!directComponentHit ? hitSelectedComponentFrame(document, selection, world) : null);
     const componentHit = selectedHandleHit ??
       directComponentHit ??
@@ -607,12 +613,17 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         setInteractionCursor(nextComponentIds.includes(componentHit.id) ? 'grab' : 'default');
         return;
       }
-      const shouldDragGroup = Boolean(selectedHandleHit && currentComponentIds.includes(componentHit.id));
-      const componentIds = shouldDragGroup ? currentComponentIds : [componentHit.id];
-      if (!shouldDragGroup || !currentComponentIds.includes(componentHit.id)) {
+      const alreadySelected = currentComponentIds.includes(componentHit.id);
+      // Keep multi-selection and drag the whole group when clicking any selected member
+      // (body, GND/net-label, or selection frame/corner).
+      const componentIds = alreadySelected && currentComponentIds.length > 0
+        ? currentComponentIds
+        : [componentHit.id];
+      if (!alreadySelected) {
         setSelection(selectionForComponentIds(componentIds));
       }
       setInteractionCursor('grabbing');
+      const draggedIdSet = new Set(componentIds);
       dragRef.current = {
         componentIds,
         startWorld: world,
@@ -621,33 +632,34 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         originalModule: cloneModule(draft),
         originalDirty: dirty,
         moved: false,
+        // Persist only wires that touch the dragged set. draft.wires is often empty until the
+        // first edit; capturing the live schematic wires for this gesture prevents commit from
+        // rematerializing stretched nets into floating labels. Do not freeze unrelated nets.
+        originalWires: document.wires
+          .filter((wire) => wireTouchesPreviewComponent(wire, draggedIdSet))
+          .map((wire) => materializeEditableWire(wire)),
       };
       return;
     }
 
     const wireSegmentHit = hitEditableWireSegment(document.wires, draft, world);
-    const wireHit = wireSegmentHit?.wire ?? hitWire(document, world);
-    if (wireHit) {
-      setSelection({ kind: 'wire', id: wireHit.id });
-      if (wireSegmentHit) {
-        const materializedWire = isStoredWire(wireSegmentHit.wire, draft)
-          ? undefined
-          : materializeEditableWire(wireSegmentHit.wire);
-        setInteractionCursor('grabbing');
-        wireSegmentDragRef.current = {
-          wireId: wireSegmentHit.wire.id,
-          segmentIndex: wireSegmentHit.segmentIndex,
-          startWorld: world,
-          originalPoints: clonePoints(wireSegmentHit.wire.points),
-          lastPoints: clonePoints(wireSegmentHit.wire.points),
-          originalModule: cloneModule(draft),
-          originalDirty: dirty,
-          moved: false,
-          materializedWire,
-        };
-      } else {
-        setInteractionCursor('default');
-      }
+    if (wireSegmentHit) {
+      setSelection({ kind: 'wire', id: wireSegmentHit.wire.id });
+      const materializedWire = isStoredWire(wireSegmentHit.wire, draft)
+        ? undefined
+        : materializeEditableWire(wireSegmentHit.wire);
+      setInteractionCursor('grabbing');
+      wireSegmentDragRef.current = {
+        wireId: wireSegmentHit.wire.id,
+        segmentIndex: wireSegmentHit.segmentIndex,
+        startWorld: world,
+        originalPoints: clonePoints(wireSegmentHit.wire.points),
+        lastPoints: clonePoints(wireSegmentHit.wire.points),
+        originalModule: cloneModule(draft),
+        originalDirty: dirty,
+        moved: false,
+        materializedWire,
+      };
       return;
     }
     if (tool === 'select') {
@@ -897,7 +909,18 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setDraft((current) => {
       const next = cloneModule(current);
       applyComponentPositions(next, drag.lastPositions);
-      next.wires = rerouteStoredWires(next, { componentIds: drag.componentIds });
+      const sampleId = drag.componentIds[0];
+      const original = sampleId ? drag.originalPositions[sampleId] : null;
+      const latest = sampleId ? drag.lastPositions[sampleId] : null;
+      const dx = original && latest ? latest.x - original.x : 0;
+      const dy = original && latest ? latest.y - original.y : 0;
+      next.wires = commitWiresAfterComponentGroupMove(
+        next,
+        drag.componentIds,
+        drag.originalWires,
+        dx,
+        dy,
+      );
       return next;
     });
     setDirty(true);
@@ -1089,6 +1112,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   function handleKeyboardEvent(event: Pick<KeyboardEvent | ReactKeyboardEvent<HTMLDivElement>, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'preventDefault' | 'shiftKey' | 'target'>) {
     if (isEditableKeyboardTarget(event.target)) return;
     const key = event.key.toLowerCase();
+    // Let the browser handle clipboard shortcuts when page text is selected
+    // (e.g. AI chat transcript). Window-level listeners otherwise steal Ctrl+C.
+    if ((event.ctrlKey || event.metaKey) && (key === 'c' || key === 'x' || key === 'a') && hasNonCollapsedDomTextSelection()) {
+      return;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       cancelActiveDrag();
@@ -2106,20 +2134,119 @@ function createDragPreviewDocument(
 ): SchematicDocument {
   const draggedIds = new Set(draggedComponentIds);
   const portPositions = computePortPositions(previewModule);
-  const wires = baseDocument.wires.map((wire) => (
-    wireTouchesPreviewComponent(wire, draggedIds)
-      ? rerouteWire(previewModule, wire, portPositions)
-      : wire
-  ));
-  const bounds = moduleBounds(previewModule, portPositions, wires, baseDocument.netLabels);
+  const sampleId = draggedComponentIds[0];
+  const baseComponent = sampleId
+    ? baseDocument.module.components.find((component) => component.id === sampleId)
+    : undefined;
+  const previewComponent = sampleId
+    ? previewModule.components.find((component) => component.id === sampleId)
+    : undefined;
+  const dx = baseComponent && previewComponent
+    ? previewComponent.position.x - baseComponent.position.x
+    : 0;
+  const dy = baseComponent && previewComponent
+    ? previewComponent.position.y - baseComponent.position.y
+    : 0;
+  const wires = baseDocument.wires.map((wire) => {
+    if (wireOnlyTouchesDraggedComponents(wire, draggedIds)) {
+      return translateWireGeometry(wire, dx, dy);
+    }
+    if (wireTouchesPreviewComponent(wire, draggedIds)) {
+      return rerouteWire(previewModule, wire, portPositions);
+    }
+    return wire;
+  });
+  const netLabels = baseDocument.netLabels.map((label) => {
+    const componentId = label.endpoint.component_id;
+    if (!componentId || !draggedIds.has(componentId) || (dx === 0 && dy === 0)) return label;
+    return {
+      ...label,
+      position: { x: label.position.x + dx, y: label.position.y + dy },
+      endpoint: {
+        ...label.endpoint,
+        x: label.endpoint.x + dx,
+        y: label.endpoint.y + dy,
+      },
+    };
+  });
+  const bounds = moduleBounds(previewModule, portPositions, wires, netLabels);
   return {
     ...baseDocument,
     module: previewModule,
     portPositions,
     wires,
+    netLabels,
     bounds,
     viewBox: padBounds(bounds, 70),
   };
+}
+
+/** Rigid-move only when both endpoints are components in the drag set (no free/junction/port ends). */
+function wireOnlyTouchesDraggedComponents(wire: CircuitWire, componentIds: Set<string>): boolean {
+  const fromId = wire.from?.component_id;
+  const toId = wire.to?.component_id;
+  if (!fromId || !toId) return false;
+  // Port / free / junction ends must stay anchored and trigger Manhattan reroute.
+  if (wire.from?.port_id || wire.to?.port_id) return false;
+  if (wire.from?.junction_id || wire.to?.junction_id) return false;
+  return componentIds.has(fromId) && componentIds.has(toId);
+}
+
+function translateWireGeometry(wire: CircuitWire, dx: number, dy: number): CircuitWire {
+  const shift = (point: CircuitPosition): CircuitPosition => ({ x: point.x + dx, y: point.y + dy });
+  return {
+    ...cloneWire(wire),
+    points: (wire.points ?? []).map(shift),
+    from: wire.from ? { ...wire.from, ...shift(wire.from) } : wire.from,
+    to: wire.to ? { ...wire.to, ...shift(wire.to) } : wire.to,
+  };
+}
+
+function commitWiresAfterComponentGroupMove(
+  module: CircuitModule,
+  componentIds: string[],
+  originalWires: CircuitWire[],
+  dx: number,
+  dy: number,
+): CircuitWire[] {
+  const ids = new Set(componentIds);
+  const originalById = new Map(originalWires.map((wire) => [wire.id, wire]));
+  // Prefer the live module wire list, but take pre-drag geometry from originalWires so
+  // rigid translates and partial reroutes start from the gesture's baseline paths.
+  const sourceWires: CircuitWire[] = [];
+  const seen = new Set<string>();
+  for (const wire of module.wires ?? []) {
+    sourceWires.push(originalById.get(wire.id) ?? wire);
+    seen.add(wire.id);
+  }
+  for (const wire of originalWires) {
+    if (seen.has(wire.id)) continue;
+    sourceWires.push(wire);
+  }
+  const nextWires = sourceWires.map((wire) => (
+    wireOnlyTouchesDraggedComponents(wire, ids)
+      ? translateWireGeometry(wire, dx, dy)
+      : cloneWire(wire)
+  ));
+  const working = { ...module, wires: nextWires };
+  const needsReroute = nextWires.some(
+    (wire) => wireTouchesPreviewComponent(wire, ids) && !wireOnlyTouchesDraggedComponents(wire, ids),
+  );
+  if (!needsReroute) {
+    return nextWires.map((wire) => (
+      wireTouchesPreviewComponent(wire, ids) ? materializeEditableWire(wire) : wire
+    ));
+  }
+  const rerouted = rerouteStoredWires(working, { componentIds });
+  return rerouted.map((wire) => {
+    if (wireOnlyTouchesDraggedComponents(wire, ids)) {
+      return materializeEditableWire(nextWires.find((entry) => entry.id === wire.id) ?? wire);
+    }
+    if (wireTouchesPreviewComponent(wire, ids)) {
+      return materializeEditableWire(wire);
+    }
+    return wire;
+  });
 }
 
 function wireTouchesPreviewComponent(wire: CircuitWire, componentIds: Set<string>): boolean {
@@ -2131,7 +2258,11 @@ function wireTouchesPreviewComponent(wire: CircuitWire, componentIds: Set<string
 
 function previewWireIdsForComponents(wires: CircuitWire[], componentIds: string[]): Set<string> {
   const ids = new Set(componentIds);
-  return new Set(wires.filter((wire) => wireTouchesPreviewComponent(wire, ids)).map((wire) => wire.id));
+  return new Set(
+    wires
+      .filter((wire) => wireTouchesPreviewComponent(wire, ids) && !wireOnlyTouchesDraggedComponents(wire, ids))
+      .map((wire) => wire.id),
+  );
 }
 
 function hitEditableWireSegment(
@@ -2277,7 +2408,45 @@ function componentFromPointerTarget(
   if (!(target instanceof Element)) return null;
   const componentId = target.closest('[data-component-id]')?.getAttribute('data-component-id');
   if (!componentId) return null;
+  // Net-label hit targets also carry data-component-id; prefer the dedicated helper
+  // so we do not treat a GND click as a body hit before net-label handling.
+  if (target.closest('[data-testid="schematic-net-label-hit-target"], [data-testid="schematic-net-label"]')) {
+    return null;
+  }
   return document.module.components.find((component) => component.id === componentId) ?? null;
+}
+
+function componentFromNetLabelPointerTarget(
+  document: ReturnType<typeof createSchematicDocument>,
+  target: EventTarget | null,
+): CircuitComponent | null {
+  if (!(target instanceof Element)) return null;
+  const labelNode = target.closest('[data-testid="schematic-net-label-hit-target"], [data-testid="schematic-net-label"]');
+  const componentId = labelNode?.getAttribute('data-component-id')
+    ?? labelNode?.closest('[data-component-id]')?.getAttribute('data-component-id');
+  if (!componentId) return null;
+  return document.module.components.find((component) => component.id === componentId) ?? null;
+}
+
+function hitNetLabelComponent(
+  document: ReturnType<typeof createSchematicDocument>,
+  world: CircuitPosition,
+): CircuitComponent | null {
+  for (let index = document.netLabels.length - 1; index >= 0; index -= 1) {
+    const label = document.netLabels[index];
+    if (!label) continue;
+    const bounds = netLabelBounds(label);
+    if (
+      world.x >= bounds.minX && world.x <= bounds.maxX
+      && world.y >= bounds.minY && world.y <= bounds.maxY
+    ) {
+      const componentId = label.endpoint.component_id;
+      if (!componentId) continue;
+      const component = document.module.components.find((entry) => entry.id === componentId);
+      if (component) return component;
+    }
+  }
+  return null;
 }
 
 function portFromPointerTarget(
@@ -2306,12 +2475,29 @@ function selectionForMarquee(
   bounds: SchematicBounds,
 ): SchematicSelection {
   const componentIds: string[] = [];
+  const seen = new Set<string>();
+  const remember = (componentId: string | undefined) => {
+    if (!componentId || seen.has(componentId)) return;
+    seen.add(componentId);
+    componentIds.push(componentId);
+  };
   for (let index = document.module.components.length - 1; index >= 0; index -= 1) {
     const component = document.module.components[index];
     if (component && boundsIntersect(bounds, componentBounds(component))) {
-      componentIds.unshift(component.id);
+      remember(component.id);
     }
   }
+  for (const label of document.netLabels) {
+    if (boundsIntersect(bounds, netLabelBounds(label))) {
+      remember(label.endpoint.component_id);
+    }
+  }
+  // Keep document order for stable selection ids.
+  componentIds.sort((left, right) => {
+    const leftIndex = document.module.components.findIndex((component) => component.id === left);
+    const rightIndex = document.module.components.findIndex((component) => component.id === right);
+    return leftIndex - rightIndex;
+  });
   if (componentIds.length === 1) {
     const componentId = componentIds[0];
     return componentId ? { kind: 'component', id: componentId } : null;
@@ -2573,6 +2759,12 @@ function clamp(value: number, min: number, max: number): number {
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function hasNonCollapsedDomTextSelection(): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+  return selection.toString().length > 0;
 }
 
 function isSpacePanKey(event: Pick<KeyboardEvent | ReactKeyboardEvent<HTMLDivElement>, 'key'>): boolean {
