@@ -2007,6 +2007,27 @@ try {
     );
     assert.equal(pinBAfterLabelDrag.label_offset.x % 20, 0, 'rail label offset stays grid-snapped');
     assert.equal(pinBAfterLabelDrag.label_offset.y % 20, 0, 'rail label offset stays grid-snapped');
+    // The stub from the pin to a dragged label must stay orthogonal.
+    const diagonalStubSegments = await page.locator(
+      `g[data-net-label-id="${groundLabelId}"] [data-testid="schematic-rail-label-stub"]`,
+    ).evaluateAll((nodes) => nodes.flatMap((node) => {
+      if (!(node instanceof SVGPolylineElement)) return [];
+      const points = (node.getAttribute('points') ?? '').trim().split(/\s+/).filter(Boolean).map((pair) => {
+        const [x, y] = pair.split(',').map(Number);
+        return { x, y };
+      });
+      const bad = [];
+      for (let index = 1; index < points.length; index += 1) {
+        const start = points[index - 1];
+        const end = points[index];
+        if (!start || !end) continue;
+        if (Number(start.x) !== Number(end.x) && Number(start.y) !== Number(end.y)) {
+          bad.push({ index, start, end });
+        }
+      }
+      return bad;
+    }));
+    assert.deepEqual(diagonalStubSegments, [], 'dragged rail label stub must not contain diagonal segments');
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
     await page.waitForFunction((before) => (
       (document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-components') ?? '') === before

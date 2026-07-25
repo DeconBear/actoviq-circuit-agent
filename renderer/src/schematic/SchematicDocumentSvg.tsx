@@ -380,13 +380,20 @@ function MarqueeRect({ bounds }: { bounds: SchematicBounds }) {
 
 function railLabelChromeBounds(label: SchematicNetLabel): SchematicBounds {
   const { position } = label;
-  // The selection chrome hugs the rail symbol + text only; the connecting stub
-  // stays clickable but is not framed, so a selected label never looks like a
-  // selected wire.
+  // The selection chrome hugs the rail symbol artwork only — neither the label
+  // text nor the connecting stub is framed, so a selected label never looks
+  // like a selected wire.
   if (label.kind === 'ground') {
-    return { minX: position.x - 26, minY: position.y - 6, maxX: position.x + 26, maxY: position.y + 64 };
+    return { minX: position.x - 26, minY: position.y - 4, maxX: position.x + 26, maxY: position.y + 44 };
   }
-  return { minX: position.x - 26, minY: position.y - 48, maxX: position.x + 26, maxY: position.y + 8 };
+  return { minX: position.x - 26, minY: position.y - 18, maxX: position.x + 26, maxY: position.y + 6 };
+}
+
+function railStubPoints(endpoint: CircuitPosition, position: CircuitPosition): CircuitPosition[] {
+  // Rail stubs always route orthogonally (drop first, then jog sideways);
+  // arbitrary drag offsets must never produce a diagonal wire.
+  if (endpoint.x === position.x || endpoint.y === position.y) return [endpoint, position];
+  return [endpoint, { x: endpoint.x, y: position.y }, position];
 }
 
 function NetLabelSymbol({ label, selected = false, hovered = false }: { label: SchematicNetLabel; selected?: boolean; hovered?: boolean }) {
@@ -437,11 +444,9 @@ function NetLabelSymbol({ label, selected = false, hovered = false }: { label: S
         />
       ) : null}
       {hasStub ? (
-        <line
-          x1={endpoint.x}
-          y1={endpoint.y}
-          x2={position.x}
-          y2={position.y}
+        <polyline
+          points={pointsAttribute(railStubPoints(endpoint, position))}
+          fill="none"
           stroke={WIRE_COLOR}
           strokeWidth={WIRE_STROKE}
           pointerEvents="none"
