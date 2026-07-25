@@ -4046,6 +4046,10 @@ function materializeNetWires(
     .map((wire) => ({ ...syncWireEndpointPoints(module, wire, portPositions), source: 'stored' as const }));
   const usedPairs = new Set(stored.map((wire) => endpointPairKey(wire.from, wire.to)));
   const existingIds = new Set(stored.map((wire) => wire.id));
+  // Nets that already carry stored wires only get the anchor fan-out: the >=4-endpoint
+  // spine/tree decomposition does not subtract partially-stored pairs and would add
+  // parallel links (e.g. after a component move materialized one wire of the net).
+  const netsWithStoredWires = new Set(stored.map((wire) => wire.net).filter(Boolean));
   const endpointsByNet = new Map<string, EndpointHit[]>();
 
   const remember = (net: string | undefined, endpoint: EndpointHit) => {
@@ -4088,7 +4092,7 @@ function materializeNetWires(
     if (endpoints.length < 2) continue;
     if (shouldRepresentNetWithLocalLabel(module, net)) continue;
     if (shouldRepresentSignalNetWithLocalLabel(module, net, endpoints)) continue;
-    if (endpoints.length >= 4) {
+    if (endpoints.length >= 4 && !netsWithStoredWires.has(net)) {
       if (!isCmosRingFeedbackNet(module, net)) {
         const spineWires = materializeEndpointSpineWires(module, net, endpoints, existingIds, usedPairs, wires);
         if (spineWires.length > 0) {
@@ -4103,11 +4107,25 @@ function materializeNetWires(
       }
     }
     const anchor = chooseNetAnchor(module, net, endpoints);
+    // Seed the connectivity state with the stored wires on this net so the
+    // fan-out only adds links that actually merge disconnected members —
+    // regenerating anchor->endpoint blindly duplicates a stored star whose
+    // anchor differs from chooseNetAnchor (e.g. after a component move).
+    const connectivity = new EndpointUnionFind();
+    for (const wire of stored) {
+      if ((wire.net ?? '') !== net) continue;
+      const leftKey = endpointKey(wire.from) ?? `${wire.from?.x ?? ''},${wire.from?.y ?? ''}`;
+      const rightKey = endpointKey(wire.to) ?? `${wire.to?.x ?? ''},${wire.to?.y ?? ''}`;
+      if (leftKey && rightKey) connectivity.union(leftKey, rightKey);
+    }
+    const anchorKey = endpointKey(anchor) ?? `${anchor.x},${anchor.y}`;
     for (const endpoint of endpoints) {
       if (endpoint === anchor) continue;
       if (distance(endpointDrawPoint(anchor), endpointDrawPoint(endpoint)) < 1) continue;
       const pairKey = endpointPairKey(anchor, endpoint);
       if (usedPairs.has(pairKey)) continue;
+      const endpointNodeKey = endpointKey(endpoint) ?? `${endpoint.x},${endpoint.y}`;
+      if (!connectivity.union(anchorKey, endpointNodeKey)) continue;
       usedPairs.add(pairKey);
       const id = makeId(`net_${wireIdToken(net)}_`, existingIds);
       existingIds.add(id);
@@ -4124,6 +4142,28 @@ function materializeNetWires(
     }
   }
   return wires;
+}
+
+/** Minimal union-find over endpoint identities (pin / port / junction / coordinate keys). */
+class EndpointUnionFind {
+  private readonly parent = new Map<string, string>();
+
+  private findRoot(key: string): string {
+    let root = this.parent.get(key) ?? key;
+    if (root !== key) {
+      root = this.findRoot(root);
+      this.parent.set(key, root);
+    }
+    return root;
+  }
+
+  union(left: string, right: string): boolean {
+    const leftRoot = this.findRoot(left);
+    const rightRoot = this.findRoot(right);
+    if (leftRoot === rightRoot) return false;
+    this.parent.set(leftRoot, rightRoot);
+    return true;
+  }
 }
 
 function materializeEndpointSpineWires(

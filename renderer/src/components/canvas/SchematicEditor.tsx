@@ -655,12 +655,24 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         originalModule: cloneModule(draft),
         originalDirty: dirty,
         moved: false,
-        // Persist only wires that touch the dragged set. draft.wires is often empty until the
-        // first edit; capturing the live schematic wires for this gesture prevents commit from
-        // rematerializing stretched nets into floating labels. Do not freeze unrelated nets.
-        originalWires: document.wires
-          .filter((wire) => wireTouchesPreviewComponent(wire, draggedIdSet))
-          .map((wire) => materializeEditableWire(wire)),
+        // Persist the FULL nets of every wire touching the dragged set. draft.wires is
+        // often empty until the first edit, so live generated wires must be captured —
+        // but storing only the touching wires lets the >=4-endpoint spine/tree generator
+        // re-decompose the rest of the net and add a parallel link after the move.
+        originalWires: (() => {
+          const touchedNets = new Set(
+            document.wires
+              .filter((wire) => wireTouchesPreviewComponent(wire, draggedIdSet))
+              .map((wire) => wire.net_id ?? wire.net)
+              .filter((net): net is string => Boolean(net)),
+          );
+          return document.wires
+            .filter((wire) => (
+              wireTouchesPreviewComponent(wire, draggedIdSet) ||
+              touchedNets.has(wire.net_id ?? wire.net ?? '')
+            ))
+            .map((wire) => materializeEditableWire(wire));
+        })(),
       };
       return;
     }
