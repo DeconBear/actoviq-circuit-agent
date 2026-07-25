@@ -3909,6 +3909,9 @@ function pointHitsComponentGraphic(component: CircuitComponent, world: CircuitPo
   if (component.type === 'L') return Math.abs(local.x) <= 38 && Math.abs(local.y) <= 12;
   if (component.type === 'D') return local.x >= -26 && local.x <= 26 && local.y >= -29 && local.y <= 29;
   if (component.type === 'V' || component.type === 'I') return Math.hypot(local.x, local.y) <= 31;
+  // The ground symbol art hangs below the anchor pin; cover the whole symbol so
+  // clicking any part of it selects the pseudo-component (qucs parity).
+  if (component.type === 'GND') return local.x >= -24 && local.x <= 24 && local.y >= -6 && local.y <= 44;
   return Math.hypot(local.x, local.y) <= 28;
 }
 

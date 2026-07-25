@@ -5400,6 +5400,13 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:gnd1'
   ));
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 1, 'GND selection should show one frame');
+  // The whole symbol body is clickable, not just the anchor pin.
+  const gndBodyPoint = await componentScreenPoint(page, 'gnd1', { x: 8, y: 30 });
+  await page.keyboard.press('Escape');
+  await page.mouse.click(gndBodyPoint.x, gndBodyPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:gnd1'
+  ));
   // Drag the ground symbol; it moves like any component.
   const gndBeforeDrag = await componentPositions(page);
   await page.mouse.move(gndScreenPoint.x, gndScreenPoint.y);
