@@ -9,6 +9,7 @@ import {
   hitEndpoint,
   isGroundPort,
   isPmosComponent,
+  makePlacedComponent,
   normalizeConnectivity,
   pinWorld,
   pointEndpoint,
@@ -416,6 +417,38 @@ const fixtures: CircuitModule[] = [
 
 assertJunctionNetIsolation();
 assertManualWireTopology();
+assertGroundPseudoComponent();
+
+function assertGroundPseudoComponent() {
+  const module = moduleFixture('ground_pseudo', [
+    component('r1', 'R', '1k', 300, 200, [['a', '1', 'out'], ['b', '2', 'n_r1_2']]),
+  ], []);
+  const gnd = makePlacedComponent(module, 'GND', { x: 200, y: 320 });
+  module.components.push(gnd);
+  assert.equal(gnd.pins.length, 1, 'GND pseudo-component has exactly one pin');
+  assert.equal(gnd.pins[0]?.net, '0', 'placed GND pin ties to net 0');
+
+  // The ground symbol renders through its own art, not a duplicated rail label.
+  const document = createSchematicDocument(module);
+  assert.equal(
+    document.netLabels.filter((label) => label.endpoint.component_id === gnd.id).length,
+    0,
+    'GND pseudo-component must not get a per-pin rail label',
+  );
+
+  // Wiring a net to the GND pin grounds the whole net.
+  const r1Pin = pinWorld(module.components[0]!, module.components[0]!.pins[1]!, 1);
+  const gndPin = pinWorld(gnd, gnd.pins[0]!, 0);
+  const continued = addWire(
+    module,
+    { kind: 'pin', ...r1Pin, component_id: 'r1', pin_id: 'b', label: 'R1.2', net: 'n_r1_2' },
+    { kind: 'pin', ...gndPin, component_id: gnd.id, pin_id: 'gnd', label: 'GND1.GND', net: '0' },
+  );
+  assert.ok(continued, 'wiring to a GND pin should be accepted');
+  const normalized = normalizeConnectivity(module);
+  const r1PinAfter = normalized.components.find((entry) => entry.id === 'r1')?.pins[1];
+  assert.equal(r1PinAfter?.net, '0', 'wiring a net to GND grounds the whole net');
+}
 
 for (const fixture of fixtures) {
   const document = createSchematicDocument(fixture);

@@ -318,6 +318,11 @@ function moduleToSpiceNetlist(moduleId: string, moduleData: CircuitModule): stri
     '* Editable schematic netlist generated from actoviq.module.v1',
   ];
   for (const component of moduleData.components) {
+    if (component.type === 'GND') {
+      // Ground symbols carry no SPICE card; their pin already ties net '0'.
+      lines.push(`* GND ${component.name} on net 0`);
+      continue;
+    }
     if (component.type === 'BLOCK') {
       const pinSummary = component.pins.map((pin) => `${pin.name}=${pin.net}`).join(', ');
       lines.push(`* BLOCK ${component.name}: ${component.value} [${pinSummary}]`);

@@ -93,7 +93,7 @@ export interface WireTopologyIssue {
   point?: CircuitPosition;
 }
 
-export const COMPONENT_TYPES: ToolComponentType[] = ['R', 'C', 'L', 'D', 'M', 'Q', 'V', 'I'];
+export const COMPONENT_TYPES: ToolComponentType[] = ['R', 'C', 'L', 'D', 'M', 'Q', 'V', 'I', 'GND'];
 
 export const DEFAULT_VALUES: Record<ToolComponentType, string> = {
   R: '1k',
@@ -104,6 +104,7 @@ export const DEFAULT_VALUES: Record<ToolComponentType, string> = {
   Q: 'NPN',
   V: 'DC 1',
   I: 'DC 1m',
+  GND: 'GND',
 };
 
 const PIN_DEFS: Record<ToolComponentType, Array<[string, string]>> = {
@@ -115,6 +116,7 @@ const PIN_DEFS: Record<ToolComponentType, Array<[string, string]>> = {
   I: [['p', '+'], ['n', '-']],
   Q: [['c', 'C'], ['b', 'B'], ['e', 'E']],
   M: [['d', 'D'], ['g', 'G'], ['s', 'S'], ['b', 'B']],
+  GND: [['gnd', 'GND']],
 };
 
 export function cloneModule(module: CircuitModule): CircuitModule {
@@ -191,7 +193,9 @@ export function makePlacedComponent(
   const pins: CircuitPin[] = PIN_DEFS[type].map(([pinId, pinName], index) => ({
     id: pinId,
     name: pinName,
-    net: `n_${id}_${index + 1}`,
+    // A placed ground symbol ties straight to the ground net instead of a
+    // fresh floating net; mergeStableNets then grounds anything wired to it.
+    net: type === 'GND' ? '0' : `n_${id}_${index + 1}`,
   }));
   return {
     id,
@@ -4023,6 +4027,9 @@ function pinOffset(component: CircuitComponent, pin: CircuitPin, index: number):
     else if (/\+|non|cp|in\+/.test(key)) offset = { x: -58, y: 24 };
     else if (/-|inv|cn|in-/.test(key)) offset = { x: -58, y: -24 };
     else offset = { x: 0, y: 58 };
+  } else if (component.type === 'GND') {
+    // The component position IS the ground anchor pin; the symbol hangs below.
+    offset = { x: 0, y: 0 };
   } else {
     const sign = index === 0 ? -1 : 1;
     offset = { x: sign * 52, y: 0 };
@@ -4481,6 +4488,7 @@ function shouldRepresentNetWithLocalLabel(module: CircuitModule, net: string | u
 }
 
 function shouldLabelRailPin(component: CircuitComponent, pin: CircuitPin): boolean {
+  if (component.type === 'GND') return false;
   if (component.type !== 'M') return true;
   const pinKey = `${pin.id} ${pin.name}`.toLowerCase();
   return /source|\bs\b/.test(pinKey);

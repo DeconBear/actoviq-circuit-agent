@@ -1354,6 +1354,19 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       openBlockDialog();
       return;
     }
+    if (key === 'g') {
+      // qucs parity: G places a ground symbol (multi-char type, so it needs an
+      // explicit branch ahead of the single-letter component hotkeys).
+      event.preventDefault();
+      setTool('place');
+      setPlaceType('GND');
+      setPlaceRotation(0);
+      setWireStart(null);
+      setHoverEndpoint(null);
+      setHoverSelection(null);
+      setInteractionCursor('default');
+      return;
+    }
     const componentType = event.key.toUpperCase() as ToolComponentType;
     if ((COMPONENT_TYPES as readonly string[]).includes(componentType)) {
       event.preventDefault();
@@ -1810,7 +1823,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
                   <option value="270">270</option>
                 </select>
               </label>
-              {onProbe && selectedComponent.type !== 'BLOCK' ? (
+              {onProbe && selectedComponent.type !== 'BLOCK' && selectedComponent.type !== 'GND' ? (
                 <div style={styles.probeActions}>
                   <button
                     type="button"

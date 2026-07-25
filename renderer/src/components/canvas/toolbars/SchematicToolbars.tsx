@@ -33,6 +33,7 @@ const COMPONENT_TOOL_LABELS: Record<ToolComponentType, string> = {
   Q: 'Place BJT (Q)',
   V: 'Place voltage source (V)',
   I: 'Place current source (I)',
+  GND: 'Place ground (G)',
 };
 
 const COMPONENT_TOOL_ICONS: Record<ToolComponentType, CircuitSymbolKind> = {
@@ -44,6 +45,7 @@ const COMPONENT_TOOL_ICONS: Record<ToolComponentType, CircuitSymbolKind> = {
   Q: 'npn',
   V: 'voltage-source',
   I: 'current-source',
+  GND: 'ground',
 };
 
 interface EditorCommandToolbarProps {

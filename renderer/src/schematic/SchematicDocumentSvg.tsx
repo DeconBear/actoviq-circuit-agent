@@ -642,23 +642,25 @@ function ComponentSymbol({ component, selected, hovered }: { component: CircuitC
           visible={selected}
         />
       ))}
-      <text
-        x={labels.name.x}
-        y={labels.name.y}
-        textAnchor={labels.name.anchor}
-        fontSize={COMPONENT_NAME_FONT_SIZE}
-        fontFamily={LABEL_FONT}
-        fontWeight="700"
-        fill={LABEL_COLOR}
-        stroke={LABEL_HALO_COLOR}
-        strokeWidth="3"
-        paintOrder="stroke"
-        pointerEvents="none"
-        data-testid="schematic-component-name-label"
-      >
-        {component.name}
-      </text>
-      {component.type !== 'BLOCK' ? (
+      {component.type !== 'GND' ? (
+        <text
+          x={labels.name.x}
+          y={labels.name.y}
+          textAnchor={labels.name.anchor}
+          fontSize={COMPONENT_NAME_FONT_SIZE}
+          fontFamily={LABEL_FONT}
+          fontWeight="700"
+          fill={LABEL_COLOR}
+          stroke={LABEL_HALO_COLOR}
+          strokeWidth="3"
+          paintOrder="stroke"
+          pointerEvents="none"
+          data-testid="schematic-component-name-label"
+        >
+          {component.name}
+        </text>
+      ) : null}
+      {component.type !== 'BLOCK' && component.type !== 'GND' ? (
         <text
           x={labels.value.x}
           y={labels.value.y}
@@ -1105,6 +1107,15 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
         <line x1={x} y1={y + 42} x2={x} y2={y + 58} />
         <text x={x - 31} y={y - 16} fontSize="15" fontFamily={LABEL_FONT} fontWeight="700" fill={SYMBOL_COLOR} stroke="none">-</text>
         <text x={x - 33} y={y + 31} fontSize="15" fontFamily={LABEL_FONT} fontWeight="700" fill={SYMBOL_COLOR} stroke="none">+</text>
+      </g>
+    );
+  }
+  if (component.type === 'GND') {
+    // The component position is the anchor pin; the ground symbol hangs below
+    // it and rotates around the pin like every other symbol (qucs parity).
+    return (
+      <g transform={`rotate(${rotation} ${x} ${y})`} pointerEvents="none" data-testid="schematic-symbol-body" data-symbol-kind="ground">
+        <GroundSymbol position={{ x, y }} />
       </g>
     );
   }

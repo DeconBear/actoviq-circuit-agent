@@ -295,7 +295,7 @@ export interface CircuitComponentEda {
 
 export interface CircuitComponent {
   id: string;
-  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E' | 'BLOCK' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B';
+  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E' | 'BLOCK' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B' | 'GND';
   name: string;
   value: string;
   position: CircuitPosition;

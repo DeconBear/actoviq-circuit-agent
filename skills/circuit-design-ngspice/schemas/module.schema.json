@@ -42,7 +42,7 @@
         "required": ["id", "type", "name", "value", "position", "rotation", "pins"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "type": { "enum": ["R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK", "U", "X", "F", "G", "H", "B"] },
+          "type": { "enum": ["R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK", "U", "X", "F", "G", "H", "B", "GND"] },
           "name": { "type": "string", "minLength": 1 },
           "value": { "type": "string", "minLength": 1 },
           "stable_id": { "type": "string", "minLength": 1 },

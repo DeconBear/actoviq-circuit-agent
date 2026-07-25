@@ -989,7 +989,7 @@ def module_spice_text(module: dict[str, Any]) -> str:
         return source
     lines: list[str] = []
     for component in module.get("components", []):
-        if component.get("type") == "BLOCK":
+        if component.get("type") in {"BLOCK", "GND"}:
             continue
         pins = " ".join(str(pin.get("net", "")) for pin in component.get("pins", []))
         lines.append(
@@ -1005,7 +1005,7 @@ def editable_component_count(module: dict[str, Any]) -> int:
     return sum(
         1
         for component in module.get("components", []) or []
-        if str(component.get("type", "")).upper() != "BLOCK"
+        if str(component.get("type", "")).upper() not in {"BLOCK", "GND"}
     )
 
 
@@ -2836,7 +2836,7 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
     parsed_ids = {str(component.get("id")) for component in parsed_components}
     schematic_blocks = [
         component for component in module.get("components", [])
-        if component.get("type") == "BLOCK" and str(component.get("id")) not in parsed_ids
+        if component.get("type") in {"BLOCK", "GND"} and str(component.get("id")) not in parsed_ids
     ]
     components = [*parsed_components, *schematic_blocks]
     if not components:
@@ -2913,7 +2913,7 @@ def hydrated_summary_module(root: Path, module_id: str, module: dict[str, Any]) 
     parsed_ids = {str(component.get("id")) for component in parsed_components}
     schematic_blocks = [
         component for component in module.get("components", [])
-        if component.get("type") == "BLOCK" and str(component.get("id")) not in parsed_ids
+        if component.get("type") in {"BLOCK", "GND"} and str(component.get("id")) not in parsed_ids
     ]
     components = [*parsed_components, *schematic_blocks]
     if not components:
@@ -3231,6 +3231,9 @@ def compile_project(root: Path) -> dict[str, Any]:
             instance_names = compiled_instance_name_map(module_id, module["components"])
             for component in module["components"]:
                 component_type = component["type"]
+                if component_type == "GND":
+                    # Ground symbols carry no SPICE card; their pin already ties net '0'.
+                    continue
                 if component_type == "BLOCK":
                     component_name = sanitize_node(f"{module_id}_{component['name']}")
                     pin_summary = ", ".join(
@@ -3565,6 +3568,9 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
     instance_names = compiled_instance_name_map(module_id, module["components"])
     for component in module["components"]:
         component_type = component["type"]
+        if component_type == "GND":
+            # Ground symbols carry no SPICE card; their pin already ties net '0'.
+            continue
         if component_type == "BLOCK":
             component_name = sanitize_node(f"{module_id}_{component['name']}")
             pin_summary = ", ".join(

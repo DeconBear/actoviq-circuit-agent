@@ -5303,6 +5303,139 @@ try {
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-unconnected-port-wired.png') });
   console.log('[e2e] unconnected port renders dimmed, snaps, and persists after wiring');
 
+  // GND as a placeable, selectable, deletable pseudo-component (qucs parity).
+  await page.getByTestId(`sidebar-project-${projectId}`).click();
+  await waitForWorkbenchProject(page, projectId);
+  await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await page.getByTestId('module-card-filter').dblclick();
+  await editor.waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'filter'
+  ));
+  await waitForEditorIdle(page);
+  const gndCountBefore = Number(await editor.getAttribute('data-component-count'));
+  await editor.focus();
+  await page.keyboard.press('g');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-tool') === 'place'
+  ));
+  const gndProbeSpot = await page.getByTestId('schematic-editor-svg').evaluate((svg) => {
+    if (!(svg instanceof SVGSVGElement)) throw new Error('schematic editor svg missing');
+    const editor = document.querySelector('[data-testid="schematic-editor"]');
+    const wires = JSON.parse(editor?.getAttribute('data-wires') ?? '[]');
+    const components = Object.values(JSON.parse(editor?.getAttribute('data-component-positions') ?? '{}'));
+    const ports = Object.values(JSON.parse(editor?.getAttribute('data-port-positions') ?? '{}'));
+    const [minX, minY, width, height] = (svg.getAttribute('viewBox') ?? '0 0 1 1').split(/\s+/).map(Number);
+    const snap20 = (value) => Math.round(value / 20) * 20;
+    const segmentDistance = (px, py, a, b) => {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lengthSquared = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / lengthSquared));
+      return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+    };
+    let best = null;
+    for (let x = snap20(minX + 60); x <= minX + width - 60; x += 20) {
+      for (let y = snap20(minY + 60); y <= minY + height - 60; y += 20) {
+        let clearance = Math.min(
+          ...components.map((p) => Math.hypot(x - p.x, y - p.y)),
+          ...ports.map((p) => Math.hypot(x - p.x, y - p.y)),
+        );
+        if (clearance < 70) continue;
+        for (const wire of wires) {
+          const points = wire.points ?? [];
+          for (let index = 1; index < points.length; index += 1) {
+            clearance = Math.min(clearance, segmentDistance(x, y, points[index - 1], points[index]));
+          }
+        }
+        if (clearance < 40) continue;
+        if (!best || clearance > best.clearance) best = { x, y, clearance };
+      }
+    }
+    if (!best) throw new Error('no free spot for the GND placement test');
+    const matrix = svg.getScreenCTM();
+    if (!matrix) throw new Error('schematic editor svg has no screen matrix');
+    const point = svg.createSVGPoint();
+    point.x = best.x;
+    point.y = best.y;
+    const screen = point.matrixTransform(matrix);
+    return { x: screen.x, y: screen.y };
+  });
+  await page.mouse.move(gndProbeSpot.x, gndProbeSpot.y);
+  await page.getByTestId('schematic-place-ghost').waitFor();
+  assert.equal(
+    await page.getByTestId('schematic-place-ghost').locator('[data-symbol-kind="ground"]').count(),
+    1,
+    'G hotkey should arm a ground ghost preview',
+  );
+  await page.mouse.click(gndProbeSpot.x, gndProbeSpot.y);
+  await page.waitForFunction((count) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count) &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:gnd1'
+  ), gndCountBefore + 1);
+  assert.equal(
+    await page.locator('g[data-component-id="gnd1"] [data-symbol-kind="ground"]').count(),
+    1,
+    'placed GND should render the ground symbol art',
+  );
+  assert.equal(
+    await page.locator('g[data-component-id="gnd1"] [data-testid="schematic-component-name-label"]').count(),
+    0,
+    'ground symbols render without name/value labels (qucs style)',
+  );
+  assert.deepEqual(await componentPinNets(page, 'gnd1'), ['0'], 'placed GND pin must tie to net 0');
+  await page.keyboard.press('Escape');
+  // Clicking the symbol itself selects the pseudo-component (not a parent).
+  const gndScreenPoint = await componentScreenPoint(page, 'gnd1');
+  await page.mouse.click(gndScreenPoint.x, gndScreenPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:gnd1'
+  ));
+  assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 1, 'GND selection should show one frame');
+  // Drag the ground symbol; it moves like any component.
+  const gndBeforeDrag = await componentPositions(page);
+  await page.mouse.move(gndScreenPoint.x, gndScreenPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(gndScreenPoint.x + 60, gndScreenPoint.y + 40, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForFunction((previous) => {
+    const positions = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}');
+    return Number(positions.gnd1?.x) !== Number(previous.x) || Number(positions.gnd1?.y) !== Number(previous.y);
+  }, gndBeforeDrag.gnd1);
+  // Delete removes the placed symbol.
+  await page.keyboard.press('Delete');
+  await page.waitForFunction((count) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count)
+  ), gndCountBefore);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+  await page.waitForFunction((count) => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count)
+  ), gndCountBefore + 1);
+  // Save: the pseudo-component persists structurally but emits no SPICE card.
+  await page.getByTestId('schematic-editor-save').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
+  ));
+  const savedGndModule = JSON.parse(await readFile(
+    path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'),
+    'utf8',
+  ));
+  const savedGnd = savedGndModule.components.find((component) => component.id === 'gnd1');
+  assert.ok(savedGnd, 'saved module should keep the placed GND pseudo-component');
+  assert.equal(savedGnd.type, 'GND', 'saved GND should keep its pseudo-component type');
+  assert.equal(savedGnd.pins?.[0]?.net, '0', 'saved GND pin should stay on net 0');
+  const savedDesignCir = await readFile(path.resolve(projectRoot, 'build', 'modules', 'filter', 'design.cir'), 'utf8').catch(() => '');
+  assert.equal(
+    savedDesignCir.split('\n').some((line) => line.startsWith('GND1 ') || line.startsWith('gnd1 ')),
+    false,
+    'GND pseudo-components must not emit SPICE cards',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-gnd.png') });
+  console.log('[e2e] GND placeable/selectable/deletable with no SPICE card verified');
+
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-smoke.png') });
   assert.deepEqual(
     pageErrors.filter((entry) => (
