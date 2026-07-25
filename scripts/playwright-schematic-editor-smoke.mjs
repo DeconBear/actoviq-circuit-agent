@@ -1978,6 +1978,44 @@ try {
       '0',
       'rail label inspector should show the ground net',
     );
+    // The selection chrome hugs the rail symbol + text, not the connecting stub.
+    const selectedLabelFrame = page.getByTestId('schematic-selected-net-label-frame').first();
+    const frameBox = await selectedLabelFrame.boundingBox();
+    assert.ok(frameBox, 'selected rail label frame should have a screen box');
+    const filterPinPoint = await componentScreenPoint(page, 'c_filter', { x: 0, y: 52 });
+    assert.ok(
+      filterPinPoint.y < frameBox.y - 1,
+      'selected rail label frame must not enclose the parent pin or stub',
+    );
+    // Rail labels are draggable: the anchor offset persists on the pin.
+    const cFilterBeforeLabelDrag = (await page.getByTestId('schematic-editor').getAttribute('data-components')) ?? '';
+    await page.mouse.move(groundBox.x + groundBox.width / 2, groundBox.y + groundBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(groundBox.x + groundBox.width / 2 + 40, groundBox.y + groundBox.height / 2 + 20, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForFunction((before) => (
+      (document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-components') ?? '') !== before
+    ), cFilterBeforeLabelDrag);
+    const componentsAfterLabelDrag = JSON.parse(await editor.getAttribute('data-components') ?? '[]');
+    const cFilterAfterLabelDrag = componentsAfterLabelDrag.find((component) => component.id === 'c_filter');
+    const pinBAfterLabelDrag = cFilterAfterLabelDrag?.pins?.find((pin) => pin.id === 'b');
+    assert.ok(pinBAfterLabelDrag?.label_offset, 'dragging a rail label should persist a label offset on the pin');
+    assert.notDeepEqual(
+      pinBAfterLabelDrag.label_offset,
+      { x: 0, y: 40 },
+      'rail label offset should change after dragging',
+    );
+    assert.equal(pinBAfterLabelDrag.label_offset.x % 20, 0, 'rail label offset stays grid-snapped');
+    assert.equal(pinBAfterLabelDrag.label_offset.y % 20, 0, 'rail label offset stays grid-snapped');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+    await page.waitForFunction((before) => (
+      (document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-components') ?? '') === before
+    ), cFilterBeforeLabelDrag);
+    // Undo restores the label; re-select it for the delete-to-wire step.
+    await page.mouse.click(groundBox.x + groundBox.width / 2, groundBox.y + groundBox.height / 2);
+    await page.waitForFunction((labelId) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `netlabel:${labelId}`
+    ), groundLabelId);
     // Deleting the label converts the pin to a physical wire on the same net.
     await page.keyboard.press('Delete');
     await page.waitForFunction((count) => (

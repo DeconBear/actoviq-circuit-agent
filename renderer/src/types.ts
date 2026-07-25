@@ -246,6 +246,8 @@ export interface CircuitPin {
   net_id?: string;
   side?: 'left' | 'right' | 'top' | 'bottom';
   order?: number;
+  /** Optional rail-label anchor offset from the pin (draggable label position). */
+  label_offset?: CircuitPosition;
 }
 
 export interface CircuitBlockStyle {

@@ -3,35 +3,99 @@
   "$id": "https://actoviq.local/schemas/module.schema.json",
   "title": "Actoviq Circuit Module",
   "type": "object",
-  "required": ["schema", "module_id", "name", "revision", "ports", "components"],
+  "required": [
+    "schema",
+    "module_id",
+    "name",
+    "revision",
+    "ports",
+    "components"
+  ],
   "properties": {
-    "schema": { "enum": ["actoviq.module.v1", "actoviq.module.v2"] },
-    "module_id": { "type": "string", "minLength": 1 },
-    "name": { "type": "string", "minLength": 1 },
-    "stable_id": { "type": "string", "minLength": 1 },
-    "revision": { "type": "integer", "minimum": 0 },
+    "schema": {
+      "enum": [
+        "actoviq.module.v1",
+        "actoviq.module.v2"
+      ]
+    },
+    "module_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stable_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
     "ports": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "name", "direction", "signal_type", "net"],
+        "required": [
+          "id",
+          "name",
+          "direction",
+          "signal_type",
+          "net"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 },
-          "direction": { "enum": ["input", "output", "bidirectional"] },
-          "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
-          "net": { "type": "string", "minLength": 1 }
-          ,"position": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "direction": {
+            "enum": [
+              "input",
+              "output",
+              "bidirectional"
+            ]
+          },
+          "signal_type": {
+            "enum": [
+              "analog",
+              "digital",
+              "power",
+              "ground"
+            ]
+          },
+          "net": {
+            "type": "string",
+            "minLength": 1
+          },
+          "position": {
             "type": "object",
-            "required": ["x", "y"],
+            "required": [
+              "x",
+              "y"
+            ],
             "properties": {
-              "x": { "type": "number" },
-              "y": { "type": "number" }
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
             },
             "additionalProperties": false
+          },
+          "net_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "inferred": {
+            "type": "boolean"
           }
-          ,"net_id": { "type": "string", "minLength": 1 }
-          ,"inferred": { "type": "boolean" }
         }
       }
     },
@@ -39,55 +103,169 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "type", "name", "value", "position", "rotation", "pins"],
+        "required": [
+          "id",
+          "type",
+          "name",
+          "value",
+          "position",
+          "rotation",
+          "pins"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "type": { "enum": ["R", "C", "L", "D", "Q", "M", "V", "I", "E", "BLOCK", "U", "X", "F", "G", "H", "B", "GND"] },
-          "name": { "type": "string", "minLength": 1 },
-          "value": { "type": "string", "minLength": 1 },
-          "stable_id": { "type": "string", "minLength": 1 },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "enum": [
+              "R",
+              "C",
+              "L",
+              "D",
+              "Q",
+              "M",
+              "V",
+              "I",
+              "E",
+              "BLOCK",
+              "U",
+              "X",
+              "F",
+              "G",
+              "H",
+              "B",
+              "GND"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stable_id": {
+            "type": "string",
+            "minLength": 1
+          },
           "eda": {
             "type": "object",
             "properties": {
-              "device_class": { "type": "string" },
-              "refdes": { "type": "string" },
-              "refdes_prefix": { "type": "string" },
-              "footprint_hint": { "type": "string" },
-              "footprint": { "type": "string" },
-              "lcsc_id": { "type": "string" },
-              "mpn": { "type": "string" },
-              "manufacturer": { "type": "string" },
-              "datasheet_url": { "type": "string" },
-              "jlc_basic": { "type": "boolean" },
-              "foreign_symbol": { "type": "string" },
-              "physical": { "type": "boolean" }
+              "device_class": {
+                "type": "string"
+              },
+              "refdes": {
+                "type": "string"
+              },
+              "refdes_prefix": {
+                "type": "string"
+              },
+              "footprint_hint": {
+                "type": "string"
+              },
+              "footprint": {
+                "type": "string"
+              },
+              "lcsc_id": {
+                "type": "string"
+              },
+              "mpn": {
+                "type": "string"
+              },
+              "manufacturer": {
+                "type": "string"
+              },
+              "datasheet_url": {
+                "type": "string"
+              },
+              "jlc_basic": {
+                "type": "boolean"
+              },
+              "foreign_symbol": {
+                "type": "string"
+              },
+              "physical": {
+                "type": "boolean"
+              }
             },
             "additionalProperties": true
           },
           "position": {
             "type": "object",
-            "required": ["x", "y"],
+            "required": [
+              "x",
+              "y"
+            ],
             "properties": {
-              "x": { "type": "number" },
-              "y": { "type": "number" }
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
             },
             "additionalProperties": false
           },
-          "rotation": { "type": "number" },
+          "rotation": {
+            "type": "number"
+          },
           "pins": {
             "type": "array",
             "minItems": 1,
             "maxItems": 64,
             "items": {
               "type": "object",
-              "required": ["id", "name", "net"],
+              "required": [
+                "id",
+                "name",
+                "net"
+              ],
               "properties": {
-                "id": { "type": "string", "minLength": 1 },
-                "name": { "type": "string", "minLength": 1 },
-                "net": { "type": "string", "minLength": 1 },
-                "net_id": { "type": "string", "minLength": 1 },
-                "side": { "enum": ["left", "right", "top", "bottom"] },
-                "order": { "type": "number" }
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "net": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "net_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "side": {
+                  "enum": [
+                    "left",
+                    "right",
+                    "top",
+                    "bottom"
+                  ]
+                },
+                "order": {
+                  "type": "number"
+                },
+                "label_offset": {
+                  "type": "object",
+                  "required": [
+                    "x",
+                    "y"
+                  ],
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "additionalProperties": false
+                }
               },
               "additionalProperties": false
             }
@@ -95,16 +273,28 @@
           "block": {
             "type": "object",
             "properties": {
-              "width": { "type": "number", "minimum": 40, "maximum": 1000 },
-              "height": { "type": "number", "minimum": 40, "maximum": 1000 }
+              "width": {
+                "type": "number",
+                "minimum": 40,
+                "maximum": 1000
+              },
+              "height": {
+                "type": "number",
+                "minimum": 40,
+                "maximum": 1000
+              }
             },
             "additionalProperties": false
           },
           "spice": {
             "type": "object",
             "properties": {
-              "raw": { "type": "string" },
-              "simulated": { "type": "boolean" }
+              "raw": {
+                "type": "string"
+              },
+              "simulated": {
+                "type": "boolean"
+              }
             },
             "additionalProperties": false
           }
@@ -116,13 +306,37 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "name": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["signal", "analog", "digital", "power", "ground"] },
-          "aliases": { "type": "array", "items": { "type": "string" } },
-          "conflict": { "type": "boolean" }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "signal",
+              "analog",
+              "digital",
+              "power",
+              "ground"
+            ]
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflict": {
+            "type": "boolean"
+          }
         },
         "additionalProperties": false
       }
@@ -130,11 +344,30 @@
     "spice": {
       "type": "object",
       "properties": {
-        "models": { "type": "array", "items": { "type": "string" } },
-        "directives": { "type": "array", "items": { "type": "string" } },
-        "opaque": { "type": "array", "items": { "type": "string" } },
-        "source": { "type": "string" },
-        "generated_testbench": { "type": "boolean" }
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "directives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "opaque": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "type": "string"
+        },
+        "generated_testbench": {
+          "type": "boolean"
+        }
       },
       "additionalProperties": false
     },
@@ -142,63 +375,173 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "points", "from", "to", "net"],
+        "required": [
+          "id",
+          "points",
+          "from",
+          "to",
+          "net"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
           "points": {
             "type": "array",
             "minItems": 2,
             "items": {
               "type": "object",
-              "required": ["x", "y"],
+              "required": [
+                "x",
+                "y"
+              ],
               "properties": {
-                "x": { "type": "number" },
-                "y": { "type": "number" }
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                }
               },
               "additionalProperties": false
             }
           },
-          "from": { "$ref": "#/$defs/wireEndpoint" },
-          "to": { "$ref": "#/$defs/wireEndpoint" },
-          "net": { "type": "string", "minLength": 1 },
-          "net_id": { "type": "string", "minLength": 1 },
-          "source": { "enum": ["stored", "net"] }
+          "from": {
+            "$ref": "#/$defs/wireEndpoint"
+          },
+          "to": {
+            "$ref": "#/$defs/wireEndpoint"
+          },
+          "net": {
+            "type": "string",
+            "minLength": 1
+          },
+          "net_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "enum": [
+              "stored",
+              "net"
+            ]
+          }
         },
         "additionalProperties": false
       }
     },
-    "annotations": { "type": "array" }
+    "annotations": {
+      "type": "array"
+    }
   },
   "$defs": {
     "wireEndpoint": {
       "type": "object",
-      "required": ["x", "y"],
+      "required": [
+        "x",
+        "y"
+      ],
       "properties": {
-        "x": { "type": "number" },
-        "y": { "type": "number" },
-        "component_id": { "type": "string", "minLength": 1 },
-        "pin_id": { "type": "string", "minLength": 1 },
-        "port_id": { "type": "string", "minLength": 1 },
-        "junction_id": { "type": "string", "minLength": 1 }
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "component_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pin_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "port_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "junction_id": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "additionalProperties": false
     },
     "identifiedWireEndpoint": {
       "allOf": [
-        { "$ref": "#/$defs/wireEndpoint" },
+        {
+          "$ref": "#/$defs/wireEndpoint"
+        },
         {
           "oneOf": [
             {
-              "required": ["component_id", "pin_id"],
-              "not": { "anyOf": [{ "required": ["port_id"] }, { "required": ["junction_id"] }] }
+              "required": [
+                "component_id",
+                "pin_id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "port_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "junction_id"
+                    ]
+                  }
+                ]
+              }
             },
             {
-              "required": ["port_id"],
-              "not": { "anyOf": [{ "required": ["component_id"] }, { "required": ["pin_id"] }, { "required": ["junction_id"] }] }
+              "required": [
+                "port_id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "component_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "pin_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "junction_id"
+                    ]
+                  }
+                ]
+              }
             },
             {
-              "required": ["junction_id"],
-              "not": { "anyOf": [{ "required": ["component_id"] }, { "required": ["pin_id"] }, { "required": ["port_id"] }] }
+              "required": [
+                "junction_id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "component_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "pin_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "port_id"
+                    ]
+                  }
+                ]
+              }
             }
           ]
         }
@@ -208,17 +551,29 @@
   "allOf": [
     {
       "if": {
-        "required": ["schema"],
-        "properties": { "schema": { "const": "actoviq.module.v2" } }
+        "required": [
+          "schema"
+        ],
+        "properties": {
+          "schema": {
+            "const": "actoviq.module.v2"
+          }
+        }
       },
       "then": {
         "properties": {
           "wires": {
             "items": {
-              "required": ["net_id"],
+              "required": [
+                "net_id"
+              ],
               "properties": {
-                "from": { "$ref": "#/$defs/identifiedWireEndpoint" },
-                "to": { "$ref": "#/$defs/identifiedWireEndpoint" }
+                "from": {
+                  "$ref": "#/$defs/identifiedWireEndpoint"
+                },
+                "to": {
+                  "$ref": "#/$defs/identifiedWireEndpoint"
+                }
               }
             }
           }

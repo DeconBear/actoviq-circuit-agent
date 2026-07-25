@@ -4428,9 +4428,8 @@ function createNetLabels(module: CircuitModule, portPositions: Map<string, Circu
       if (!shouldLabelRailPin(module, component, pin)) return;
       const kind = isGroundNet(pin.net, module) ? 'ground' : 'power';
       const stub = RAIL_LABEL_STUB;
-      const symbolPosition = kind === 'ground'
-        ? { x: position.x, y: position.y + stub }
-        : { x: position.x, y: position.y - stub };
+      const offset = pin.label_offset ?? (kind === 'ground' ? { x: 0, y: stub } : { x: 0, y: -stub });
+      const symbolPosition = { x: position.x + offset.x, y: position.y + offset.y };
       labels.push({
         id: `label_${wireIdToken(pin.net)}_${component.id}_${pin.id}`,
         kind,

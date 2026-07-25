@@ -378,10 +378,22 @@ function MarqueeRect({ bounds }: { bounds: SchematicBounds }) {
   );
 }
 
+function railLabelChromeBounds(label: SchematicNetLabel): SchematicBounds {
+  const { position } = label;
+  // The selection chrome hugs the rail symbol + text only; the connecting stub
+  // stays clickable but is not framed, so a selected label never looks like a
+  // selected wire.
+  if (label.kind === 'ground') {
+    return { minX: position.x - 26, minY: position.y - 6, maxX: position.x + 26, maxY: position.y + 64 };
+  }
+  return { minX: position.x - 26, minY: position.y - 48, maxX: position.x + 26, maxY: position.y + 8 };
+}
+
 function NetLabelSymbol({ label, selected = false, hovered = false }: { label: SchematicNetLabel; selected?: boolean; hovered?: boolean }) {
   const { position, endpoint } = label;
   const nameY = label.kind === 'power' ? position.y - 18 : position.y + 54;
   const hit = netLabelBounds(label);
+  const chrome = railLabelChromeBounds(label);
   if (label.kind === 'signal') {
     return <SignalNetLabelSymbol label={label} />;
   }
@@ -408,10 +420,10 @@ function NetLabelSymbol({ label, selected = false, hovered = false }: { label: S
       />
       {selected || hovered ? (
         <rect
-          x={hit.minX - 4}
-          y={hit.minY - 4}
-          width={Math.max(1, hit.maxX - hit.minX) + 8}
-          height={Math.max(1, hit.maxY - hit.minY) + 8}
+          x={chrome.minX}
+          y={chrome.minY}
+          width={Math.max(1, chrome.maxX - chrome.minX)}
+          height={Math.max(1, chrome.maxY - chrome.minY)}
           rx="4"
           fill={COMPONENT_SELECTION_COLOR}
           fillOpacity={selected ? 0.07 : 0.045}

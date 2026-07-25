@@ -33,6 +33,7 @@ import {
   padBounds,
   pointToSegmentDistance,
   pointEndpoint,
+  RAIL_LABEL_STUB,
   removeWireAndUpdateConnectivity,
   rerouteWire,
   rerouteStoredWires,
@@ -137,6 +138,17 @@ interface PortDragState {
   moved: boolean;
 }
 
+interface LabelDragState {
+  componentId: string;
+  pinId: string;
+  startWorld: CircuitPosition;
+  originalOffset: CircuitPosition;
+  lastOffset: CircuitPosition;
+  originalModule: CircuitModule;
+  originalDirty: boolean;
+  moved: boolean;
+}
+
 interface WireDragState {
   start: EndpointHit;
   startClient: CircuitPosition;
@@ -216,6 +228,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const portDragRef = useRef<PortDragState | null>(null);
+  const labelDragRef = useRef<LabelDragState | null>(null);
   const wireDragRef = useRef<WireDragState | null>(null);
   const wireSegmentDragRef = useRef<WireSegmentDragState | null>(null);
   const wirePointDragRef = useRef<WirePointDragState | null>(null);
@@ -628,9 +641,28 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       ?? hitRailNetLabel(document, world);
     if (railLabelHit) {
       // Rail labels (GND / power) are first-class selectable entities: clicking
-      // one selects the label itself instead of starting a parent-component drag.
+      // one selects the label itself; dragging moves the label anchor (the stub
+      // follows) instead of dragging the parent component.
       setSelection({ kind: 'netlabel', id: railLabelHit.id });
-      setInteractionCursor('default');
+      const labelComponent = draft.components.find((entry) => entry.id === railLabelHit.endpoint.component_id);
+      const labelPinIndex = labelComponent?.pins.findIndex((entry) => entry.id === railLabelHit.endpoint.pin_id) ?? -1;
+      const labelPin = labelPinIndex >= 0 ? labelComponent?.pins[labelPinIndex] : undefined;
+      if (labelComponent && labelPin) {
+        setInteractionCursor('grabbing');
+        const originalOffset = labelPin.label_offset ?? defaultRailLabelOffset(railLabelHit.kind);
+        labelDragRef.current = {
+          componentId: labelComponent.id,
+          pinId: labelPin.id,
+          startWorld: world,
+          originalOffset: { ...originalOffset },
+          lastOffset: { ...originalOffset },
+          originalModule: cloneModule(draft),
+          originalDirty: dirty,
+          moved: false,
+        };
+      } else {
+        setInteractionCursor('default');
+      }
       return;
     }
 
@@ -848,6 +880,28 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       autoPanViewport(event.currentTarget, event.clientX, event.clientY);
       return;
     }
+    const labelDrag = labelDragRef.current;
+    if (labelDrag) {
+      setHoverSelection(null);
+      setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
+      const nextOffset = snapPoint({
+        x: labelDrag.originalOffset.x + world.x - labelDrag.startWorld.x,
+        y: labelDrag.originalOffset.y + world.y - labelDrag.startWorld.y,
+      });
+      if (samePosition(labelDrag.lastOffset, nextOffset)) return;
+      labelDrag.lastOffset = { ...nextOffset };
+      labelDrag.moved = true;
+      scheduleDraftUpdate((current) => {
+        const next = cloneModule(current);
+        const component = next.components.find((entry) => entry.id === labelDrag.componentId);
+        const pin = component?.pins.find((entry) => entry.id === labelDrag.pinId);
+        if (pin) pin.label_offset = { ...nextOffset };
+        return next;
+      });
+      markDirty();
+      autoPanViewport(event.currentTarget, event.clientX, event.clientY);
+      return;
+    }
     const marquee = marqueeRef.current;
     if (marquee) {
       setHoverSelection(null);
@@ -925,11 +979,13 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     }
     const drag = dragRef.current;
     const portDrag = portDragRef.current;
+    const labelDrag = labelDragRef.current;
     const wirePointDrag = wirePointDragRef.current;
     const wireSegmentDrag = wireSegmentDragRef.current;
     const marquee = marqueeRef.current;
     dragRef.current = null;
     portDragRef.current = null;
+    labelDragRef.current = null;
     wirePointDragRef.current = null;
     wireSegmentDragRef.current = null;
     marqueeRef.current = null;
@@ -940,6 +996,19 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setInteractionCursor(cursorForWorld(document, draft, selection, world));
     if (marquee) {
       setSelection(marquee.moved ? selectionForMarquee(document, normalizedBounds(marquee.startWorld, marquee.currentWorld)) : null);
+      return;
+    }
+    if (labelDrag?.moved) {
+      setHistory((items) => [...items, labelDrag.originalModule].slice(-40));
+      setFuture([]);
+      setDraft((current) => {
+        const next = cloneModule(current);
+        const component = next.components.find((entry) => entry.id === labelDrag.componentId);
+        const pin = component?.pins.find((entry) => entry.id === labelDrag.pinId);
+        if (pin) pin.label_offset = { ...labelDrag.lastOffset };
+        return next;
+      });
+      setDirty(true);
       return;
     }
     if (wirePointDrag?.moved) {
@@ -1018,7 +1087,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       return;
     }
     const activeGesture = Boolean(
-      wireStart || tool !== 'select' || dragRef.current || portDragRef.current || wireDragRef.current || wirePointDragRef.current || wireSegmentDragRef.current || marqueeRef.current || panRef.current,
+      wireStart || tool !== 'select' || dragRef.current || portDragRef.current || labelDragRef.current || wireDragRef.current || wirePointDragRef.current || wireSegmentDragRef.current || marqueeRef.current || panRef.current,
     );
     const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
     const hitSelection = activeGesture
@@ -1093,6 +1162,8 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     dragRef.current = null;
     const portDrag = portDragRef.current;
     portDragRef.current = null;
+    const labelDrag = labelDragRef.current;
+    labelDragRef.current = null;
     wireDragRef.current = null;
     const wirePointDrag = wirePointDragRef.current;
     wirePointDragRef.current = null;
@@ -1113,6 +1184,11 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (wireSegmentDrag?.moved) {
       setDraft(wireSegmentDrag.originalModule);
       setDirty(wireSegmentDrag.originalDirty);
+      return;
+    }
+    if (labelDrag?.moved) {
+      setDraft(labelDrag.originalModule);
+      setDirty(labelDrag.originalDirty);
       return;
     }
     if (portDrag?.moved) {
@@ -2670,6 +2746,7 @@ function cursorForWorld(
 ): EditorCursor {
   if (hitSelectedStoredWirePoint(document.wires, module, selection, world)) return 'move';
   if (hitPort(document, world)) return 'grab';
+  if (hitRailNetLabel(document, world)) return 'grab';
   if (hitComponent(document, world)) return 'grab';
   if (hitSelectedComponentFrame(document, selection, world)) return 'grab';
   return hitEditableWireSegment(document.wires, module, world) ? 'move' : 'default';
@@ -2822,6 +2899,10 @@ function hitRailNetLabel(
     }
   }
   return null;
+}
+
+function defaultRailLabelOffset(kind: 'ground' | 'power'): CircuitPosition {
+  return kind === 'ground' ? { x: 0, y: RAIL_LABEL_STUB } : { x: 0, y: -RAIL_LABEL_STUB };
 }
 
 function nearestNetEndpoint(
