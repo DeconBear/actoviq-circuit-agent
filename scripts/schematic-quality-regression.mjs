@@ -255,6 +255,59 @@ const fixtures = [
     },
   },
   {
+    id: 'two-module-link',
+    inputNode: 'in_n',
+    outputNode: 'out',
+    netlist: [
+      '* Two-module inter-module net label fixture',
+      '.model NMOS1 NMOS (LEVEL=1 VTO=0.7 KP=120u)',
+      'Rin in_n local_a 10k',
+      'M1 link local_a 0 0 NMOS1 W=20u L=1u',
+      'Rload out link 5k',
+      'Cout out 0 1u',
+      '.end',
+    ],
+    moduleManifest: {
+      version: 1,
+      modules: [
+        {
+          name: 'driver',
+          label: 'DRIVER',
+          component_names: ['Rin', 'M1'],
+          input_nets: ['in_n'],
+          output_nets: ['link'],
+          shared_nets: ['0'],
+          ports: [
+            { id: 'inp', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in_n', side: 'left' },
+            { id: 'lnk', name: 'LINK', direction: 'output', signal_type: 'analog', net: 'link', side: 'right' },
+          ],
+        },
+        {
+          name: 'load',
+          label: 'LOAD',
+          component_names: ['Rload', 'Cout'],
+          input_nets: ['link'],
+          output_nets: ['out'],
+          shared_nets: ['0'],
+          ports: [
+            { id: 'lnk', name: 'LINK', direction: 'input', signal_type: 'analog', net: 'link', side: 'left' },
+            { id: 'outp', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out', side: 'right' },
+          ],
+        },
+      ],
+    },
+    expectNetLabels: ['link'],
+    expectWiredNets: ['local_a'],
+    overrides: {
+      Rin: { x: 160, y: 200 },
+      M1: { x: 260, y: 240 },
+      Rload: { x: 420, y: 200 },
+      Cout: { x: 560, y: 260 },
+      IN: { x: 60, y: 200 },
+      OUT: { x: 680, y: 200 },
+    },
+  },
+  {
     id: 'current-mirror',
     inputNode: 'bias',
     outputNode: 'out',
@@ -701,6 +754,23 @@ for (const fixture of fixtures) {
 
   assert.deepEqual(skipped, [], `${fixture.id} skipped schematic overrides`);
   assert.deepEqual(missingMoves, [], `${fixture.id} missing schematic override moves`);
+
+  if (fixture.expectNetLabels || fixture.expectWiredNets) {
+    const autoSvg = await readFile(autoResult.svgPath, 'utf8');
+    for (const net of fixture.expectNetLabels ?? []) {
+      assert.ok(
+        autoSvg.includes(`>${net}</text>`),
+        `${fixture.id} cross-module net ${net} should render as a net label`,
+      );
+    }
+    for (const net of fixture.expectWiredNets ?? []) {
+      assert.equal(
+        autoSvg.includes(`>${net}</text>`),
+        false,
+        `${fixture.id} intra-module net ${net} should stay wired (no net label)`,
+      );
+    }
+  }
 
   results.push({
     id: fixture.id,

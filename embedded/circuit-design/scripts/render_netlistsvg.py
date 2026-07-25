@@ -514,6 +514,7 @@ def collect_module_blocks(payload: dict[str, object]) -> list[dict[str, object]]
 
     if not blocks:
         seen: dict[str, int] = {}
+        grouped: dict[str, dict[str, object]] = {}
         for comp in components:
             if not isinstance(comp, dict):
                 continue
@@ -522,8 +523,21 @@ def collect_module_blocks(payload: dict[str, object]) -> list[dict[str, object]]
                 continue
             order = int(comp.get("module_order") or 999)
             seen[name] = min(order, seen.get(name, order))
+            entry = grouped.setdefault(name, {"component_names": [], "nodes": []})
+            comp_name = str(comp.get("name") or "")
+            if comp_name:
+                entry["component_names"].append(comp_name)
+            for node in component_nodes(comp):
+                if node not in entry["nodes"]:
+                    entry["nodes"].append(node)
         blocks = [
-            {"name": name, "label": module_label(name), "order": order}
+            {
+                "name": name,
+                "label": module_label(name),
+                "order": order,
+                "component_names": grouped.get(name, {}).get("component_names", []),
+                "nodes": grouped.get(name, {}).get("nodes", []),
+            }
             for name, order in seen.items()
         ]
 
@@ -540,16 +554,10 @@ def collect_module_blocks(payload: dict[str, object]) -> list[dict[str, object]]
     for block in blocks:
         name = str(block["name"])
         count = counts.get(name, 1)
-        if "baseband" in name:
-            width = 580.0
-        elif "comparator" in name or "window" in name:
-            width = 430.0
-        elif "frontend" in name or "matching" in name or name.startswith("rf"):
-            width = 380.0
-        elif "detector" in name:
-            width = 300.0
-        else:
-            width = max(230.0, min(390.0, 120.0 + count * 28.0))
+        # Width follows block content instead of a fixed name table: roughly two
+        # placement lanes at ~58-68px per symbol plus margins, clamped so large
+        # blocks still leave the following blocks reachable.
+        width = max(230.0, min(620.0, 120.0 + count * 34.0))
         block.update({"x": x, "y": 70.0, "w": width, "h": 360.0})
         x += width + 28.0
     return blocks
@@ -648,9 +656,12 @@ def place_module_components(
     bottom_index = 0
     series_index = 0
     misc_index = 0
-    top_occupied: list[float] = []
-    bottom_occupied: list[float] = []
-    series_occupied: list[float] = []
+    # Passive lanes must also steer clear of the active slots; otherwise a
+    # node-aligned passive can land a few pixels from an active on the same row.
+    active_lane_x = active_slots[: len(active_components)]
+    top_occupied: list[float] = list(active_lane_x)
+    bottom_occupied: list[float] = list(active_lane_x)
+    series_occupied: list[float] = list(active_lane_x)
     placed = 0
 
     for component in sorted(module_components, key=lambda comp: int(comp.get("line_no") or 999999)):
@@ -712,10 +723,10 @@ def place_module_components(
             series_index += 1
         elif len(nonrails) >= 2:
             cx = reserve_lane_x(preferred_component_x(component, node_x, x + 60.0 + series_index * 68.0), series_occupied, x + 42.0, x + w - 42.0, 68.0)
-            shift_passive_lane = module_has_active and (
-                "baseband" in module_name or "comparator" in module_name or "window" in module_name
-            )
-            cy = signal_y + (52.0 if shift_passive_lane and ctype in {"resistor", "capacitor", "inductor"} else 0.0)
+            # Passives share the signal row with actives only when the block has
+            # no actives; otherwise drop them half a lane so wide active symbols
+            # (MOS/BJT) do not crowd them on the x axis.
+            cy = signal_y + (52.0 if module_has_active and ctype in {"resistor", "capacitor", "inductor"} else 0.0)
             series_index += 1
         else:
             misc_index += 1
@@ -1524,7 +1535,7 @@ def apply_cascode_amplifier_placements(root: ET.Element, payload: dict[str, obje
         set_group_anchor(groups["IN"], (130.0, 255.0))
     if "OUT" in groups:
         set_group_anchor(groups["OUT"], (620.0, 150.0))
-    set_terminal_group_anchor(groups, ("VB", "VBIAS"), (215.0, 220.0))
+    set_terminal_group_anchor(groups, ("VB", "VBIAS"), (215.0, 245.0))
 
 
 def apply_ring_oscillator_placements(root: ET.Element, payload: dict[str, object]) -> None:
@@ -2034,6 +2045,100 @@ def append_net_label(root: ET.Element, net_class: str, label: str, x: float, y: 
     root.append(text)
 
 
+
+def segment_crosses_box(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    box: tuple[float, float, float, float],
+) -> bool:
+    """Mirror the geometry checker's shrunk-box overlap rule for one axis-aligned segment."""
+    left, top, right, bottom = box
+    if abs(start[0] - end[0]) < 0.75:
+        x = start[0]
+        if not (left + 2.0 < x < right - 2.0):
+            return False
+        low, high = sorted((start[1], end[1]))
+        return min(high, bottom - 1.5) - max(low, top + 1.5) > 2.0
+    if abs(start[1] - end[1]) < 0.75:
+        y = start[1]
+        if not (top + 2.0 < y < bottom - 2.0):
+            return False
+        low, high = sorted((start[0], end[0]))
+        return min(high, right - 1.5) - max(low, left + 1.5) > 2.0
+    return False
+
+
+
+def rail_stub_route(
+    point: tuple[float, float],
+    anchor: tuple[float, float],
+    host_box: tuple[float, float, float, float] | None,
+    rail: str,
+) -> tuple[tuple[float, float], list[tuple[tuple[float, float], tuple[float, float]]]]:
+    """Route a rail stub from a pin to its anchor.
+
+    Straight stub when it does not cross the host body. Otherwise re-anchor
+    the symbol just outside the host (above for vcc, below for vee/gnd) and
+    route the wire around the nearest side edge, entering the symbol pin
+    vertically from outside so the rail still reads as connected.
+    """
+    if host_box is None or not segment_crosses_box(point, anchor, host_box):
+        return anchor, [(point, anchor)]
+    left, top, right, bottom = host_box
+    side_x = left - 12.0 if point[0] < (left + right) / 2.0 else right + 12.0
+    above = rail == "vcc"
+    anchor = (point[0], top - 30.0 if above else bottom + 30.0)
+    entry_y = anchor[1] + 14.0 if above else anchor[1] - 14.0
+    elbow = (side_x, point[1])
+    lift = (side_x, entry_y)
+    run = (anchor[0], entry_y)
+    return anchor, [(point, elbow), (elbow, lift), (lift, run), (run, anchor)]
+
+
+def cell_body_boxes(root: ET.Element) -> dict[str, tuple[float, float, float, float]]:
+    boxes: dict[str, tuple[float, float, float, float]] = {}
+    for name, group in find_cell_groups(root).items():
+        transform = parse_translate(group.get("transform"))
+        if transform is None:
+            continue
+        width, height = group_dimensions(group)
+        boxes[name] = (transform[0], transform[1], transform[0] + width, transform[1] + height)
+    return boxes
+
+
+def drop_corridor_x(point: tuple[float, float], bus_y: float, boxes: dict[str, tuple[float, float, float, float]]) -> float | None:
+    """Return a vertical corridor x when the straight drop to the bus crosses a body.
+
+    Mirrors the geometry checker's shrunk-box rule: any component body whose
+    x-span contains the drop and whose y-span overlaps it by more than 2px is
+    an obstacle. The pin is routed outward around the nearest side edge.
+    """
+    for name, body in boxes.items():
+        if name in {"IN", "OUT"}:
+            continue
+        left, top, right, bottom = body
+        if not (left + 2.0 < point[0] < right - 2.0):
+            continue
+        low, high = sorted((point[1], bus_y))
+        if min(high, bottom - 1.5) - max(low, top + 1.5) > 2.0:
+            return left - 12.0 if point[0] < (left + right) / 2.0 else right + 12.0
+    return None
+
+
+def drop_corridor_y(point: tuple[float, float], bus_x: float, boxes: dict[str, tuple[float, float, float, float]]) -> float | None:
+    """Return a horizontal corridor y when the straight run to the bus crosses a body."""
+    for name, body in boxes.items():
+        if name in {"IN", "OUT"}:
+            continue
+        left, top, right, bottom = body
+        if not (top + 2.0 < point[1] < bottom - 2.0):
+            continue
+        low, high = sorted((point[0], bus_x))
+        if min(high, right - 1.5) - max(low, left + 1.5) > 2.0:
+            return top - 12.0 if point[1] < (top + bottom) / 2.0 else bottom + 12.0
+    return None
+
+
 def add_inline_horizontal_net(
     root: ET.Element,
     net_class: str,
@@ -2044,12 +2149,22 @@ def add_inline_horizontal_net(
     """Route a multi-pin signal as one horizontal trunk plus short vertical taps."""
     line_count = 0
     bus_xs: set[float] = set()
+    boxes = cell_body_boxes(root)
     for point in raw_points:
         bus_point = (point[0], signal_y)
-        if not nearly_equal(point[1], signal_y):
-            line_count += append_counted_net_line(root, net_class, point, bus_point)
-            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
-        bus_xs.add(bus_point[0])
+        corridor_x = drop_corridor_x(point, signal_y, boxes)
+        if corridor_x is not None:
+            elbow = (corridor_x, point[1])
+            drop = (corridor_x, signal_y)
+            line_count += append_counted_net_line(root, net_class, point, elbow)
+            line_count += append_counted_net_line(root, net_class, elbow, drop)
+            junction_counts[(drop[0], drop[1], net_class)] += 1
+            bus_xs.add(corridor_x)
+        else:
+            if not nearly_equal(point[1], signal_y):
+                line_count += append_counted_net_line(root, net_class, point, bus_point)
+                junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+            bus_xs.add(bus_point[0])
     for start_x, end_x in zip(sorted(bus_xs), sorted(bus_xs)[1:]):
         line_count += append_counted_net_line(root, net_class, (start_x, signal_y), (end_x, signal_y))
     return line_count
@@ -2207,6 +2322,8 @@ def add_local_ground_net(
 
     line_count = 0
     standard_symbol_count = 0
+    pin_lookup = cell_pin_points(root)
+    boxes = cell_body_boxes(root)
     for point in sorted(ground_points, key=lambda item: (item[0] > 540.0 and item[1] < 230.0, item[0], item[1])):
         if point[0] > 540.0 and point[1] < 230.0:
             # A threshold-divider ground pin can sit just above the output
@@ -2217,7 +2334,8 @@ def add_local_ground_net(
             route = [(point, anchor)]
         elif point[1] < 170.0:
             anchor = (point[0], point[1] - 28.0)
-            route = [(point, anchor)]
+            host = next((cell_name for cell_name, cell_pins in pin_lookup.items() if point in cell_pins.values()), None)
+            anchor, route = rail_stub_route(point, anchor, boxes.get(host), "vee")
             if standard_symbol_count == 0:
                 set_group_anchor(template, anchor)
             else:
@@ -2225,7 +2343,8 @@ def add_local_ground_net(
             standard_symbol_count += 1
         else:
             anchor = (point[0], point[1] + 28.0)
-            route = [(point, anchor)]
+            host = next((cell_name for cell_name, cell_pins in pin_lookup.items() if point in cell_pins.values()), None)
+            anchor, route = rail_stub_route(point, anchor, boxes.get(host), "vee")
             if standard_symbol_count == 0:
                 set_group_anchor(template, anchor)
             else:
@@ -2271,14 +2390,21 @@ def add_local_power_net(
 
     line_count = 0
     clone_count = 0
+    pin_lookup = cell_pin_points(root)
+    boxes = cell_body_boxes(root)
     for point in power_points:
+        host = next((cell_name for cell_name, cell_pins in pin_lookup.items() if point in cell_pins.values()), None)
         anchor = (point[0], point[1] - 30.0 if rail == "vcc" else point[1] + 30.0)
+        # A bottom-tap pin would otherwise stub straight through the host body;
+        # re-anchor outside the symbol and route the wire around its side edge.
+        anchor, route = rail_stub_route(point, anchor, boxes.get(host), rail)
         if clone_count == 0:
             set_group_anchor(template, anchor)
         else:
             clone_power_symbol(root, template, rail, clone_count, anchor)
         clone_count += 1
-        line_count += append_counted_net_line(root, net_class, point, anchor)
+        for start, end in route:
+            line_count += append_counted_net_line(root, net_class, start, end)
         junction_counts[(point[0], point[1], net_class)] += 1
     return line_count
 
@@ -3019,6 +3145,8 @@ def add_ldo_custom_net(
     output_node: str = "",
     gate_nodes: set[str] | None = None,
     compact_feedback: bool = False,
+    point_cells: list[str] | None = None,
+    body_boxes: dict[str, tuple[float, float, float, float]] | None = None,
 ) -> int | None:
     lower = node.lower()
     gate_nodes = {item.lower() for item in (gate_nodes or set())}
@@ -3057,12 +3185,31 @@ def add_ldo_custom_net(
     if lower == "out" or lower == output_node.lower():
         bus_y = max(180.0, min(point[1] for point in raw_points) + 7.0)
         bus_points: list[tuple[float, float]] = []
-        for point in raw_points:
+        for index, point in enumerate(raw_points):
             bus_point = (point[0], bus_y)
-            if not nearly_equal(point[1], bus_y):
-                line_count += append_counted_net_line(root, net_class, point, bus_point)
-            junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
-            bus_points.append(bus_point)
+            body = body_boxes.get(point_cells[index]) if point_cells and body_boxes else None
+            crosses_body = (
+                body is not None
+                and point[1] > bus_y + 20.0
+                and body[0] + 2.0 < point[0] < body[2] - 2.0
+                and min(point[1], body[3] - 1.5) - max(bus_y, body[1] + 1.5) > 2.0
+            )
+            if crosses_body:
+                # Deep pins (e.g. the divider's bottom tap) detour around the
+                # host body's right edge so the drop never crosses the symbol.
+                corridor_x = body[2] + 12.0
+                elbow = (corridor_x, point[1])
+                drop = (corridor_x, bus_y)
+                line_count += append_counted_net_line(root, net_class, point, elbow)
+                line_count += append_counted_net_line(root, net_class, elbow, drop)
+                junction_counts[(elbow[0], elbow[1], net_class)] += 1
+                junction_counts[(drop[0], drop[1], net_class)] += 1
+                bus_points.append(drop)
+            else:
+                if not nearly_equal(point[1], bus_y):
+                    line_count += append_counted_net_line(root, net_class, point, bus_point)
+                junction_counts[(bus_point[0], bus_point[1], net_class)] += 1
+                bus_points.append(bus_point)
         xs = sorted(set(point[0] for point in bus_points))
         for start_x, end_x in zip(xs, xs[1:]):
             line_count += append_counted_net_line(root, net_class, (start_x, bus_y), (end_x, bus_y))
@@ -3121,6 +3268,8 @@ def add_blockwise_custom_net(
     net_class: str,
     raw_points: list[tuple[float, float]],
     junction_counts: dict[tuple[float, float, str], int],
+    touched_blocks: set[str] | None = None,
+    stub_directions: list[tuple[float, float]] | None = None,
 ) -> int | None:
     blocks = collect_module_blocks(payload)
     if not blocks:
@@ -3134,22 +3283,27 @@ def add_blockwise_custom_net(
     span_x = max(point[0] for point in raw_points) - min(point[0] for point in raw_points)
     line_count = 0
 
-    if lower == output_node or lower.endswith("_n") or (len(raw_points) >= 4 and span_x > 520.0):
-        # High-fanout/cross-module nets read better as local net labels than as
-        # one long wire spanning every block. This matches hand-drawn analog
-        # schematics and also exposes accidental output-net reuse without
-        # turning the whole page into a bus.
+    cross_module = bool(touched_blocks) and len(touched_blocks) > 1
+    if cross_module or lower == output_node or lower.endswith("_n") or (len(raw_points) >= 4 and span_x > 520.0):
+        # Only cross-module nets (spanning more than one module block) collapse
+        # to local net labels; intra-module connections stay wired. High-fanout
+        # and output nets keep the previous label behavior as well — it reads
+        # like hand-drawn analog schematics and exposes accidental net reuse.
+        # Stubs point outward from the host symbol (never back through its body).
         label = node.upper() if lower.endswith("_n") else node
-        right_edge = max(float(block["x"]) + float(block["w"]) for block in blocks)
-        for point in raw_points:
-            if point[0] > right_edge:
-                end = (point[0] - 24.0, point[1])
+        directions = stub_directions or [(0.0, -1.0)] * len(raw_points)
+        for point, direction in zip(raw_points, directions):
+            dx, dy = direction
+            if abs(dx) >= abs(dy) and (dx or dy):
+                sign = 1.0 if dx >= 0 else -1.0
+                end = (point[0] + sign * 24.0, point[1])
                 line_count += append_counted_net_line(root, net_class, point, end)
-                append_net_label(root, net_class, label, end[0] - 48.0, end[1] - 4.0)
+                append_net_label(root, net_class, label, end[0] + (4.0 if sign > 0 else -48.0), end[1] - 4.0)
             else:
-                end = (point[0], point[1] - 20.0)
+                sign = 1.0 if dy >= 0 else -1.0
+                end = (point[0], point[1] + sign * 24.0)
                 line_count += append_counted_net_line(root, net_class, point, end)
-                append_net_label(root, net_class, label, end[0] + 4.0, end[1] - 3.0)
+                append_net_label(root, net_class, label, end[0] + 4.0, end[1] + (12.0 if sign > 0 else -6.0))
         return line_count
 
     return None
@@ -3164,7 +3318,16 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
         return {"updated": False, "reason": "invalid_module"}
 
     pins = cell_pin_points(root)
+    cell_centers: dict[str, tuple[float, float]] = {}
+    cell_boxes: dict[str, tuple[float, float, float, float]] = cell_body_boxes(root)
+    for name, group in find_cell_groups(root).items():
+        transform = parse_translate(group.get("transform"))
+        if transform is None:
+            continue
+        group_w, group_h = group_dimensions(group)
+        cell_centers[name] = (transform[0] + group_w / 2.0, transform[1] + group_h / 2.0)
     points_by_bit: dict[int, list[tuple[float, float]]] = defaultdict(list)
+    cells_by_bit: dict[int, list[str]] = defaultdict(list)
     cells = module.get("cells", {})
     if not isinstance(cells, dict):
         return {"updated": False, "reason": "missing_cells"}
@@ -3182,6 +3345,7 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
             for bit in bits:
                 if isinstance(bit, int):
                     points_by_bit[bit].append(point)
+                    cells_by_bit[bit].append(str(cell_name))
 
     node_names = bit_to_node_name(payload)
     interfaces = payload.get("interfaces", {}) if isinstance(payload.get("interfaces"), dict) else {}
@@ -3196,6 +3360,7 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
         if isinstance(node, (str, int, float))
     }
     components = payload.get("components", [])
+    component_lookup = component_by_name(payload)
     compact_ldo_feedback = any(
         isinstance(component, dict)
         and component_type(component) == "bjt"
@@ -3264,7 +3429,31 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
         if rail_symbol_for_format(node) in {"vcc", "vee"}:
             line_count += add_local_power_net(root, node, net_class, raw_points, junction_counts)
             continue
-        blockwise_line_count = add_blockwise_custom_net(root, payload, node, net_class, raw_points, junction_counts)
+        blockwise_line_count = add_blockwise_custom_net(
+            root,
+            payload,
+            node,
+            net_class,
+            raw_points,
+            junction_counts,
+            {
+                module_name
+                for module_name in (
+                    component_module_name(component_lookup.get(cell_name) or {})
+                    for cell_name in cells_by_bit.get(bit, [])
+                )
+                if module_name and module_name != "global"
+            },
+            [
+                (
+                    point[0] - cell_centers[cell_name][0],
+                    point[1] - cell_centers[cell_name][1],
+                )
+                if cell_name in cell_centers
+                else (0.0, -1.0)
+                for point, cell_name in zip(raw_points, cells_by_bit.get(bit, []))
+            ],
+        )
         if blockwise_line_count is not None:
             line_count += blockwise_line_count
             continue
@@ -3279,6 +3468,8 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 output_node=output_node,
                 gate_nodes=ldo_gate_nodes,
                 compact_feedback=compact_ldo_feedback,
+                point_cells=cells_by_bit.get(bit, []),
+                body_boxes=cell_boxes,
             )
             if custom_line_count is not None:
                 line_count += custom_line_count
@@ -3364,6 +3555,7 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 line_count += custom_line_count
                 continue
         orientation = net_trunk_orientation(node, raw_points, input_node, output_node)
+        body_boxes = cell_body_boxes(root)
 
         if orientation == "horizontal":
             y = snap(sum(point[1] for point in raw_points) / len(raw_points))
@@ -3371,13 +3563,23 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
                 y = max(point[1] for point in raw_points)
             elif rail_symbol_for_format(node) in {"vcc", "vee"}:
                 y = min(point[1] for point in raw_points)
-            xs = sorted(set([point[0] for point in raw_points]))
+            xs = set(point[0] for point in raw_points)
             for point in raw_points:
                 if not nearly_equal(point[1], y):
+                    corridor_x = drop_corridor_x(point, y, body_boxes)
+                    if corridor_x is not None:
+                        # The straight drop to the bus crosses a symbol: route the
+                        # pin outward around the nearest body edge instead.
+                        append_net_line(root, net_class, point, (corridor_x, point[1]))
+                        append_net_line(root, net_class, (corridor_x, point[1]), (corridor_x, y))
+                        junction_counts[(corridor_x, y, net_class)] += 1
+                        xs.add(corridor_x)
+                        line_count += 2
+                        continue
                     append_net_line(root, net_class, point, (point[0], y))
                     junction_counts[(point[0], y, net_class)] += 1
                     line_count += 1
-            for start, end in zip(xs, xs[1:]):
+            for start, end in zip(sorted(xs), sorted(xs)[1:]):
                 append_net_line(root, net_class, (start, y), (end, y))
                 line_count += 1
         else:
@@ -3385,6 +3587,15 @@ def add_formatted_nets(root: ET.Element, payload: dict[str, object]) -> dict[str
             ys = sorted(set([point[1] for point in raw_points]))
             for point in raw_points:
                 if not nearly_equal(point[0], x):
+                    corridor_y = drop_corridor_y(point, x, body_boxes)
+                    if corridor_y is not None:
+                        append_net_line(root, net_class, point, (point[0], corridor_y))
+                        append_net_line(root, net_class, (point[0], corridor_y), (x, corridor_y))
+                        junction_counts[(x, corridor_y, net_class)] += 1
+                        ys.append(corridor_y)
+                        ys.sort()
+                        line_count += 2
+                        continue
                     append_net_line(root, net_class, point, (x, point[1]))
                     junction_counts[(x, point[1], net_class)] += 1
                     line_count += 1
