@@ -701,21 +701,23 @@ function PlaceGhostSymbol({ component }: { component: CircuitComponent }) {
           />
         );
       })}
-      <text
-        x={labels.name.x}
-        y={labels.name.y}
-        textAnchor={labels.name.anchor}
-        fontSize={COMPONENT_NAME_FONT_SIZE}
-        fontFamily={LABEL_FONT}
-        fontWeight="700"
-        fill={LABEL_COLOR}
-        stroke={LABEL_HALO_COLOR}
-        strokeWidth="3"
-        paintOrder="stroke"
-      >
-        {component.name}
-      </text>
-      {component.type !== 'BLOCK' ? (
+      {component.type !== 'GND' ? (
+        <text
+          x={labels.name.x}
+          y={labels.name.y}
+          textAnchor={labels.name.anchor}
+          fontSize={COMPONENT_NAME_FONT_SIZE}
+          fontFamily={LABEL_FONT}
+          fontWeight="700"
+          fill={LABEL_COLOR}
+          stroke={LABEL_HALO_COLOR}
+          strokeWidth="3"
+          paintOrder="stroke"
+        >
+          {component.name}
+        </text>
+      ) : null}
+      {component.type !== 'BLOCK' && component.type !== 'GND' ? (
         <text
           x={labels.value.x}
           y={labels.value.y}

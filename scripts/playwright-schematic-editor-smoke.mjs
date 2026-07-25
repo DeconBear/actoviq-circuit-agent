@@ -5371,6 +5371,11 @@ try {
     1,
     'G hotkey should arm a ground ghost preview',
   );
+  assert.equal(
+    await page.getByTestId('schematic-place-ghost').locator('text').count(),
+    0,
+    'ground ghost preview must not render name/value labels (qucs parity)',
+  );
   await page.mouse.click(gndProbeSpot.x, gndProbeSpot.y);
   await page.waitForFunction((count) => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(count) &&

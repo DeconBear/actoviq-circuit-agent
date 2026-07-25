@@ -144,6 +144,10 @@ def _project_net_aliases(project: dict[str, Any], modules: dict[str, dict[str, A
 
 
 def _included_component(component: dict[str, Any], view: str) -> bool:
+    if str(component.get("type", "")).upper() == "GND":
+        # Ground pseudo-components are schematic anchors, not physical devices;
+        # the ground net still exports through pins and the promoted GND port.
+        return False
     if view == "simulation":
         return True
     mount_policy = str(component.get("mount_policy", ""))
@@ -3572,6 +3576,10 @@ def _spice_lines(
     for page in ir["pages"]:
         for component in page["components"]:
             component_type = str(component.get("type", "X")).upper()
+            if component_type == "GND":
+                # Ground pseudo-components carry no SPICE/CDL card; their pin
+                # already ties the ground net through the connectivity records.
+                continue
             prefix = "X" if component_type == "BLOCK" else component_type
             name = str((component.get("eda") or {}).get("refdes") or component.get("name", component["id"]))
             if not name.upper().startswith(prefix):
