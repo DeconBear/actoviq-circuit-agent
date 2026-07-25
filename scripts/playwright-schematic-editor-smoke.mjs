@@ -2772,10 +2772,12 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r2'
   ));
-  // Wires attached to a selected component show the attached-selection highlight.
-  assert.ok(
-    await page.getByTestId('schematic-attached-wire-highlight').count() >= 1,
-    'selecting a wired component should highlight its attached wires',
+  // A single selected component must not make its wires look selected;
+  // the attached highlight is a multi-selection group marker only.
+  assert.equal(
+    await page.getByTestId('schematic-attached-wire-highlight').count(),
+    0,
+    'single component selection must not highlight attached wires',
   );
   const c1BodyPoint = await componentScreenPoint(page, 'c1');
   await page.keyboard.down('Shift');
@@ -2786,7 +2788,7 @@ try {
   ));
   assert.ok(
     await page.getByTestId('schematic-attached-wire-highlight').count() >= 1,
-    'multi-selected components should keep attached-wire highlights',
+    'multi-selected components should highlight their shared attached wires',
   );
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => (

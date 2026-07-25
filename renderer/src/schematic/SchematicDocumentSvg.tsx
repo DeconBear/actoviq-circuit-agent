@@ -181,14 +181,10 @@ export function SchematicDocumentSvg({
         {document.wires.map((wire) => {
           const selected = (selection?.kind === 'wire' && selection.id === wire.id) ||
             (selection?.kind === 'wires' && selection.ids.includes(wire.id));
-          // Wires attached to a selected component get a muted highlight of the
-          // component-selection color (no point handles — the wire itself is not
-          // the active edit target).
-          const selectedComponentIds = selection?.kind === 'component'
-            ? [selection.id]
-            : selection?.kind === 'components'
-              ? selection.ids
-              : [];
+          // Attached-wire highlight marks group membership only for a MULTI
+          // component selection; a single selected component must not make its
+          // wires look selected too.
+          const selectedComponentIds = selection?.kind === 'components' ? selection.ids : [];
           const attachedSelected = selectedComponentIds.some((componentId) => (
             wire.from?.component_id === componentId || wire.to?.component_id === componentId
           ));
