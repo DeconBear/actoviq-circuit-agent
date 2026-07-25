@@ -270,7 +270,9 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     if (busy || contextMenu) return null;
     if (tool === 'place-block') {
       if (!pendingBlock || !hoverWorld) return null;
-      return makePlacedBlock(cloneModule(draft), snapPoint(hoverWorld), pendingBlock);
+      const ghost = makePlacedBlock(cloneModule(draft), snapPoint(hoverWorld), pendingBlock);
+      ghost.rotation = normalizeRotation(placeRotation);
+      return ghost;
     }
     if (tool !== 'place' || !hoverWorld) return null;
     const ghost = makePlacedComponent(cloneModule(draft), placeType, snapPoint(hoverWorld));
@@ -532,11 +534,13 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       }
       const next = cloneModule(draft);
       const component = makePlacedBlock(next, snapPoint(world), pendingBlock);
+      component.rotation = normalizeRotation(placeRotation);
       next.components.push(component);
       commitDraft(next);
       setSelection({ kind: 'component', id: component.id });
       // Keep place-block mode armed (qucs-style continuous placement); Esc or the
       // select tool exits, and the pending block definition stays for the next click.
+      setPlaceRotation(0);
       return;
     }
 
@@ -976,7 +980,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   function handleContextMenu(event: ReactMouseEvent<SVGSVGElement>) {
     event.preventDefault();
     event.stopPropagation();
-    if (tool === 'place') {
+    if (tool === 'place' || tool === 'place-block') {
       // qucs parity: right-click rotates the pending symbol during placement
       // (Esc exits place mode); it must not cancel the placement gesture.
       setPlaceRotation((current) => normalizeRotation(current + 90));
@@ -1298,7 +1302,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       fitViewport();
       return;
     }
-    if (key === 'r' && tool === 'place') {
+    if (key === 'r' && (tool === 'place' || tool === 'place-block')) {
       // While placing, R rotates the pending symbol (qucs parity) instead of
       // rotating whatever component happens to be selected.
       event.preventDefault();
@@ -1455,13 +1459,17 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       next.ports = updated.ports;
       next.wires = updated.wires;
     } else if (targetSelection.kind === 'wires') {
+      // The whole batch is being deleted: never (re)materialize a sibling whose
+      // id is in the selection, otherwise a same-net wire deleted earlier in
+      // this loop would come back when a later generated wire is processed.
+      const batchIds = new Set(targetSelection.ids);
       for (const wireId of targetSelection.ids) {
         const selectedWire = document.wires.find((wire) => wire.id === wireId);
         if (selectedWire && !isStoredWire(selectedWire, next)) {
           next.wires = [
             ...(next.wires ?? []),
             ...document.wires
-              .filter((wire) => wire.id !== selectedWire.id && wire.net === selectedWire.net && !isStoredWire(wire, next))
+              .filter((wire) => wire.id !== selectedWire.id && !batchIds.has(wire.id) && wire.net === selectedWire.net && !isStoredWire(wire, next))
               .map(materializeEditableWire),
           ];
         }
@@ -1623,7 +1631,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       data-preview-busy={buildBusy ? 'true' : 'false'}
       data-dirty={dirty ? 'true' : 'false'}
       data-save-error={saveError ?? ''}
-      data-place-rotation={tool === 'place' ? String(placeRotation) : ''}
+      data-place-rotation={tool === 'place' || tool === 'place-block' ? String(placeRotation) : ''}
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}
       data-selected-wire-count={String(wireIdsForSelection(selection).length)}
@@ -2219,22 +2227,21 @@ function appendCopiedComponents(
       .filter((port) => port.signal_type === 'ground' || port.signal_type === 'power')
       .map((port) => port.net),
   );
-  // Nets referenced by anything outside the copied set must not be joined by the
-  // paste (that would short the copy into the original circuit). Pure junction
-  // wires do not prove externality on their own: their net's membership derives
-  // from the pins/ports reachable on it.
+  // Nets used by components outside the copied set must not be joined by the
+  // paste (that would short the copy into the original circuit). Ports and
+  // junction wires do not prove externality on their own: a net shared inside
+  // the copied set keeps its internal wiring (fresh shared net) even when a
+  // module port carries the same name or a wire bound the net to a port —
+  // rails are still kept by isRailNet, and wires bound to a port are never
+  // copied, so the paste stays isolated from the port itself.
   const externalNets = new Set<string>([
     ...module.components
       .filter((component) => !sourceIds.has(component.id))
       .flatMap((component) => component.pins.map((pin) => pin.net)),
-    ...module.ports.map((port) => port.net),
     ...(module.wires ?? [])
-      .filter((wire) => [wire.from, wire.to].some((endpoint) => {
-        if (!endpoint) return false;
-        if (endpoint.port_id) return true;
-        if (endpoint.component_id) return !sourceIds.has(endpoint.component_id);
-        return false;
-      }))
+      .filter((wire) => [wire.from, wire.to].some((endpoint) => (
+        endpoint?.component_id ? !sourceIds.has(endpoint.component_id) : false
+      )))
       .map((wire) => wire.net ?? ''),
   ].filter(Boolean));
   const usedNetNames = new Set<string>([

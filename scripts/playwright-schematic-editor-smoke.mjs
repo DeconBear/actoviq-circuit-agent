@@ -3565,6 +3565,28 @@ try {
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-custom-block.png') });
   console.log('[e2e] custom block placement and pin editing isolated');
 
+  // R while placing a block rotates the pending block and must not exit place mode.
+  await editor.focus();
+  await page.keyboard.press('r');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-place-rotation') === '90' &&
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-tool') === 'place-block'
+  ));
+  assert.equal(
+    await editor.getAttribute('data-selected'),
+    `component:${manualBlock.id}`,
+    'R in place-block mode must not rotate the selected block',
+  );
+  assert.equal(
+    Number((await componentRotations(page))[manualBlock.id] ?? 0),
+    0,
+    'R in place-block mode must not change the placed block rotation',
+  );
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-tool') === 'select'
+  ));
+
   // Block placement mode persists (qucs parity); return to the select tool before port tests.
   await page.getByTestId('schematic-editor-select').click();
   await page.waitForFunction(() => (
