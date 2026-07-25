@@ -220,10 +220,14 @@ export function SchematicDocumentSvg({
       </g>
       <g data-layer="net-labels">
         {document.netLabels.map((label) => (
-          // Net-label hit targets still select the parent component, but selection/hover
-          // chrome stays on the component frame only — extra dashed boxes around every
-          // attached GND/VDD stub made dense MOS stages look fragmented.
-          <NetLabelSymbol key={label.id} label={label} />
+          // Rail labels (GND / power) are first-class selectable entities with
+          // their own selection chrome; signal labels keep selecting the parent.
+          <NetLabelSymbol
+            key={label.id}
+            label={label}
+            selected={selection?.kind === 'netlabel' && selection.id === label.id}
+            hovered={hoverSelection?.kind === 'netlabel' && hoverSelection.id === label.id && !(selection?.kind === 'netlabel' && selection.id === label.id)}
+          />
         ))}
       </g>
       <g data-layer="ports">
@@ -374,7 +378,7 @@ function MarqueeRect({ bounds }: { bounds: SchematicBounds }) {
   );
 }
 
-function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
+function NetLabelSymbol({ label, selected = false, hovered = false }: { label: SchematicNetLabel; selected?: boolean; hovered?: boolean }) {
   const { position, endpoint } = label;
   const nameY = label.kind === 'power' ? position.y - 18 : position.y + 54;
   const hit = netLabelBounds(label);
@@ -402,6 +406,24 @@ function NetLabelSymbol({ label }: { label: SchematicNetLabel }) {
         data-net-label-id={label.id}
         data-component-id={label.endpoint.component_id || undefined}
       />
+      {selected || hovered ? (
+        <rect
+          x={hit.minX - 4}
+          y={hit.minY - 4}
+          width={Math.max(1, hit.maxX - hit.minX) + 8}
+          height={Math.max(1, hit.maxY - hit.minY) + 8}
+          rx="4"
+          fill={COMPONENT_SELECTION_COLOR}
+          fillOpacity={selected ? 0.07 : 0.045}
+          stroke={COMPONENT_SELECTION_COLOR}
+          strokeWidth={selected ? 1.8 : 1.5}
+          strokeDasharray={selected ? '8 6' : undefined}
+          pointerEvents="none"
+          data-testid={selected ? 'schematic-selected-net-label-frame' : 'schematic-hover-net-label-frame'}
+          data-selection-kind="netlabel"
+          data-net-label-id={label.id}
+        />
+      ) : null}
       {hasStub ? (
         <line
           x1={endpoint.x}

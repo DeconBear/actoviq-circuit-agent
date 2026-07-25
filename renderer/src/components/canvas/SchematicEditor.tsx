@@ -43,8 +43,11 @@ import {
   type EndpointHit,
   type SchematicDocument,
   type SchematicBounds,
+  type SchematicNetLabel,
   type SchematicSelection,
   type ToolComponentType,
+  distance,
+  pinWorld,
 } from '../../schematic/schematicDocument';
 
 type ToolMode = 'select' | 'wire' | 'place' | 'place-block';
@@ -206,6 +209,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [dragPreviewPositions, setDragPreviewPositions] = useState<Record<string, CircuitPosition> | null>(null);
   const [clipboardComponentCount, setClipboardComponentCount] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<CircuitModule[]>([]);
   const [future, setFuture] = useState<CircuitModule[]>([]);
   const editorShellRef = useRef<HTMLDivElement | null>(null);
@@ -261,6 +265,9 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const selectedWire = selection?.kind === 'wire'
     ? document.wires.find((wire) => wire.id === selection.id) ?? null
     : null;
+  const selectedNetLabel = selection?.kind === 'netlabel'
+    ? document.netLabels.find((label) => label.id === selection.id) ?? null
+    : null;
   const wirePreview = hoverWorld
     ? hoverEndpoint ?? pointEndpoint(snapPoint(hoverWorld))
     : null;
@@ -313,6 +320,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setSpacePanActive(false);
     setDragPreviewPositions(null);
     setSaveError(null);
+    setActionNotice(null);
     componentClipboardRef.current = [];
     pasteSerialRef.current = 0;
     setClipboardComponentCount(0);
@@ -326,6 +334,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setDraft(next);
     setDirty(true);
     setSaveError(null);
+    setActionNotice(null);
   }, [draft]);
 
   function scheduleDraftUpdate(update: DraftUpdate) {
@@ -612,6 +621,16 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         originalDirty: dirty,
         moved: false,
       };
+      return;
+    }
+
+    const railLabelHit = railNetLabelFromPointerTarget(document, event.target)
+      ?? hitRailNetLabel(document, world);
+    if (railLabelHit) {
+      // Rail labels (GND / power) are first-class selectable entities: clicking
+      // one selects the label itself instead of starting a parent-component drag.
+      setSelection({ kind: 'netlabel', id: railLabelHit.id });
+      setInteractionCursor('default');
       return;
     }
 
@@ -1483,6 +1502,33 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       next.components = updated.components;
       next.ports = updated.ports;
       next.wires = updated.wires;
+    } else if (targetSelection.kind === 'netlabel') {
+      const label = document.netLabels.find((entry) => entry.id === targetSelection.id);
+      if (!label || !label.endpoint.component_id || !label.endpoint.pin_id) return;
+      const component = next.components.find((entry) => entry.id === label.endpoint.component_id);
+      const pinIndex = component?.pins.findIndex((entry) => entry.id === label.endpoint.pin_id) ?? -1;
+      const pin = pinIndex >= 0 ? component?.pins[pinIndex] : undefined;
+      if (!component || !pin) return;
+      // Convert the rail-labeled pin into a physical wire: deleting a rail label
+      // keeps the net connected by wiring the pin to the nearest same-net node.
+      const pinPoint = pinWorld(component, pin, pinIndex);
+      const target = nearestNetEndpoint(document, pin.net, pinPoint, {
+        componentId: component.id,
+        pinId: pin.id,
+      });
+      if (!target) {
+        setActionNotice(`Cannot delete ${label.name}: it is the only connection on net ${pin.net}`);
+        return;
+      }
+      addWire(next, {
+        kind: 'pin',
+        x: pinPoint.x,
+        y: pinPoint.y,
+        component_id: component.id,
+        pin_id: pin.id,
+        label: `${component.name}.${pin.name}`,
+        net: pin.net,
+      }, target, document.wires);
     } else if (targetSelection.kind === 'wires') {
       // The whole batch is being deleted: never (re)materialize a sibling whose
       // id is in the selection, otherwise a same-net wire deleted earlier in
@@ -1707,9 +1753,10 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         hasSelection={Boolean(selection)}
         dirty={dirty}
         buildBusy={buildBusy}
-        status={saveError
-          ? `Save failed: ${saveError}`
-          : wireStart
+        status={actionNotice
+          ?? (saveError
+            ? `Save failed: ${saveError}`
+            : wireStart
             ? `Wire from ${wireStart.label}${hoverEndpoint ? ` to ${hoverEndpoint.label}` : ''}`
             : tool === 'place'
               ? `Placing ${placeType}: click to place, R / right-click rotates, Esc to exit`
@@ -1717,7 +1764,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
                 ? 'Placing block: click to place, Esc to exit'
                 : hoverEndpoint
                   ? `Snap ${hoverEndpoint.label}`
-                  : dirty ? 'Unsaved' : 'Saved'}
+                  : dirty ? 'Unsaved' : 'Saved')}
         zoom={zoom}
         onSelect={() => {
           setTool('select');
@@ -1971,6 +2018,24 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             <div style={styles.emptyText}>{selection.ids.length} components selected</div>
           ) : selection?.kind === 'wires' ? (
             <div style={styles.emptyText} data-testid="schematic-editor-wires-panel">{selection.ids.length} wires selected</div>
+          ) : selectedNetLabel ? (
+            <div style={styles.pinList} data-testid="schematic-editor-netlabel-panel">
+              <div style={styles.pinRow}>
+                <span>Rail label</span>
+                <code data-testid="schematic-editor-netlabel-name">{selectedNetLabel.name}</code>
+              </div>
+              <div style={styles.pinRow}>
+                <span>Net</span>
+                <code data-testid="schematic-editor-netlabel-net">{selectedNetLabel.net}</code>
+              </div>
+              <div style={styles.pinRow}>
+                <span>Attached</span>
+                <code data-testid="schematic-editor-netlabel-pin">
+                  {selectedNetLabel.endpoint.component_id}.{selectedNetLabel.endpoint.pin_id}
+                </code>
+              </div>
+              <div style={styles.emptyText}>Delete converts this pin to a wired connection.</div>
+            </div>
           ) : selectedPort ? (
             <div style={styles.pinList} data-testid="schematic-editor-port-panel">
               <div style={styles.pinRow}>
@@ -2620,6 +2685,10 @@ function hoverSelectionForWorld(
   if (port && !(selection?.kind === 'port' && selection.id === port.id)) {
     return { kind: 'port', id: port.id };
   }
+  const railLabel = hitRailNetLabel(document, world);
+  if (railLabel && !(selection?.kind === 'netlabel' && selection.id === railLabel.id)) {
+    return { kind: 'netlabel', id: railLabel.id };
+  }
   const component = hitComponent(document, world);
   if (component && !componentIdsForSelection(selection).includes(component.id)) {
     return { kind: 'component', id: component.id };
@@ -2723,6 +2792,99 @@ function hitNetLabelComponent(
     }
   }
   return null;
+}
+
+function railNetLabelFromPointerTarget(
+  document: ReturnType<typeof createSchematicDocument>,
+  target: EventTarget | null,
+): SchematicNetLabel | null {
+  if (!(target instanceof Element)) return null;
+  const labelNode = target.closest('[data-testid="schematic-net-label-hit-target"], [data-testid="schematic-net-label"]');
+  const labelId = labelNode?.getAttribute('data-net-label-id');
+  if (!labelId) return null;
+  const label = document.netLabels.find((entry) => entry.id === labelId);
+  return label && (label.kind === 'ground' || label.kind === 'power') ? label : null;
+}
+
+function hitRailNetLabel(
+  document: ReturnType<typeof createSchematicDocument>,
+  world: CircuitPosition,
+): SchematicNetLabel | null {
+  for (let index = document.netLabels.length - 1; index >= 0; index -= 1) {
+    const label = document.netLabels[index];
+    if (!label || (label.kind !== 'ground' && label.kind !== 'power')) continue;
+    const bounds = netLabelBounds(label);
+    if (
+      world.x >= bounds.minX && world.x <= bounds.maxX
+      && world.y >= bounds.minY && world.y <= bounds.maxY
+    ) {
+      return label;
+    }
+  }
+  return null;
+}
+
+function nearestNetEndpoint(
+  document: ReturnType<typeof createSchematicDocument>,
+  net: string,
+  fromPoint: CircuitPosition,
+  exclude: { componentId: string; pinId: string },
+): EndpointHit | null {
+  let best: EndpointHit | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  const consider = (candidate: EndpointHit | null) => {
+    if (!candidate) return;
+    const candidateDistance = distance(candidate, fromPoint);
+    if (candidateDistance > 0.5 && candidateDistance < bestDistance) {
+      best = candidate;
+      bestDistance = candidateDistance;
+    }
+  };
+  for (const component of document.module.components) {
+    component.pins.forEach((pin, index) => {
+      if (pin.net !== net) return;
+      if (component.id === exclude.componentId && pin.id === exclude.pinId) return;
+      const point = pinWorld(component, pin, index);
+      consider({
+        kind: 'pin',
+        x: point.x,
+        y: point.y,
+        component_id: component.id,
+        pin_id: pin.id,
+        label: `${component.name}.${pin.name}`,
+        net: pin.net,
+      });
+    });
+  }
+  for (const port of document.module.ports) {
+    if (port.net !== net) continue;
+    const point = document.portPositions.get(port.id);
+    if (!point) continue;
+    consider({
+      kind: 'port',
+      x: point.x,
+      y: point.y,
+      port_id: port.id,
+      label: port.name,
+      net: port.net,
+    });
+  }
+  for (const wire of document.wires) {
+    if ((wire.net ?? '') !== net) continue;
+    for (const endpoint of [wire.from, wire.to]) {
+      if (!endpoint?.junction_id) continue;
+      consider({
+        kind: 'junction',
+        x: endpoint.x,
+        y: endpoint.y,
+        junction_id: endpoint.junction_id,
+        label: wire.net ? `Junction ${wire.net}` : 'Junction',
+        net: wire.net,
+        net_id: wire.net_id,
+      });
+    }
+  }
+  return best;
 }
 
 function portFromPointerTarget(

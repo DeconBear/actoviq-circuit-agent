@@ -30,6 +30,7 @@ export type SchematicSelection =
   | { kind: 'port'; id: string }
   | { kind: 'wire'; id: string }
   | { kind: 'wires'; ids: string[] }
+  | { kind: 'netlabel'; id: string }
   | null;
 
 type SignalPortSide = 'left' | 'right';
@@ -4424,7 +4425,7 @@ function createNetLabels(module: CircuitModule, portPositions: Map<string, Circu
         net: pin.net,
       });
       if (!shouldRepresentNetWithLocalLabel(module, pin.net)) return;
-      if (!shouldLabelRailPin(component, pin)) return;
+      if (!shouldLabelRailPin(module, component, pin)) return;
       const kind = isGroundNet(pin.net, module) ? 'ground' : 'power';
       const stub = RAIL_LABEL_STUB;
       const symbolPosition = kind === 'ground'
@@ -4490,8 +4491,15 @@ function shouldRepresentNetWithLocalLabel(module: CircuitModule, net: string | u
   return Boolean(net && isRailNet(net, module));
 }
 
-function shouldLabelRailPin(component: CircuitComponent, pin: CircuitPin): boolean {
+function shouldLabelRailPin(module: CircuitModule, component: CircuitComponent, pin: CircuitPin): boolean {
   if (component.type === 'GND') return false;
+  // A pin already tied with a stored wire keeps the wire; its rail label must
+  // not duplicate (e.g. after a rail label was converted into a connection).
+  if ((module.wires ?? []).some((wire) => (
+    [wire.from, wire.to].some((endpoint) => endpoint?.component_id === component.id && endpoint?.pin_id === pin.id)
+  ))) {
+    return false;
+  }
   if (component.type !== 'M') return true;
   const pinKey = `${pin.id} ${pin.name}`.toLowerCase();
   return /source|\bs\b/.test(pinKey);

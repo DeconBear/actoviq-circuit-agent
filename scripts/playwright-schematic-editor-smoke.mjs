@@ -1943,7 +1943,8 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
   ));
 
-  // GND / power net labels must be clickable and select their parent component.
+  // GND / power rail labels are first-class selectable entities (qucs parity):
+  // clicking one selects the label itself with its own selection chrome.
   const groundLabelCount = await page.locator('[data-testid="schematic-net-label"][data-kind="ground"]').count();
   if (groundLabelCount > 0) {
     const groundStubCount = await page.locator('[data-testid="schematic-net-label"][data-kind="ground"] [data-testid="schematic-rail-label-stub"]').count();
@@ -1955,27 +1956,59 @@ try {
     const groundHit = page.locator('[data-testid="schematic-net-label"][data-kind="ground"] [data-testid="schematic-net-label-hit-target"]').first();
     const groundBox = await groundHit.boundingBox();
     assert.ok(groundBox, 'ground net-label hit target should have a screen box');
-    const parentComponentId = await groundHit.getAttribute('data-component-id');
-    assert.ok(parentComponentId, 'ground net-label should reference a parent component');
+    const groundLabelId = await groundHit.getAttribute('data-net-label-id');
+    assert.ok(groundLabelId, 'ground net-label should expose a label id');
+    const netLabelCountBefore = Number(await editor.getAttribute('data-net-label-count'));
     await page.mouse.click(groundBox.x + groundBox.width / 2, groundBox.y + groundBox.height / 2);
-    await page.waitForFunction((componentId) => (
-      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `component:${componentId}`
-    ), parentComponentId);
-    assert.equal(
-      await page.getByTestId('schematic-selected-component-frame').count(),
-      1,
-      'selecting GND should select the parent component frame (not a separate net-label frame)',
-    );
+    await page.waitForFunction((labelId) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `netlabel:${labelId}`
+    ), groundLabelId);
     assert.equal(
       await page.getByTestId('schematic-selected-net-label-frame').count(),
+      1,
+      'selecting a rail label should show its own selection frame',
+    );
+    assert.equal(
+      await page.getByTestId('schematic-selected-component-frame').count(),
       0,
-      'parent selection must not draw fragmented net-label selection frames',
+      'rail label selection must not frame the parent component',
+    );
+    assert.equal(
+      (await page.getByTestId('schematic-editor-netlabel-net').textContent())?.trim(),
+      '0',
+      'rail label inspector should show the ground net',
+    );
+    // Deleting the label converts the pin to a physical wire on the same net.
+    await page.keyboard.press('Delete');
+    await page.waitForFunction((count) => (
+      Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-net-label-count') ?? '0') === count - 1
+    ), netLabelCountBefore);
+    const wiresAfterLabelDelete = await editorWires(page);
+    const convertedWire = wiresAfterLabelDelete.find((wire) => (
+      wire.source === 'stored' &&
+      (wire.from?.component_id === 'c_filter' && wire.from?.pin_id === 'b' || wire.to?.component_id === 'c_filter' && wire.to?.pin_id === 'b')
+    ));
+    assert.ok(convertedWire, 'deleting a rail label should wire the pin to a same-net node');
+    assert.equal(convertedWire.net, '0', 'converted rail-label wire should stay on the ground net');
+    assert.equal(
+      await page.locator('[data-testid="schematic-net-label"][data-kind="ground"]').count(),
+      groundLabelCount - 1,
+      'converted rail label should disappear once its pin is wired',
+    );
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+    await page.waitForFunction((count) => (
+      Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-net-label-count') ?? '0') === count
+    ), netLabelCountBefore);
+    assert.equal(
+      await page.locator('[data-testid="schematic-net-label"][data-kind="ground"]').count(),
+      groundLabelCount,
+      'undo should restore the deleted rail label',
     );
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
     ));
-    console.log('[e2e] ground net-label selection verified');
+    console.log('[e2e] rail label selection and delete-to-wire verified');
   } else {
     console.log('[e2e] ground net-label selection skipped (no ground labels in fixture)');
   }
