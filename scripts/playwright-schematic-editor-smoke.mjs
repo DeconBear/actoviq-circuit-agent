@@ -2680,9 +2680,38 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r2'
   ));
+  // Wires attached to a selected component show the attached-selection highlight.
+  assert.ok(
+    await page.getByTestId('schematic-attached-wire-highlight').count() >= 1,
+    'selecting a wired component should highlight its attached wires',
+  );
   const c1BodyPoint = await componentScreenPoint(page, 'c1');
   await page.keyboard.down('Shift');
   await page.mouse.click(c1BodyPoint.x, c1BodyPoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
+  ));
+  assert.ok(
+    await page.getByTestId('schematic-attached-wire-highlight').count() >= 1,
+    'multi-selected components should keep attached-wire highlights',
+  );
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+  ));
+  assert.equal(
+    await page.getByTestId('schematic-attached-wire-highlight').count(),
+    0,
+    'attached-wire highlights should clear with the selection',
+  );
+  await page.mouse.click(r2BodyPoint.x, r2BodyPoint.y);
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r2'
+  ));
+  const c1BodyPointForDuplicate = await componentScreenPoint(page, 'c1');
+  await page.keyboard.down('Shift');
+  await page.mouse.click(c1BodyPointForDuplicate.x, c1BodyPointForDuplicate.y);
   await page.keyboard.up('Shift');
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'

@@ -181,12 +181,24 @@ export function SchematicDocumentSvg({
         {document.wires.map((wire) => {
           const selected = (selection?.kind === 'wire' && selection.id === wire.id) ||
             (selection?.kind === 'wires' && selection.ids.includes(wire.id));
+          // Wires attached to a selected component get a muted highlight of the
+          // component-selection color (no point handles — the wire itself is not
+          // the active edit target).
+          const selectedComponentIds = selection?.kind === 'component'
+            ? [selection.id]
+            : selection?.kind === 'components'
+              ? selection.ids
+              : [];
+          const attachedSelected = selectedComponentIds.some((componentId) => (
+            wire.from?.component_id === componentId || wire.to?.component_id === componentId
+          ));
           const hovered = hoverSelection?.kind === 'wire' && hoverSelection.id === wire.id && !selected;
           return (
             <WirePath
               key={wire.id}
               wire={wire}
               selected={selected}
+              attachedSelected={attachedSelected}
               hovered={hovered}
               rubberBand={rubberBandWireIds?.has(wire.id) ?? false}
             />
@@ -497,7 +509,7 @@ function signalLabelTextPosition(
 
 type CSSCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
-function WirePath({ wire, selected, hovered, rubberBand }: { wire: CircuitWire; selected: boolean; hovered: boolean; rubberBand: boolean }) {
+function WirePath({ wire, selected, attachedSelected, hovered, rubberBand }: { wire: CircuitWire; selected: boolean; attachedSelected?: boolean; hovered: boolean; rubberBand: boolean }) {
   const points = pointsAttribute(wire.points ?? []);
   if (!points) return null;
   return (
@@ -538,6 +550,21 @@ function WirePath({ wire, selected, hovered, rubberBand }: { wire: CircuitWire; 
         data-hover-kind={hovered ? 'wire' : undefined}
         data-hover-shape={hovered ? 'route' : undefined}
       />
+      {attachedSelected && !selected ? (
+        <polyline
+          points={points}
+          fill="none"
+          stroke={COMPONENT_SELECTION_COLOR}
+          strokeWidth="9"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity="0.4"
+          pointerEvents="none"
+          data-testid="schematic-attached-wire-highlight"
+          data-selection-kind="attached-component"
+          data-selection-shape="route"
+        />
+      ) : null}
       <polyline
         points={points}
         fill="none"
