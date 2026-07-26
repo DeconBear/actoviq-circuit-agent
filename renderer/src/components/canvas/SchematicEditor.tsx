@@ -17,7 +17,6 @@ import {
   cloneModule,
   COMPONENT_TYPES,
   componentBounds,
-  computePortPositions,
   createSchematicDocument,
   hitComponent,
   hitEndpoint,
@@ -26,16 +25,13 @@ import {
   makeId,
   makePlacedBlock,
   makePlacedComponent,
-  moduleBounds,
   netLabelBounds,
   normalizeConnectivity,
   normalizeRotation,
-  padBounds,
   pointToSegmentDistance,
   pointEndpoint,
   RAIL_LABEL_STUB,
   removeWireAndUpdateConnectivity,
-  rerouteWire,
   rerouteStoredWires,
   SCHEMATIC_GRID,
   snapPoint,
@@ -246,9 +242,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const baseDocument = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
   const previewDraft = useMemo(() => {
     if (!dragPreviewPositions) return draft;
-    const next = cloneModule(draft);
-    applyComponentPositions(next, dragPreviewPositions);
-    return next;
+    return moduleWithComponentPositions(draft, dragPreviewPositions);
   }, [draft, dragPreviewPositions]);
   const document = useMemo(() => (
     dragPreviewPositions
@@ -2567,7 +2561,6 @@ function createDragPreviewDocument(
   draggedComponentIds: string[],
 ): SchematicDocument {
   const draggedIds = new Set(draggedComponentIds);
-  const portPositions = computePortPositions(previewModule);
   const sampleId = draggedComponentIds[0];
   const baseComponent = sampleId
     ? baseDocument.module.components.find((component) => component.id === sampleId)
@@ -2581,21 +2574,14 @@ function createDragPreviewDocument(
   const dy = baseComponent && previewComponent
     ? previewComponent.position.y - baseComponent.position.y
     : 0;
-  const wires = baseDocument.wires.map((wire) => cloneWire(wire));
-  for (let index = 0; index < wires.length; index += 1) {
-    const wire = wires[index];
-    if (!wire) continue;
-    if (wireOnlyTouchesDraggedComponents(wire, draggedIds)) {
-      wires[index] = translateWireGeometry(wire, dx, dy);
-      continue;
-    }
-    if (wireTouchesPreviewComponent(wire, draggedIds)) {
-      // qucs-like rubber-band: keep the far end fixed and rebuild an egress-first
-      // Manhattan path to the moving pin so the preview never threads the body.
-      const occupied = wires.filter((_, occupiedIndex) => occupiedIndex !== index);
-      wires[index] = rerouteWire(previewModule, wire, portPositions, occupied);
-    }
-  }
+  // Qucs-style drag preview: mutate only the selected components and the wires
+  // attached to them. Unrelated wire objects remain identical and there is no
+  // obstacle search, port recomputation, or document-wide bounds pass per frame.
+  const wires = baseDocument.wires.map((wire) => (
+    wireTouchesPreviewComponent(wire, draggedIds)
+      ? moveWireWithComponentSelection(wire, draggedIds, dx, dy)
+      : wire
+  ));
   const netLabels = baseDocument.netLabels.map((label) => {
     const componentId = label.endpoint.component_id;
     if (!componentId || !draggedIds.has(componentId) || (dx === 0 && dy === 0)) return label;
@@ -2609,15 +2595,11 @@ function createDragPreviewDocument(
       },
     };
   });
-  const bounds = moduleBounds(previewModule, portPositions, wires, netLabels);
   return {
     ...baseDocument,
     module: previewModule,
-    portPositions,
     wires,
     netLabels,
-    bounds,
-    viewBox: padBounds(bounds, 70),
   };
 }
 
@@ -2642,6 +2624,89 @@ function translateWireGeometry(wire: CircuitWire, dx: number, dy: number): Circu
   };
 }
 
+function moveWireWithComponentSelection(
+  wire: CircuitWire,
+  componentIds: Set<string>,
+  dx: number,
+  dy: number,
+): CircuitWire {
+  if (wireOnlyTouchesDraggedComponents(wire, componentIds)) {
+    return translateWireGeometry(wire, dx, dy);
+  }
+  const next = cloneWire(wire);
+  if (wire.from?.component_id && componentIds.has(wire.from.component_id)) {
+    moveWireEndpoint(next, 'from', dx, dy);
+  }
+  if (wire.to?.component_id && componentIds.has(wire.to.component_id)) {
+    moveWireEndpoint(next, 'to', dx, dy);
+  }
+  return next;
+}
+
+function moveWireEndpoint(
+  wire: CircuitWire,
+  side: 'from' | 'to',
+  dx: number,
+  dy: number,
+) {
+  const points = wire.points ?? [];
+  if (points.length < 2) return;
+  const movingIndex = side === 'from' ? 0 : points.length - 1;
+  const neighborIndex = side === 'from' ? 1 : points.length - 2;
+  const fixedIndex = side === 'from' ? points.length - 1 : 0;
+  const moving = points[movingIndex];
+  const neighbor = points[neighborIndex];
+  const fixed = points[fixedIndex];
+  if (!moving || !neighbor || !fixed) return;
+
+  const moved = { x: moving.x + dx, y: moving.y + dy };
+  const firstSegmentHorizontal = Math.abs(moving.y - neighbor.y) <= Math.abs(moving.x - neighbor.x);
+  if (points.length === 2) {
+    const dogleg = firstSegmentHorizontal
+      ? (() => {
+          const middleX = snapPoint({ x: (moved.x + fixed.x) / 2, y: 0 }).x;
+          return [moved, { x: middleX, y: moved.y }, { x: middleX, y: fixed.y }, fixed];
+        })()
+      : (() => {
+          const middleY = snapPoint({ x: 0, y: (moved.y + fixed.y) / 2 }).y;
+          return [moved, { x: moved.x, y: middleY }, { x: fixed.x, y: middleY }, fixed];
+        })();
+    wire.points = side === 'from'
+      ? compactOrthogonalPoints(dogleg)
+      : compactOrthogonalPoints([...dogleg].reverse());
+  } else {
+    points[movingIndex] = moved;
+    points[neighborIndex] = firstSegmentHorizontal
+      ? { x: neighbor.x, y: moved.y }
+      : { x: moved.x, y: neighbor.y };
+    wire.points = compactOrthogonalPoints(points);
+  }
+  const endpoint = wire[side];
+  if (endpoint) wire[side] = { ...endpoint, x: moved.x, y: moved.y };
+}
+
+function compactOrthogonalPoints(points: CircuitPosition[]): CircuitPosition[] {
+  const compact: CircuitPosition[] = [];
+  for (const point of points) {
+    const previous = compact.at(-1);
+    if (previous && samePosition(previous, point)) continue;
+    const beforePrevious = compact.at(-2);
+    if (
+      beforePrevious &&
+      previous &&
+      (
+        beforePrevious.x === previous.x && previous.x === point.x ||
+        beforePrevious.y === previous.y && previous.y === point.y
+      )
+    ) {
+      compact[compact.length - 1] = { ...point };
+      continue;
+    }
+    compact.push({ ...point });
+  }
+  return compact;
+}
+
 function commitWiresAfterComponentGroupMove(
   module: CircuitModule,
   componentIds: string[],
@@ -2650,43 +2715,21 @@ function commitWiresAfterComponentGroupMove(
   dy: number,
 ): CircuitWire[] {
   const ids = new Set(componentIds);
-  const originalById = new Map(originalWires.map((wire) => [wire.id, wire]));
-  // Prefer the live module wire list, but take pre-drag geometry from originalWires so
-  // rigid translates and partial reroutes start from the gesture's baseline paths.
-  const sourceWires: CircuitWire[] = [];
-  const seen = new Set<string>();
+  const movedById = new Map(originalWires.map((wire) => [
+    wire.id,
+    materializeEditableWire(
+      wireTouchesPreviewComponent(wire, ids)
+        ? moveWireWithComponentSelection(wire, ids, dx, dy)
+        : wire,
+    ),
+  ]));
+  const committed: CircuitWire[] = [];
   for (const wire of module.wires ?? []) {
-    sourceWires.push(originalById.get(wire.id) ?? wire);
-    seen.add(wire.id);
+    committed.push(movedById.get(wire.id) ?? cloneWire(wire));
+    movedById.delete(wire.id);
   }
-  for (const wire of originalWires) {
-    if (seen.has(wire.id)) continue;
-    sourceWires.push(wire);
-  }
-  const nextWires = sourceWires.map((wire) => (
-    wireOnlyTouchesDraggedComponents(wire, ids)
-      ? translateWireGeometry(wire, dx, dy)
-      : cloneWire(wire)
-  ));
-  const working = { ...module, wires: nextWires };
-  const needsReroute = nextWires.some(
-    (wire) => wireTouchesPreviewComponent(wire, ids) && !wireOnlyTouchesDraggedComponents(wire, ids),
-  );
-  if (!needsReroute) {
-    return nextWires.map((wire) => (
-      wireTouchesPreviewComponent(wire, ids) ? materializeEditableWire(wire) : wire
-    ));
-  }
-  const rerouted = rerouteStoredWires(working, { componentIds });
-  return rerouted.map((wire) => {
-    if (wireOnlyTouchesDraggedComponents(wire, ids)) {
-      return materializeEditableWire(nextWires.find((entry) => entry.id === wire.id) ?? wire);
-    }
-    if (wireTouchesPreviewComponent(wire, ids)) {
-      return materializeEditableWire(wire);
-    }
-    return wire;
-  });
+  committed.push(...movedById.values());
+  return committed;
 }
 
 function wireTouchesPreviewComponent(wire: CircuitWire, componentIds: Set<string>): boolean {
@@ -3106,6 +3149,19 @@ function applyComponentPositions(module: CircuitModule, positions: Record<string
     const component = module.components.find((entry) => entry.id === componentId);
     if (component) component.position = { ...position };
   }
+}
+
+function moduleWithComponentPositions(
+  module: CircuitModule,
+  positions: Record<string, CircuitPosition>,
+): CircuitModule {
+  return {
+    ...module,
+    components: module.components.map((component) => {
+      const position = positions[component.id];
+      return position ? { ...component, position: { ...position } } : component;
+    }),
+  };
 }
 
 function clonePositionMap(positions: Record<string, CircuitPosition>): Record<string, CircuitPosition> {
