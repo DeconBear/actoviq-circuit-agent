@@ -81,6 +81,11 @@ from xschem_bridge import (
     push as push_xschem,
     validate_binding as validate_xschem_binding,
 )
+from open_sim_providers import (
+    OpenVafProvider,
+    XyceProvider,
+    inject_ngspice_osdi,
+)
 from stable_ids import ensure_module_stable_ids, ensure_project_stable_ids
 from validate_netlist_primitives import validate_netlist_text
 
@@ -4967,18 +4972,22 @@ class NgspiceSimulationProvider:
 
     provider_id = "ngspice"
 
-    def __init__(self, executable: str):
+    def __init__(self, executable: str, osdi_paths: list[Path] | None = None):
         self.executable = executable
+        self.osdi_paths = [Path(path).expanduser().resolve() for path in (osdi_paths or [])]
         self.execution_target = "local_windows" if os.name == "nt" else "local_linux"
 
     def run_analysis(self, run_root: Path, analysis: dict[str, Any]) -> dict[str, Any]:
-        return run_analysis(self.executable, run_root, analysis)
+        prepared = dict(analysis)
+        prepared["deck"] = inject_ngspice_osdi(str(analysis["deck"]), self.osdi_paths)
+        return run_analysis(self.executable, run_root, prepared)
 
     def metadata(self) -> dict[str, str]:
         return {
             "id": self.provider_id,
             "executable": self.executable,
             "version": Path(self.executable).name,
+            "osdi": [str(path) for path in self.osdi_paths],
         }
 
 
@@ -5074,7 +5083,11 @@ def execute_simulation_run(
     return result
 
 
-def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
+def simulate_project(
+    root: Path,
+    ngspice_bin: str,
+    osdi_paths: list[Path] | None = None,
+) -> dict[str, Any]:
     project, modules = load_project(root)
     analog_ic = normalize_project_kind(project.get("project_kind")) == "analog_ic"
     if analog_ic:
@@ -5084,7 +5097,7 @@ def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
             codes = ", ".join(str(item.get("code")) for item in audit.get("errors", []))
             raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_project(root)
-    provider = NgspiceSimulationProvider(resolve_ngspice(ngspice_bin))
+    provider = NgspiceSimulationProvider(resolve_ngspice(ngspice_bin), osdi_paths)
     netlist_path = Path(compile_result["netlist_path"])
     if analog_ic:
         atomic_write_text(
@@ -5117,7 +5130,12 @@ def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
     return result
 
 
-def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, Any]:
+def simulate_module(
+    root: Path,
+    module_id: str,
+    ngspice_bin: str,
+    osdi_paths: list[Path] | None = None,
+) -> dict[str, Any]:
     project, modules = load_project(root)
     analog_ic = normalize_project_kind(project.get("project_kind")) == "analog_ic"
     if analog_ic:
@@ -5127,7 +5145,7 @@ def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, A
             codes = ", ".join(str(item.get("code")) for item in audit.get("errors", []))
             raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_module(root, module_id)
-    provider = NgspiceSimulationProvider(resolve_ngspice(ngspice_bin))
+    provider = NgspiceSimulationProvider(resolve_ngspice(ngspice_bin), osdi_paths)
     netlist_path = Path(compile_result["netlist_path"])
     if analog_ic:
         atomic_write_text(
@@ -6058,11 +6076,31 @@ def build_parser() -> argparse.ArgumentParser:
     simulate_parser = subparsers.add_parser("simulate")
     simulate_parser.add_argument("--project-root", required=True)
     simulate_parser.add_argument("--ngspice-bin", default="")
+    simulate_parser.add_argument("--osdi", action="append", default=[])
 
     simulate_module_parser = subparsers.add_parser("simulate-module")
     simulate_module_parser.add_argument("--project-root", required=True)
     simulate_module_parser.add_argument("--module-id", required=True)
     simulate_module_parser.add_argument("--ngspice-bin", default="")
+    simulate_module_parser.add_argument("--osdi", action="append", default=[])
+
+    openvaf_parser = subparsers.add_parser(
+        "openvaf-compile",
+        help="Compile one Verilog-A model into a cached ngspice OSDI artifact.",
+    )
+    openvaf_parser.add_argument("--source", required=True)
+    openvaf_parser.add_argument("--cache-root", required=True)
+    openvaf_parser.add_argument("--openvaf-bin", default="")
+    openvaf_parser.add_argument("--flag", action="append", default=[])
+
+    xyce_parser = subparsers.add_parser(
+        "simulate-xyce",
+        help="Run a Xyce-compatible deck using the independent Xyce provider.",
+    )
+    xyce_parser.add_argument("--deck", required=True)
+    xyce_parser.add_argument("--run-root", required=True)
+    xyce_parser.add_argument("--xyce-bin", default="")
+    xyce_parser.add_argument("--arg", action="append", default=[])
 
     analog_ic_audit_parser = subparsers.add_parser(
         "analog-ic-audit",
@@ -6454,12 +6492,29 @@ def main() -> int:
         elif args.command == "compile-module":
             result = compile_module(Path(args.project_root).resolve(), args.module_id, args.renderer)
         elif args.command == "simulate":
-            result = simulate_project(Path(args.project_root).resolve(), args.ngspice_bin)
+            result = simulate_project(
+                Path(args.project_root).resolve(),
+                args.ngspice_bin,
+                [Path(path) for path in args.osdi],
+            )
         elif args.command == "simulate-module":
             result = simulate_module(
                 Path(args.project_root).resolve(),
                 args.module_id,
                 args.ngspice_bin,
+                [Path(path) for path in args.osdi],
+            )
+        elif args.command == "openvaf-compile":
+            result = OpenVafProvider(args.openvaf_bin).compile(
+                Path(args.source),
+                Path(args.cache_root),
+                list(args.flag),
+            )
+        elif args.command == "simulate-xyce":
+            result = XyceProvider(args.xyce_bin).run_deck(
+                Path(args.deck),
+                Path(args.run_root),
+                list(args.arg),
             )
         elif args.command == "analog-ic-audit":
             root = Path(args.project_root).resolve()

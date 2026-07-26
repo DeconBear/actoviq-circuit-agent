@@ -52,6 +52,7 @@
     "test:tool-providers": "tsx scripts/tool-providers-regression.ts",
     "test:pdk-registry": "python scripts/pdk-registry-regression.py",
     "test:xschem-bridge": "python scripts/xschem-bridge-regression.py",
+    "test:open-ic-flow": "python scripts/open-ic-flow-regression.py",
     "test:analog-ic": "python scripts/analog-ic-regression.py",
     "test:pcb-integration": "python scripts/pcb-integration-regression.py",
     "typecheck": "npm run typecheck:src && npm run typecheck:electron && npm run typecheck:renderer",
