@@ -86,6 +86,7 @@ from open_sim_providers import (
     XyceProvider,
     inject_ngspice_osdi,
 )
+from physical_verification import KLayoutProvider, MagicProvider, NetgenProvider
 from stable_ids import ensure_module_stable_ids, ensure_project_stable_ids
 from validate_netlist_primitives import validate_netlist_text
 
@@ -6102,6 +6103,35 @@ def build_parser() -> argparse.ArgumentParser:
     xyce_parser.add_argument("--xyce-bin", default="")
     xyce_parser.add_argument("--arg", action="append", default=[])
 
+    klayout_drc_parser = subparsers.add_parser("verify-klayout-drc")
+    klayout_drc_parser.add_argument("--layout", required=True)
+    klayout_drc_parser.add_argument("--rule-deck", required=True)
+    klayout_drc_parser.add_argument("--run-root", required=True)
+    klayout_drc_parser.add_argument("--klayout-bin", default="")
+
+    klayout_lvs_parser = subparsers.add_parser("verify-klayout-lvs")
+    klayout_lvs_parser.add_argument("--layout", required=True)
+    klayout_lvs_parser.add_argument("--schematic", required=True)
+    klayout_lvs_parser.add_argument("--rule-deck", required=True)
+    klayout_lvs_parser.add_argument("--run-root", required=True)
+    klayout_lvs_parser.add_argument("--klayout-bin", default="")
+
+    magic_parser = subparsers.add_parser("extract-magic")
+    magic_parser.add_argument("--layout", required=True)
+    magic_parser.add_argument("--tech-file", required=True)
+    magic_parser.add_argument("--run-root", required=True)
+    magic_parser.add_argument("--top-cell", required=True)
+    magic_parser.add_argument("--magic-bin", default="")
+
+    netgen_parser = subparsers.add_parser("verify-netgen-lvs")
+    netgen_parser.add_argument("--extracted", required=True)
+    netgen_parser.add_argument("--schematic", required=True)
+    netgen_parser.add_argument("--setup-file", required=True)
+    netgen_parser.add_argument("--run-root", required=True)
+    netgen_parser.add_argument("--extracted-cell", required=True)
+    netgen_parser.add_argument("--schematic-cell", required=True)
+    netgen_parser.add_argument("--netgen-bin", default="")
+
     analog_ic_audit_parser = subparsers.add_parser(
         "analog-ic-audit",
         help="Validate PDK binding and explicit MOS W/L/M/NF sizing before simulation.",
@@ -6515,6 +6545,35 @@ def main() -> int:
                 Path(args.deck),
                 Path(args.run_root),
                 list(args.arg),
+            )
+        elif args.command == "verify-klayout-drc":
+            result = KLayoutProvider(args.klayout_bin).run_drc(
+                Path(args.layout),
+                Path(args.rule_deck),
+                Path(args.run_root),
+            )
+        elif args.command == "verify-klayout-lvs":
+            result = KLayoutProvider(args.klayout_bin).run_lvs(
+                Path(args.layout),
+                Path(args.schematic),
+                Path(args.rule_deck),
+                Path(args.run_root),
+            )
+        elif args.command == "extract-magic":
+            result = MagicProvider(args.magic_bin).extract(
+                Path(args.layout),
+                Path(args.tech_file),
+                Path(args.run_root),
+                args.top_cell,
+            )
+        elif args.command == "verify-netgen-lvs":
+            result = NetgenProvider(args.netgen_bin).run_lvs(
+                Path(args.extracted),
+                Path(args.schematic),
+                Path(args.setup_file),
+                Path(args.run_root),
+                args.extracted_cell,
+                args.schematic_cell,
             )
         elif args.command == "analog-ic-audit":
             root = Path(args.project_root).resolve()
