@@ -551,7 +551,7 @@ try {
         ? [...select.options].map((option) => option.textContent)
         : []
     )),
-    ['Simulation', 'PCB Schematic', 'Analog IC'],
+    ['Simulation', 'PCB Schematic', 'Analog IC', 'Mixed-Signal IC'],
   );
   await page.getByTestId('project-name-input').fill(sidebarDemoProjectName);
   await page.getByTestId('project-create-submit').dblclick();
@@ -569,6 +569,9 @@ try {
   assert.equal(await sidebarDemoProject.getAttribute('aria-current'), 'true');
   assert.equal(await page.getByTestId('project-title').textContent(), sidebarDemoProjectName);
   assert.equal(sidebarDemoProjectManifest.project.modules.length, 0);
+  await page.getByTestId('topbar-tab-hdl').click();
+  await page.getByTestId('hdl-workspace-empty').waitFor();
+  await page.getByTestId('topbar-tab-design').click();
   await page.getByTestId('open-project-erc').click();
   await page.getByTestId('project-erc-panel').waitFor();
   await page.getByTestId('project-erc-panel').getByText(/Revision \d+ \| \d+ errors \| \d+ warnings/).waitFor();

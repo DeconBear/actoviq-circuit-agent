@@ -34,6 +34,14 @@
       "type": "integer",
       "minimum": 0
     },
+    "domain": {
+      "enum": [
+        "analog",
+        "digital",
+        "mixed_boundary",
+        "testbench"
+      ]
+    },
     "schematic_peer": {
       "$ref": "schematic-peer-binding.schema.json"
     },

@@ -161,7 +161,8 @@ export interface WorkspaceSummary {
   lastOpenedAt: string;
 }
 
-export type ProjectKind = 'simulation' | 'pcb_schematic' | 'analog_ic';
+export type ProjectKind = 'simulation' | 'pcb_schematic' | 'analog_ic' | 'mixed_signal_ic';
+export type ModuleDomain = 'analog' | 'digital' | 'mixed_boundary' | 'testbench';
 export type EdaBridgePeerKind = 'kicad' | 'jlceda';
 
 export interface PdkBinding {
@@ -231,6 +232,7 @@ export interface CircuitModuleRef {
   id: string;
   name: string;
   kind: string;
+  domain?: ModuleDomain;
   function?: string;
   parameters?: Record<string, string>;
   notes?: string;
@@ -257,6 +259,8 @@ export interface CircuitProject {
   updated_at: string;
   project_kind?: ProjectKind;
   analog_ic_profile?: AnalogIcProfile;
+  hdl_manifest?: string;
+  mixed_signal_contract?: string;
   stable_id?: string;
   modules: CircuitModuleRef[];
   connections: CircuitConnection[];
@@ -338,6 +342,7 @@ export interface CircuitModule {
   module_id: string;
   name: string;
   revision: number;
+  domain?: ModuleDomain;
   nets?: CircuitNet[];
   spice?: CircuitSpiceSource;
   ports: CircuitPort[];

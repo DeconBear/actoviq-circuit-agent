@@ -817,6 +817,7 @@ export function Sidebar({
               <option value="simulation">Simulation</option>
               <option value="pcb_schematic">PCB Schematic</option>
               <option value="analog_ic">Analog IC</option>
+              <option value="mixed_signal_ic">Mixed-Signal IC</option>
             </select>
           </label>
           <div style={styles.formActions}>

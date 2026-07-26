@@ -330,6 +330,40 @@ async function readJsonFile<T>(targetPath: string): Promise<T> {
   return JSON.parse(await readFile(targetPath, 'utf8')) as T;
 }
 
+const HDL_SOURCE_EXTENSIONS = new Set(['.v', '.vh', '.sv', '.svh', '.json']);
+
+function resolveHdlProjectFile(projectRoot: string, relativePath: string): string {
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.split('/').some((part) => part === '..' || part === '')) {
+    throw new Error(`Invalid HDL project path: ${relativePath}`);
+  }
+  const hdlRoot = path.resolve(projectRoot, 'hdl');
+  const target = path.resolve(hdlRoot, normalized);
+  const relative = path.relative(hdlRoot, target);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`HDL path escapes the project: ${relativePath}`);
+  }
+  if (!HDL_SOURCE_EXTENSIONS.has(path.extname(target).toLowerCase())) {
+    throw new Error(`Unsupported HDL file type: ${relativePath}`);
+  }
+  return target;
+}
+
+async function listHdlSourceFiles(root: string, prefix = ''): Promise<string[]> {
+  if (!(await exists(root))) return [];
+  const files: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const absolute = path.resolve(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await listHdlSourceFiles(absolute, relative));
+    } else if (entry.isFile() && HDL_SOURCE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      files.push(relative);
+    }
+  }
+  return files.sort((left, right) => left.localeCompare(right));
+}
+
 async function designMemoryTargetRoot(
   kind: 'templates' | 'flows',
   project: { name: string; revision: number },
@@ -856,7 +890,7 @@ async function createProjectFromTemplate(input: {
 }
 
 const EDA_BRIDGE_PEER_KINDS = new Set(['kicad', 'jlceda']);
-const PROJECT_KINDS = new Set(['simulation', 'pcb_schematic', 'analog_ic']);
+const PROJECT_KINDS = new Set(['simulation', 'pcb_schematic', 'analog_ic', 'mixed_signal_ic']);
 
 async function appendLcscCliArgs(args: string[]): Promise<string[]> {
   const settings = await loadSettingsWithSecrets();
@@ -1940,6 +1974,28 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
+
+  ipcMain.handle('project:list-hdl-files', async (_event, projectId: string) => {
+    const root = await resolveProjectRoot(projectId);
+    return listHdlSourceFiles(path.resolve(root, 'hdl'));
+  });
+
+  ipcMain.handle('project:read-hdl-file', async (_event, projectId: string, relativePath: string) => {
+    const root = await resolveProjectRoot(projectId);
+    return readFile(resolveHdlProjectFile(root, relativePath), 'utf8');
+  });
+
+  ipcMain.handle(
+    'project:write-hdl-file',
+    async (_event, projectId: string, relativePath: string, content: string) => {
+      if (typeof content !== 'string') throw new Error('HDL file content must be text');
+      const root = await resolveProjectRoot(projectId);
+      const target = resolveHdlProjectFile(root, relativePath);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, content, 'utf8');
+      return { ok: true, path: relativePath, hash: createHash('sha256').update(content).digest('hex') };
+    },
+  );
 
   ipcMain.handle('pdk:choose-root', async () => {
     const result = await dialog.showOpenDialog({

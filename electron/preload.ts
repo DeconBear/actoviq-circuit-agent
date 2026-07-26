@@ -304,6 +304,18 @@ const electronAPI = {
     return ipcRenderer.invoke('project:get', projectId);
   },
 
+  listHdlFiles(projectId: string): Promise<string[]> {
+    return ipcRenderer.invoke('project:list-hdl-files', projectId);
+  },
+
+  readHdlFile(projectId: string, relativePath: string): Promise<string> {
+    return ipcRenderer.invoke('project:read-hdl-file', projectId, relativePath);
+  },
+
+  writeHdlFile(projectId: string, relativePath: string, content: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:write-hdl-file', projectId, relativePath, content);
+  },
+
   applyCircuitCommand(projectId: string, command: unknown): Promise<unknown> {
     return ipcRenderer.invoke('project:apply-command', projectId, command);
   },
@@ -653,7 +665,7 @@ export interface ChatResponse {
   revisionRequest?: string;
   targetStage?: string;
   projectName?: string;
-  projectKind?: 'simulation' | 'pcb_schematic' | 'analog_ic';
+  projectKind?: 'simulation' | 'pcb_schematic' | 'analog_ic' | 'mixed_signal_ic';
   projectOperations?: Array<Record<string, unknown>>;
   compileAfterApply?: boolean;
   simulateAfterApply?: boolean;

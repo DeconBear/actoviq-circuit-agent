@@ -114,7 +114,7 @@ export interface DesktopAgentChatResponse {
   revisionRequest?: string;
   targetStage?: string;
   projectName?: string;
-  projectKind?: 'simulation' | 'pcb_schematic' | 'analog_ic';
+  projectKind?: 'simulation' | 'pcb_schematic' | 'analog_ic' | 'mixed_signal_ic';
   projectOperations?: Array<Record<string, unknown>>;
   compileAfterApply?: boolean;
   simulateAfterApply?: boolean;

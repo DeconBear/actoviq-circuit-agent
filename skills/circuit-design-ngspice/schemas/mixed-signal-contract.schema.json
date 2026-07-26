@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/mixed-signal-contract.schema.json",
+  "title": "Actoviq Mixed-Signal Interface Contract",
+  "type": "object",
+  "required": ["schema", "boundaries"],
+  "properties": {
+    "schema": { "const": "actoviq.mixed-signal-contract.v1" },
+    "boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "analog_net",
+          "digital_signal",
+          "direction",
+          "supply_domain",
+          "threshold",
+          "sampling",
+          "conversion_model"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "analog_net": { "type": "string", "minLength": 1 },
+          "digital_signal": { "type": "string", "minLength": 1 },
+          "direction": { "enum": ["analog_to_digital", "digital_to_analog", "bidirectional"] },
+          "supply_domain": {
+            "type": "object",
+            "required": ["vss", "vdd"],
+            "properties": {
+              "vss": { "type": "number" },
+              "vdd": { "type": "number" }
+            },
+            "additionalProperties": false
+          },
+          "threshold": {
+            "type": "object",
+            "required": ["low_max", "high_min"],
+            "properties": {
+              "low_max": { "type": "number" },
+              "high_min": { "type": "number" }
+            },
+            "additionalProperties": false
+          },
+          "sampling": {
+            "type": "object",
+            "required": ["mode"],
+            "properties": {
+              "mode": { "enum": ["edge", "periodic", "continuous"] },
+              "period_s": { "type": "number", "exclusiveMinimum": 0 },
+              "edge": { "enum": ["rising", "falling", "both"] }
+            },
+            "additionalProperties": false
+          },
+          "conversion_model": { "type": "string", "minLength": 1 },
+          "vectors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["time_s", "analog_voltage", "digital_value"],
+              "properties": {
+                "time_s": { "type": "number", "minimum": 0 },
+                "analog_voltage": { "type": "number" },
+                "digital_value": { "enum": [0, 1] }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

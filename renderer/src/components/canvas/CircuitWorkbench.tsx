@@ -74,6 +74,7 @@ const PROJECT_KIND_OPTIONS: Array<{ value: ProjectKind; label: string }> = [
   { value: 'simulation', label: 'Simulation' },
   { value: 'pcb_schematic', label: 'PCB Schematic' },
   { value: 'analog_ic', label: 'Analog IC' },
+  { value: 'mixed_signal_ic', label: 'Mixed-Signal IC' },
 ];
 
 function supportsEdaBridge(projectKind?: ProjectKind): boolean {

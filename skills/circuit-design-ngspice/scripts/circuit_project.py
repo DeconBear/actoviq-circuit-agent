@@ -87,6 +87,13 @@ from open_sim_providers import (
     inject_ngspice_osdi,
 )
 from physical_verification import KLayoutProvider, MagicProvider, NetgenProvider
+from hdl_flow import (
+    IcarusProvider,
+    YosysProvider,
+    load_hdl_manifest,
+    run_gate_regression,
+    verify_mixed_signal_contract,
+)
 from stable_ids import ensure_module_stable_ids, ensure_project_stable_ids
 from validate_netlist_primitives import validate_netlist_text
 
@@ -6018,7 +6025,7 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument(
             "--project-kind",
             default=DEFAULT_PROJECT_KIND,
-            choices=["simulation", "pcb_schematic", "analog_ic"],
+            choices=["simulation", "pcb_schematic", "analog_ic", "mixed_signal_ic"],
             help="Project type gate for validation, Agent defaults, and Bridge/LCSC.",
         )
         subparser.set_defaults(demo=demo)
@@ -6131,6 +6138,36 @@ def build_parser() -> argparse.ArgumentParser:
     netgen_parser.add_argument("--extracted-cell", required=True)
     netgen_parser.add_argument("--schematic-cell", required=True)
     netgen_parser.add_argument("--netgen-bin", default="")
+
+    hdl_sim_parser = subparsers.add_parser("hdl-simulate")
+    hdl_sim_parser.add_argument("--project-root", required=True)
+    hdl_sim_parser.add_argument("--manifest", default="")
+    hdl_sim_parser.add_argument("--source-set", default="")
+    hdl_sim_parser.add_argument("--run-root", required=True)
+    hdl_sim_parser.add_argument("--iverilog-bin", default="")
+    hdl_sim_parser.add_argument("--vvp-bin", default="")
+
+    hdl_synth_parser = subparsers.add_parser("hdl-synthesize")
+    hdl_synth_parser.add_argument("--project-root", required=True)
+    hdl_synth_parser.add_argument("--manifest", default="")
+    hdl_synth_parser.add_argument("--source-set", default="")
+    hdl_synth_parser.add_argument("--run-root", required=True)
+    hdl_synth_parser.add_argument("--yosys-bin", default="")
+
+    hdl_gate_parser = subparsers.add_parser("hdl-gate-regression")
+    hdl_gate_parser.add_argument("--project-root", required=True)
+    hdl_gate_parser.add_argument("--manifest", default="")
+    hdl_gate_parser.add_argument("--source-set", default="")
+    hdl_gate_parser.add_argument("--synthesis-run", required=True)
+    hdl_gate_parser.add_argument("--run-root", required=True)
+    hdl_gate_parser.add_argument("--iverilog-bin", default="")
+    hdl_gate_parser.add_argument("--vvp-bin", default="")
+
+    mixed_parser = subparsers.add_parser("mixed-signal-check")
+    mixed_parser.add_argument("--contract", required=True)
+    mixed_parser.add_argument("--run-root", required=True)
+    mixed_parser.add_argument("--analog-run", default="")
+    mixed_parser.add_argument("--digital-run", default="")
 
     analog_ic_audit_parser = subparsers.add_parser(
         "analog-ic-audit",
@@ -6574,6 +6611,53 @@ def main() -> int:
                 Path(args.run_root),
                 args.extracted_cell,
                 args.schematic_cell,
+            )
+        elif args.command == "hdl-simulate":
+            project_root = Path(args.project_root).resolve()
+            manifest = load_hdl_manifest(
+                project_root,
+                Path(args.manifest).resolve() if args.manifest else None,
+            )
+            result = IcarusProvider(args.iverilog_bin, args.vvp_bin).simulate(
+                project_root,
+                manifest,
+                Path(args.run_root),
+                args.source_set,
+            )
+        elif args.command == "hdl-synthesize":
+            project_root = Path(args.project_root).resolve()
+            manifest = load_hdl_manifest(
+                project_root,
+                Path(args.manifest).resolve() if args.manifest else None,
+            )
+            result = YosysProvider(args.yosys_bin).synthesize(
+                project_root,
+                manifest,
+                Path(args.run_root),
+                args.source_set,
+            )
+        elif args.command == "hdl-gate-regression":
+            project_root = Path(args.project_root).resolve()
+            manifest = load_hdl_manifest(
+                project_root,
+                Path(args.manifest).resolve() if args.manifest else None,
+            )
+            result = run_gate_regression(
+                project_root,
+                manifest,
+                read_json(Path(args.synthesis_run).resolve()),
+                Path(args.run_root),
+                IcarusProvider(args.iverilog_bin, args.vvp_bin),
+                args.source_set,
+            )
+        elif args.command == "mixed-signal-check":
+            analog_run = read_json(Path(args.analog_run).resolve()) if args.analog_run else None
+            digital_run = read_json(Path(args.digital_run).resolve()) if args.digital_run else None
+            result = verify_mixed_signal_contract(
+                Path(args.contract),
+                Path(args.run_root),
+                analog_run,
+                digital_run,
             )
         elif args.command == "analog-ic-audit":
             root = Path(args.project_root).resolve()

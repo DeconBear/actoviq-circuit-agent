@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/hdl-manifest.schema.json",
+  "title": "Actoviq HDL Manifest",
+  "type": "object",
+  "required": ["schema", "language", "source_sets", "active_source_set"],
+  "properties": {
+    "schema": { "const": "actoviq.hdl-manifest.v1" },
+    "language": { "const": "verilog-2005" },
+    "active_source_set": { "type": "string", "minLength": 1 },
+    "source_sets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "top", "sources"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "top": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$" },
+          "sources": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "testbench": { "type": "string", "minLength": 1 },
+          "testbench_top": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$" },
+          "gate_libraries": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "include_paths": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "defines": {
+            "type": "object",
+            "additionalProperties": { "type": ["string", "number", "boolean"] }
+          },
+          "liberty": { "type": "string", "minLength": 1 },
+          "constraints": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

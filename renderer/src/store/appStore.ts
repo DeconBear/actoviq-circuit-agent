@@ -18,7 +18,7 @@ import {
   mergeChatTranscript,
 } from './chatHistoryPersistence';
 
-export type TabKey = 'design' | 'netlist' | 'svg' | 'simulation' | 'report';
+export type TabKey = 'design' | 'netlist' | 'hdl' | 'svg' | 'simulation' | 'report';
 export type ApprovalPolicy = 'manual' | 'execution' | 'all';
 export type ThemeMode = 'dark' | 'light';
 

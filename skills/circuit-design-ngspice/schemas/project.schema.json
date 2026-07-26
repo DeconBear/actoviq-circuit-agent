@@ -10,11 +10,13 @@
     "name": { "type": "string", "minLength": 1 },
     "project_kind": {
       "type": "string",
-      "enum": ["simulation", "pcb_schematic", "analog_ic"],
+      "enum": ["simulation", "pcb_schematic", "analog_ic", "mixed_signal_ic"],
       "description": "Project type gate for validation, Agent defaults, and EDA/LCSC capabilities. Missing values migrate to simulation."
     },
     "stable_id": { "type": "string", "minLength": 1 },
     "analog_ic_profile": { "$ref": "analog-ic-profile.schema.json" },
+    "hdl_manifest": { "type": "string", "minLength": 1 },
+    "mixed_signal_contract": { "type": "string", "minLength": 1 },
     "revision": { "type": "integer", "minimum": 0 },
     "created_at": { "type": "string" },
     "updated_at": { "type": "string" },
@@ -27,6 +29,7 @@
           "id": { "type": "string", "minLength": 1 },
           "name": { "type": "string", "minLength": 1 },
           "kind": { "type": "string", "minLength": 1 },
+          "domain": { "enum": ["analog", "digital", "mixed_boundary", "testbench"] },
           "function": { "type": "string" },
           "parameters": {
             "type": "object",

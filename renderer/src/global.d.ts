@@ -112,6 +112,13 @@ declare global {
       createCircuitProject(input: { name: string; demo?: boolean; projectKind?: ProjectKind }): Promise<CircuitProjectBundle>;
       createCircuitProjectFromTemplate(input: { templateId: string; name?: string }): Promise<CircuitProjectBundle>;
       getCircuitProject(projectId: string): Promise<CircuitProjectBundle>;
+      listHdlFiles(projectId: string): Promise<string[]>;
+      readHdlFile(projectId: string, relativePath: string): Promise<string>;
+      writeHdlFile(
+        projectId: string,
+        relativePath: string,
+        content: string,
+      ): Promise<{ ok: true; path: string; hash: string }>;
       applyCircuitCommand(projectId: string, command: CircuitCommand): Promise<{
         ok: true;
         revision: number;

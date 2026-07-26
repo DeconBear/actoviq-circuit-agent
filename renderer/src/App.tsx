@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatView, type ChatRunView } from './components/chat/ChatView';
 import { NetlistEditor } from './components/netlist/NetlistEditor';
+import { HdlEditor } from './components/hdl/HdlEditor';
 import { SvgViewer } from './components/schematic/SvgViewer';
 import { SimulationTab } from './components/simulation/SimulationTab';
 import { ReportPreview } from './components/report/ReportPreview';
@@ -38,6 +39,7 @@ import {
 const toolbarTabs = [
   { value: 'design', label: 'Design', icon: <CircuitBoard size={15} />, testId: 'topbar-tab-design' },
   { value: 'netlist', label: 'Netlist', icon: <FileCode2 size={15} />, testId: 'topbar-tab-netlist' },
+  { value: 'hdl', label: 'HDL', icon: <FileCode2 size={15} />, testId: 'topbar-tab-hdl' },
   { value: 'svg', label: 'SVG', icon: <Image size={15} />, testId: 'topbar-tab-svg' },
   { value: 'simulation', label: 'Sim', icon: <Waves size={15} />, testId: 'topbar-tab-simulation' },
   { value: 'report', label: 'Report', icon: <FileText size={15} />, testId: 'topbar-tab-report' },
@@ -1324,6 +1326,7 @@ export function App() {
                 onReloadProject={reloadCircuitProjectIfActive}
               />
             )}
+            {store.activeTab === 'hdl' && <HdlEditor />}
             {store.activeTab === 'svg' && <SvgViewer />}
             {store.activeTab === 'simulation' && <SimulationTab />}
             {store.activeTab === 'report' && <ReportPreview />}

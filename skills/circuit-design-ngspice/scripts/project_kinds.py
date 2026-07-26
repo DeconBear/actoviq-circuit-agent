@@ -1,10 +1,10 @@
-"""Project kind gates for simulation / pcb_schematic / analog_ic."""
+"""Project kind gates for simulation, PCB, analog IC, and mixed-signal IC."""
 
 from __future__ import annotations
 
 from typing import Any, Iterable
 
-PROJECT_KINDS = ("simulation", "pcb_schematic", "analog_ic")
+PROJECT_KINDS = ("simulation", "pcb_schematic", "analog_ic", "mixed_signal_ic")
 DEFAULT_PROJECT_KIND = "simulation"
 
 # Desktop module model always allows these; simulation netlist gate is stricter.
@@ -20,6 +20,7 @@ FORBIDDEN_DIRECTIVES_BY_KIND = {
     "simulation": {".subckt", ".ends", ".include", ".lib"},
     "pcb_schematic": set(),  # opaque spice attachments allowed
     "analog_ic": set(),
+    "mixed_signal_ic": set(),
 }
 
 
@@ -36,6 +37,9 @@ def normalize_project_kind(value: Any) -> str:
         "ic": "analog_ic",
         "analog-ic": "analog_ic",
         "analog": "analog_ic",
+        "mixed": "mixed_signal_ic",
+        "mixed-signal": "mixed_signal_ic",
+        "mixed-signal-ic": "mixed_signal_ic",
     }
     if not text:
         return DEFAULT_PROJECT_KIND
@@ -67,7 +71,7 @@ def allowed_component_types(project_kind: str) -> set[str]:
     kind = normalize_project_kind(project_kind)
     if kind == "pcb_schematic":
         return set(PCB_COMPONENT_TYPES)
-    if kind == "analog_ic":
+    if kind in {"analog_ic", "mixed_signal_ic"}:
         return set(IC_COMPONENT_TYPES)
     return set(BASE_COMPONENT_TYPES)
 
@@ -76,7 +80,7 @@ def allowed_netlist_prefixes(project_kind: str) -> set[str]:
     kind = normalize_project_kind(project_kind)
     if kind == "pcb_schematic":
         return set(PCB_NETLIST_PREFIXES)
-    if kind == "analog_ic":
+    if kind in {"analog_ic", "mixed_signal_ic"}:
         return set(IC_NETLIST_PREFIXES)
     return set(SIM_NETLIST_PREFIXES)
 
@@ -86,7 +90,7 @@ def forbidden_directives(project_kind: str) -> set[str]:
 
 
 def requires_simulation(project_kind: str) -> bool:
-    return normalize_project_kind(project_kind) in {"simulation", "analog_ic"}
+    return normalize_project_kind(project_kind) in {"simulation", "analog_ic", "mixed_signal_ic"}
 
 
 def supports_lcsc_binding(project_kind: str) -> bool:
@@ -98,7 +102,7 @@ def supports_eda_bridge(project_kind: str) -> bool:
 
 
 def supports_virtuoso_export(project_kind: str) -> bool:
-    return normalize_project_kind(project_kind) == "analog_ic"
+    return normalize_project_kind(project_kind) in {"analog_ic", "mixed_signal_ic"}
 
 
 def kind_summary(project_kind: str) -> dict[str, Any]:

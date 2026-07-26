@@ -125,11 +125,11 @@ export function createDesktopCircuitTools(options: DesktopCircuitToolsOptions = 
         name: 'create_circuit_project',
         description: [
           'Create a new circuit project in the active workspace.',
-          'project_kind must be simulation | pcb_schematic | analog_ic.',
+          'project_kind must be simulation | pcb_schematic | analog_ic | mixed_signal_ic.',
         ].join(' '),
         inputSchema: z.object({
           name: z.string().min(1),
-          project_kind: z.enum(['simulation', 'pcb_schematic', 'analog_ic']).default('simulation'),
+          project_kind: z.enum(['simulation', 'pcb_schematic', 'analog_ic', 'mixed_signal_ic']).default('simulation'),
           demo: z.boolean().optional(),
         }),
         serialize: (output) => String(output),
