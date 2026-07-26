@@ -105,6 +105,77 @@ def main() -> None:
     ]
     ports = infer_editable_ports(stale, buck_with_vin)
     assert not any(port["id"] == "input" for port in ports), ports
+
+    # Netlist sync owns the interface list: a stale explicit port must disappear
+    # when its net no longer exists.
+    stale_explicit = [
+        {
+            "id": "old_out",
+            "name": "OUT",
+            "direction": "output",
+            "signal_type": "analog",
+            "net": "removed_net",
+        }
+    ]
+    ports = infer_editable_ports(stale_explicit, signal_in)
+    assert not any(port["id"] == "old_out" for port in ports), ports
+
+    # The net is the electrical identity. Prefer the explicit module interface
+    # over an older inferred alias so VIN/OUT cannot render twice or with the
+    # inferred rail direction.
+    duplicate_interfaces = [
+        {
+            "id": "vin",
+            "name": "VIN",
+            "direction": "input",
+            "signal_type": "power",
+            "net": "vin",
+            "inferred": True,
+        },
+        {
+            "id": "output",
+            "name": "OUT",
+            "direction": "output",
+            "signal_type": "analog",
+            "net": "vout",
+            "inferred": True,
+        },
+        {
+            "id": "VIN",
+            "name": "VIN",
+            "direction": "input",
+            "signal_type": "analog",
+            "net": "VIN",
+        },
+        {
+            "id": "VOUT",
+            "name": "VOUT",
+            "direction": "output",
+            "signal_type": "analog",
+            "net": "VOUT",
+        },
+    ]
+    duplicate_net_components = [
+        {
+            "id": "r1",
+            "type": "R",
+            "name": "R1",
+            "value": "1k",
+            "pins": [{"id": "a", "net": "VIN"}, {"id": "b", "net": "VOUT"}],
+        },
+        {
+            "id": "rload",
+            "type": "R",
+            "name": "Rload",
+            "value": "10",
+            "pins": [{"id": "a", "net": "VOUT"}, {"id": "b", "net": "0"}],
+        },
+    ]
+    ports = infer_editable_ports(duplicate_interfaces, duplicate_net_components)
+    vin_ports = [port for port in ports if port["net"].casefold() == "vin"]
+    vout_ports = [port for port in ports if port["net"].casefold() == "vout"]
+    assert [(port["id"], port["signal_type"]) for port in vin_ports] == [("VIN", "analog")], ports
+    assert [(port["id"], port["name"]) for port in vout_ports] == [("VOUT", "VOUT")], ports
     print("infer-editable-ports-unit: ok")
 
 

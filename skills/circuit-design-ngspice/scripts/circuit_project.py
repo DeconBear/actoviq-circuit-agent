@@ -2779,47 +2779,65 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
             node = str(pin.get("net", "")).strip()
             if node and node not in nodes:
                 nodes.append(node)
+    node_keys = {node.casefold() for node in nodes}
 
     # Nets already driven by on-schematic sources are not external interfaces.
     # A buck with local Vin must not also grow an inferred IN/VIN port on the
     # same net (that port is only for external or cross-module stimulus).
     source_driven_nets = {
-        str((component.get("pins") or [{}])[0].get("net", "")).strip()
+        str((component.get("pins") or [{}])[0].get("net", "")).strip().casefold()
         for component in components
         if str(component.get("type", "")).upper() in {"V", "I"}
         and (component.get("pins") or [])
     }
     source_driven_nets.discard("")
 
-    ports: list[dict[str, Any]] = []
-    used_port_ids: set[str] = set()
-    for port in existing_ports:
+    # A SPICE net is the electrical identity (case-insensitive), not the port
+    # id. Keep one interface per live net and prefer an explicit module port
+    # over an older inferred alias such as OUT/VOUT or power-VIN/analog-VIN.
+    candidates: list[tuple[int, dict[str, Any], str, str]] = []
+    for index, port in enumerate(existing_ports):
         port_id = str(port.get("id", "")).strip()
-        if not port_id or port_id in used_port_ids:
+        net = str(port.get("net", "")).strip()
+        net_key = net.casefold()
+        if not port_id or not net_key or net_key not in node_keys:
             continue
-        net = str(port.get("net", ""))
-        if port.get("inferred") and net not in nodes:
-            continue
-        # Drop stale inferred interface ports once a local source drives the net.
         if (
             port.get("inferred")
-            and net in source_driven_nets
+            and net_key in source_driven_nets
             and str(port.get("signal_type", "")) in {"analog", "power"}
             and str(port.get("direction", "")) == "input"
         ):
             continue
+        candidates.append((index, port, port_id, net_key))
+
+    winner_by_net: dict[str, tuple[int, dict[str, Any], str, str]] = {}
+    for candidate in candidates:
+        current = winner_by_net.get(candidate[3])
+        if current is None or (current[1].get("inferred") and not candidate[1].get("inferred")):
+            winner_by_net[candidate[3]] = candidate
+
+    ports: list[dict[str, Any]] = []
+    used_port_ids: set[str] = set()
+    existing_nets: set[str] = set()
+    for index, port, port_id, net_key in candidates:
+        winner = winner_by_net.get(net_key)
+        if winner is None or winner[0] != index:
+            continue
+        if port_id in used_port_ids:
+            continue
         used_port_ids.add(port_id)
+        existing_nets.add(net_key)
         ports.append(port)
 
-    existing_nets = {str(port.get("net", "")) for port in ports}
-
     def add_port(port_id: str, name: str, direction: str, signal_type: str, net: str) -> None:
-        if net in existing_nets or port_id in used_port_ids:
+        net_key = net.casefold()
+        if net_key in existing_nets or port_id in used_port_ids:
             return
-        if net in source_driven_nets and signal_type in {"analog", "power"} and direction == "input":
+        if net_key in source_driven_nets and signal_type in {"analog", "power"} and direction == "input":
             return
         used_port_ids.add(port_id)
-        existing_nets.add(net)
+        existing_nets.add(net_key)
         port = make_port(port_id, name, direction, signal_type, net)
         port["inferred"] = True
         ports.append(port)
