@@ -41,6 +41,11 @@ Positive example: `flash-adc-2bit` — `stimuli`, `ref_ladder`, `comp1`/`comp2`/
 - Use `add_port` for nets the importer does not infer (`vth`, `th*`, `c*`,
   `d*`). After `upsert_module_netlist`, module-card ports stay in sync with
   the module document.
+- **Do not** add an `IN` port on a net that already has an on-schematic
+  stimulus (`V` / `I`, e.g. board-level `Vin`). `IN` is only for external or
+  cross-module inputs; a standalone buck/regulator with local `Vin` needs no
+  `IN`. The importer skips source-driven nets for the same reason (`vin`
+  without a local source may still infer a `VIN` power port).
 - On a **stimuli** module, mark driving rails (`vdd`, `vin`/`input`, `vref`)
   as `direction: "output"` so hierarchical ERC sees them as drivers.
 - Put `.dc` / swept sources in the module that owns the swept instance.

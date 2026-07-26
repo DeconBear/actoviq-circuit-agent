@@ -71,9 +71,9 @@ interface EdaExportFormState {
 const BOARD_MARGIN = 1200;
 
 const PROJECT_KIND_OPTIONS: Array<{ value: ProjectKind; label: string }> = [
-  { value: 'simulation', label: '仿真/教学' },
-  { value: 'pcb_schematic', label: 'PCB 原理图' },
-  { value: 'analog_ic', label: '模拟 IC' },
+  { value: 'simulation', label: 'Simulation' },
+  { value: 'pcb_schematic', label: 'PCB Schematic' },
+  { value: 'analog_ic', label: 'Analog IC' },
 ];
 
 function supportsEdaBridge(projectKind?: ProjectKind): boolean {
@@ -1528,29 +1528,14 @@ export function CircuitWorkbench({
             onClick={() => {
               setError('');
               setNotice('');
-              setEmptyProjectForm({ demo: true, name: 'Modular analog chain', projectKind: 'simulation' });
-            }}
-            disabled={busy}
-            title="Create three-module demo project"
-            aria-label="Create three-module demo project"
-            data-testid="create-demo-project"
-          >
-            Create three-module demo
-          </button>
-          <button
-            type="button"
-            style={styles.secondaryButton}
-            onClick={() => {
-              setError('');
-              setNotice('');
               setEmptyProjectForm({ demo: false, name: 'New circuit project', projectKind: 'simulation' });
             }}
             disabled={busy}
-            title="Create blank project"
-            aria-label="Create blank project"
-            data-testid="create-blank-project"
+            title="Create project"
+            aria-label="Create project"
+            data-testid="create-project"
           >
-            Create blank project
+            + Project
           </button>
         </div>
         {emptyProjectForm ? (
@@ -1559,9 +1544,7 @@ export function CircuitWorkbench({
             data-testid="empty-project-create-panel"
             onKeyDown={handleEmptyProjectFormKeyDown}
           >
-            <div style={styles.emptyCreateTitle}>
-              {emptyProjectForm.demo ? 'Demo project' : 'Blank project'}
-            </div>
+            <div style={styles.emptyCreateTitle}>New project</div>
             <input
               value={emptyProjectForm.name}
               onChange={(event) => setEmptyProjectForm({ ...emptyProjectForm, name: event.target.value })}
@@ -1974,7 +1957,7 @@ export function CircuitWorkbench({
                 </>
               ) : (
                 <p className="av-form-hint" data-testid="eda-bridge-simulation-note">
-                  EDA Bridge 与立创搜料适用于 PCB 原理图 / 模拟 IC 项目；当前为仿真/教学项目。
+                  EDA Bridge and LCSC binding apply to PCB Schematic / Analog IC projects; this project is Simulation.
                 </p>
               )}
             </div>

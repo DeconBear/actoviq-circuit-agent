@@ -1125,6 +1125,22 @@ async function waitForEditorIdle(page) {
   });
 }
 
+/** Open a hub module card without stalling on hub SVG rebuild actionability. */
+async function openModuleCard(page, moduleId) {
+  const card = page.getByTestId(`module-card-${moduleId}`);
+  await card.waitFor({ state: 'visible' });
+  // Module cards open via React onClick(detail===2). Hub netlistsvg rebuilds make
+  // Playwright dblclick hang mid-action on large modules, so fire the event directly.
+  await card.evaluate((node) => {
+    node.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      detail: 2,
+      view: window,
+    }));
+  });
+}
+
 async function focusEditorByClickingCanvas(page) {
   const box = await page.getByTestId('schematic-editor-svg').boundingBox();
   assert.ok(box, 'schematic editor canvas has no bounding box');
@@ -1167,6 +1183,63 @@ async function assertWireEndpointsMatchComponentPins(page, componentId, label) {
     assert.equal(Number(point.x), Number(pin.x), `${label}: ${wireId}.${side} x is not on ${componentId}.${endpoint.pin_id}`);
     assert.equal(Number(point.y), Number(pin.y), `${label}: ${wireId}.${side} y is not on ${componentId}.${endpoint.pin_id}`);
   }
+}
+
+async function assertAttachedWiresAvoidComponentInterior(page, componentId, label) {
+  const bad = await page.evaluate((id) => {
+    const editor = document.querySelector('[data-testid="schematic-editor"]');
+    const wires = JSON.parse(editor?.getAttribute('data-wires') ?? '[]');
+    const components = JSON.parse(editor?.getAttribute('data-components') ?? '[]');
+    const positions = JSON.parse(editor?.getAttribute('data-component-positions') ?? '{}');
+    const component = components.find((entry) => entry.id === id);
+    const position = positions[id];
+    if (!component || !position) return [{ reason: 'missing-component' }];
+    // Approximate body interior from the live selection frame when present; otherwise
+    // use a tight box around the component center (enough to catch through-body routes).
+    const frame = document.querySelector(
+      `[data-testid="schematic-editor-svg"] g[data-component-id="${id}"] [data-testid="schematic-selected-component-frame"]`,
+    );
+    let interior;
+    if (frame instanceof SVGGraphicsElement) {
+      const box = frame.getBBox();
+      const inset = 10;
+      interior = {
+        minX: box.x + inset,
+        minY: box.y + inset,
+        maxX: box.x + box.width - inset,
+        maxY: box.y + box.height - inset,
+      };
+    } else {
+      interior = {
+        minX: Number(position.x) - 18,
+        minY: Number(position.y) - 18,
+        maxX: Number(position.x) + 18,
+        maxY: Number(position.y) + 18,
+      };
+    }
+    const attached = wires.filter((wire) => (
+      wire.from?.component_id === id || wire.to?.component_id === id
+    ));
+    const hits = [];
+    for (const wire of attached) {
+      const points = wire.points ?? [];
+      for (let index = 1; index < points.length; index += 1) {
+        const start = points[index - 1];
+        const end = points[index];
+        if (!start || !end) continue;
+        const crosses = start.x === end.x
+          ? start.x > interior.minX && start.x < interior.maxX &&
+            Math.min(start.y, end.y) < interior.maxY && Math.max(start.y, end.y) > interior.minY
+          : start.y === end.y
+            ? start.y > interior.minY && start.y < interior.maxY &&
+              Math.min(start.x, end.x) < interior.maxX && Math.max(start.x, end.x) > interior.minX
+            : false;
+        if (crosses) hits.push({ wireId: wire.id, index, start, end, interior });
+      }
+    }
+    return hits;
+  }, componentId);
+  assert.deepEqual(bad, [], `${label}: attached wires cross ${componentId} interior during drag`);
 }
 
 function longestEditableGeneratedWireSegment(wires) {
@@ -1620,7 +1693,7 @@ try {
     'module card preview did not render document wires',
   );
 
-  await page.getByTestId('module-card-filter').dblclick();
+  await openModuleCard(page, 'filter');
   const editor = page.getByTestId('schematic-editor');
   await editor.waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
@@ -1978,6 +2051,86 @@ try {
       '0',
       'rail label inspector should show the ground net',
     );
+    // Right-click on a rail label keeps it selected and opens a Delete menu.
+    await page.mouse.click(groundBox.x + groundBox.width / 2, groundBox.y + groundBox.height / 2, { button: 'right' });
+    await page.getByTestId('schematic-context-menu').waitFor();
+    assert.equal(
+      await page.getByTestId('schematic-context-menu').getAttribute('data-menu-target'),
+      `netlabel:${groundLabelId}`,
+      'rail label context menu should target the netlabel',
+    );
+    assert.equal(
+      await page.getByTestId('schematic-context-menu').getAttribute('data-menu-kind'),
+      'netlabel',
+      'rail label context menu should be netlabel-kind',
+    );
+    assert.equal(await page.getByTestId('schematic-context-menu-rotate').count(), 0, 'rail label menu should not expose Rotate');
+    assert.equal(await page.getByTestId('schematic-context-menu-duplicate').count(), 0, 'rail label menu should not expose Duplicate');
+    assert.equal(await page.getByTestId('schematic-context-menu-delete').count(), 1, 'rail label menu should expose Delete');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => (
+      document.querySelector('[data-testid="schematic-context-menu"]') == null
+    ));
+    // When the parent is already selected, dragging its rail label moves the component group.
+    const cFilterBodyPoint = await componentScreenPoint(page, 'c_filter');
+    await page.mouse.click(cFilterBodyPoint.x, cFilterBodyPoint.y);
+    await page.waitForFunction(() => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:c_filter'
+    ));
+    const positionsBeforeParentDrag = await componentPositions(page);
+    const groundHitAfterParentSelect = page.locator('[data-testid="schematic-net-label"][data-kind="ground"] [data-testid="schematic-net-label-hit-target"]').first();
+    const groundBoxAfterParentSelect = await groundHitAfterParentSelect.boundingBox();
+    assert.ok(groundBoxAfterParentSelect, 'ground net-label hit target should remain after selecting parent');
+    await page.mouse.move(
+      groundBoxAfterParentSelect.x + groundBoxAfterParentSelect.width / 2,
+      groundBoxAfterParentSelect.y + groundBoxAfterParentSelect.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      groundBoxAfterParentSelect.x + groundBoxAfterParentSelect.width / 2 + 60,
+      groundBoxAfterParentSelect.y + groundBoxAfterParentSelect.height / 2,
+      { steps: 8 },
+    );
+    await page.mouse.up();
+    await page.waitForFunction((previousX) => {
+      const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+      const positions = JSON.parse(raw);
+      return Number(positions.c_filter?.x) !== Number(previousX);
+    }, positionsBeforeParentDrag.c_filter.x);
+    const positionsAfterParentDrag = await componentPositions(page);
+    assert.notEqual(
+      Number(positionsAfterParentDrag.c_filter.x),
+      Number(positionsBeforeParentDrag.c_filter.x),
+      'dragging a rail label on an already-selected parent should move the component',
+    );
+    assert.equal(
+      Number(positionsAfterParentDrag.c_filter.x) % schematicGrid,
+      0,
+      'parent drag via rail label should stay grid-snapped',
+    );
+    assert.equal(
+      await editor.getAttribute('data-selected'),
+      'component:c_filter',
+      'dragging a rail label on an already-selected parent should keep the component selection',
+    );
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+    await page.waitForFunction((previous) => {
+      const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}';
+      const positions = JSON.parse(raw);
+      return Number(positions.c_filter?.x) === Number(previous.x) && Number(positions.c_filter?.y) === Number(previous.y);
+    }, positionsBeforeParentDrag.c_filter);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === ''
+    ));
+    // Re-select the rail label for the offset-drag / delete coverage below.
+    const groundHitForDrag = page.locator('[data-testid="schematic-net-label"][data-kind="ground"] [data-testid="schematic-net-label-hit-target"]').first();
+    const groundBoxForDrag = await groundHitForDrag.boundingBox();
+    assert.ok(groundBoxForDrag, 'ground net-label hit target should have a screen box before label drag');
+    await page.mouse.click(groundBoxForDrag.x + groundBoxForDrag.width / 2, groundBoxForDrag.y + groundBoxForDrag.height / 2);
+    await page.waitForFunction((labelId) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `netlabel:${labelId}`
+    ), groundLabelId);
     // The selection chrome hugs the rail symbol + text, not the connecting stub.
     const selectedLabelFrame = page.getByTestId('schematic-selected-net-label-frame').first();
     const frameBox = await selectedLabelFrame.boundingBox();
@@ -1989,9 +2142,9 @@ try {
     );
     // Rail labels are draggable: the anchor offset persists on the pin.
     const cFilterBeforeLabelDrag = (await page.getByTestId('schematic-editor').getAttribute('data-components')) ?? '';
-    await page.mouse.move(groundBox.x + groundBox.width / 2, groundBox.y + groundBox.height / 2);
+    await page.mouse.move(groundBoxForDrag.x + groundBoxForDrag.width / 2, groundBoxForDrag.y + groundBoxForDrag.height / 2);
     await page.mouse.down();
-    await page.mouse.move(groundBox.x + groundBox.width / 2 + 40, groundBox.y + groundBox.height / 2 + 20, { steps: 6 });
+    await page.mouse.move(groundBoxForDrag.x + groundBoxForDrag.width / 2 + 40, groundBoxForDrag.y + groundBoxForDrag.height / 2 + 20, { steps: 6 });
     await page.mouse.up();
     await page.waitForFunction((before) => (
       (document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-components') ?? '') !== before
@@ -2033,7 +2186,7 @@ try {
       (document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-components') ?? '') === before
     ), cFilterBeforeLabelDrag);
     // Undo restores the label; re-select it for the delete-to-wire step.
-    await page.mouse.click(groundBox.x + groundBox.width / 2, groundBox.y + groundBox.height / 2);
+    await page.mouse.click(groundBoxForDrag.x + groundBoxForDrag.width / 2, groundBoxForDrag.y + groundBoxForDrag.height / 2);
     await page.waitForFunction((labelId) => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === `netlabel:${labelId}`
     ), groundLabelId);
@@ -2120,6 +2273,8 @@ try {
   );
   await assertWireEndpointsMatchComponentPins(page, 'c_filter', 'group-dragging Cfilter should keep wire endpoints on moving pins');
   await assertWireEndpointsMatchComponentPins(page, 'r_filter', 'group-dragging Rfilter should keep wire endpoints on moving pins');
+  await assertAttachedWiresAvoidComponentInterior(page, 'c_filter', 'group-drag preview must not thread wires through Cfilter');
+  await assertAttachedWiresAvoidComponentInterior(page, 'r_filter', 'group-drag preview must not thread wires through Rfilter');
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await page.waitForFunction((previous) => {
@@ -3167,7 +3322,7 @@ try {
   await assertRenderedWirePolylinesOrthogonal(page, 'after continuous wire drawing');
   // qucs/KiCad parity: double-click ends the in-progress wire chain.
   // The end point must be free (no wire/pin snap) AND inside the occupied
-  // document region — a wire expanding the document bounds would rescale the
+  // document region -- a wire expanding the document bounds would rescale the
   // viewport and change the world-space delta of the segment drags below.
   const dblEnd = await page.getByTestId('schematic-editor-svg').evaluate((svg) => {
     if (!(svg instanceof SVGSVGElement)) throw new Error('schematic editor svg missing');
@@ -3522,7 +3677,7 @@ try {
     const contentMinY = Math.min(...occupied.map((point) => point.y));
     const contentMaxY = Math.max(...occupied.map((point) => point.y));
     // Left of all content: right-side space is blocked by the OUT port's
-    // interaction bounds; the IN port zone only reaches y≈214, so mid-Y is safe.
+    // interaction bounds; the IN port zone only reaches y~=214, so mid-Y is safe.
     let x2 = snap20(contentMinX - 60);
     let x1 = snap20(contentMinX - 140);
     const minAllowedX = minX + 20;
@@ -3910,7 +4065,7 @@ try {
   assert.equal(agentModuleData.components.find((component) => component.id === 'agent_logic')?.type, 'BLOCK');
   console.log('[e2e] svg tab verified');
   await page.getByTestId('back-to-board').click();
-  await page.getByTestId('module-card-filter').dblclick();
+  await openModuleCard(page, 'filter');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => (
     Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-count') ?? '0') >= 3 &&
@@ -3960,7 +4115,7 @@ try {
   await page.getByTestId(`sidebar-project-${legacyLdoProject.projectId}`).click();
   await waitForWorkbenchProject(page, legacyLdoProject.projectId);
   await page.getByTestId('circuit-workbench').getByText(legacyLdoProject.projectName, { exact: true }).waitFor();
-  await page.getByTestId('module-card-ldo').dblclick();
+  await openModuleCard(page, 'ldo');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4134,7 +4289,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-reset').dblclick();
+  await openModuleCard(page, 'reset');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4238,7 +4393,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-divider').dblclick();
+  await openModuleCard(page, 'divider');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4279,7 +4434,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-mosamp').dblclick();
+  await openModuleCard(page, 'mosamp');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4408,7 +4563,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-inverter').dblclick();
+  await openModuleCard(page, 'inverter');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4502,7 +4657,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-ring').dblclick();
+  await openModuleCard(page, 'ring');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4593,7 +4748,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-diffpair').dblclick();
+  await openModuleCard(page, 'diffpair');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4739,7 +4894,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-mirror').dblclick();
+  await openModuleCard(page, 'mirror');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4845,7 +5000,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-opamp').dblclick();
+  await openModuleCard(page, 'opamp');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -4930,7 +5085,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-cascode').dblclick();
+  await openModuleCard(page, 'cascode');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -5035,7 +5190,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-buck').dblclick();
+  await openModuleCard(page, 'buck');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => {
     const node = document.querySelector('[data-testid="schematic-editor"]');
@@ -5077,7 +5232,7 @@ try {
   for (const id of ['msw', 'dfree', 'l1', 'cout', 'rload']) {
     assert.ok(buckRenderedCenters[id], `hydrated buck converter component ${id} is not rendered in the SVG viewport`);
   }
-  // Use schematic positions for topology — rendered getBBox centers include side labels and
+  // Use schematic positions for topology -- rendered getBBox centers include side labels and
   // drift when label placement changes without the devices themselves moving.
   assert.ok(buckPositions.msw.x < buckPositions.l1.x, 'buck switch node should feed the inductor to the right in GUI');
   assert.ok(buckPositions.dfree.x >= buckPositions.msw.x - 40, 'buck freewheel diode should sit near the switch node, not before the switch');
@@ -5150,7 +5305,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-junctions').dblclick();
+  await openModuleCard(page, 'junctions');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'junctions'
@@ -5293,7 +5448,7 @@ try {
     await page.getByTestId('back-to-board').click();
   }
 
-  await page.getByTestId('module-card-power').dblclick();
+  await openModuleCard(page, 'power');
   await editor.waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'power'
@@ -5346,7 +5501,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-ports').dblclick();
+  await openModuleCard(page, 'ports');
   await editor.waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'ports'
@@ -5404,7 +5559,7 @@ try {
   if (await page.getByTestId('back-to-board').count()) {
     await page.getByTestId('back-to-board').click();
   }
-  await page.getByTestId('module-card-filter').dblclick();
+  await openModuleCard(page, 'filter');
   await editor.waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'filter'

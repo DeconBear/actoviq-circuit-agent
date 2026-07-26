@@ -772,33 +772,17 @@ export function Sidebar({
           type="button"
           onClick={() => {
             if (creating) return;
-            setProjectForm({ demo: true, name: 'Modular analog chain', projectKind: 'simulation' });
+            setProjectForm({ demo: false, name: 'New circuit project', projectKind: 'simulation' });
             setWorkspaceFormOpen(false);
             setNotice(null);
           }}
           style={styles.newBtn}
           disabled={creating}
-          title="Create demo project"
-          aria-label="Create demo project"
-          data-testid="sidebar-new-demo-project"
+          title="Create project"
+          aria-label="Create project"
+          data-testid="sidebar-new-project"
         >
-          + Demo Project
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            if (creating) return;
-            setProjectForm({ demo: false, name: 'New circuit project', projectKind: 'simulation' });
-            setWorkspaceFormOpen(false);
-            setNotice(null);
-          }}
-          style={styles.blankProjectBtn}
-          disabled={creating}
-          title="Create blank project"
-          aria-label="Create blank project"
-          data-testid="sidebar-new-blank-project"
-        >
-          Blank
+          + Project
         </button>
       </div>
       {projectForm && (
@@ -809,7 +793,7 @@ export function Sidebar({
           aria-busy={creating}
           onKeyDown={handleProjectFormKeyDown}
         >
-          <div style={styles.formTitle}>{projectForm.demo ? 'Demo project' : 'Blank project'}</div>
+          <div style={styles.formTitle}>New project</div>
           <input
             value={projectForm.name}
             onChange={(event) => setProjectForm({ ...projectForm, name: event.target.value })}
@@ -830,9 +814,9 @@ export function Sidebar({
               disabled={creating}
               data-testid="project-kind-select"
             >
-              <option value="simulation">仿真/教学</option>
-              <option value="pcb_schematic">PCB 原理图</option>
-              <option value="analog_ic">模拟 IC</option>
+              <option value="simulation">Simulation</option>
+              <option value="pcb_schematic">PCB Schematic</option>
+              <option value="analog_ic">Analog IC</option>
             </select>
           </label>
           <div style={styles.formActions}>
@@ -1476,7 +1460,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     padding: '3px 6px',
   },
-  projectActions: { display: 'grid', gridTemplateColumns: '1fr 62px', gap: 6, margin: '10px 12px' },
+  projectActions: { display: 'grid', gridTemplateColumns: '1fr', gap: 6, margin: '10px 12px' },
   projectRow: { position: 'relative', display: 'flex', alignItems: 'stretch', backgroundColor: '#ffffff' },
   projectCheckbox: { width: 16, margin: '0 0 0 10px', flex: '0 0 16px', accentColor: '#2563eb' },
   newBtn: {
@@ -1488,16 +1472,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontSize: 13,
     fontWeight: 600,
-  },
-  blankProjectBtn: {
-    padding: '8px 0',
-    backgroundColor: '#ffffff',
-    color: '#3f4a56',
-    border: '1px solid #c8cfd7',
-    borderRadius: 5,
-    cursor: 'pointer',
-    fontSize: 11,
-    fontWeight: 650,
   },
   createPanel: {
     margin: '0 12px 10px',

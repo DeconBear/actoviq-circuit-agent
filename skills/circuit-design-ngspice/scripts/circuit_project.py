@@ -2780,13 +2780,33 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
             if node and node not in nodes:
                 nodes.append(node)
 
+    # Nets already driven by on-schematic sources are not external interfaces.
+    # A buck with local Vin must not also grow an inferred IN/VIN port on the
+    # same net (that port is only for external or cross-module stimulus).
+    source_driven_nets = {
+        str((component.get("pins") or [{}])[0].get("net", "")).strip()
+        for component in components
+        if str(component.get("type", "")).upper() in {"V", "I"}
+        and (component.get("pins") or [])
+    }
+    source_driven_nets.discard("")
+
     ports: list[dict[str, Any]] = []
     used_port_ids: set[str] = set()
     for port in existing_ports:
         port_id = str(port.get("id", "")).strip()
         if not port_id or port_id in used_port_ids:
             continue
-        if port.get("inferred") and str(port.get("net", "")) not in nodes:
+        net = str(port.get("net", ""))
+        if port.get("inferred") and net not in nodes:
+            continue
+        # Drop stale inferred interface ports once a local source drives the net.
+        if (
+            port.get("inferred")
+            and net in source_driven_nets
+            and str(port.get("signal_type", "")) in {"analog", "power"}
+            and str(port.get("direction", "")) == "input"
+        ):
             continue
         used_port_ids.add(port_id)
         ports.append(port)
@@ -2795,6 +2815,8 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
 
     def add_port(port_id: str, name: str, direction: str, signal_type: str, net: str) -> None:
         if net in existing_nets or port_id in used_port_ids:
+            return
+        if net in source_driven_nets and signal_type in {"analog", "power"} and direction == "input":
             return
         used_port_ids.add(port_id)
         existing_nets.add(net)
@@ -2805,10 +2827,11 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
     lower_to_node = {node.lower(): node for node in nodes}
     if "0" in nodes:
         add_port("gnd", "GND", "bidirectional", "ground", "0")
-    for rail in ("vdd", "vcc", "vee", "vss"):
+    # vin is a supply rail name, not an analog signal input.
+    for rail in ("vdd", "vcc", "vee", "vss", "vin"):
         if rail in lower_to_node:
             add_port(rail, rail.upper(), "input", "power", lower_to_node[rail])
-    for label in ("in", "vin", "input", "rf_in"):
+    for label in ("in", "input", "rf_in"):
         if label in lower_to_node:
             add_port("input", "IN", "input", "analog", lower_to_node[label])
             break

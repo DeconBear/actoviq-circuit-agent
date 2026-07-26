@@ -357,8 +357,8 @@ try {
   assert.equal(await page.getByTestId('sidebar-new-workspace').getAttribute('aria-label'), 'Create workspace');
   assert.equal(await page.getByTestId('sidebar-new-workspace').getAttribute('title'), 'Create workspace');
   assert.equal(await page.getByTestId('sidebar-open-workspace-root').getAttribute('aria-label'), 'Open active workspace folder');
-  assert.equal(await page.getByTestId('sidebar-new-demo-project').getAttribute('aria-label'), 'Create demo project');
-  assert.equal(await page.getByTestId('sidebar-new-blank-project').getAttribute('aria-label'), 'Create blank project');
+  assert.equal(await page.getByTestId('sidebar-new-project').getAttribute('aria-label'), 'Create project');
+  assert.equal(await page.getByTestId('sidebar-new-project').getAttribute('title'), 'Create project');
   await clickApplicationMenuPath(electronApp, ['File', 'Settings']);
   await page.getByTestId('settings-dialog').waitFor({ timeout: 10_000 });
   await page.getByTestId('circuit-skill-status').getByText('actoviq.project-agent.v2', { exact: false }).waitFor();
@@ -418,21 +418,20 @@ try {
   for (const relative of ['projects', 'references', 'jobs']) {
     assert.equal((await stat(path.resolve(createdWorkspaceRoot, relative))).isDirectory(), true);
   }
-  await page.getByTestId('create-demo-project').waitFor({ timeout: 20_000 });
-  assert.equal(await page.getByTestId('create-demo-project').getAttribute('aria-label'), 'Create three-module demo project');
-  assert.equal(await page.getByTestId('create-demo-project').getAttribute('title'), 'Create three-module demo project');
-  assert.equal(await page.getByTestId('create-blank-project').getAttribute('aria-label'), 'Create blank project');
-  await page.getByTestId('create-demo-project').click();
+  await page.getByTestId('create-project').waitFor({ timeout: 20_000 });
+  assert.equal(await page.getByTestId('create-project').getAttribute('aria-label'), 'Create project');
+  assert.equal(await page.getByTestId('create-project').getAttribute('title'), 'Create project');
+  await page.getByTestId('create-project').click();
   await page.getByTestId('empty-project-create-panel').waitFor({ timeout: 10_000 });
-  await page.getByText('Demo project', { exact: true }).waitFor();
+  await page.getByText('New project', { exact: true }).waitFor();
   assert.equal(await page.getByTestId('empty-project-create-submit').isDisabled(), false);
   assert.equal(await page.getByTestId('empty-project-cancel').getAttribute('aria-label'), 'Cancel project creation');
   assert.equal(await page.getByTestId('empty-project-create-submit').getAttribute('aria-label'), 'Create project');
   await page.getByTestId('empty-project-cancel').click();
   await page.getByTestId('empty-project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
   const emptyBlankProjectName = `Playwright Empty Blank ${Date.now()}`;
-  await page.getByTestId('create-blank-project').waitFor({ timeout: 20_000 });
-  await page.getByTestId('create-blank-project').click();
+  await page.getByTestId('create-project').waitFor({ timeout: 20_000 });
+  await page.getByTestId('create-project').click();
   await page.getByTestId('empty-project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('empty-project-name-input').fill(emptyBlankProjectName);
   await page.getByTestId('empty-project-create-submit').dblclick();
@@ -484,19 +483,19 @@ try {
   await waitForWorkbenchProject(page, projectId);
 
   const sidebarProjectName = `Playwright Inline Project ${Date.now()}`;
-  await page.getByTestId('sidebar-new-blank-project').click();
+  await page.getByTestId('sidebar-new-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   assert.equal(await page.getByTestId('project-create-cancel').getAttribute('aria-label'), 'Cancel project creation');
   assert.equal(await page.getByTestId('project-create-submit').getAttribute('aria-label'), 'Create project');
   await page.keyboard.press('Escape');
   await page.getByTestId('project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
-  await page.getByTestId('sidebar-new-blank-project').click();
+  await page.getByTestId('sidebar-new-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('project-name-input').fill('');
   assert.equal(await page.getByTestId('project-create-submit').isDisabled(), true);
   await page.getByTestId('project-create-cancel').click();
   await page.getByTestId('project-create-panel').waitFor({ state: 'detached', timeout: 10_000 });
-  await page.getByTestId('sidebar-new-blank-project').click();
+  await page.getByTestId('sidebar-new-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('project-name-input').fill(sidebarProjectName);
   await page.getByTestId('project-create-submit').dblclick();
@@ -504,7 +503,7 @@ try {
   assert.equal(
     await countProjectsByNameInRoot(projectsRoot, sidebarProjectName),
     1,
-    'double-clicking sidebar blank project create should create exactly one project',
+    'double-clicking sidebar project create should create exactly one project',
   );
   const sidebarBlankProjectManifest = await findProjectByName(sidebarProjectName);
   await waitForWorkbenchProject(page, sidebarBlankProjectManifest.project.project_id);
@@ -523,7 +522,7 @@ try {
   assert.equal(await page.getByTestId(`sidebar-project-${projectId}`).getAttribute('data-active'), 'true');
 
   const sidebarKeyboardProjectName = `Playwright Keyboard Project ${Date.now()}`;
-  await page.getByTestId('sidebar-new-blank-project').click();
+  await page.getByTestId('sidebar-new-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByTestId('project-name-input').fill(sidebarKeyboardProjectName);
   await page.keyboard.press('Enter');
@@ -542,16 +541,25 @@ try {
   assert.equal(await page.getByTestId('project-title').textContent(), sidebarKeyboardProjectName);
 
   const sidebarDemoProjectName = `${e2eUiProjectPrefix}${Date.now()}`;
-  await page.getByTestId('sidebar-new-demo-project').click();
+  await page.getByTestId('sidebar-new-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
-  await page.getByText('Demo project', { exact: true }).waitFor();
+  await page.getByText('New project', { exact: true }).waitFor();
+  assert.equal(await page.getByTestId('project-kind-select').inputValue(), 'simulation');
+  assert.deepEqual(
+    await page.getByTestId('project-kind-select').evaluate((select) => (
+      select instanceof HTMLSelectElement
+        ? [...select.options].map((option) => option.textContent)
+        : []
+    )),
+    ['Simulation', 'PCB Schematic', 'Analog IC'],
+  );
   await page.getByTestId('project-name-input').fill(sidebarDemoProjectName);
   await page.getByTestId('project-create-submit').dblclick();
   await page.getByTestId('sidebar-notice').getByText(`Project created: ${sidebarDemoProjectName}`, { exact: true }).waitFor({ timeout: 60_000 });
   assert.equal(
     await countProjectsByNameInRoot(projectsRoot, sidebarDemoProjectName),
     1,
-    'double-clicking sidebar demo project create should create exactly one project',
+    'double-clicking sidebar project create should create exactly one project',
   );
   const sidebarDemoProjectManifest = await findProjectByName(sidebarDemoProjectName);
   await waitForWorkbenchProject(page, sidebarDemoProjectManifest.project.project_id);
@@ -560,15 +568,12 @@ try {
   assert.equal(await sidebarDemoProject.getAttribute('data-active'), 'true');
   assert.equal(await sidebarDemoProject.getAttribute('aria-current'), 'true');
   assert.equal(await page.getByTestId('project-title').textContent(), sidebarDemoProjectName);
-  await page.waitForFunction(() => document.querySelectorAll('[data-testid^="module-card-"]').length === 3);
+  assert.equal(sidebarDemoProjectManifest.project.modules.length, 0);
   await page.getByTestId('open-project-erc').click();
   await page.getByTestId('project-erc-panel').waitFor();
   await page.getByTestId('project-erc-panel').getByText(/Revision \d+ \| \d+ errors \| \d+ warnings/).waitFor();
   await page.getByTestId('close-project-erc').click();
   await page.getByTestId('project-erc-panel').waitFor({ state: 'detached' });
-  assert.equal(sidebarDemoProjectManifest.project.modules.length, 3);
-  assert.ok(sidebarDemoProjectManifest.project.connections.length >= 2);
-  assert.ok(sidebarDemoProjectManifest.project.modules.some((module) => module.id === 'filter'));
 
   await sidebarDemoProject.click({ button: 'right' });
   await page.getByTestId('sidebar-project-context-menu').waitFor();
