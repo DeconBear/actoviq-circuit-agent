@@ -2608,7 +2608,7 @@ function wireOnlyTouchesDraggedComponents(wire: CircuitWire, componentIds: Set<s
   const fromId = wire.from?.component_id;
   const toId = wire.to?.component_id;
   if (!fromId || !toId) return false;
-  // Port / free / junction ends must stay anchored and trigger Manhattan reroute.
+  // Port / free / junction ends stay anchored; the commit path reroutes those wires.
   if (wire.from?.port_id || wire.to?.port_id) return false;
   if (wire.from?.junction_id || wire.to?.junction_id) return false;
   return componentIds.has(fromId) && componentIds.has(toId);
@@ -2715,21 +2715,43 @@ function commitWiresAfterComponentGroupMove(
   dy: number,
 ): CircuitWire[] {
   const ids = new Set(componentIds);
-  const movedById = new Map(originalWires.map((wire) => [
-    wire.id,
-    materializeEditableWire(
-      wireTouchesPreviewComponent(wire, ids)
-        ? moveWireWithComponentSelection(wire, ids, dx, dy)
-        : wire,
-    ),
-  ]));
-  const committed: CircuitWire[] = [];
+  const originalById = new Map(originalWires.map((wire) => [wire.id, wire]));
+  // Prefer the live module wire list, but take pre-drag geometry from originalWires so
+  // rigid translates and partial reroutes start from the gesture's baseline paths.
+  const sourceWires: CircuitWire[] = [];
+  const seen = new Set<string>();
   for (const wire of module.wires ?? []) {
-    committed.push(movedById.get(wire.id) ?? cloneWire(wire));
-    movedById.delete(wire.id);
+    sourceWires.push(originalById.get(wire.id) ?? wire);
+    seen.add(wire.id);
   }
-  committed.push(...movedById.values());
-  return committed;
+  for (const wire of originalWires) {
+    if (seen.has(wire.id)) continue;
+    sourceWires.push(wire);
+  }
+  const nextWires = sourceWires.map((wire) => (
+    wireOnlyTouchesDraggedComponents(wire, ids)
+      ? translateWireGeometry(wire, dx, dy)
+      : cloneWire(wire)
+  ));
+  const working = { ...module, wires: nextWires };
+  const needsReroute = nextWires.some(
+    (wire) => wireTouchesPreviewComponent(wire, ids) && !wireOnlyTouchesDraggedComponents(wire, ids),
+  );
+  if (!needsReroute) {
+    return nextWires.map((wire) => (
+      wireTouchesPreviewComponent(wire, ids) ? materializeEditableWire(wire) : wire
+    ));
+  }
+  const rerouted = rerouteStoredWires(working, { componentIds });
+  return rerouted.map((wire) => {
+    if (wireOnlyTouchesDraggedComponents(wire, ids)) {
+      return materializeEditableWire(nextWires.find((entry) => entry.id === wire.id) ?? wire);
+    }
+    if (wireTouchesPreviewComponent(wire, ids)) {
+      return materializeEditableWire(wire);
+    }
+    return wire;
+  });
 }
 
 function wireTouchesPreviewComponent(wire: CircuitWire, componentIds: Set<string>): boolean {

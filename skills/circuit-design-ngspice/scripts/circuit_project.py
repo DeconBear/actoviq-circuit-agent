@@ -1965,6 +1965,7 @@ def apply_operation(
             raise ValueError("set_module_schematic nets must be an array")
         if not isinstance(annotations, list):
             raise ValueError("set_module_schematic annotations must be an array")
+        previous_ports = list(module.get("ports", []))
         next_module = {
             **module,
             "components": components,
@@ -2011,11 +2012,13 @@ def apply_operation(
         if "spice" in next_module:
             module["spice"] = next_module["spice"]
         find_module_ref(project, module_id)["ports"] = ports
+        rewrite_module_port_connections(project, module_id, previous_ports, ports)
         changed_modules.add(module_id)
         return
     if op == "set_module_netlist":
         module_id = str(operation["module_id"])
         module = modules[module_id]
+        previous_ports = list(module.get("ports", []))
         notebook = coerce_netlist_notebook_text(operation.get("netlist_notebook"))
         next_module = module_from_netlist_notebook(
             module_id,
@@ -2025,6 +2028,7 @@ def apply_operation(
         )
         modules[module_id] = next_module
         find_module_ref(project, module_id)["ports"] = next_module["ports"]
+        rewrite_module_port_connections(project, module_id, previous_ports, next_module["ports"])
         notebook_writes[module_id] = notebook
         changed_modules.add(module_id)
         return
@@ -2772,6 +2776,97 @@ def parse_spice_source(
     }
 
 
+_GENERIC_PORT_NAMES = frozenset({"in", "input", "out", "output"})
+
+
+def is_generic_module_port(port: dict[str, Any]) -> bool:
+    port_id = str(port.get("id", "")).strip().casefold()
+    name = str(port.get("name", "")).strip().casefold()
+    return port_id in _GENERIC_PORT_NAMES or name in _GENERIC_PORT_NAMES
+
+
+def prefer_module_port_candidate(
+    current: tuple[int, dict[str, Any], str, str],
+    candidate: tuple[int, dict[str, Any], str, str],
+) -> bool:
+    """Return True when candidate should replace the current same-net winner."""
+    current_port = current[1]
+    candidate_port = candidate[1]
+    current_inferred = bool(current_port.get("inferred"))
+    candidate_inferred = bool(candidate_port.get("inferred"))
+    if current_inferred and not candidate_inferred:
+        return True
+    if (not current_inferred) and candidate_inferred:
+        return False
+    current_generic = is_generic_module_port(current_port)
+    candidate_generic = is_generic_module_port(candidate_port)
+    if current_generic and not candidate_generic:
+        return True
+    if (not current_generic) and candidate_generic:
+        return False
+    return False
+
+
+def port_alias_remap(
+    previous_ports: list[dict[str, Any]],
+    next_ports: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Map dropped port ids to a surviving port on the same SPICE net."""
+    survivors_by_net: dict[str, str] = {}
+    surviving_ids: set[str] = set()
+    for port in next_ports:
+        port_id = str(port.get("id", "")).strip()
+        net_key = str(port.get("net", "")).strip().casefold()
+        if port_id:
+            surviving_ids.add(port_id)
+        if port_id and net_key and net_key not in survivors_by_net:
+            survivors_by_net[net_key] = port_id
+    remap: dict[str, str] = {}
+    for port in previous_ports:
+        port_id = str(port.get("id", "")).strip()
+        net_key = str(port.get("net", "")).strip().casefold()
+        if not port_id or port_id in surviving_ids:
+            continue
+        winner = survivors_by_net.get(net_key)
+        if winner and winner != port_id:
+            remap[port_id] = winner
+    return remap
+
+
+def rewrite_module_port_connections(
+    project: dict[str, Any],
+    module_id: str,
+    previous_ports: list[dict[str, Any]],
+    next_ports: list[dict[str, Any]],
+) -> None:
+    """Rewrite or drop project connections after module port ids change."""
+    remap = port_alias_remap(previous_ports, next_ports)
+    surviving_ids = {
+        str(port.get("id", "")).strip()
+        for port in next_ports
+        if str(port.get("id", "")).strip()
+    }
+    rewritten: list[dict[str, Any]] = []
+    for connection in project.get("connections", []):
+        next_connection = dict(connection)
+        drop = False
+        for endpoint_name in ("from", "to"):
+            endpoint = dict(next_connection.get(endpoint_name) or {})
+            if endpoint.get("module_id") != module_id:
+                next_connection[endpoint_name] = endpoint
+                continue
+            port_id = str(endpoint.get("port_id", "")).strip()
+            if port_id in remap:
+                endpoint["port_id"] = remap[port_id]
+            elif port_id and port_id not in surviving_ids:
+                drop = True
+                break
+            next_connection[endpoint_name] = endpoint
+        if not drop:
+            rewritten.append(next_connection)
+    project["connections"] = rewritten
+
+
 def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[dict[str, Any]]) -> list[dict[str, Any]]:
     nodes: list[str] = []
     for component in components:
@@ -2793,8 +2888,8 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
     source_driven_nets.discard("")
 
     # A SPICE net is the electrical identity (case-insensitive), not the port
-    # id. Keep one interface per live net and prefer an explicit module port
-    # over an older inferred alias such as OUT/VOUT or power-VIN/analog-VIN.
+    # id. Keep one interface per live net and prefer an explicit named module
+    # port over inferred or generic IN/OUT aliases.
     candidates: list[tuple[int, dict[str, Any], str, str]] = []
     for index, port in enumerate(existing_ports):
         port_id = str(port.get("id", "")).strip()
@@ -2803,10 +2898,7 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
         if not port_id or not net_key:
             continue
         live_net = net_key in node_keys
-        generic_interface = (
-            port_id.casefold() in {"in", "input", "out", "output"}
-            or str(port.get("name", "")).strip().casefold() in {"in", "input", "out", "output"}
-        )
+        generic_interface = is_generic_module_port(port)
         if not live_net and (port.get("inferred") or generic_interface):
             continue
         if (
@@ -2821,7 +2913,7 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
     winner_by_net: dict[str, tuple[int, dict[str, Any], str, str]] = {}
     for candidate in candidates:
         current = winner_by_net.get(candidate[3])
-        if current is None or (current[1].get("inferred") and not candidate[1].get("inferred")):
+        if current is None or prefer_module_port_candidate(current, candidate):
             winner_by_net[candidate[3]] = candidate
 
     ports: list[dict[str, Any]] = []
@@ -2889,7 +2981,8 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
     components = [*parsed_components, *schematic_blocks]
     if not components:
         return {"ok": True, "project_id": project["project_id"], "module_id": module_id, "changed": False}
-    ports = infer_editable_ports(list(module.get("ports", [])), components)
+    previous_ports = list(module.get("ports", []))
+    ports = infer_editable_ports(previous_ports, components)
     next_module = {
         **module,
         "components": components,
@@ -2909,6 +3002,8 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
     with ProjectLock(root):
         project, modules = load_project(root)
         module = modules[module_id]
+        previous_ports = list(module.get("ports", []))
+        ports = infer_editable_ports(previous_ports, components)
         next_module = {
             **module,
             "components": components,
@@ -2922,6 +3017,8 @@ def sync_module_from_netlist(root: Path, module_id: str) -> dict[str, Any]:
         modules[module_id] = next_module
         module_ref = find_module_ref(project, module_id)
         module_ref["ports"] = ports
+        rewrite_module_port_connections(project, module_id, previous_ports, ports)
+        validate_project(project)
         project["revision"] = int(project.get("revision", 0)) + 1
         project["updated_at"] = utc_now()
         atomic_write_json(project_path(root), project)

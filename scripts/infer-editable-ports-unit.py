@@ -9,7 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills" / "circuit-design-ngspice" / "scripts"))
 
-from circuit_project import infer_editable_ports  # noqa: E402
+from circuit_project import (  # noqa: E402
+    infer_editable_ports,
+    port_alias_remap,
+    rewrite_module_port_connections,
+)
 
 
 def main() -> None:
@@ -190,6 +194,81 @@ def main() -> None:
     vout_ports = [port for port in ports if port["net"].casefold() == "vout"]
     assert [(port["id"], port["signal_type"]) for port in vin_ports] == [("VIN", "analog")], ports
     assert [(port["id"], port["name"]) for port in vout_ports] == [("VOUT", "VOUT")], ports
+
+    # Named explicit interfaces beat generic IN/OUT even when the generic port
+    # appears first in the module port list.
+    generic_first = [
+        {
+            "id": "output",
+            "name": "OUT",
+            "direction": "output",
+            "signal_type": "analog",
+            "net": "vout",
+        },
+        {
+            "id": "VOUT",
+            "name": "VOUT",
+            "direction": "output",
+            "signal_type": "analog",
+            "net": "vout",
+        },
+        {
+            "id": "input",
+            "name": "IN",
+            "direction": "input",
+            "signal_type": "analog",
+            "net": "vin",
+        },
+        {
+            "id": "VIN",
+            "name": "VIN",
+            "direction": "input",
+            "signal_type": "analog",
+            "net": "vin",
+        },
+    ]
+    ports = infer_editable_ports(generic_first, duplicate_net_components)
+    assert [(port["id"], port["name"]) for port in ports if port["net"].casefold() == "vin"] == [("VIN", "VIN")], ports
+    assert [(port["id"], port["name"]) for port in ports if port["net"].casefold() == "vout"] == [("VOUT", "VOUT")], ports
+
+    previous = generic_first
+    next_ports = infer_editable_ports(previous, duplicate_net_components)
+    assert port_alias_remap(previous, next_ports) == {
+        "output": "VOUT",
+        "input": "VIN",
+    }
+    project = {
+        "connections": [
+            {
+                "id": "c1",
+                "from": {"module_id": "src", "port_id": "out"},
+                "to": {"module_id": "dut", "port_id": "input"},
+            },
+            {
+                "id": "c2",
+                "from": {"module_id": "dut", "port_id": "output"},
+                "to": {"module_id": "load", "port_id": "in"},
+            },
+            {
+                "id": "c3",
+                "from": {"module_id": "bias", "port_id": "vdd"},
+                "to": {"module_id": "dut", "port_id": "vdd"},
+            },
+        ]
+    }
+    rewrite_module_port_connections(project, "dut", previous, next_ports)
+    assert project["connections"] == [
+        {
+            "id": "c1",
+            "from": {"module_id": "src", "port_id": "out"},
+            "to": {"module_id": "dut", "port_id": "VIN"},
+        },
+        {
+            "id": "c2",
+            "from": {"module_id": "dut", "port_id": "VOUT"},
+            "to": {"module_id": "load", "port_id": "in"},
+        },
+    ], project["connections"]
     print("infer-editable-ports-unit: ok")
 
 

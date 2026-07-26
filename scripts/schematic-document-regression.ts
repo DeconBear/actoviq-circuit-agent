@@ -481,6 +481,23 @@ function assertLegacyPortNormalization() {
   const vout = voutPorts[0]!;
   assert.equal(portRenderSide(document, vin, document.portPositions.get(vin.id)!), 'left');
   assert.equal(portRenderSide(document, vout, document.portPositions.get(vout.id)!), 'right');
+
+  const genericFirst = moduleFixture('legacy_generic_first', [
+    component('r1', 'R', '1k', 300, 200, [['a', '1', 'vin'], ['b', '2', 'vout']]),
+  ], [
+    { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+    { id: 'VOUT', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+    { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'vin' },
+    { id: 'VIN', name: 'VIN', direction: 'input', signal_type: 'analog', net: 'vin' },
+  ]);
+  const genericFirstDocument = createSchematicDocument(genericFirst, { autoLayout: false });
+  assert.deepEqual(
+    genericFirstDocument.module.ports
+      .filter((port) => port.net.toLowerCase() === 'vin' || port.net.toLowerCase() === 'vout')
+      .map((port) => port.id),
+    ['VOUT', 'VIN'],
+    'named explicit interfaces beat generic IN/OUT even when generic ports are listed first',
+  );
 }
 
 function assertRouteEgressAvoidsOwnerBody() {

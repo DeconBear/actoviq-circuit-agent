@@ -167,11 +167,32 @@ export function createSchematicDocument(
  * Normalize historical module data before projecting it into the editor.
  *
  * SPICE net names are case-insensitive, so an inferred VIN/OUT and an explicit
- * VIN/VOUT on the same net are one interface. Explicit ports win because
- * project-level connections may reference their ids. Stale inferred and
- * generic IN/OUT ports are removed, while named explicit module interfaces are
- * preserved even when the local schematic does not currently consume them.
+ * VIN/VOUT on the same net are one interface. Explicit named ports win over
+ * inferred or generic IN/OUT aliases because project-level connections may
+ * reference those ids. Stale inferred and generic IN/OUT ports are removed,
+ * while named explicit module interfaces are preserved even when the local
+ * schematic does not currently consume them.
  */
+export function isGenericModulePort(port: Pick<CircuitPort, 'id' | 'name'>): boolean {
+  const genericNames = new Set(['in', 'input', 'out', 'output']);
+  return genericNames.has(port.id.trim().toLowerCase()) || genericNames.has(port.name.trim().toLowerCase());
+}
+
+function preferSchematicPortCandidate(
+  current: { port: CircuitPort },
+  candidate: { port: CircuitPort },
+): boolean {
+  const currentInferred = Boolean(current.port.inferred);
+  const candidateInferred = Boolean(candidate.port.inferred);
+  if (currentInferred && !candidateInferred) return true;
+  if (!currentInferred && candidateInferred) return false;
+  const currentGeneric = isGenericModulePort(current.port);
+  const candidateGeneric = isGenericModulePort(candidate.port);
+  if (currentGeneric && !candidateGeneric) return true;
+  if (!currentGeneric && candidateGeneric) return false;
+  return false;
+}
+
 export function normalizeSchematicPorts(
   ports: CircuitPort[],
   components: CircuitComponent[],
@@ -185,12 +206,11 @@ export function normalizeSchematicPorts(
       .map((component) => component.pins[0]?.net.trim().toLowerCase() ?? '')
       .filter(Boolean),
   );
-  const genericNames = new Set(['in', 'input', 'out', 'output']);
   const candidates = ports.flatMap((port, index) => {
     const id = port.id.trim();
     const net = port.net.trim().toLowerCase();
     if (!id || !net) return [];
-    const genericInterface = genericNames.has(id.toLowerCase()) || genericNames.has(port.name.trim().toLowerCase());
+    const genericInterface = isGenericModulePort(port);
     if (!liveNets.has(net) && (port.inferred || genericInterface)) return [];
     if (
       port.inferred &&
@@ -206,7 +226,7 @@ export function normalizeSchematicPorts(
   const winnerByNet = new Map<string, (typeof candidates)[number]>();
   for (const candidate of candidates) {
     const current = winnerByNet.get(candidate.net);
-    if (!current || (current.port.inferred && !candidate.port.inferred)) {
+    if (!current || preferSchematicPortCandidate(current, candidate)) {
       winnerByNet.set(candidate.net, candidate);
     }
   }
