@@ -120,6 +120,20 @@ def main() -> None:
     ports = infer_editable_ports(stale_explicit, signal_in)
     assert not any(port["id"] == "old_out" for port in ports), ports
 
+    # Named cross-module interfaces remain stable even when the local notebook
+    # does not consume them yet; project connections may still reference them.
+    explicit_supply = [
+        {
+            "id": "vdd",
+            "name": "VDD",
+            "direction": "input",
+            "signal_type": "power",
+            "net": "vdd",
+        }
+    ]
+    ports = infer_editable_ports(explicit_supply, signal_in)
+    assert any(port["id"] == "vdd" for port in ports), ports
+
     # The net is the electrical identity. Prefer the explicit module interface
     # over an older inferred alias so VIN/OUT cannot render twice or with the
     # inferred rail direction.

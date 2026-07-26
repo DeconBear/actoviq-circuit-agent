@@ -2800,7 +2800,14 @@ def infer_editable_ports(existing_ports: list[dict[str, Any]], components: list[
         port_id = str(port.get("id", "")).strip()
         net = str(port.get("net", "")).strip()
         net_key = net.casefold()
-        if not port_id or not net_key or net_key not in node_keys:
+        if not port_id or not net_key:
+            continue
+        live_net = net_key in node_keys
+        generic_interface = (
+            port_id.casefold() in {"in", "input", "out", "output"}
+            or str(port.get("name", "")).strip().casefold() in {"in", "input", "out", "output"}
+        )
+        if not live_net and (port.get("inferred") or generic_interface):
             continue
         if (
             port.get("inferred")
