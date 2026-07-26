@@ -7,12 +7,16 @@ import {
   skill,
   type ActoviqAgentClient,
   type AgentEvent,
+  type AgentRunResult,
   type AgentSession,
   type ActoviqSkillDefinition,
 } from 'actoviq-agent-sdk';
 
 import { createDesktopCircuitTools } from './desktopCircuitTools.js';
 import { createDisabledTaskTool, withAgentFacingToolErrorsForAll } from './toolHelpers.js';
+import { createAssistantRoundTracker, type DesktopAgentRound } from './assistantRounds.js';
+
+export type { DesktopAgentRound } from './assistantRounds.js';
 
 const DESKTOP_AGENT_NAME = 'actoviq-circuit-desktop';
 const REPORT_AGENT_NAME = 'actoviq-circuit-report-writer';
@@ -101,6 +105,8 @@ export interface DesktopAgentRunInput {
 
 export interface DesktopAgentChatResponse {
   text: string;
+  /** All assistant text rounds of the run (text may only carry the final one). */
+  rounds?: DesktopAgentRound[];
   /** Legacy flags retained for type compatibility; always false on the ReAct path. */
   isDesignRequest: boolean;
   isRevisionRequest?: boolean;
@@ -125,6 +131,7 @@ export type DesktopAgentEventType =
   | 'run-started'
   | 'status'
   | 'text-progress'
+  | 'assistant-round'
   | 'thinking-delta'
   | 'tool-call'
   | 'tool-result'
@@ -151,6 +158,7 @@ export interface DesktopAgentEvent {
   toolName?: string;
   toolUseId?: string;
   usage?: Record<string, unknown>;
+  rounds?: DesktopAgentRound[];
 }
 
 export interface DesktopAgentRunHandle {
@@ -410,6 +418,7 @@ export function startDesktopAgentRun(
 
   const runAttempt = async (session: AgentSession, prompt: string): Promise<{
     raw: string;
+    rounds: DesktopAgentRound[];
     runId?: string;
     sessionId?: string;
     model: string;
@@ -418,6 +427,11 @@ export function startDesktopAgentRun(
     let raw = '';
     let visibleText = '';
     let usage: Record<string, unknown> | undefined;
+    // Per-round assistant text. The SDK's response.text.delta snapshot is scoped to
+    // a single ReAct iteration, so each new request.started boundary finalizes the
+    // previous round; stream.result.requests is the authoritative fallback.
+    const roundTracker = createAssistantRoundTracker();
+    let requestSummaries: AgentRunResult['requests'] | undefined;
     const stream = session.stream(prompt, {
       signal: abortController.signal,
       maxTokens: 8192,
@@ -434,7 +448,13 @@ export function startDesktopAgentRun(
           lastModel = sdkEvent.model;
           emit({ type: 'run-started', runId: sdkEvent.runId, sessionId: sdkEvent.sessionId, model: sdkEvent.model });
           break;
-        case 'request.started':
+        case 'request.started': {
+          const round = roundTracker.flushRequestBoundary();
+          if (round) {
+            emit({ type: 'assistant-round', runId: sdkEvent.runId, iteration: round.iteration, text: round.text });
+          }
+          raw = '';
+          visibleText = '';
           emit({
             type: 'status',
             runId: sdkEvent.runId,
@@ -442,11 +462,12 @@ export function startDesktopAgentRun(
             label: 'Thinking and selecting tools',
           });
           break;
+        }
         case 'response.text.delta': {
           const snapshot = typeof sdkEvent.snapshot === 'string' ? sdkEvent.snapshot : '';
           const delta = typeof sdkEvent.delta === 'string' ? sdkEvent.delta : '';
-          raw = snapshot || raw + delta;
-          const nextText = snapshot || raw;
+          raw = roundTracker.handleTextDelta(sdkEvent.iteration, snapshot, delta);
+          const nextText = raw;
           if (nextText !== visibleText) {
             const textDelta = nextText.startsWith(visibleText) ? nextText.slice(visibleText.length) : (delta || nextText);
             visibleText = nextText;
@@ -464,6 +485,7 @@ export function startDesktopAgentRun(
           emit({
             type: 'tool-call',
             runId: sdkEvent.runId,
+            iteration: sdkEvent.iteration,
             toolName: name,
             toolUseId: sdkEvent.call.id,
             label: toolLabel(name, 'call'),
@@ -491,6 +513,7 @@ export function startDesktopAgentRun(
           emit({
             type: 'tool-result',
             runId: sdkEvent.runId,
+            iteration: sdkEvent.iteration,
             toolName: name,
             toolUseId: sdkEvent.result.id,
             label: resultLabel,
@@ -512,6 +535,7 @@ export function startDesktopAgentRun(
           break;
         case 'response.completed':
           raw = sdkEvent.result.text || raw;
+          requestSummaries = sdkEvent.result.requests;
           usage = sdkEvent.result.usage as unknown as Record<string, unknown> | undefined;
           if (usage) emit({ type: 'usage', runId: sdkEvent.runId, usage });
           break;
@@ -523,8 +547,12 @@ export function startDesktopAgentRun(
     }
     const result = await stream.result;
     activeStream = null;
+    // Authoritative per-iteration texts win; fall back to rounds flushed while
+    // streaming plus the final accumulated round.
+    const finalRaw = result.text || raw;
     return {
-      raw: result.text || raw,
+      raw: finalRaw,
+      rounds: roundTracker.finalize(requestSummaries ?? result.requests, finalRaw),
       runId: result.runId,
       sessionId: result.sessionId,
       model: result.model,
@@ -540,6 +568,7 @@ export function startDesktopAgentRun(
       const text = (first.raw || '').trim() || 'Done.';
       const completed: DesktopAgentChatResponse = {
         text,
+        rounds: first.rounds.length > 0 ? first.rounds : [{ iteration: 1, text }],
         isDesignRequest: false,
         isRevisionRequest: false,
         runId: first.runId,
@@ -554,6 +583,7 @@ export function startDesktopAgentRun(
         sessionId: completed.sessionId,
         model: completed.model,
         text: completed.text,
+        rounds: completed.rounds,
         usage: completed.usage,
       });
       return completed;

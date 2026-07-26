@@ -431,6 +431,38 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     setDirty((current) => (current ? current : true));
   }
 
+  function beginComponentGroupDrag(componentIds: string[], world: CircuitPosition) {
+    setInteractionCursor('grabbing');
+    const draggedIdSet = new Set(componentIds);
+    dragRef.current = {
+      componentIds,
+      startWorld: world,
+      originalPositions: componentPositionsById(draft, componentIds),
+      lastPositions: componentPositionsById(draft, componentIds),
+      originalModule: cloneModule(draft),
+      originalDirty: dirty,
+      moved: false,
+      // Persist the FULL nets of every wire touching the dragged set. draft.wires is
+      // often empty until the first edit, so live generated wires must be captured —
+      // but storing only the touching wires lets the >=4-endpoint spine/tree generator
+      // re-decompose the rest of the net and add a parallel link after the move.
+      originalWires: (() => {
+        const touchedNets = new Set(
+          document.wires
+            .filter((wire) => wireTouchesPreviewComponent(wire, draggedIdSet))
+            .map((wire) => wire.net_id ?? wire.net)
+            .filter((net): net is string => Boolean(net)),
+        );
+        return document.wires
+          .filter((wire) => (
+            wireTouchesPreviewComponent(wire, draggedIdSet) ||
+            touchedNets.has(wire.net_id ?? wire.net ?? '')
+          ))
+          .map((wire) => materializeEditableWire(wire));
+      })(),
+    };
+  }
+
   useEffect(() => () => {
     cancelPendingDraftUpdate();
     cancelPendingViewportUpdate();
@@ -640,9 +672,15 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     const railLabelHit = railNetLabelFromPointerTarget(document, event.target)
       ?? hitRailNetLabel(document, world);
     if (railLabelHit) {
-      // Rail labels (GND / power) are first-class selectable entities: clicking
-      // one selects the label itself; dragging moves the label anchor (the stub
-      // follows) instead of dragging the parent component.
+      const parentId = railLabelHit.endpoint.component_id;
+      const currentComponentIds = componentIdsForSelection(selection);
+      // When the parent is already in the selection, clicking its rail label
+      // keeps the group and starts a component drag (parity with body/frame).
+      // Otherwise the rail label is first-class: select it and drag the anchor.
+      if (parentId && currentComponentIds.includes(parentId) && !event.shiftKey) {
+        beginComponentGroupDrag(currentComponentIds, world);
+        return;
+      }
       setSelection({ kind: 'netlabel', id: railLabelHit.id });
       const labelComponent = draft.components.find((entry) => entry.id === railLabelHit.endpoint.component_id);
       const labelPinIndex = labelComponent?.pins.findIndex((entry) => entry.id === railLabelHit.endpoint.pin_id) ?? -1;
@@ -689,42 +727,15 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       }
       const alreadySelected = currentComponentIds.includes(componentHit.id);
       // Keep multi-selection and drag the whole group when clicking any selected member
-      // (body, GND/net-label, or selection frame/corner).
+      // (body, signal net-label, or selection frame/corner). Rail labels on an already
+      // selected parent take the same path above; an unselected rail label stays first-class.
       const componentIds = alreadySelected && currentComponentIds.length > 0
         ? currentComponentIds
         : [componentHit.id];
       if (!alreadySelected) {
         setSelection(selectionForComponentIds(componentIds));
       }
-      setInteractionCursor('grabbing');
-      const draggedIdSet = new Set(componentIds);
-      dragRef.current = {
-        componentIds,
-        startWorld: world,
-        originalPositions: componentPositionsById(draft, componentIds),
-        lastPositions: componentPositionsById(draft, componentIds),
-        originalModule: cloneModule(draft),
-        originalDirty: dirty,
-        moved: false,
-        // Persist the FULL nets of every wire touching the dragged set. draft.wires is
-        // often empty until the first edit, so live generated wires must be captured —
-        // but storing only the touching wires lets the >=4-endpoint spine/tree generator
-        // re-decompose the rest of the net and add a parallel link after the move.
-        originalWires: (() => {
-          const touchedNets = new Set(
-            document.wires
-              .filter((wire) => wireTouchesPreviewComponent(wire, draggedIdSet))
-              .map((wire) => wire.net_id ?? wire.net)
-              .filter((net): net is string => Boolean(net)),
-          );
-          return document.wires
-            .filter((wire) => (
-              wireTouchesPreviewComponent(wire, draggedIdSet) ||
-              touchedNets.has(wire.net_id ?? wire.net ?? '')
-            ))
-            .map((wire) => materializeEditableWire(wire));
-        })(),
-      };
+      beginComponentGroupDrag(componentIds, world);
       return;
     }
 
@@ -2177,7 +2188,13 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
           style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}
           data-testid="schematic-context-menu"
           data-menu-target={selectionAttribute(contextMenu.selection)}
-          data-menu-kind={contextMenu.selection.kind === 'wire' || contextMenu.selection.kind === 'wires' ? 'wire' : 'component'}
+          data-menu-kind={
+            contextMenu.selection.kind === 'wire' || contextMenu.selection.kind === 'wires'
+              ? 'wire'
+              : contextMenu.selection.kind === 'netlabel'
+                ? 'netlabel'
+                : 'component'
+          }
           onPointerDown={(event) => event.stopPropagation()}
           onContextMenu={(event) => event.preventDefault()}
         >
@@ -2564,15 +2581,21 @@ function createDragPreviewDocument(
   const dy = baseComponent && previewComponent
     ? previewComponent.position.y - baseComponent.position.y
     : 0;
-  const wires = baseDocument.wires.map((wire) => {
+  const wires = baseDocument.wires.map((wire) => cloneWire(wire));
+  for (let index = 0; index < wires.length; index += 1) {
+    const wire = wires[index];
+    if (!wire) continue;
     if (wireOnlyTouchesDraggedComponents(wire, draggedIds)) {
-      return translateWireGeometry(wire, dx, dy);
+      wires[index] = translateWireGeometry(wire, dx, dy);
+      continue;
     }
     if (wireTouchesPreviewComponent(wire, draggedIds)) {
-      return rerouteWire(previewModule, wire, portPositions);
+      // qucs-like rubber-band: keep the far end fixed and rebuild an egress-first
+      // Manhattan path to the moving pin so the preview never threads the body.
+      const occupied = wires.filter((_, occupiedIndex) => occupiedIndex !== index);
+      wires[index] = rerouteWire(previewModule, wire, portPositions, occupied);
     }
-    return wire;
-  });
+  }
   const netLabels = baseDocument.netLabels.map((label) => {
     const componentId = label.endpoint.component_id;
     if (!componentId || !draggedIds.has(componentId) || (dx === 0 && dy === 0)) return label;
@@ -2783,6 +2806,8 @@ function contextMenuSelectionForTarget(
   target: EventTarget | null,
   world: CircuitPosition,
 ): SchematicSelection {
+  const railLabel = railNetLabelFromPointerTarget(document, target) ?? hitRailNetLabel(document, world);
+  if (railLabel) return { kind: 'netlabel', id: railLabel.id };
   const component = componentFromPointerTarget(document, target) ?? hitComponent(document, world);
   if (component) return { kind: 'component', id: component.id };
   const wire = hitEditableWireSegment(document.wires, module, world)?.wire ?? hitWire(document, world);
@@ -2901,7 +2926,9 @@ function hitRailNetLabel(
   return null;
 }
 
-function defaultRailLabelOffset(kind: 'ground' | 'power'): CircuitPosition {
+function defaultRailLabelOffset(kind: 'ground' | 'power' | 'signal'): CircuitPosition {
+  // Signal labels sit on the pin itself; rail labels hang off a short stub.
+  if (kind === 'signal') return { x: 0, y: 0 };
   return kind === 'ground' ? { x: 0, y: RAIL_LABEL_STUB } : { x: 0, y: -RAIL_LABEL_STUB };
 }
 

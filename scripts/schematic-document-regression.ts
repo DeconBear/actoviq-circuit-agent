@@ -97,6 +97,17 @@ const cascodePorts: CircuitPort[] = [
   { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
 ];
 
+const buckBoostPorts: CircuitPort[] = [
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  { id: 'vin_power', name: 'VIN', direction: 'input', signal_type: 'power', net: 'vin' },
+  { id: 'vin', name: 'VIN', direction: 'input', signal_type: 'analog', net: 'vin' },
+  { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+  { id: 'g1', name: 'G1', direction: 'input', signal_type: 'analog', net: 'g1' },
+  { id: 'g2', name: 'G2', direction: 'input', signal_type: 'analog', net: 'g2' },
+  { id: 'g3', name: 'G3', direction: 'input', signal_type: 'analog', net: 'g3' },
+  { id: 'g4', name: 'G4', direction: 'input', signal_type: 'analog', net: 'g4' },
+];
+
 function component(
   id: string,
   type: CircuitComponent['type'],
@@ -413,11 +424,102 @@ const fixtures: CircuitModule[] = [
     component('cload', 'C', '12p', 660, 260, [['a', '1', 'out'], ['b', '2', '0']]),
     component('rprobe', 'R', '1Meg', 780, 260, [['a', '1', 'out'], ['b', '2', '0']]),
   ], cascodePorts),
+  // Four-switch buck-boost power stage captured from a real agent design session:
+  // stored positions are the compiler's dense grid (with outright collisions), so
+  // auto-layout must rebuild the geometry from topology alone.
+  moduleFixture('buck_boost_power_stage', [
+    component('m1', 'M', 'NMOS W=0.01 L=1e-6', 140, 120, [['d', 'D', 'vin'], ['g', 'G', 'g1'], ['s', 'S', 'sw1'], ['b', 'B', '0']]),
+    component('d1', 'D', 'DMOD', 320, 120, [['a', 'A', 'sw1'], ['b', 'K', 'vin']]),
+    component('m2', 'M', 'NMOS W=0.01 L=1e-6', 320, 120, [['d', 'D', 'sw1'], ['g', 'G', 'g2'], ['s', 'S', '0'], ['b', 'B', '0']]),
+    component('d2', 'D', 'DMOD', 680, 120, [['a', 'A', '0'], ['b', 'K', 'sw1']]),
+    component('l1', 'L', '100u', 500, 120, [['a', '1', 'sw1'], ['b', '2', 'sw2']]),
+    component('m3', 'M', 'NMOS W=0.01 L=1e-6', 680, 120, [['d', 'D', 'vout'], ['g', 'G', 'g3'], ['s', 'S', 'sw2'], ['b', 'B', '0']]),
+    component('d3', 'D', 'DMOD', 500, 260, [['a', 'A', 'sw2'], ['b', 'K', 'vout']]),
+    component('m4', 'M', 'NMOS W=0.01 L=1e-6', 140, 260, [['d', 'D', 'sw2'], ['g', 'G', 'g4'], ['s', 'S', '0'], ['b', 'B', '0']]),
+    component('d4', 'D', 'DMOD', 140, 400, [['a', 'A', '0'], ['b', 'K', 'sw2']]),
+    component('cin', 'C', '100u', 320, 260, [['a', '1', 'vin'], ['b', '2', '0']]),
+    component('cout', 'C', '470u', 500, 260, [['a', '1', 'vout'], ['b', '2', '0']]),
+    component('rload', 'R', '10', 680, 260, [['a', '1', 'vout'], ['b', '2', '0']]),
+  ], buckBoostPorts),
 ];
 
 assertJunctionNetIsolation();
 assertManualWireTopology();
 assertGroundPseudoComponent();
+assertRouteEgressAvoidsOwnerBody();
+
+function assertRouteEgressAvoidsOwnerBody() {
+  // Vertical two-pin part with a ground below: a naive start→end Manhattan route
+  // would thread the body. Egress-first routing (qucs-like) must keep the path outside.
+  const module = moduleFixture('route_egress_body', [
+    component('c1', 'C', '100n', 300, 200, [['a', '1', 'mid'], ['b', '2', '0']]),
+  ], [
+    { id: 'mid', name: 'MID', direction: 'input', signal_type: 'analog', net: 'mid' },
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ]);
+  const cap = module.components[0]!;
+  cap.rotation = 90;
+  const gnd = makePlacedComponent(module, 'GND', { x: 300, y: 360 });
+  module.components.push(gnd);
+  const top = pinWorld(cap, cap.pins[0]!, 0);
+  const bottom = pinWorld(cap, cap.pins[1]!, 1);
+  const gndPin = pinWorld(gnd, gnd.pins[0]!, 0);
+  addWire(
+    module,
+    { kind: 'pin', ...top, component_id: 'c1', pin_id: 'a', label: 'C1.1', net: 'mid' },
+    { kind: 'point', ...{ x: top.x, y: top.y - 80 }, label: 'stub' },
+  );
+  addWire(
+    module,
+    { kind: 'pin', ...bottom, component_id: 'c1', pin_id: 'b', label: 'C1.2', net: '0' },
+    { kind: 'pin', ...gndPin, component_id: gnd.id, pin_id: 'gnd', label: 'GND.GND', net: '0' },
+  );
+  // Simulate a drag preview: move the capacitor down over the previous ground route.
+  cap.position = { x: 300, y: 280 };
+  const movedBottom = pinWorld(cap, cap.pins[1]!, 1);
+  const movedTop = pinWorld(cap, cap.pins[0]!, 0);
+  const document = createSchematicDocument(module, { autoLayout: false });
+  const grounded = document.wires.filter((wire) => (
+    wire.from?.component_id === 'c1' && wire.from?.pin_id === 'b' ||
+    wire.to?.component_id === 'c1' && wire.to?.pin_id === 'b'
+  ));
+  assert.ok(grounded.length > 0, 'vertical capacitor should keep a ground-side wire after the move');
+  const body = componentBounds(cap);
+  const inset = 8;
+  const interior = {
+    minX: body.minX + inset,
+    minY: body.minY + inset,
+    maxX: body.maxX - inset,
+    maxY: body.maxY - inset,
+  };
+  for (const wire of grounded) {
+    const points = wire.points ?? [];
+    assert.ok(points.length >= 2, 'ground-side wire should have a route');
+    const start = points[0]!;
+    const end = points[points.length - 1]!;
+    const touchesMovedPin = (
+      Math.hypot(start.x - movedBottom.x, start.y - movedBottom.y) < 1 ||
+      Math.hypot(end.x - movedBottom.x, end.y - movedBottom.y) < 1
+    );
+    assert.ok(touchesMovedPin, 'drag-style reroute must keep the wire endpoint on the moving pin');
+    for (let index = 1; index < points.length; index += 1) {
+      const left = points[index - 1]!;
+      const right = points[index]!;
+      const crossesInterior = left.x === right.x
+        ? left.x > interior.minX && left.x < interior.maxX &&
+          Math.min(left.y, right.y) < interior.maxY && Math.max(left.y, right.y) > interior.minY
+        : left.y === right.y
+          ? left.y > interior.minY && left.y < interior.maxY &&
+            Math.min(left.x, right.x) < interior.maxX && Math.max(left.x, right.x) > interior.minX
+          : false;
+      assert.equal(
+        crossesInterior,
+        false,
+        `ground-side wire must not thread the capacitor body (segment ${index}); top=${JSON.stringify(movedTop)} route=${JSON.stringify(points)}`,
+      );
+    }
+  }
+}
 
 function assertGroundPseudoComponent() {
   const module = moduleFixture('ground_pseudo', [
@@ -1039,6 +1141,44 @@ function assertReadableLayout(module: CircuitModule) {
   if (module.module_id === 'baseband_conditioning') {
     assertNoComponentOverlap(module, ['rin', 'rbias1']);
   }
+  if (module.module_id === 'buck_boost_power_stage') {
+    const m1 = mustComponent(module, 'm1');
+    const m2 = mustComponent(module, 'm2');
+    const m3 = mustComponent(module, 'm3');
+    const m4 = mustComponent(module, 'm4');
+    const d1 = mustComponent(module, 'd1');
+    const l1 = mustComponent(module, 'l1');
+    const cin = mustComponent(module, 'cin');
+    const cout = mustComponent(module, 'cout');
+    const rload = mustComponent(module, 'rload');
+    [m1, m2, m3, m4].forEach((device) => assertActivePins(device, module.module_id));
+    // Half-bridge legs: high-side stacked over low-side on one column, buck leg
+    // left of boost leg in signal-flow order.
+    assert.ok(Math.abs(m1.position.x - m2.position.x) <= 1, 'buck leg devices should share a column');
+    assert.ok(m1.position.y < m2.position.y, 'buck leg high-side should sit above low-side');
+    assert.ok(Math.abs(m3.position.x - m4.position.x) <= 1, 'boost leg devices should share a column');
+    assert.ok(m3.position.y < m4.position.y, 'boost leg high-side should sit above low-side');
+    assert.ok(m2.position.x < m4.position.x, 'buck leg should precede the boost leg (signal flow)');
+    // The inductor bridges the two switch nodes on the tap row between the legs.
+    assert.ok(l1.position.x > m2.position.x && l1.position.x < m4.position.x, 'inductor should sit between the legs');
+    assert.ok(l1.position.y > m1.position.y && l1.position.y < m2.position.y, 'inductor should sit on the switch tap row');
+    // Freewheeling diodes outside their leg (first leg left, last leg right),
+    // input cap between them, output shunts right of everything.
+    const d3 = mustComponent(module, 'd3');
+    assert.ok(d1.position.x < m1.position.x, 'D1 should sit left of the buck leg, outside the tap corridor');
+    assert.ok(d1.position.y <= m1.position.y, 'D1 should sit on or above the high-side row');
+    assert.ok(d3.position.x > m3.position.x, 'D3 should sit right of the boost leg, outside the tap corridor');
+    assert.ok(d1.position.x < cin.position.x, 'D1/D2 column should sit left of the input capacitor');
+    assert.ok(cin.position.x < m1.position.x, 'input capacitor should sit left of the first leg');
+    assert.ok(cout.position.x > m3.position.x, 'output capacitor should sit right of the last leg');
+    assert.ok(rload.position.x > cout.position.x, 'load should sit outside the output capacitor');
+    assertPinAbove(cin, 'vin', '0', module.module_id);
+    assertPinAbove(cout, 'vout', '0', module.module_id);
+    assertPinAbove(rload, 'vout', '0', module.module_id);
+    assertPinLeftOf(l1, 'sw1', 'sw2', module.module_id);
+    assertNoComponentOverlap(module, module.components.map((entry) => entry.id));
+    assertNoLabelCollisions(module);
+  }
 }
 
 function assertReadablePortPlacement(document: ReturnType<typeof createSchematicDocument>) {
@@ -1562,8 +1702,15 @@ function assertNoComponentOverlap(module: CircuitModule, componentIds: string[])
 
 function boundsForComponent(component: CircuitComponent) {
   const points = component.pins.map((pin, index) => pinWorld(component, pin, index));
-  const xs = [component.position.x - 58, component.position.x + 58, ...points.map((point) => point.x)];
-  const ys = [component.position.y - 58, component.position.y + 58, ...points.map((point) => point.y)];
+  // MOS/BJT art spans ±58 (gate lead + channel); two-pin art is compact — only
+  // its pin leads reach the ±52 endpoints, so the art box stays tight.
+  const rotation = ((component.rotation ?? 0) % 360 + 360) % 360;
+  const twoPin = component.pins.length === 2;
+  const verticalTwoPin = twoPin && (rotation === 90 || rotation === 270);
+  const bodyX = twoPin ? (verticalTwoPin ? 14 : 30) : 58;
+  const bodyY = twoPin ? (verticalTwoPin ? 30 : 14) : 58;
+  const xs = [component.position.x - bodyX, component.position.x + bodyX, ...points.map((point) => point.x)];
+  const ys = [component.position.y - bodyY, component.position.y + bodyY, ...points.map((point) => point.y)];
   return {
     minX: Math.min(...xs),
     minY: Math.min(...ys),
@@ -1579,6 +1726,75 @@ function padLocalBounds(bounds: ReturnType<typeof boundsForComponent>, padding: 
     maxX: bounds.maxX + padding,
     maxY: bounds.maxY + padding,
   };
+}
+
+/**
+ * Estimated name/value label boxes vs. symbol art boxes, mirroring
+ * componentLabelPositions / displayComponentValue in SchematicDocumentSvg.
+ * Guards auto-layout against text-on-text and text-on-body collisions.
+ */
+function assertNoLabelCollisions(module: CircuitModule) {
+  interface Box { left: number; right: number; top: number; bottom: number; tag: string }
+  const displayValue = (value: string | undefined): string => {
+    const text = (value ?? '').trim();
+    if (!text) return '';
+    if (text.length <= 22) return text;
+    if (/^PULSE\s*\(/i.test(text)) return 'PULSE(...)';
+    if (/^PWL\s*\(/i.test(text)) return 'PWL(...)';
+    if (/^SIN\s*\(/i.test(text)) return 'SIN(...)';
+    if (/^EXP\s*\(/i.test(text)) return 'EXP(...)';
+    return `${text.slice(0, 20)}…`;
+  };
+  const boxes: Box[] = [];
+  const pushText = (component: CircuitComponent, px: number, py: number, anchor: string, text: string, charWidth: number, tag: string) => {
+    if (!text) return;
+    const width = text.length * charWidth;
+    const left = anchor === 'end' ? px - width : anchor === 'middle' ? px - width / 2 : px;
+    // SVG text y is the baseline; glyph ink spans roughly -12..+2 around it.
+    boxes.push({ left, right: left + width, top: py - 12, bottom: py + 2, tag: `${component.name}.${tag}="${text}"` });
+  };
+  for (const component of module.components) {
+    const { x, y } = component.position;
+    const rotation = ((component.rotation ?? 0) % 360 + 360) % 360;
+    const verticalTwoPin = component.pins.length === 2 && (rotation === 90 || rotation === 270);
+    const value = displayValue(component.value);
+    if (verticalTwoPin) {
+      pushText(component, x - 46, y - 28, 'end', component.name, 9, 'name');
+      pushText(component, x - 46, y - 6, 'end', value, 7.5, 'value');
+      boxes.push({ left: x - 12, right: x + 12, top: y - 26, bottom: y + 26, tag: `${component.name}.body` });
+      continue;
+    }
+    if (component.type === 'M' || component.type === 'Q') {
+      if (component.type === 'M') {
+        pushText(component, x, y - 66, 'middle', component.name, 9, 'name');
+        pushText(component, x + 52, y + 8, 'start', value, 7.5, 'value');
+      } else {
+        pushText(component, x + 52, y - 52, 'start', component.name, 9, 'name');
+        pushText(component, x + 52, y + 58, 'start', value, 7.5, 'value');
+      }
+      boxes.push({ left: x - 58, right: x + 58, top: y - 52, bottom: y + 52, tag: `${component.name}.body` });
+      continue;
+    }
+    if (component.pins.length === 2) {
+      pushText(component, x, y - 42, 'middle', component.name, 9, 'name');
+      pushText(component, x, y + 44, 'middle', value, 7.5, 'value');
+      boxes.push({ left: x - 26, right: x + 26, top: y - 12, bottom: y + 12, tag: `${component.name}.body` });
+      continue;
+    }
+    boxes.push({ left: x - 30, right: x + 30, top: y - 30, bottom: y + 30, tag: `${component.name}.body` });
+  }
+  const intersects = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  for (let leftIndex = 0; leftIndex < boxes.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < boxes.length; rightIndex += 1) {
+      const left = boxes[leftIndex];
+      const right = boxes[rightIndex];
+      const leftOwner = left.tag.split('.')[0];
+      const rightOwner = right.tag.split('.')[0];
+      if (leftOwner === rightOwner) continue;
+      if (left.tag.endsWith('.body') && right.tag.endsWith('.body')) continue;
+      assert.ok(!intersects(left, right), `${module.module_id}: ${left.tag} collides with ${right.tag}`);
+    }
+  }
 }
 
 function segmentIntersectsLocalBounds(

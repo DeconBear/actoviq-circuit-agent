@@ -20,6 +20,7 @@ import {
   shouldPreserveChatOnProjectLoad,
 } from './store/chatHistoryPersistence';
 import type { ChatMessageTool, CircuitTrashItem, DesktopAgentEvent, ModuleManifest, ProjectKind, StageDef } from './types';
+import { assistantRoundMessageId, findAssistantRoundMessage, upsertAssistantRoundMessage } from './store/chatRounds';
 import type { ChatModelTier } from './modelTiers';
 import type { ChatRunToolView } from './components/chat/ChatView';
 import {
@@ -99,6 +100,10 @@ function reduceDesktopAgentEvent(current: ChatRunView | null, event: DesktopAgen
       return { ...base, status: 'streaming', label: event.label || 'Generating response', runId: event.runId ?? base.runId };
     case 'text-progress':
       return { ...base, status: 'streaming', text: event.text ?? base.text, label: 'Responding' };
+    case 'assistant-round':
+      // A ReAct round just completed; it is persisted as its own chat message by
+      // the stream listener, so clear the live card's current-round text.
+      return { ...base, status: 'streaming', text: '', label: 'Responding' };
     case 'thinking-delta':
       return { ...base, status: 'streaming', thinking: `${base.thinking ?? ''}${event.delta ?? ''}`.slice(-12_000) };
     case 'tool-call': {
@@ -161,7 +166,6 @@ export function App() {
   const [trashProjects, setTrashProjects] = useState<CircuitTrashItem[]>([]);
   const resizing = useRef<'sidebar' | 'stage' | 'chat' | null>(null);
   const activeChatConversationRef = useRef<string | null>(null);
-  const pendingAssistantMessageIdRef = useRef<string | null>(null);
   const isChatPendingRef = useRef(false);
   const workflowConversationIdRef = useRef<string | null>(null);
   const suppressAutoLoadRef = useRef(false);
@@ -411,16 +415,28 @@ export function App() {
       if (event.conversationId !== activeChatConversationRef.current) return;
       setChatRun((current) => reduceDesktopAgentEvent(current, event));
 
+      if (event.type === 'assistant-round') {
+        // Persist each completed ReAct round as its own assistant message so the
+        // transcript keeps every round, not just the final one.
+        const text = (event.text ?? '').trim();
+        if (text) {
+          upsertAssistantRoundMessage(useAppStore.getState(), {
+            conversationId: event.conversationId,
+            runId: event.runId,
+            iteration: event.iteration ?? 1,
+            text,
+            timestamp: event.timestamp,
+          });
+        }
+        return;
+      }
+
       if (event.type === 'tool-call' || event.type === 'tool-result') {
         const store = useAppStore.getState();
         const conversationId = event.conversationId;
-        let assistantId = pendingAssistantMessageIdRef.current;
-        if (!assistantId) {
-          assistantId = `agent-${Date.now()}`;
-          pendingAssistantMessageIdRef.current = assistantId;
-        }
-        const hasDraft = (store.conversationMessages[conversationId] ?? []).some((msg) => msg.id === assistantId)
-          || store.messages.some((msg) => msg.id === assistantId);
+        // Tools attach to the message of the ReAct round that produced them.
+        const assistantId = assistantRoundMessageId(event.runId, event.iteration ?? 1);
+        const hasDraft = findAssistantRoundMessage(store, conversationId, event.runId, event.iteration ?? 1) !== undefined;
         if (!hasDraft) {
           store.addMessage({
             id: assistantId,
@@ -428,6 +444,7 @@ export function App() {
             content: '',
             timestamp: Date.now(),
             conversationId,
+            runId: event.runId,
             tools: [],
           });
         }
@@ -535,7 +552,6 @@ export function App() {
           void window.electronAPI?.stopChat(previousChatId);
         }
         activeChatConversationRef.current = null;
-        pendingAssistantMessageIdRef.current = null;
         setChatRun(null);
         setIsChatPending(false);
         isChatPendingRef.current = false;
@@ -1022,7 +1038,6 @@ export function App() {
     }
 
     activeChatConversationRef.current = cid;
-    pendingAssistantMessageIdRef.current = `agent-${Date.now()}`;
     setChatRun({ status: 'starting', text: '', label: 'Connecting to Actoviq agent' });
     setIsChatPending(true);
     isChatPendingRef.current = true;
@@ -1042,8 +1057,8 @@ export function App() {
         modelTier,
       });
 
-      // Finalize the assistant turn (tools may already be persisted from stream events).
-      const assistantMessageId = pendingAssistantMessageIdRef.current ?? `agent-${Date.now()}`;
+      // Finalize the assistant turn: upsert every ReAct round as its own message
+      // (streamed assistant-round events may have already created some of them).
       const liveRun = chatRunRef.current;
       const liveTools: ChatMessageTool[] = (liveRun?.tools ?? []).map((tool: ChatRunToolView) => ({
         id: tool.id,
@@ -1052,34 +1067,34 @@ export function App() {
         label: tool.label,
       }));
       const store = useAppStore.getState();
-      const existing = (store.conversationMessages[cid] ?? []).some((msg) => msg.id === assistantMessageId);
-      if (existing) {
-        store.patchMessage(assistantMessageId, {
-          content: result.text,
-          isError: result.isError,
-          runId: result.runId,
-          sessionId: result.sessionId,
-          model: result.model,
-          usage: result.usage,
-          tools: liveTools.length > 0 ? liveTools : undefined,
-          thinking: liveRun?.thinking || undefined,
-        });
-      } else {
-        store.addMessage({
-          id: assistantMessageId,
-          role: 'assistant',
-          content: result.text,
-          timestamp: Date.now(),
-          isError: result.isError,
+      const rounds = (result.rounds ?? [])
+        .map((round) => ({ iteration: round.iteration, text: round.text.trim() }))
+        .filter((round) => round.text.length > 0);
+      if (rounds.length === 0 && result.text.trim()) {
+        rounds.push({ iteration: 1, text: result.text.trim() });
+      }
+      const anyToolsPersisted = rounds.some((round) => {
+        const existing = findAssistantRoundMessage(store, cid, result.runId, round.iteration);
+        return (existing?.tools?.length ?? 0) > 0;
+      });
+      rounds.forEach((round, index) => {
+        const isLast = index === rounds.length - 1;
+        upsertAssistantRoundMessage(store, {
           conversationId: cid,
           runId: result.runId,
-          sessionId: result.sessionId,
-          model: result.model,
-          usage: result.usage,
-          tools: liveTools.length > 0 ? liveTools : undefined,
-          thinking: liveRun?.thinking || undefined,
+          iteration: round.iteration,
+          text: round.text,
+          timestamp: Date.now(),
+          meta: isLast ? {
+            isError: result.isError,
+            sessionId: result.sessionId,
+            model: result.model,
+            usage: result.usage,
+            thinking: liveRun?.thinking || undefined,
+            tools: !anyToolsPersisted && liveTools.length > 0 ? liveTools : undefined,
+          } : undefined,
         });
-      }
+      });
 
       // Bind + reload canvas; never swap away from this conversation.
       const reloadId = result.touchedProjectId || store.activeProjectId;
@@ -1107,7 +1122,6 @@ export function App() {
       setIsChatPending(false);
       isChatPendingRef.current = false;
       activeChatConversationRef.current = null;
-      pendingAssistantMessageIdRef.current = null;
       setChatRun(null);
     }
   }, [isChatPending, loadCircuitProject, refreshCircuitProjects]);
@@ -1118,7 +1132,6 @@ export function App() {
       void window.electronAPI?.stopChat(previous);
     }
     activeChatConversationRef.current = null;
-    pendingAssistantMessageIdRef.current = null;
     setChatRun(null);
     setIsChatPending(false);
     isChatPendingRef.current = false;

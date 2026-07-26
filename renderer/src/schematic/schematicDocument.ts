@@ -270,6 +270,8 @@ function autoLayoutModule(module: CircuitModule): CircuitModule {
   if (cascodeLayout) return autoLayoutCascodeModule(module, cascodeLayout);
   const opampFeedbackLayout = findOpampFeedbackLayout(module);
   if (opampFeedbackLayout) return autoLayoutOpampFeedbackModule(module, opampFeedbackLayout);
+  const halfBridgeLegsLayout = findHalfBridgeLegsLayout(module, activeComponents);
+  if (halfBridgeLegsLayout) return autoLayoutHalfBridgeLegsModule(module, halfBridgeLegsLayout);
   if (activeComponents.length === 1 && isSingleTransistorStageLikeModule(activeComponents[0])) {
     return autoLayoutSingleTransistorStageModule(module, activeComponents[0]);
   }
@@ -1153,6 +1155,323 @@ function autoLayoutBuckConverterModule(module: CircuitModule, layout: BuckConver
   return module;
 }
 
+interface HalfBridgeLeg {
+  highSide: CircuitComponent;
+  lowSide: CircuitComponent;
+  switchNet: string;
+  topNet: string;
+  bottomNet: string;
+}
+
+interface HalfBridgeLegsLayout {
+  legs: HalfBridgeLeg[];
+}
+
+/**
+ * Detect half-bridge legs: two active devices stacked on a shared switch node
+ * (one device's source/drain tied to the other's drain), e.g. the two legs of a
+ * 4-switch buck-boost, full-bridge stages, synchronous bucks, class-D outputs.
+ */
+function findHalfBridgeLegsLayout(module: CircuitModule, activeComponents: CircuitComponent[]): HalfBridgeLegsLayout | null {
+  const candidates = activeComponents.filter((component) => {
+    const nets = activeNetMap(component);
+    return Boolean(nets.gate && nets.drain && nets.source);
+  });
+  const consumed = new Set<string>();
+  const legs: HalfBridgeLeg[] = [];
+  for (let leftIndex = 0; leftIndex < candidates.length; leftIndex += 1) {
+    const first = candidates[leftIndex];
+    if (!first || consumed.has(first.id)) continue;
+    const firstNets = activeNetMap(first);
+    for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex += 1) {
+      const second = candidates[rightIndex];
+      if (!second || consumed.has(second.id)) continue;
+      const secondNets = activeNetMap(second);
+      // Series link: share one conduction-terminal net, but never source-source —
+      // a shared source is a differential pair / parallel devices, not a leg.
+      let switchNet: string | null = null;
+      if (firstNets.source && firstNets.source === secondNets.drain) switchNet = firstNets.source;
+      else if (firstNets.drain && firstNets.drain === secondNets.source) switchNet = firstNets.drain;
+      else if (firstNets.drain && firstNets.drain === secondNets.drain) switchNet = firstNets.drain;
+      if (!switchNet || isRailNet(switchNet, module)) continue;
+      const otherNetOf = (nets: { drain?: string; source?: string }): string | undefined => (
+        nets.drain === switchNet ? nets.source : nets.drain
+      );
+      const firstOther = otherNetOf(firstNets);
+      const secondOther = otherNetOf(secondNets);
+      if (!firstOther || !secondOther || firstOther === secondOther) continue;
+      const potentialRank = (net: string): number => (
+        isGroundNet(net, module) ? 0 : isRailNet(net, module) ? 2 : 1
+      );
+      const firstRank = potentialRank(firstOther);
+      const secondRank = potentialRank(secondOther);
+      if (firstRank === secondRank) continue;
+      let highSide = first;
+      let lowSide = second;
+      let topNet = firstOther;
+      let bottomNet = secondOther;
+      if (secondRank > firstRank) {
+        highSide = second;
+        lowSide = first;
+        topNet = secondOther;
+        bottomNet = firstOther;
+      }
+      legs.push({ highSide, lowSide, switchNet, topNet, bottomNet });
+      consumed.add(highSide.id);
+      consumed.add(lowSide.id);
+      break;
+    }
+  }
+  if (legs.length === 0) return null;
+  return { legs };
+}
+
+/** nearestPinPointForNet variant that skips MOS body pins (they are never wired). */
+function nearestWirablePinPointForNet(components: CircuitComponent[], net: string): CircuitPosition | null {
+  for (const component of components) {
+    for (let index = 0; index < component.pins.length; index += 1) {
+      const pin = component.pins[index];
+      if (!pin || pin.net !== net || isMosBodyPin(component, pin)) continue;
+      return pinWorld(component, pin, index);
+    }
+  }
+  return null;
+}
+
+function rememberWirablePinAnchors(anchors: Map<string, CircuitPosition>, component: CircuitComponent) {
+  component.pins.forEach((pin, index) => {
+    if (isMosBodyPin(component, pin)) return;
+    anchors.set(pin.net, pinWorld(component, pin, index));
+  });
+}
+
+/** BFS net distances from the input port through passives and leg channels. */
+function halfBridgeFlowRanks(
+  module: CircuitModule,
+  legs: HalfBridgeLeg[],
+  inputNet: string | null,
+): Map<string, number> {
+  const ranks = new Map<string, number>();
+  if (!inputNet) return ranks;
+  const adjacency = new Map<string, Set<string>>();
+  const link = (left: string, right: string) => {
+    if (!left || !right || left === right) return;
+    adjacency.set(left, new Set([...(adjacency.get(left) ?? []), right]));
+    adjacency.set(right, new Set([...(adjacency.get(right) ?? []), left]));
+  };
+  for (const component of module.components) {
+    if (component.pins.length !== 2) continue;
+    const [first, second] = component.pins;
+    if (!first || !second) continue;
+    if (isRailNet(first.net, module) || isRailNet(second.net, module)) continue;
+    link(first.net, second.net);
+  }
+  for (const leg of legs) {
+    link(leg.topNet, leg.switchNet);
+    if (!isRailNet(leg.bottomNet, module)) link(leg.switchNet, leg.bottomNet);
+  }
+  const queue: string[] = [inputNet];
+  ranks.set(inputNet, 0);
+  while (queue.length > 0) {
+    const net = queue.shift();
+    if (!net) break;
+    const rank = ranks.get(net) ?? 0;
+    for (const next of adjacency.get(net) ?? []) {
+      if (ranks.has(next)) continue;
+      ranks.set(next, rank + 1);
+      queue.push(next);
+    }
+  }
+  return ranks;
+}
+
+function autoLayoutHalfBridgeLegsModule(module: CircuitModule, layout: HalfBridgeLegsLayout): CircuitModule {
+  const placed = new Set<string>();
+  const nodeAnchors = new Map<string, CircuitPosition>();
+  // Row spacing tuned so the tap-row series part's name (y-42) sits between the
+  // high-side value label (y+8) rows and its value (y+44) clears the low-side
+  // diode name row (yLow-28).
+  const yHigh = 120;
+  const yLow = 280;
+  // Legs start far enough right that the first leg's outside diode column and the
+  // input shunt column both fit on the left.
+  const xStart = 380;
+  // Wide enough that a truncated MOS value label (x+52, ~150px) never reaches the
+  // next leg's gate port flag (placed at gateX-110, body reaching ~70px left of it).
+  const legPitch = 440;
+  const diodeDx = 230;
+  const inputNet = preferredPortNet(module, 'input')
+    ?? module.ports.find((port) => port.signal_type === 'power' && !isGroundPort(port))?.net
+    ?? null;
+  const outputNet = preferredPortNet(module, 'output');
+  const flowRank = halfBridgeFlowRanks(module, layout.legs, inputNet);
+  const orderedLegs = [...layout.legs].sort((left, right) => (
+    (flowRank.get(left.switchNet) ?? 99) - (flowRank.get(right.switchNet) ?? 99)
+    || left.highSide.id.localeCompare(right.highSide.id)
+  ));
+  const legX = new Map<string, number>();
+  orderedLegs.forEach((leg, index) => {
+    const x = snap(xStart + index * legPitch);
+    legX.set(leg.switchNet, x);
+    leg.highSide.position = snapPoint({ x, y: yHigh });
+    leg.highSide.rotation = 0;
+    leg.lowSide.position = snapPoint({ x, y: yLow });
+    leg.lowSide.rotation = 0;
+    placed.add(leg.highSide.id);
+    placed.add(leg.lowSide.id);
+    rememberWirablePinAnchors(nodeAnchors, leg.highSide);
+    rememberWirablePinAnchors(nodeAnchors, leg.lowSide);
+  });
+
+  // Freewheeling / antiparallel diodes sit OUTSIDE their leg — first leg's diodes
+  // on its left, every other leg's on its right — so each switch node's fan-out
+  // stays in its own x-zone and never crosses the tap-row corridor between legs.
+  // The high-side diode rides one notch above the high-side row to keep its
+  // switch-node lead tip clear of series passives on the tap row.
+  orderedLegs.forEach((leg, legIndex) => {
+    const x = legX.get(leg.switchNet);
+    if (x === undefined) return;
+    const columnX = legIndex === 0 ? x - diodeDx : x + diodeDx;
+    for (const component of module.components) {
+      if (placed.has(component.id) || component.type !== 'D' || component.pins.length !== 2) continue;
+      if (componentHasNets(component, leg.switchNet, leg.topNet)) {
+        placeVertical(component, leg.topNet, leg.switchNet, { x: columnX, y: yHigh - 40 });
+        placed.add(component.id);
+        continue;
+      }
+      if (componentHasNets(component, leg.switchNet, leg.bottomNet)) {
+        placeVertical(component, leg.switchNet, leg.bottomNet, { x: columnX, y: yLow });
+        placed.add(component.id);
+      }
+    }
+  });
+  for (const component of module.components) {
+    if (placed.has(component.id)) rememberWirablePinAnchors(nodeAnchors, component);
+  }
+
+  // Series passives bridging two switch nodes (the buck-boost inductor) sit on the
+  // switch-rail tap row, centered between the legs; with the diode columns outside
+  // the corridor the tap row is free of foreign switch fan-out.
+  for (const component of module.components) {
+    if (placed.has(component.id) || component.pins.length !== 2) continue;
+    const [first, second] = component.pins;
+    if (!first || !second) continue;
+    if (isRailNet(first.net, module) || isRailNet(second.net, module)) continue;
+    const firstX = legX.get(first.net);
+    const secondX = legX.get(second.net);
+    if (firstX === undefined || secondX === undefined || firstX === secondX) continue;
+    let leftX = firstX;
+    let rightX = secondX;
+    let leftNet = first.net;
+    let rightNet = second.net;
+    if (leftX > rightX) {
+      leftX = secondX;
+      rightX = firstX;
+      leftNet = second.net;
+      rightNet = first.net;
+    }
+    const centerX = (leftX + rightX) / 2 + 22;
+    const clampedX = Math.min(Math.max(centerX, leftX + 120), rightX - 120);
+    placeHorizontal(component, leftNet, rightNet, {
+      x: clampedX,
+      y: (yHigh + yLow) / 2,
+    });
+    placed.add(component.id);
+    rememberWirablePinAnchors(nodeAnchors, component);
+  }
+
+  const lastLeg = orderedLegs[orderedLegs.length - 1];
+  const lastLegX = (lastLeg ? legX.get(lastLeg.switchNet) : undefined) ?? xStart;
+  const lastTopNet = lastLeg?.topNet;
+  const inputBranchCounts = new Map<string, number>();
+  const outputBranchCounts = new Map<string, number>();
+  const midBranchCounts = new Map<string, number>();
+  let overflowIndex = 0;
+  const placedComponents = (): CircuitComponent[] => module.components.filter((entry) => placed.has(entry.id));
+  for (const component of module.components) {
+    if (placed.has(component.id)) continue;
+    if (component.pins.length !== 2) {
+      component.position = snapPoint({ x: lastLegX + 360 + overflowIndex * 160, y: yHigh });
+      component.rotation = normalizeRotation(component.rotation);
+      placed.add(component.id);
+      overflowIndex += 1;
+      continue;
+    }
+    const [first, second] = component.pins;
+    if (!first || !second) continue;
+    const firstRail = isRailNet(first.net, module);
+    const secondRail = isRailNet(second.net, module);
+    let railNet = firstRail ? first.net : secondRail ? second.net : '';
+    let signalNet = firstRail ? second.net : first.net;
+    if (firstRail && secondRail) {
+      // Both ends are rails (e.g. a VIN decoupling cap): anchor on the non-ground rail.
+      if (isGroundNet(first.net, module)) {
+        railNet = first.net;
+        signalNet = second.net;
+      } else {
+        railNet = second.net;
+        signalNet = first.net;
+      }
+    }
+    if (railNet) {
+      const anchor = nearestWirablePinPointForNet(placedComponents(), signalNet) ?? nodeAnchors.get(signalNet);
+      if (isGroundNet(railNet, module)) {
+        if (signalNet === inputNet) {
+          const index = inputBranchCounts.get(signalNet) ?? 0;
+          inputBranchCounts.set(signalNet, index + 1);
+          // Between the first leg's outside diode column and the leg itself, far
+          // enough left that the low-side gate drop clears the body padding.
+          placeVertical(component, signalNet, railNet, { x: xStart - 120 - index * 120, y: yLow });
+        } else if (signalNet === outputNet || (lastTopNet && signalNet === lastTopNet)) {
+          const index = outputBranchCounts.get(signalNet) ?? 0;
+          outputBranchCounts.set(signalNet, index + 1);
+          placeVertical(component, signalNet, railNet, { x: lastLegX + 360 + index * 130, y: yLow });
+        } else {
+          const index = midBranchCounts.get(signalNet) ?? 0;
+          midBranchCounts.set(signalNet, index + 1);
+          placeVertical(component, signalNet, railNet, {
+            x: (anchor?.x ?? lastLegX + 360) + index * 120,
+            y: yLow + 150,
+          });
+        }
+      } else {
+        // Upper-rail shunt (e.g. VDD decoupling) sits above its signal anchor.
+        const index = midBranchCounts.get(signalNet) ?? 0;
+        midBranchCounts.set(signalNet, index + 1);
+        placeVertical(component, railNet, signalNet, {
+          x: (anchor?.x ?? xStart - 150) + index * 120,
+          y: yHigh - 140,
+        });
+      }
+      placed.add(component.id);
+      rememberWirablePinAnchors(nodeAnchors, component);
+      continue;
+    }
+    // Gate-side passives hang left of their device's gate; anything else overflows right.
+    const ownerLeg = orderedLegs.find((leg) => {
+      const gateNets = [activeNetMap(leg.highSide).gate, activeNetMap(leg.lowSide).gate];
+      return gateNets.includes(first.net) || gateNets.includes(second.net);
+    });
+    if (ownerLeg) {
+      const ownerX = legX.get(ownerLeg.switchNet) ?? xStart;
+      const gateNet = [first.net, second.net].find((net) => (
+        activeNetMap(ownerLeg.highSide).gate === net || activeNetMap(ownerLeg.lowSide).gate === net
+      ));
+      const otherNet = first.net === gateNet ? second.net : first.net;
+      const gateY = activeNetMap(ownerLeg.highSide).gate === gateNet ? yHigh : yLow;
+      placeHorizontal(component, otherNet, gateNet ?? first.net, { x: ownerX - 160, y: gateY });
+      placed.add(component.id);
+      rememberWirablePinAnchors(nodeAnchors, component);
+      continue;
+    }
+    component.position = snapPoint({ x: lastLegX + 360 + overflowIndex * 160, y: yLow + 150 });
+    component.rotation = normalizeRotation(component.rotation);
+    placed.add(component.id);
+    overflowIndex += 1;
+  }
+  return module;
+}
+
 function findCascodeLayout(module: CircuitModule, activeComponents: CircuitComponent[]): CascodeLayout | null {
   const mosComponents = activeComponents.filter((component) => component.type === 'M');
   if (mosComponents.length < 2) return null;
@@ -1608,8 +1927,20 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
     activePlacementScore(left) - activePlacementScore(right) || left.id.localeCompare(right.id)
   ));
   const mainY = 220;
+  // MOS/BJT value labels are start-anchored at x+52 and extend right; size the
+  // active pitch so a long value cannot run into the next device's body.
+  const activeValueReach = Math.max(0, ...sortedActive.map((component) => (
+    52 + displayLabelLength(component.value) * 7.5
+  )));
+  const activePitch = snap(Math.max(190, activeValueReach + 58 + 24));
+  // Vertical rail branches carry end-anchored labels reaching left from x-46;
+  // keep stacked branches clear of the previous branch's text.
+  const branchLabelWidth = Math.max(0, ...module.components
+    .filter((component) => component.pins.length === 2)
+    .map((component) => Math.max(component.name.length * 9, displayLabelLength(component.value) * 7.5)));
+  const branchDx = snap(Math.max(110, 46 + branchLabelWidth + 20));
   sortedActive.forEach((component, index) => {
-    component.position = snapPoint({ x: 250 + index * 190, y: mainY });
+    component.position = snapPoint({ x: 250 + index * activePitch, y: mainY });
     component.rotation = 0;
   });
 
@@ -1628,7 +1959,7 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
   for (const component of module.components) {
     if (placed.has(component.id)) continue;
     if (component.pins.length !== 2) {
-      component.position = snapPoint({ x: 250 + sortedActive.length * 190 + usedSlots.right * 150, y: mainY });
+      component.position = snapPoint({ x: 250 + sortedActive.length * activePitch + usedSlots.right * 150, y: mainY });
       component.rotation = 0;
       usedSlots.right += 1;
       continue;
@@ -1648,14 +1979,14 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
         const index = lowerCounts.get(signalNet) ?? 0;
         lowerCounts.set(signalNet, index + 1);
         placeVertical(component, signalNet, railNet, {
-          x: signalPin.x + passiveBranchOffset + index * 110,
+          x: signalPin.x + passiveBranchOffset + index * branchDx,
           y: signalPin.y + 90,
         });
       } else {
         const index = upperCounts.get(signalNet) ?? 0;
         upperCounts.set(signalNet, index + 1);
         placeVertical(component, railNet, signalNet, {
-          x: signalPin.x + passiveBranchOffset + index * 110,
+          x: signalPin.x + passiveBranchOffset + index * branchDx,
           y: signalPin.y - 90,
         });
       }
@@ -1689,7 +2020,7 @@ function autoLayoutActiveModule(module: CircuitModule, activeComponents: Circuit
       continue;
     }
 
-    component.position = snapPoint({ x: 250 + sortedActive.length * 190 + usedSlots.right * 150, y: mainY + 100 });
+    component.position = snapPoint({ x: 250 + sortedActive.length * activePitch + usedSlots.right * 150, y: mainY + 100 });
     component.rotation = 0;
     usedSlots.right += 1;
     rememberComponentPinAnchors(nodeAnchors, component);
@@ -2141,6 +2472,12 @@ function activePlacementScore(component: CircuitComponent): number {
   if (/ref|bias|diode/.test(text)) return 0;
   if (/out|load/.test(text)) return 2;
   return 1;
+}
+
+/** Label length as rendered by displayComponentValue (long values collapse to 21 chars). */
+function displayLabelLength(value: string | undefined): number {
+  const text = (value ?? '').trim();
+  return text.length > 22 ? 21 : text.length;
 }
 
 function isLdoLikeModule(module: CircuitModule, activeComponents: CircuitComponent[]): boolean {
@@ -3175,16 +3512,53 @@ function routePointsForModule(
   net?: string,
   occupiedWires: CircuitWire[] = [],
 ): CircuitPosition[] {
+  // qucs-style: leave the owning symbol along the pin outward axis before any
+  // Manhattan detour. Start/end components are excluded from obstacles so a
+  // naive start→end fallback can cut straight through the body during drag;
+  // egress stubs make that path illegal and keep previews pin-attached.
+  const startExit = endpointOutwardStep(module, startEndpoint, startPoint);
+  const endExit = endpointOutwardStep(module, endEndpoint, endPoint);
   const obstacles = obstaclesForEndpoints(module, startEndpoint, endEndpoint, net);
-  const candidates = orthogonalRouteCandidates(startPoint, endPoint, obstacles);
-  return candidates
-    .filter((points) => routeIsClear(points, obstacles))
-    .sort((left, right) => (
+  const midCandidates = orthogonalRouteCandidates(startExit, endExit, obstacles);
+  const candidates = [
+    ...midCandidates.map((mid) => compactRoute([startPoint, ...mid, endPoint])),
+    ...orthogonalRouteCandidates(startPoint, endPoint, obstacles),
+  ];
+  const clear = candidates.filter((points) => routeIsClear(points, obstacles));
+  if (clear.length > 0) {
+    return clear.sort((left, right) => (
       routeCost(left) + routeCrossingPenalty(left, net, occupiedWires) +
         routeEndpointEgressPenalty(module, left, startEndpoint, endEndpoint) -
       routeCost(right) - routeCrossingPenalty(right, net, occupiedWires) -
         routeEndpointEgressPenalty(module, right, startEndpoint, endEndpoint)
-    ))[0] ?? routePoints(startPoint, endPoint);
+    ))[0] ?? clear[0]!;
+  }
+  return compactRoute([startPoint, startExit, ...routePoints(startExit, endExit), endExit, endPoint]);
+}
+
+/**
+ * One grid step out of a component along its pin axis (orthogonal). Non-pin
+ * endpoints stay put so junction/port anchors remain fixed while the moving
+ * pin rubber-bands toward them (qucs selection.moveCenter / node sync).
+ */
+function endpointOutwardStep(
+  module: CircuitModule,
+  endpoint: CircuitWireEndpoint | undefined,
+  point: CircuitPosition,
+  distance = SCHEMATIC_GRID,
+): CircuitPosition {
+  if (!endpoint?.component_id || !endpoint.pin_id) return point;
+  const component = module.components.find((entry) => entry.id === endpoint.component_id);
+  const pinIndex = component?.pins.findIndex((pin) => pin.id === endpoint.pin_id) ?? -1;
+  const pin = pinIndex >= 0 ? component?.pins[pinIndex] : undefined;
+  if (!component || !pin) return point;
+  const pinPoint = pinWorld(component, pin, pinIndex);
+  const outward = { x: pinPoint.x - component.position.x, y: pinPoint.y - component.position.y };
+  if (Math.abs(outward.x) < 0.5 && Math.abs(outward.y) < 0.5) return point;
+  if (Math.abs(outward.x) >= Math.abs(outward.y)) {
+    return snapPoint({ x: point.x + Math.sign(outward.x) * distance, y: point.y });
+  }
+  return snapPoint({ x: point.x, y: point.y + Math.sign(outward.y) * distance });
 }
 
 function routeCrossingPenalty(points: CircuitPosition[], net: string | undefined, occupiedWires: CircuitWire[]): number {
@@ -4550,8 +4924,10 @@ function isSwitchStageSignalNet(
   net: string,
   endpoints: EndpointHit[],
 ): boolean {
+  // Name-matched switch nodes always stay wired, whatever the endpoint count —
+  // a 4-switch buck-boost has 5+ endpoints on each switch rail.
+  if (/^(sw|switch|ph|phase|lx|vsw|mid|node_?sw)[\d_]*$/i.test(net)) return true;
   if (endpoints.length > 4) return false;
-  if (/^(sw|switch|ph|phase|lx|vsw|mid|node_?sw)$/i.test(net)) return true;
   const mosDrainOwners = new Set<string>();
   for (const component of module.components) {
     if (component.type !== 'M') continue;

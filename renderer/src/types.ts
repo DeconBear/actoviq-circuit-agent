@@ -55,6 +55,8 @@ export interface StageDef {
 
 export interface ChatResponse {
   text: string;
+  /** All assistant text rounds of a ReAct run (text may only carry the final one). */
+  rounds?: Array<{ iteration: number; text: string }>;
   isDesignRequest: boolean;
   formalizedRequirement?: string;
   isRevisionRequest?: boolean;
@@ -80,6 +82,7 @@ export interface DesktopAgentEvent {
     | 'run-started'
     | 'status'
     | 'text-progress'
+    | 'assistant-round'
     | 'thinking-delta'
     | 'tool-call'
     | 'tool-result'
@@ -103,6 +106,7 @@ export interface DesktopAgentEvent {
   toolName?: string;
   toolUseId?: string;
   usage?: Record<string, unknown>;
+  rounds?: Array<{ iteration: number; text: string }>;
 }
 
 export interface WorkflowEvent {
