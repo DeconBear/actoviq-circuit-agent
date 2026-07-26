@@ -13,6 +13,7 @@ import {
   normalizeConnectivity,
   pinWorld,
   pointEndpoint,
+  portRenderSide,
   removeWireAndUpdateConnectivity,
   validateWireTopology,
 } from '../renderer/src/schematic/schematicDocument';
@@ -447,6 +448,40 @@ assertJunctionNetIsolation();
 assertManualWireTopology();
 assertGroundPseudoComponent();
 assertRouteEgressAvoidsOwnerBody();
+assertLegacyPortNormalization();
+
+function assertLegacyPortNormalization() {
+  const module = moduleFixture('legacy_duplicate_ports', [
+    component('r1', 'R', '1k', 300, 200, [['a', '1', 'vin'], ['b', '2', 'vout']]),
+  ], [
+    { id: 'vin', name: 'VIN', direction: 'input', signal_type: 'power', net: 'VIN', inferred: true },
+    { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'VOUT', inferred: true },
+    { id: 'VIN', name: 'VIN', direction: 'input', signal_type: 'analog', net: 'vin' },
+    { id: 'VOUT', name: 'VOUT', direction: 'output', signal_type: 'analog', net: 'vout' },
+    { id: 'old_out', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'removed_net' },
+    { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+  ]);
+  const document = createSchematicDocument(module, { autoLayout: false });
+  const vinPorts = document.module.ports.filter((port) => port.net.toLowerCase() === 'vin');
+  const voutPorts = document.module.ports.filter((port) => port.net.toLowerCase() === 'vout');
+  assert.deepEqual(
+    vinPorts.map((port) => [port.id, port.signal_type]),
+    [['VIN', 'analog']],
+    'explicit analog VIN replaces the inferred top-facing power alias',
+  );
+  assert.deepEqual(
+    voutPorts.map((port) => [port.id, port.name]),
+    [['VOUT', 'VOUT']],
+    'explicit VOUT replaces the inferred OUT alias',
+  );
+  assert.equal(document.module.ports.some((port) => port.id === 'old_out'), false, 'stale generic OUT is removed');
+  assert.equal(document.module.ports.some((port) => port.id === 'vdd'), true, 'named explicit interfaces remain stable');
+
+  const vin = vinPorts[0]!;
+  const vout = voutPorts[0]!;
+  assert.equal(portRenderSide(document, vin, document.portPositions.get(vin.id)!), 'left');
+  assert.equal(portRenderSide(document, vout, document.portPositions.get(vout.id)!), 'right');
+}
 
 function assertRouteEgressAvoidsOwnerBody() {
   // Vertical two-pin part with a ground below: a naive start→end Manhattan route

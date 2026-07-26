@@ -130,6 +130,7 @@ export function createSchematicDocument(
 ): SchematicDocument {
   const shouldAutoLayout = options.autoLayout !== false && (module.wires ?? []).length === 0;
   const next = shouldAutoLayout ? autoLayoutModule(cloneModule(module)) : cloneModule(module);
+  next.ports = normalizeSchematicPorts(next.ports, next.components);
   ensureStableNetModel(next);
   for (const component of next.components) {
     component.rotation = normalizeRotation(component.rotation);
@@ -160,6 +161,62 @@ export function createSchematicDocument(
     bounds,
     viewBox,
   };
+}
+
+/**
+ * Normalize historical module data before projecting it into the editor.
+ *
+ * SPICE net names are case-insensitive, so an inferred VIN/OUT and an explicit
+ * VIN/VOUT on the same net are one interface. Explicit ports win because
+ * project-level connections may reference their ids. Stale inferred and
+ * generic IN/OUT ports are removed, while named explicit module interfaces are
+ * preserved even when the local schematic does not currently consume them.
+ */
+export function normalizeSchematicPorts(
+  ports: CircuitPort[],
+  components: CircuitComponent[],
+): CircuitPort[] {
+  const liveNets = new Set(
+    components.flatMap((component) => component.pins.map((pin) => pin.net.trim().toLowerCase())).filter(Boolean),
+  );
+  const sourceDrivenNets = new Set(
+    components
+      .filter((component) => component.type === 'V' || component.type === 'I')
+      .map((component) => component.pins[0]?.net.trim().toLowerCase() ?? '')
+      .filter(Boolean),
+  );
+  const genericNames = new Set(['in', 'input', 'out', 'output']);
+  const candidates = ports.flatMap((port, index) => {
+    const id = port.id.trim();
+    const net = port.net.trim().toLowerCase();
+    if (!id || !net) return [];
+    const genericInterface = genericNames.has(id.toLowerCase()) || genericNames.has(port.name.trim().toLowerCase());
+    if (!liveNets.has(net) && (port.inferred || genericInterface)) return [];
+    if (
+      port.inferred &&
+      sourceDrivenNets.has(net) &&
+      (port.signal_type === 'analog' || port.signal_type === 'power') &&
+      port.direction === 'input'
+    ) {
+      return [];
+    }
+    return [{ index, port, id, net }];
+  });
+
+  const winnerByNet = new Map<string, (typeof candidates)[number]>();
+  for (const candidate of candidates) {
+    const current = winnerByNet.get(candidate.net);
+    if (!current || (current.port.inferred && !candidate.port.inferred)) {
+      winnerByNet.set(candidate.net, candidate);
+    }
+  }
+
+  const usedIds = new Set<string>();
+  return candidates.flatMap((candidate) => {
+    if (winnerByNet.get(candidate.net)?.index !== candidate.index || usedIds.has(candidate.id)) return [];
+    usedIds.add(candidate.id);
+    return [candidate.port];
+  });
 }
 
 export function snap(value: number): number {
