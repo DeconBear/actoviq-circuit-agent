@@ -365,6 +365,11 @@ try {
   await page.getByTestId('skill-target-codex').waitFor();
   await page.getByTestId('skill-target-claude').waitFor();
   await page.getByTestId('sync-circuit-skill').waitFor();
+  await page.getByTestId('run-ic-diagnostics').click();
+  await page.getByTestId('ic-diagnostics-result').waitFor({ timeout: 30_000 });
+  await page.getByTestId('ic-tool-ngspice').waitFor();
+  await page.getByTestId('ic-tool-klayout').waitFor();
+  await page.getByTestId('ic-tool-yosys').waitFor();
   await page.getByTestId('settings-dialog-close').click();
   await page.getByTestId('settings-dialog').waitFor({ state: 'detached', timeout: 10_000 });
   await clickApplicationMenuPath(electronApp, ['File', 'New Design']);

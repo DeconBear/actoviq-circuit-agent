@@ -157,6 +157,8 @@ error table:
 | `eda_bridge.py` / `eda_kicad_import.py` / `eda_jlceda_*` | PCB layout/property handoff (KiCad + experimental, vendor-unverified JLCEDA exchange JSON); not lossless connectivity co-editing |
 | `lcsc_search.py` | 立创商城 search / get / bind (`eda.lcsc_id`) |
 | `analog_ic.py` | PDK/model-path and MOS W/L/M/NF audit before analog simulation/export |
+| `pdk_registry.py` / `open_sim_providers.py` / `physical_verification.py` | Local PDK registry, OpenVAF/Xyce, and KLayout/Magic/Netgen providers |
+| `xschem_bridge.py` / `hdl_flow.py` | Explicit Xschem peer modes and Verilog/Icarus/Yosys/OpenROAD flows |
 | `razavi_bench.py` | Read-only upstream provenance check; task/evaluator access remains license-blocked |
 | `strict_param_check.py` | Parameter sanity |
 | `run_dual_analysis.py` / `run_ngspice.py` | Simulation |
@@ -189,6 +191,7 @@ Use `--scope project --project-root <path>` for a repo-local install.
 - [references/user-reference-assets.md](references/user-reference-assets.md) — catalog import (circuit + schematic layout)
 - [references/modular-project-design.md](references/modular-project-design.md) — default multi-module canvas design
 - [references/analog-ic-design.md](references/analog-ic-design.md) — PDK, transistor sizing, ngspice, Razavi-Bench license boundary, and Virtuoso handoff
+- [references/ic-platform-integration.md](references/ic-platform-integration.md) — IC PDK/tool setup, support matrix, migration, and security boundaries
 - [references/eda-export.md](references/eda-export.md) — multi-EDA schematic export contract
 - [references/jobs-workflow.md](references/jobs-workflow.md) — jobs 8-step workflow
 - [references/tool-contracts.md](references/tool-contracts.md) — CLI contracts and errors

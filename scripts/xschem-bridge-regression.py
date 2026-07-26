@@ -14,7 +14,7 @@ SKILL_SCRIPTS = ROOT / "skills" / "circuit-design-ngspice" / "scripts"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 
 from circuit_project import apply_operation  # noqa: E402
-from xschem_bridge import link_existing, make_binding, pull, push  # noqa: E402
+from xschem_bridge import headless_validate, link_existing, make_binding, pull, push  # noqa: E402
 
 
 def fixture() -> dict:
@@ -57,6 +57,17 @@ def main() -> int:
         pushed = push(module, binding, 1)
         assert peer_file.is_file()
         assert "ACTOVIQ_ID" in peer_file.read_text(encoding="utf-8")
+        fake_xschem = root / "fake_xschem.py"
+        fake_xschem.write_text(
+            "import pathlib, sys\n"
+            "out = pathlib.Path(sys.argv[sys.argv.index('-o') + 1])\n"
+            "name = sys.argv[sys.argv.index('-N') + 1]\n"
+            "(out / name).write_text('* reference netlist\\n.end\\n', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        validation = headless_validate(peer_file, root / "headless", str(fake_xschem))
+        assert validation["status"] == "passed"
+        assert validation["metadata"]["topology_writeback"] is False
 
         edited = peer_file.read_text(encoding="utf-8")
         edited = edited.replace("100.000 200.000 0 0", "120.000 220.000 1 0", 1)

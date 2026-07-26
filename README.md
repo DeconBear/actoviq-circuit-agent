@@ -64,6 +64,7 @@ When creating a blank/demo project, choose a **project kind** (legacy projects m
 | Simulation (`simulation`) | Primitive-only SPICE verification | kind gate → ERC → compile → ngspice |
 | PCB schematic (`pcb_schematic`) | External PCB EDA handoff + LCSC metadata | ERC → part/refdes readiness → validated KiCad handoff / experimental JLCEDA exchange; sim optional |
 | Analog IC (`analog_ic`) | PDK-bound transistor sizing | PDK/W/L audit → ERC → compile → ngspice → Virtuoso package |
+| Mixed-signal IC (`mixed_signal_ic`) | Analog modules plus HDL-owned digital blocks | Per-domain verification → explicit interface contract → qualified commercial AMS |
 
 **Recommended joint workflow (PCB schematic)**
 
@@ -75,6 +76,10 @@ When creating a blank/demo project, choose a **project kind** (legacy projects m
 6. One-shot zip export remains available for controlled handoff and Altium-via-KiCad.
 
 For **Analog IC**, configure the user-supplied PDK/model library and corner, require explicit MOS W/L/M/NF, run `analog-ic-audit` plus ngspice, then export the revision/hash-bound SPICE/CDL + mapping + SKILL Virtuoso package. Foundry models are referenced, not bundled. Razavi-Bench evaluation remains disabled pending the written permission required by its benchmark-material license; the included command performs provenance preflight only.
+
+The open-PDK, Xschem, OpenVAF/Xyce, physical verification, HDL, OpenROAD, and
+licensed EDA integration contracts are documented in
+[IC Platform Integration](./skills/circuit-design-ngspice/references/ic-platform-integration.md).
 
 **Out of scope**: PCB layout, footprint generation, DFM, LCSC ordering.
 

@@ -8,6 +8,9 @@ import json
 import os
 import re
 import shlex
+import shutil
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -110,6 +113,71 @@ def make_binding(mode: str, peer_file: str = "") -> dict[str, Any]:
         "base_peer_hash": "",
         "base_connectivity_hash": "",
     })
+
+
+def headless_validate(
+    peer_file: Path,
+    run_root: Path,
+    executable: str = "",
+) -> dict[str, Any]:
+    peer = peer_file.expanduser().resolve()
+    if not peer.is_file() or peer.suffix.casefold() != ".sch":
+        raise ValueError(f"Xschem validation requires an existing .sch file: {peer}")
+    candidate = executable.strip() or "xschem"
+    located = shutil.which(candidate)
+    resolved_executable = str(Path(located).resolve()) if located else str(Path(candidate).expanduser().resolve())
+    if not Path(resolved_executable).is_file():
+        raise FileNotFoundError(f"Xschem executable not found: {candidate}")
+    run_root = run_root.expanduser().resolve()
+    run_root.mkdir(parents=True, exist_ok=True)
+    netlist = run_root / "reference.spice"
+    command = [
+        resolved_executable,
+        "-n",
+        "-q",
+        "-x",
+        "-o",
+        str(run_root),
+        "-N",
+        netlist.name,
+        "-s",
+        str(peer),
+    ]
+    if Path(resolved_executable).suffix.casefold() == ".py":
+        command = [sys.executable, *command]
+    completed = subprocess.run(
+        command,
+        cwd=str(run_root),
+        shell=False,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    diagnostics = [
+        text for text in (completed.stdout.strip(), completed.stderr.strip()) if text
+    ]
+    success = completed.returncode == 0 and netlist.is_file()
+    artifacts = [{"kind": "xschem_schematic", "path": str(peer), "hash": file_hash(peer)}]
+    if netlist.is_file():
+        artifacts.append({"kind": "reference_netlist", "path": str(netlist), "hash": file_hash(netlist)})
+    result = {
+        "schema": "actoviq.verification-run.v1",
+        "run_id": run_root.name,
+        "kind": "schematic_reference_netlist",
+        "provider_id": "xschem",
+        "executed": True,
+        "status": "passed" if success else "failed",
+        "diagnostics": diagnostics,
+        "artifacts": artifacts,
+        "metadata": {
+            "peer_hash": file_hash(peer),
+            "reference_netlist_hash": file_hash(netlist) if netlist.is_file() else "",
+            "topology_writeback": False,
+        },
+    }
+    _atomic_json(run_root / "run.json", result)
+    return result
 
 
 def _safe_property(value: Any) -> str:

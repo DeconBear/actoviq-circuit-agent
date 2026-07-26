@@ -3,6 +3,7 @@ import type {
   ActoviqProviderPreset,
   AppSettings,
   CircuitSkillStatus,
+  IcDiagnostics,
   LayoutModelTestResult,
   ProviderTestResult,
 } from '../../types';
@@ -25,6 +26,11 @@ export function SettingsDialog({ onClose }: Props) {
   const [providerTest, setProviderTest] = useState<ProviderTestResult | null>(null);
   const [testingLayoutModel, setTestingLayoutModel] = useState(false);
   const [layoutModelTest, setLayoutModelTest] = useState<LayoutModelTestResult | null>(null);
+  const [icDiagnostics, setIcDiagnostics] = useState<IcDiagnostics | null>(null);
+  const [testingIcTools, setTestingIcTools] = useState(false);
+  const [pdkAdapter, setPdkAdapter] = useState<'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial'>('ihp-sg13g2');
+  const [pdkLicenseAccepted, setPdkLicenseAccepted] = useState(false);
+  const [pdkImportStatus, setPdkImportStatus] = useState('');
 
   useEffect(() => {
     if (!window.electronAPI) {
@@ -265,6 +271,46 @@ export function SettingsDialog({ onClose }: Props) {
     }
   }, [settings]);
 
+  const handleIcDiagnostics = useCallback(async () => {
+    setTestingIcTools(true);
+    setError(null);
+    try {
+      setIcDiagnostics(await window.electronAPI.getIcDiagnostics());
+    } catch (err: unknown) {
+      setError(`IC diagnostics failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setTestingIcTools(false);
+    }
+  }, []);
+
+  const handlePdkImport = useCallback(async () => {
+    if (!pdkLicenseAccepted) return;
+    setPdkImportStatus('');
+    try {
+      const root = await window.electronAPI.choosePdkRoot();
+      if (!root) return;
+      const mappingFile = pdkAdapter === 'commercial'
+        ? await window.electronAPI.choosePdkMappingPack()
+        : null;
+      if (pdkAdapter === 'commercial' && !mappingFile) return;
+      const scanned = await window.electronAPI.scanPdkInstallation({
+        root,
+        adapter: pdkAdapter,
+        mappingFile: mappingFile || undefined,
+      });
+      const registered = await window.electronAPI.registerPdkInstallation({
+        root,
+        adapter: pdkAdapter,
+        mappingFile: mappingFile || undefined,
+        licenseAccepted: true,
+      });
+      setPdkImportStatus(`Registered ${String(registered.installation?.id ?? scanned.installation?.id ?? pdkAdapter)}`);
+      await handleIcDiagnostics();
+    } catch (err: unknown) {
+      setPdkImportStatus(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [handleIcDiagnostics, pdkAdapter, pdkLicenseAccepted]);
+
   const requestClose = useCallback(() => {
     if (dirty && !window.confirm('Discard unsaved settings changes?')) {
       return;
@@ -449,6 +495,83 @@ export function SettingsDialog({ onClose }: Props) {
               <section className="av-form-section">
                 <h3 className="av-form-section__title">Tool paths</h3>
                 <Field label="ngspice binary" value={settings.ngspiceBin} onChange={(v) => update('ngspiceBin', v)} placeholder="e.g. E:/Program/ngspice/bin/ngspice.exe" />
+              </section>
+
+              <section className="av-form-section" data-testid="ic-tool-diagnostics">
+                <div className="av-form-section__header">
+                  <h3 className="av-form-section__title">IC tools and PDKs</h3>
+                  <button
+                    type="button"
+                    className="av-btn av-btn--secondary"
+                    onClick={() => { void handleIcDiagnostics(); }}
+                    disabled={testingIcTools}
+                    data-testid="run-ic-diagnostics"
+                  >
+                    {testingIcTools ? 'Probing…' : 'Run diagnostics'}
+                  </button>
+                </div>
+                <p className="av-form-hint">
+                  Probes are version-only. Commercial tools remain unverified until qualified in a licensed environment.
+                </p>
+                {icDiagnostics && (
+                  <div data-testid="ic-diagnostics-result">
+                    <div className="av-form-meta">
+                      <span>Open simulation</span><strong>{icDiagnostics.features.openSimulation ? 'available' : 'missing'}</strong>
+                    </div>
+                    <div className="av-form-meta">
+                      <span>Physical verification</span><strong>{icDiagnostics.features.physicalVerification ? 'available' : 'missing'}</strong>
+                    </div>
+                    <div className="av-form-meta">
+                      <span>HDL flow</span><strong>{icDiagnostics.features.hdlFlow ? 'available' : 'missing'}</strong>
+                    </div>
+                    {icDiagnostics.tools.map((tool) => (
+                      <div key={tool.id} className="av-form-meta" data-testid={`ic-tool-${tool.id}`}>
+                        <span>{tool.label}</span>
+                        <strong style={{ color: tool.available ? 'var(--av-success)' : 'var(--av-text-tertiary)' }}>
+                          {tool.available
+                            ? tool.domain === 'commercial' ? 'configured / unverified' : tool.version || 'available'
+                            : 'not found'}
+                        </strong>
+                      </div>
+                    ))}
+                    <p className="av-form-hint">
+                      Registered PDKs: {icDiagnostics.pdkRegistry.installations?.length ?? 0}
+                    </p>
+                  </div>
+                )}
+                <div className="av-form-meta" style={{ alignItems: 'center', gap: 8 }}>
+                  <select
+                    value={pdkAdapter}
+                    onChange={(event) => setPdkAdapter(event.target.value as typeof pdkAdapter)}
+                    className="av-settings-input"
+                    aria-label="PDK adapter"
+                    data-testid="pdk-adapter-select"
+                  >
+                    <option value="ihp-sg13g2">IHP SG13G2</option>
+                    <option value="sky130">SKY130</option>
+                    <option value="gf180mcu">GF180MCU (experimental)</option>
+                    <option value="commercial">Commercial mapping pack</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="av-btn av-btn--secondary"
+                    onClick={() => { void handlePdkImport(); }}
+                    disabled={!pdkLicenseAccepted}
+                    data-testid="import-local-pdk"
+                  >
+                    Scan and register
+                  </button>
+                </div>
+                <label className="av-form-check">
+                  <input
+                    type="checkbox"
+                    checked={pdkLicenseAccepted}
+                    onChange={(event) => setPdkLicenseAccepted(event.target.checked)}
+                    data-testid="pdk-license-accepted"
+                  />
+                  I have reviewed and accept this PDK&apos;s license; keep all files in place.
+                </label>
+                {pdkImportStatus && <p className="av-form-hint" role="status">{pdkImportStatus}</p>}
               </section>
 
               <section className="av-form-section" data-testid="circuit-skill-status">

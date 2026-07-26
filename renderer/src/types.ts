@@ -855,6 +855,36 @@ export interface AppSettings {
   lcscUseFallback: boolean;
 }
 
+export interface IcToolDiagnostic {
+  id: string;
+  label: string;
+  domain: 'schematic' | 'simulation' | 'physical' | 'hdl' | 'commercial' | 'runtime';
+  executable: string;
+  available: boolean;
+  version?: string;
+  qualification: 'open_source' | 'configured' | 'unverified';
+  diagnostic?: string;
+}
+
+export interface IcDiagnostics {
+  schema: 'actoviq.ic-diagnostics.v1';
+  platform: string;
+  tools: IcToolDiagnostic[];
+  pdkRegistry: {
+    ok?: boolean;
+    installations?: Array<Record<string, unknown>>;
+    error?: string;
+  };
+  features: {
+    schematicBridge: boolean;
+    openSimulation: boolean;
+    physicalVerification: boolean;
+    hdlFlow: boolean;
+    licensedEda: boolean;
+  };
+  generatedAt: string;
+}
+
 export interface ProviderTestResult {
   ok: boolean;
   provider: ActoviqProvider;

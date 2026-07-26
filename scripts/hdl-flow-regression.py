@@ -16,6 +16,7 @@ sys.path.insert(0, str(SKILL_SCRIPTS))
 
 from hdl_flow import (  # noqa: E402
     IcarusProvider,
+    OpenRoadProvider,
     YosysProvider,
     load_hdl_manifest,
     run_gate_regression,
@@ -61,6 +62,15 @@ print("Number of cells: 1")
 """
 
 
+FAKE_OPENROAD = r"""
+import pathlib
+
+pathlib.Path("macro.def").write_text("VERSION 5.8 ;\nEND DESIGN\n", encoding="utf-8")
+pathlib.Path("macro.gds").write_bytes(b"synthetic-gds")
+print("OpenROAD flow complete")
+"""
+
+
 def write_project(root: Path) -> dict:
     hdl = root / "hdl"
     hdl.mkdir()
@@ -103,9 +113,11 @@ def main() -> int:
         fake_iverilog = root / "fake_iverilog.py"
         fake_vvp = root / "fake_vvp.py"
         fake_yosys = root / "fake_yosys.py"
+        fake_openroad = root / "fake_openroad.py"
         fake_iverilog.write_text(FAKE_IVERILOG, encoding="utf-8")
         fake_vvp.write_text(FAKE_VVP, encoding="utf-8")
         fake_yosys.write_text(FAKE_YOSYS, encoding="utf-8")
+        fake_openroad.write_text(FAKE_OPENROAD, encoding="utf-8")
 
         icarus = IcarusProvider(str(fake_iverilog), str(fake_vvp))
         simulation = icarus.simulate(root, manifest, root / "runs" / "rtl-sim")
@@ -135,6 +147,17 @@ def main() -> int:
         )
         assert gate["status"] == "passed"
         assert gate["kind"] == "hdl_gate_regression"
+
+        flow_script = root / "hdl" / "openroad.tcl"
+        flow_script.write_text("# explicit synthetic OpenROAD flow\n", encoding="utf-8")
+        openroad = OpenRoadProvider(str(fake_openroad)).run_script(
+            root,
+            flow_script,
+            root / "runs" / "openroad",
+        )
+        assert openroad["status"] == "passed"
+        assert openroad["metadata"]["qualification"] == "experimental"
+        assert any(artifact["kind"] == "openroad_gds" for artifact in openroad["artifacts"])
 
         contract_path = root / "mixed-signal.json"
         contract = {

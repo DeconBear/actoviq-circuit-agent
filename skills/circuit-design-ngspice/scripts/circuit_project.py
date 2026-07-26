@@ -75,6 +75,7 @@ from pdk_registry import (
     scan_installation as scan_pdk_installation,
 )
 from xschem_bridge import (
+    headless_validate as validate_xschem_headless,
     link_existing as link_existing_xschem,
     make_binding as make_xschem_binding,
     pull as pull_xschem,
@@ -89,6 +90,7 @@ from open_sim_providers import (
 from physical_verification import KLayoutProvider, MagicProvider, NetgenProvider
 from hdl_flow import (
     IcarusProvider,
+    OpenRoadProvider,
     YosysProvider,
     load_hdl_manifest,
     run_gate_regression,
@@ -6163,6 +6165,12 @@ def build_parser() -> argparse.ArgumentParser:
     hdl_gate_parser.add_argument("--iverilog-bin", default="")
     hdl_gate_parser.add_argument("--vvp-bin", default="")
 
+    openroad_parser = subparsers.add_parser("hdl-openroad")
+    openroad_parser.add_argument("--project-root", required=True)
+    openroad_parser.add_argument("--script", required=True)
+    openroad_parser.add_argument("--run-root", required=True)
+    openroad_parser.add_argument("--openroad-bin", default="")
+
     mixed_parser = subparsers.add_parser("mixed-signal-check")
     mixed_parser.add_argument("--contract", required=True)
     mixed_parser.add_argument("--run-root", required=True)
@@ -6189,6 +6197,11 @@ def build_parser() -> argparse.ArgumentParser:
         xschem_parser = subparsers.add_parser(name)
         xschem_parser.add_argument("--project-root", required=True)
         xschem_parser.add_argument("--module-id", required=True)
+
+    xschem_validate_parser = subparsers.add_parser("xschem-validate")
+    xschem_validate_parser.add_argument("--peer-file", required=True)
+    xschem_validate_parser.add_argument("--run-root", required=True)
+    xschem_validate_parser.add_argument("--xschem-bin", default="")
 
     pdk_list_parser = subparsers.add_parser(
         "pdk-list",
@@ -6528,6 +6541,12 @@ def main() -> int:
                 "operations": operations,
             })
             result = {**sync_result, "revision": applied["revision"], "erc": applied["erc"]}
+        elif args.command == "xschem-validate":
+            result = validate_xschem_headless(
+                Path(args.peer_file),
+                Path(args.run_root),
+                args.xschem_bin,
+            )
         elif args.command in {"create", "create-demo"}:
             resolved = resolve_projects_root(
                 projects_root=args.projects_root or None,
@@ -6649,6 +6668,12 @@ def main() -> int:
                 Path(args.run_root),
                 IcarusProvider(args.iverilog_bin, args.vvp_bin),
                 args.source_set,
+            )
+        elif args.command == "hdl-openroad":
+            result = OpenRoadProvider(args.openroad_bin).run_script(
+                Path(args.project_root),
+                Path(args.script),
+                Path(args.run_root),
             )
         elif args.command == "mixed-signal-check":
             analog_run = read_json(Path(args.analog_run).resolve()) if args.analog_run else None

@@ -80,6 +80,20 @@ export interface ToolProvider<TJob extends ToolJob = ToolJob> {
 }
 
 const SECRET_KEY = /(api[_-]?key|token|secret|password|license|lm_license_file)/i;
+const SAFE_BASE_ENVIRONMENT_KEYS = [
+  'PATH',
+  'Path',
+  'PATHEXT',
+  'SystemRoot',
+  'WINDIR',
+  'ComSpec',
+  'HOME',
+  'USERPROFILE',
+  'TEMP',
+  'TMP',
+  'LANG',
+  'LC_ALL',
+] as const;
 
 export function sanitizeEnvironment(
   values: Record<string, string>,
@@ -128,7 +142,10 @@ export async function runPreparedTool(
 ): Promise<ToolExecution> {
   const startedAt = new Date().toISOString();
   const timeoutMs = job.timeoutMs ?? 120_000;
-  const env = { ...process.env };
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of SAFE_BASE_ENVIRONMENT_KEYS) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
   for (const [key, value] of Object.entries(job.env ?? {})) {
     if (!SECRET_KEY.test(key) || value) env[key] = value;
   }

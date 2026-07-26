@@ -619,6 +619,10 @@ const electronAPI = {
     return ipcRenderer.invoke('settings:test-layout-model', settings);
   },
 
+  getIcDiagnostics(): Promise<unknown> {
+    return ipcRenderer.invoke('settings:ic-diagnostics');
+  },
+
   getAppVersion(): Promise<string> {
     return ipcRenderer.invoke('app:version');
   },

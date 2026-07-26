@@ -389,6 +389,51 @@ class YosysProvider:
         return result
 
 
+class OpenRoadProvider:
+    """Explicit, experimental handoff to a user/PDK-owned OpenROAD Tcl flow."""
+
+    provider_id = "openroad"
+
+    def __init__(self, executable: str = ""):
+        self.executable = _resolve_executable(executable, "openroad")
+
+    def run_script(
+        self,
+        project_root: Path,
+        script_path: Path,
+        run_root: Path,
+    ) -> dict[str, Any]:
+        script = _resolve_project_path(project_root, str(script_path), "OpenROAD script")
+        if script.suffix.casefold() != ".tcl":
+            raise ValueError("OpenROAD flow input must be an explicit .tcl script")
+        run_root = run_root.expanduser().resolve()
+        run_root.mkdir(parents=True, exist_ok=True)
+        completed = _run(self.executable, ["-exit", str(script)], run_root)
+        artifacts = [{"kind": "openroad_script", "path": str(script), "hash": _hash(script)}]
+        for path in sorted(run_root.iterdir()):
+            if path.is_file() and path.suffix.casefold() in {".def", ".gds", ".odb", ".rpt", ".json"}:
+                artifacts.append({
+                    "kind": f"openroad_{path.suffix.casefold().lstrip('.')}",
+                    "path": str(path),
+                    "hash": _hash(path),
+                })
+        result = _verification(
+            run_root.name,
+            "rtl_to_gds",
+            self.provider_id,
+            completed.returncode == 0,
+            [text for text in (completed.stdout.strip(), completed.stderr.strip()) if text],
+            artifacts,
+            {
+                "script_hash": _hash(script),
+                "qualification": "experimental",
+                "executed_by_explicit_user_action": True,
+            },
+        )
+        _atomic_json(run_root / "run.json", result)
+        return result
+
+
 def verify_mixed_signal_contract(
     contract_path: Path,
     run_root: Path,

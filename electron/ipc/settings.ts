@@ -4,8 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { createAgentSdk } from 'actoviq-agent-sdk';
 import { probeLayoutVisionModel } from '../agent/layoutVisionProbe.js';
+import { runProjectTool } from '../agent/circuitProjectCli.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -125,6 +127,119 @@ const defaultSettings: PersistedAppSettings = {
 };
 
 const successfulLayoutVisionProbes = new Map<string, string>();
+
+interface IcToolProbe {
+  id: string;
+  label: string;
+  domain: 'schematic' | 'simulation' | 'physical' | 'hdl' | 'commercial' | 'runtime';
+  executable: string;
+  available: boolean;
+  version?: string;
+  qualification: 'open_source' | 'configured' | 'unverified';
+  diagnostic?: string;
+}
+
+const IC_TOOL_SPECS = [
+  ['xschem', 'Xschem', 'schematic', 'xschem', ['--version']],
+  ['ngspice', 'ngspice', 'simulation', 'ngspice', ['--version']],
+  ['xyce', 'Xyce', 'simulation', 'Xyce', ['-v']],
+  ['openvaf', 'OpenVAF', 'simulation', 'openvaf', ['--version']],
+  ['klayout', 'KLayout', 'physical', 'klayout', ['-v']],
+  ['magic', 'Magic', 'physical', 'magic', ['--version']],
+  ['netgen', 'Netgen', 'physical', 'netgen', ['-version']],
+  ['iverilog', 'Icarus Verilog', 'hdl', 'iverilog', ['-V']],
+  ['yosys', 'Yosys', 'hdl', 'yosys', ['-V']],
+  ['openroad', 'OpenROAD', 'hdl', 'openroad', ['-version']],
+  ['spectre', 'Cadence Spectre', 'commercial', 'spectre', ['-W']],
+  ['hspice', 'Synopsys PrimeSim HSPICE', 'commercial', 'hspice', ['-V']],
+  ['xa', 'Synopsys PrimeSim XA', 'commercial', 'xa', ['-version']],
+  ['afs', 'Siemens AFS', 'commercial', 'afs', ['-version']],
+  ['xrun', 'Cadence Xcelium AMS', 'commercial', 'xrun', ['-version']],
+  ['vcs', 'Synopsys VCS AMS', 'commercial', 'vcs', ['-ID']],
+  ['vsim', 'Siemens Questa AMS', 'commercial', 'vsim', ['-version']],
+] as const;
+
+function probeIcTool(
+  id: string,
+  label: string,
+  domain: IcToolProbe['domain'],
+  executable: string,
+  args: readonly string[],
+): Promise<IcToolProbe> {
+  return new Promise((resolve) => {
+    let output = '';
+    let settled = false;
+    const finish = (available: boolean, diagnostic = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        id,
+        label,
+        domain,
+        executable,
+        available,
+        version: output.trim().split(/\r?\n/, 1)[0]?.slice(0, 240) || undefined,
+        qualification: domain === 'commercial' ? 'unverified' : 'open_source',
+        diagnostic: diagnostic || undefined,
+      });
+    };
+    const probeEnvironment = Object.fromEntries(
+      ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'ComSpec', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL']
+        .flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!]]),
+    );
+    const child = spawn(executable, [...args], {
+      shell: false,
+      windowsHide: true,
+      env: probeEnvironment,
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(false, 'probe timed out');
+    }, 5_000);
+    child.stdout.on('data', (chunk) => { output += String(chunk); });
+    child.stderr.on('data', (chunk) => { output += String(chunk); });
+    child.on('error', (error) => finish(false, error.message));
+    child.on('close', (code) => finish(code === 0, code === 0 ? '' : `exit ${code}`));
+  });
+}
+
+async function collectIcDiagnostics(settings: PersistedAppSettings) {
+  const tools = await Promise.all(IC_TOOL_SPECS.map(([id, label, domain, fallback, args]) => (
+    probeIcTool(
+      id,
+      label,
+      domain,
+      id === 'ngspice' && settings.ngspiceBin.trim() ? settings.ngspiceBin.trim() : fallback,
+      args,
+    )
+  )));
+  let pdkRegistry: Record<string, unknown> = { ok: false, installations: [] };
+  try {
+    pdkRegistry = await runProjectTool(['pdk-list']) as Record<string, unknown>;
+  } catch (error) {
+    pdkRegistry = {
+      ok: false,
+      installations: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return {
+    schema: 'actoviq.ic-diagnostics.v1',
+    platform: process.platform,
+    tools,
+    pdkRegistry,
+    features: {
+      schematicBridge: tools.some((tool) => tool.id === 'xschem' && tool.available),
+      openSimulation: tools.some((tool) => ['ngspice', 'xyce'].includes(tool.id) && tool.available),
+      physicalVerification: tools.some((tool) => tool.id === 'klayout' && tool.available)
+        || tools.filter((tool) => ['magic', 'netgen'].includes(tool.id) && tool.available).length === 2,
+      hdlFlow: tools.filter((tool) => ['iverilog', 'yosys'].includes(tool.id) && tool.available).length === 2,
+      licensedEda: tools.some((tool) => tool.domain === 'commercial' && tool.available),
+    },
+    generatedAt: new Date().toISOString(),
+  };
+}
 
 export function layoutVisionModelFingerprint(
   provider: ActoviqProvider,
@@ -585,6 +700,10 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
   ipcMain.handle('settings:get', async () => {
     return loadSettings();
   });
+
+  ipcMain.handle('settings:ic-diagnostics', async () => (
+    collectIcDiagnostics(await loadSettingsWithSecrets())
+  ));
 
   ipcMain.handle('settings:reveal-actoviq-auth-token', async () => {
     const settings = await loadSettingsWithSecrets();

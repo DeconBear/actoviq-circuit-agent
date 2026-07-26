@@ -6,6 +6,7 @@ import type {
   ChatModelTier,
   EdaColdStartImportResult,
   LayoutModelTestResult,
+  IcDiagnostics,
   LcscBindResult,
   LcscPartResult,
   LcscSearchResult,
@@ -218,6 +219,25 @@ declare global {
       saveSettings(settings: AppSettings): Promise<AppSettings>;
       testProviderSettings(settings: AppSettings): Promise<ProviderTestResult>;
       testLayoutModelSettings(settings: AppSettings): Promise<LayoutModelTestResult>;
+      getIcDiagnostics(): Promise<IcDiagnostics>;
+      choosePdkRoot(): Promise<string | null>;
+      choosePdkMappingPack(): Promise<string | null>;
+      listPdkInstallations(): Promise<Record<string, unknown>>;
+      scanPdkInstallation(input: {
+        root: string;
+        adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial';
+        version?: string;
+        revision?: string;
+        mappingFile?: string;
+      }): Promise<{ ok: true; installation?: Record<string, unknown> }>;
+      registerPdkInstallation(input: {
+        root: string;
+        adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial';
+        version?: string;
+        revision?: string;
+        mappingFile?: string;
+        licenseAccepted: boolean;
+      }): Promise<{ ok: true; installation?: Record<string, unknown> }>;
       getAppVersion(): Promise<string>;
       getCircuitSkillStatus(): Promise<CircuitSkillStatus>;
       syncCircuitSkill(): Promise<CircuitSkillStatus>;
