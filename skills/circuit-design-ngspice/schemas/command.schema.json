@@ -41,6 +41,7 @@
               "set_module_preview",
               "set_module_metadata",
               "set_analog_ic_profile",
+              "set_schematic_peer",
               "bind_lcsc_part",
               "restore_revision"
             ]

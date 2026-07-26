@@ -1981,6 +1981,42 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return runProjectTool(pdkArgs('pdk-register', input));
   });
 
+  ipcMain.handle('project:choose-xschem-peer', async (_event, mode: 'bridge' | 'external') => {
+    if (mode === 'external') {
+      const opened = await dialog.showOpenDialog({
+        title: 'Select Xschem schematic',
+        properties: ['openFile'],
+        filters: [{ name: 'Xschem schematic', extensions: ['sch'] }],
+      });
+      return opened.canceled ? null : opened.filePaths[0] ?? null;
+    }
+    const saved = await dialog.showSaveDialog({
+      title: 'Create Xschem peer schematic',
+      filters: [{ name: 'Xschem schematic', extensions: ['sch'] }],
+    });
+    return saved.canceled ? null : saved.filePath ?? null;
+  });
+
+  ipcMain.handle('project:xschem-link', async (_event, projectId: string, input) => {
+    const args = [
+      'xschem-link',
+      '--project-root', await resolveProjectRoot(projectId),
+      '--module-id', String(input.moduleId),
+      '--mode', String(input.mode),
+    ];
+    if (input.peerFile) args.push('--peer-file', String(input.peerFile));
+    return withProjectWatchPaused(async () => runProjectTool(args));
+  });
+  for (const command of ['push', 'pull', 'take-ownership'] as const) {
+    ipcMain.handle(`project:xschem-${command}`, async (_event, projectId: string, moduleId: string) => (
+      withProjectWatchPaused(async () => runProjectTool([
+        `xschem-${command}`,
+        '--project-root', await resolveProjectRoot(projectId),
+        '--module-id', moduleId,
+      ]))
+    ));
+  }
+
   ipcMain.handle('project:choose-bridge-peer-root', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Select KiCad / 嘉立创 EDA project folder',

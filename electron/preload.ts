@@ -382,6 +382,30 @@ const electronAPI = {
     return ipcRenderer.invoke('pdk:register', input);
   },
 
+  chooseXschemPeerFile(mode: 'bridge' | 'external'): Promise<string | null> {
+    return ipcRenderer.invoke('project:choose-xschem-peer', mode);
+  },
+
+  linkXschemPeer(projectId: string, input: {
+    moduleId: string;
+    mode: 'native' | 'bridge' | 'external';
+    peerFile?: string;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:xschem-link', projectId, input);
+  },
+
+  pushXschemPeer(projectId: string, moduleId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:xschem-push', projectId, moduleId);
+  },
+
+  pullXschemPeer(projectId: string, moduleId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:xschem-pull', projectId, moduleId);
+  },
+
+  takeXschemOwnership(projectId: string, moduleId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:xschem-take-ownership', projectId, moduleId);
+  },
+
   chooseEdaBridgePeerRoot(): Promise<string | null> {
     return ipcRenderer.invoke('project:choose-bridge-peer-root');
   },

@@ -3022,15 +3022,22 @@ function ModuleSchematic({
       ) : null}
       <div style={styles.fullSvgStage}>
         {viewMode === 'editor' && moduleData ? (
-          <SchematicEditor
-            module={moduleData}
-            busy={busy}
-            buildBusy={previewBusy}
-            onSave={onSaveSchematic}
-            onBuild={onBuild}
-            onProbe={onProbe}
-            onDirtyChange={setEditorDirty}
-          />
+          <>
+            {moduleData.schematic_peer?.mode === 'external' ? (
+              <div className="av-form-status" data-testid="schematic-external-readonly">
+                Xschem is authoritative. This Actoviq canvas is read-only until ownership is taken explicitly.
+              </div>
+            ) : null}
+            <SchematicEditor
+              module={moduleData}
+              busy={busy || moduleData.schematic_peer?.mode === 'external'}
+              buildBusy={previewBusy}
+              onSave={onSaveSchematic}
+              onBuild={onBuild}
+              onProbe={onProbe}
+              onDirtyChange={setEditorDirty}
+            />
+          </>
         ) : schematicDocument ? (
           <div
             style={styles.documentSvgPanel}

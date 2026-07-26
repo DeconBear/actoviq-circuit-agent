@@ -34,6 +34,9 @@
       "type": "integer",
       "minimum": 0
     },
+    "schematic_peer": {
+      "$ref": "schematic-peer-binding.schema.json"
+    },
     "ports": {
       "type": "array",
       "items": {

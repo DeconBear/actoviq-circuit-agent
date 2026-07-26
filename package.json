@@ -51,6 +51,7 @@
     "test:simulation-regression": "python scripts/simulation-regression.py",
     "test:tool-providers": "tsx scripts/tool-providers-regression.ts",
     "test:pdk-registry": "python scripts/pdk-registry-regression.py",
+    "test:xschem-bridge": "python scripts/xschem-bridge-regression.py",
     "test:analog-ic": "python scripts/analog-ic-regression.py",
     "test:pcb-integration": "python scripts/pcb-integration-regression.py",
     "typecheck": "npm run typecheck:src && npm run typecheck:electron && npm run typecheck:renderer",

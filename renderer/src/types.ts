@@ -344,6 +344,15 @@ export interface CircuitModule {
   components: CircuitComponent[];
   wires: CircuitWire[];
   annotations: unknown[];
+  schematic_peer?: {
+    schema: 'actoviq.schematic-peer-binding.v1';
+    peer_kind: 'xschem';
+    mode: 'native' | 'bridge' | 'external';
+    peer_file?: string;
+    base_module_hash?: string;
+    base_peer_hash?: string;
+    base_connectivity_hash?: string;
+  };
 }
 
 export interface CircuitProjectSummary {

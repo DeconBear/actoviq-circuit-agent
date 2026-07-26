@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/schematic-peer-binding.schema.json",
+  "title": "Actoviq Schematic Peer Binding",
+  "type": "object",
+  "required": ["schema", "peer_kind", "mode"],
+  "properties": {
+    "schema": { "const": "actoviq.schematic-peer-binding.v1" },
+    "peer_kind": { "const": "xschem" },
+    "mode": { "enum": ["native", "bridge", "external"] },
+    "peer_file": { "type": "string" },
+    "base_module_hash": { "type": "string" },
+    "base_peer_hash": { "type": "string" },
+    "base_connectivity_hash": { "type": "string" }
+  },
+  "additionalProperties": true
+}

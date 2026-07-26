@@ -74,6 +74,13 @@ from pdk_registry import (
     register_installation as register_pdk_installation,
     scan_installation as scan_pdk_installation,
 )
+from xschem_bridge import (
+    link_existing as link_existing_xschem,
+    make_binding as make_xschem_binding,
+    pull as pull_xschem,
+    push as push_xschem,
+    validate_binding as validate_xschem_binding,
+)
 from stable_ids import ensure_module_stable_ids, ensure_project_stable_ids
 from validate_netlist_primitives import validate_netlist_text
 
@@ -1604,6 +1611,7 @@ NESTED_OPERATION_NAMES = frozenset({
     "set_module_preview",
     "set_module_metadata",
     "set_analog_ic_profile",
+    "set_schematic_peer",
     "set_component_value",
     "move_component",
     "upsert_module_netlist",
@@ -1709,6 +1717,31 @@ def apply_operation(
         modules.update(restored_modules)
         changed_modules.update(restored_modules)
         return
+    module_id_for_guard = str(operation.get("module_id") or "").strip()
+    externally_locked_ops = {
+        "add_component",
+        "remove_component",
+        "add_port",
+        "set_component_value",
+        "move_component",
+        "upsert_module_netlist",
+        "set_module_schematic",
+        "set_module_netlist",
+        "move_schematic_item",
+        "reset_schematic_item",
+        "connect_pins",
+    }
+    if module_id_for_guard and op in externally_locked_ops:
+        locked_module = modules.get(module_id_for_guard)
+        peer = locked_module.get("schematic_peer") if isinstance(locked_module, dict) else None
+        if (
+            isinstance(peer, dict)
+            and peer.get("mode") == "external"
+            and operation.get("source") != "xschem"
+        ):
+            raise ValueError(
+                f"module {module_id_for_guard} is read-only because Xschem is authoritative"
+            )
     if op == "upsert_module":
         module_ref = dict(operation["module_ref"])
         module = operation["module"]
@@ -1856,6 +1889,14 @@ def apply_operation(
         if profile_errors:
             raise ValueError(profile_errors[0]["message"])
         project["analog_ic_profile"] = json.loads(json.dumps(profile))
+        return
+    if op == "set_schematic_peer":
+        module_id = str(operation.get("module_id") or "")
+        module = modules.get(module_id)
+        if module is None:
+            raise ValueError(f"unknown module: {module_id}")
+        module["schematic_peer"] = validate_xschem_binding(operation.get("binding"))
+        changed_modules.add(module_id)
         return
     if op == "set_component_value":
         module_id = operation["module_id"]
@@ -6030,6 +6071,20 @@ def build_parser() -> argparse.ArgumentParser:
     analog_ic_audit_parser.add_argument("--project-root", required=True)
     analog_ic_audit_parser.add_argument("--output-path", default="")
 
+    xschem_link_parser = subparsers.add_parser(
+        "xschem-link",
+        help="Set one module's explicit Xschem ownership mode.",
+    )
+    xschem_link_parser.add_argument("--project-root", required=True)
+    xschem_link_parser.add_argument("--module-id", required=True)
+    xschem_link_parser.add_argument("--mode", choices=["native", "bridge", "external"], required=True)
+    xschem_link_parser.add_argument("--peer-file", default="")
+
+    for name in ("xschem-push", "xschem-pull", "xschem-take-ownership"):
+        xschem_parser = subparsers.add_parser(name)
+        xschem_parser.add_argument("--project-root", required=True)
+        xschem_parser.add_argument("--module-id", required=True)
+
     pdk_list_parser = subparsers.add_parser(
         "pdk-list",
         help="List local-only registered PDK installations.",
@@ -6292,6 +6347,82 @@ def main() -> int:
                     path=args.registry_path or None,
                 )
             result = {"ok": True, "installation": installation}
+        elif args.command == "xschem-link":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            module = modules.get(args.module_id)
+            if module is None:
+                raise ValueError(f"unknown module: {args.module_id}")
+            binding = make_xschem_binding(args.mode, args.peer_file)
+            link_result: dict[str, Any] = {"ok": True, "binding": binding}
+            if args.mode == "bridge":
+                link_result = push_xschem(module, binding, int(project["revision"]))
+                binding = link_result["binding"]
+            elif args.mode == "external":
+                link_result = link_existing_xschem(module, binding, int(project["revision"]))
+                binding = link_result["binding"]
+            applied = apply_command(root, {
+                "schema": COMMAND_SCHEMA,
+                "command_id": f"xschem-link-{args.module_id}-{project['revision'] + 1}",
+                "actor": "user",
+                "project_id": project["project_id"],
+                "base_revision": project["revision"],
+                "message": f"Set Xschem mode to {args.mode}",
+                "operations": [{
+                    "op": "set_schematic_peer",
+                    "module_id": args.module_id,
+                    "binding": binding,
+                }],
+            })
+            result = {**link_result, "revision": applied["revision"], "erc": applied["erc"]}
+        elif args.command in {"xschem-push", "xschem-pull", "xschem-take-ownership"}:
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            module = modules.get(args.module_id)
+            if module is None:
+                raise ValueError(f"unknown module: {args.module_id}")
+            binding = validate_xschem_binding(module.get("schematic_peer"))
+            if args.command == "xschem-push":
+                sync_result = push_xschem(module, binding, int(project["revision"]))
+                operations = [{
+                    "op": "set_schematic_peer",
+                    "module_id": args.module_id,
+                    "binding": sync_result["binding"],
+                }]
+            else:
+                sync_result = pull_xschem(module, binding)
+                if sync_result.get("requires_review"):
+                    result = sync_result
+                    print(json.dumps(result, ensure_ascii=False))
+                    return 0
+                next_module = sync_result["updated_module"]
+                next_binding = sync_result["binding"]
+                if args.command == "xschem-take-ownership":
+                    next_binding = {**next_binding, "mode": "native"}
+                    next_module["schematic_peer"] = next_binding
+                operations = [
+                    {
+                        "op": "set_module_schematic",
+                        "module_id": args.module_id,
+                        "module": next_module,
+                        "source": "xschem",
+                    },
+                    {
+                        "op": "set_schematic_peer",
+                        "module_id": args.module_id,
+                        "binding": next_binding,
+                    },
+                ]
+            applied = apply_command(root, {
+                "schema": COMMAND_SCHEMA,
+                "command_id": f"{args.command}-{args.module_id}-{project['revision'] + 1}",
+                "actor": "user",
+                "project_id": project["project_id"],
+                "base_revision": project["revision"],
+                "message": args.command,
+                "operations": operations,
+            })
+            result = {**sync_result, "revision": applied["revision"], "erc": applied["erc"]}
         elif args.command in {"create", "create-demo"}:
             resolved = resolve_projects_root(
                 projects_root=args.projects_root or None,
