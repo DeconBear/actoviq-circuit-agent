@@ -4916,21 +4916,65 @@ def run_analysis(
         }
 
 
+class NgspiceSimulationProvider:
+    """Adapter that keeps ngspice execution behind the provider-neutral run loop."""
+
+    provider_id = "ngspice"
+
+    def __init__(self, executable: str):
+        self.executable = executable
+        self.execution_target = "local_windows" if os.name == "nt" else "local_linux"
+
+    def run_analysis(self, run_root: Path, analysis: dict[str, Any]) -> dict[str, Any]:
+        return run_analysis(self.executable, run_root, analysis)
+
+    def metadata(self) -> dict[str, str]:
+        return {
+            "id": self.provider_id,
+            "executable": self.executable,
+            "version": Path(self.executable).name,
+        }
+
+
+def pdk_fingerprint(project: dict[str, Any]) -> str:
+    profile = project.get("analog_ic_profile")
+    if not isinstance(profile, dict):
+        return ""
+    binding = profile.get("pdk_binding")
+    if isinstance(binding, dict):
+        source = binding
+    else:
+        pdk = profile.get("pdk")
+        source = {
+            "name": pdk.get("name", ""),
+            "corner": pdk.get("corner", ""),
+            "temperature_c": pdk.get("temperature_c"),
+        } if isinstance(pdk, dict) else {}
+    if not source:
+        return ""
+    return hashlib.sha256(
+        json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def execute_simulation_run(
     root: Path,
-    executable: str,
+    provider: NgspiceSimulationProvider | str,
     netlist_path: Path,
     source_revision: int,
     document_hash: str,
     scope: str,
+    pdk_hash: str = "",
 ) -> dict[str, Any]:
+    if isinstance(provider, str):
+        provider = NgspiceSimulationProvider(provider)
     netlist_text = netlist_path.read_text(encoding="utf-8", errors="replace")
     simulation_root = netlist_path.parent / "simulation"
     runs_root = simulation_root / "runs"
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}-{document_hash[:8] or 'document'}"
     run_root = runs_root / run_id
     run_root.mkdir(parents=True, exist_ok=False)
-    analyses = [run_analysis(executable, run_root, analysis) for analysis in split_analysis_decks(netlist_text)]
+    analyses = [provider.run_analysis(run_root, analysis) for analysis in split_analysis_decks(netlist_text)]
     metrics = [metric for analysis in analyses for metric in analysis.get("metrics", [])]
     specifications, specification_diagnostics = parse_simulation_specifications(netlist_text)
     specification_status, specification_results = evaluate_simulation_specifications(metrics, specifications)
@@ -4946,7 +4990,7 @@ def execute_simulation_run(
     completed = [analysis for analysis in analyses if analysis.get("status") == "completed"]
     failed = [analysis for analysis in analyses if analysis.get("status") != "completed"]
     result = {
-        "schema": "actoviq.simulation.v2",
+        "schema": "actoviq.simulation.v3",
         "run_id": run_id,
         "scope": scope,
         "source_revision": source_revision,
@@ -4964,7 +5008,19 @@ def execute_simulation_run(
         "analysis_count": len(analyses),
         "analyses": analyses,
         "metrics": metrics,
-        "ngspice": executable,
+        "provider": provider.metadata(),
+        "execution_target": provider.execution_target,
+        "pdk_fingerprint": pdk_hash,
+        "verification": {
+            "executed": len(completed) > 0,
+            "measured": bool(metrics) and all(
+                metric.get("measurement_status") == "measured" for metric in metrics
+            ),
+            "spec_passed": specification_status == "passed",
+            "lvs_clean": None,
+            "ams_verified": False,
+        },
+        "ngspice": provider.executable,
         "simulated_at": utc_now(),
     }
     atomic_write_json(run_root / "run.json", result)
@@ -4982,7 +5038,7 @@ def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
             codes = ", ".join(str(item.get("code")) for item in audit.get("errors", []))
             raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_project(root)
-    executable = resolve_ngspice(ngspice_bin)
+    provider = NgspiceSimulationProvider(resolve_ngspice(ngspice_bin))
     netlist_path = Path(compile_result["netlist_path"])
     if analog_ic:
         atomic_write_text(
@@ -4993,11 +5049,12 @@ def simulate_project(root: Path, ngspice_bin: str) -> dict[str, Any]:
     manifest = read_json(manifest_path)
     result = execute_simulation_run(
         root,
-        executable,
+        provider,
         netlist_path,
         int(manifest.get("source_revision", manifest.get("revision", compile_result.get("revision", 0)))),
         str(manifest.get("document_hash", "")),
         "project",
+        pdk_fingerprint(project),
     )
     manifest["status"] = "simulated" if result["ok"] else "simulation_failed"
     manifest["simulation"] = "system/simulation/result.json"
@@ -5024,7 +5081,7 @@ def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, A
             codes = ", ".join(str(item.get("code")) for item in audit.get("errors", []))
             raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_module(root, module_id)
-    executable = resolve_ngspice(ngspice_bin)
+    provider = NgspiceSimulationProvider(resolve_ngspice(ngspice_bin))
     netlist_path = Path(compile_result["netlist_path"])
     if analog_ic:
         atomic_write_text(
@@ -5035,11 +5092,12 @@ def simulate_module(root: Path, module_id: str, ngspice_bin: str) -> dict[str, A
     manifest = read_json(manifest_path)
     result = execute_simulation_run(
         root,
-        executable,
+        provider,
         netlist_path,
         int(manifest.get("source_revision", manifest.get("revision", 0))),
         str(manifest.get("document_hash", project_document_hash(*load_project(root)))),
         f"module:{module_id}",
+        pdk_fingerprint(project),
     )
     result["module_id"] = module_id
     atomic_write_json(netlist_path.parent / "simulation" / "result.json", result)

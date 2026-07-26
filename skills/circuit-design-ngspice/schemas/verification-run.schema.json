@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/verification-run.schema.json",
+  "title": "Actoviq Verification Run",
+  "type": "object",
+  "required": ["schema", "run_id", "kind", "provider_id", "executed", "status", "diagnostics", "artifacts"],
+  "properties": {
+    "schema": { "const": "actoviq.verification-run.v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "provider_id": { "type": "string", "minLength": 1 },
+    "source_revision": { "type": "integer", "minimum": 0 },
+    "document_hash": { "type": "string" },
+    "pdk_fingerprint": { "type": "string" },
+    "executed": { "type": "boolean" },
+    "status": { "enum": ["passed", "failed", "cancelled"] },
+    "diagnostics": { "type": "array", "items": { "type": "string" } },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path"],
+        "properties": {
+          "kind": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "hash": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

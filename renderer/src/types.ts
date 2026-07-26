@@ -535,6 +535,21 @@ export interface SimulationRun {
   metrics?: SimulationRunMetric[];
   stderr?: string;
   simulated_at?: string;
+  provider?: {
+    id: string;
+    executable?: string;
+    version?: string;
+  };
+  execution_target?: 'local_linux' | 'ssh_linux' | 'container' | 'local_windows' | 'wsl2';
+  pdk_fingerprint?: string;
+  layout_hash?: string;
+  verification?: {
+    executed: boolean;
+    measured: boolean;
+    spec_passed: boolean;
+    lvs_clean: boolean | null;
+    ams_verified: boolean;
+  };
 }
 
 export interface CircuitAgentContext {

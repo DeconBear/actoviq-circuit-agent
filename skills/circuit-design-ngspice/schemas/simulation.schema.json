@@ -16,7 +16,7 @@
     "metrics"
   ],
   "properties": {
-    "schema": { "const": "actoviq.simulation.v2" },
+    "schema": { "enum": ["actoviq.simulation.v2", "actoviq.simulation.v3"] },
     "run_id": { "type": "string", "minLength": 1 },
     "scope": { "type": "string" },
     "source_revision": { "type": "integer", "minimum": 0 },
@@ -68,7 +68,34 @@
     "metrics": { "type": "array" },
     "specifications": { "type": "array" },
     "specification_diagnostics": { "type": "array", "items": { "type": "string" } },
-    "simulated_at": { "type": "string" }
+    "simulated_at": { "type": "string" },
+    "provider": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "executable": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "execution_target": {
+      "enum": ["local_linux", "ssh_linux", "container", "local_windows", "wsl2"]
+    },
+    "pdk_fingerprint": { "type": "string" },
+    "layout_hash": { "type": "string" },
+    "verification": {
+      "type": "object",
+      "required": ["executed", "measured", "spec_passed", "lvs_clean", "ams_verified"],
+      "properties": {
+        "executed": { "type": "boolean" },
+        "measured": { "type": "boolean" },
+        "spec_passed": { "type": "boolean" },
+        "lvs_clean": { "type": ["boolean", "null"] },
+        "ams_verified": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": true
 }
