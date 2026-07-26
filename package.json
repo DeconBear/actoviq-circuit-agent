@@ -56,6 +56,7 @@
     "test:physical-verification": "python scripts/physical-verification-regression.py",
     "test:hdl-flow": "python scripts/hdl-flow-regression.py",
     "test:mixed-signal-contract": "python scripts/mixed-signal-contract-regression.py",
+    "test:licensed-eda": "tsx scripts/licensed-eda-provider-regression.ts",
     "test:analog-ic": "python scripts/analog-ic-regression.py",
     "test:pcb-integration": "python scripts/pcb-integration-regression.py",
     "typecheck": "npm run typecheck:src && npm run typecheck:electron && npm run typecheck:renderer",
