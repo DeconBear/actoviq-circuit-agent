@@ -164,7 +164,19 @@ export interface WorkspaceSummary {
 export type ProjectKind = 'simulation' | 'pcb_schematic' | 'analog_ic';
 export type EdaBridgePeerKind = 'kicad' | 'jlceda';
 
-export interface AnalogIcProfile {
+export interface PdkBinding {
+  schema: 'actoviq.pdk-binding.v1';
+  pdk_ref: string;
+  version?: string;
+  fingerprint?: string;
+  model_set?: string;
+  default_corner?: string;
+  corner_sweep?: string[];
+  temperature_c?: number;
+  device_mapping?: string;
+}
+
+export type AnalogIcProfile = {
   schema: 'actoviq.analog-ic-profile.v1';
   simulator: 'ngspice';
   pdk: {
@@ -177,7 +189,15 @@ export interface AnalogIcProfile {
     require_explicit_w_l?: boolean;
     require_scale_suffix?: boolean;
   };
-}
+} | {
+  schema: 'actoviq.analog-ic-profile.v2';
+  simulation_profile_id: string;
+  pdk_binding: PdkBinding;
+  sizing?: {
+    require_explicit_w_l?: boolean;
+    require_scale_suffix?: boolean;
+  };
+};
 
 export type PortDirection = 'input' | 'output' | 'bidirectional';
 export type SignalType = 'analog' | 'digital' | 'power' | 'ground';

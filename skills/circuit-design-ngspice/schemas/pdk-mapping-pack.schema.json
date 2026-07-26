@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/pdk-mapping-pack.schema.json",
+  "title": "Actoviq Commercial PDK Mapping Pack",
+  "type": "object",
+  "required": ["schema", "id", "name", "vendor", "process", "views"],
+  "properties": {
+    "schema": { "const": "actoviq.pdk-mapping-pack.v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "vendor": { "type": "string", "minLength": 1 },
+    "process": { "type": "string", "minLength": 1 },
+    "license": { "type": "string" },
+    "views": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } } }
+  },
+  "additionalProperties": false
+}

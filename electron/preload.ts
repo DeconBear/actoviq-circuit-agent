@@ -349,6 +349,39 @@ const electronAPI = {
     return ipcRenderer.invoke('project:choose-eda-output-dir');
   },
 
+  choosePdkRoot(): Promise<string | null> {
+    return ipcRenderer.invoke('pdk:choose-root');
+  },
+
+  choosePdkMappingPack(): Promise<string | null> {
+    return ipcRenderer.invoke('pdk:choose-mapping-pack');
+  },
+
+  listPdkInstallations(): Promise<unknown> {
+    return ipcRenderer.invoke('pdk:list');
+  },
+
+  scanPdkInstallation(input: {
+    root: string;
+    adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial';
+    version?: string;
+    revision?: string;
+    mappingFile?: string;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('pdk:scan', input);
+  },
+
+  registerPdkInstallation(input: {
+    root: string;
+    adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial';
+    version?: string;
+    revision?: string;
+    mappingFile?: string;
+    licenseAccepted: boolean;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('pdk:register', input);
+  },
+
   chooseEdaBridgePeerRoot(): Promise<string | null> {
     return ipcRenderer.invoke('project:choose-bridge-peer-root');
   },

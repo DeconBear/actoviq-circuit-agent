@@ -11,8 +11,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from pdk_registry import BINDING_SCHEMA, resolve_binding
+
 
 PROFILE_SCHEMA = "actoviq.analog-ic-profile.v1"
+PROFILE_SCHEMA_V2 = "actoviq.analog-ic-profile.v2"
 AUDIT_SCHEMA = "actoviq.analog-ic-audit.v1"
 NUMBER_RE = re.compile(
     r"^([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
@@ -73,21 +76,46 @@ def validate_profile(profile: Any) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     if not isinstance(profile, dict):
         return [{"code": "profile_missing", "message": "analog_ic_profile is required"}]
-    if profile.get("schema") != PROFILE_SCHEMA:
-        errors.append({"code": "profile_schema", "message": f"profile schema must be {PROFILE_SCHEMA}"})
-    if profile.get("simulator") != "ngspice":
-        errors.append({"code": "profile_simulator", "message": "analog IC simulator must be ngspice"})
-    pdk = profile.get("pdk")
-    if not isinstance(pdk, dict):
-        errors.append({"code": "profile_pdk", "message": "profile.pdk must be an object"})
+    schema = profile.get("schema")
+    if schema not in {PROFILE_SCHEMA, PROFILE_SCHEMA_V2}:
+        errors.append({
+            "code": "profile_schema",
+            "message": f"profile schema must be {PROFILE_SCHEMA} or {PROFILE_SCHEMA_V2}",
+        })
+    if schema == PROFILE_SCHEMA:
+        if profile.get("simulator") != "ngspice":
+            errors.append({"code": "profile_simulator", "message": "legacy analog IC simulator must be ngspice"})
+        pdk = profile.get("pdk")
+        if not isinstance(pdk, dict):
+            errors.append({"code": "profile_pdk", "message": "profile.pdk must be an object"})
+        else:
+            if not str(pdk.get("name") or "").strip():
+                errors.append({"code": "pdk_name", "message": "profile.pdk.name is required"})
+            if not str(pdk.get("model_library") or "").strip():
+                errors.append({"code": "pdk_model_library", "message": "profile.pdk.model_library is required"})
+            temperature = pdk.get("temperature_c")
+            if temperature is not None and not isinstance(temperature, (int, float)):
+                errors.append({"code": "pdk_temperature", "message": "profile.pdk.temperature_c must be numeric"})
     else:
-        if not str(pdk.get("name") or "").strip():
-            errors.append({"code": "pdk_name", "message": "profile.pdk.name is required"})
-        if not str(pdk.get("model_library") or "").strip():
-            errors.append({"code": "pdk_model_library", "message": "profile.pdk.model_library is required"})
-        temperature = pdk.get("temperature_c")
+        if not str(profile.get("simulation_profile_id") or "").strip():
+            errors.append({
+                "code": "profile_simulation_profile",
+                "message": "profile.simulation_profile_id is required",
+            })
+        binding = profile.get("pdk_binding")
+        if not isinstance(binding, dict) or binding.get("schema") != BINDING_SCHEMA:
+            errors.append({
+                "code": "profile_pdk_binding",
+                "message": f"profile.pdk_binding must use {BINDING_SCHEMA}",
+            })
+        elif not str(binding.get("pdk_ref") or "").strip():
+            errors.append({"code": "pdk_ref", "message": "profile.pdk_binding.pdk_ref is required"})
+        temperature = binding.get("temperature_c") if isinstance(binding, dict) else None
         if temperature is not None and not isinstance(temperature, (int, float)):
-            errors.append({"code": "pdk_temperature", "message": "profile.pdk.temperature_c must be numeric"})
+            errors.append({
+                "code": "pdk_temperature",
+                "message": "profile.pdk_binding.temperature_c must be numeric",
+            })
     sizing = profile.get("sizing", {})
     if not isinstance(sizing, dict):
         errors.append({"code": "profile_sizing", "message": "profile.sizing must be an object"})
@@ -415,6 +443,24 @@ def audit_project(
 
     profile = project.get("analog_ic_profile") if isinstance(project.get("analog_ic_profile"), dict) else {}
     pdk = profile.get("pdk") if isinstance(profile.get("pdk"), dict) else {}
+    if profile.get("schema") == PROFILE_SCHEMA_V2 and not profile_errors:
+        try:
+            resolved_binding = resolve_binding(profile["pdk_binding"])
+            installation = resolved_binding["installation"]
+            pdk = {
+                "name": installation.get("name") or installation.get("logical_id"),
+                "model_library": resolved_binding.get("model_library", ""),
+                "corner": resolved_binding.get("corner", ""),
+                "temperature_c": resolved_binding.get("temperature_c"),
+            }
+            if not pdk["model_library"]:
+                _diagnostic(
+                    errors,
+                    "pdk_model_library",
+                    "bound local PDK installation has no discovered model library",
+                )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            _diagnostic(errors, "pdk_binding_unresolved", str(exc))
     sizing = profile.get("sizing") if isinstance(profile.get("sizing"), dict) else {}
     require_w_l = True
     require_suffix = True

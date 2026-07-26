@@ -69,6 +69,11 @@ from analog_ic import (
     rewrite_model_paths as rewrite_analog_ic_model_paths,
     validate_profile as validate_analog_ic_profile,
 )
+from pdk_registry import (
+    load_registry as load_pdk_registry,
+    register_installation as register_pdk_installation,
+    scan_installation as scan_pdk_installation,
+)
 from stable_ids import ensure_module_stable_ids, ensure_project_stable_ids
 from validate_netlist_primitives import validate_netlist_text
 
@@ -6025,6 +6030,34 @@ def build_parser() -> argparse.ArgumentParser:
     analog_ic_audit_parser.add_argument("--project-root", required=True)
     analog_ic_audit_parser.add_argument("--output-path", default="")
 
+    pdk_list_parser = subparsers.add_parser(
+        "pdk-list",
+        help="List local-only registered PDK installations.",
+    )
+    pdk_list_parser.add_argument("--registry-path", default="")
+
+    for name in ("pdk-scan", "pdk-register"):
+        pdk_parser = subparsers.add_parser(
+            name,
+            help="Discover PDK capabilities without copying foundry files.",
+        )
+        pdk_parser.add_argument("--root", required=True)
+        pdk_parser.add_argument(
+            "--adapter",
+            choices=["ihp-sg13g2", "sky130", "gf180mcu", "commercial"],
+            required=True,
+        )
+        pdk_parser.add_argument("--version", default="")
+        pdk_parser.add_argument("--revision", default="")
+        pdk_parser.add_argument("--mapping-file", default="")
+        pdk_parser.add_argument("--registry-path", default="")
+        if name == "pdk-register":
+            pdk_parser.add_argument(
+                "--license-accepted",
+                action="store_true",
+                help="Confirm that the user is authorized to use this local PDK.",
+            )
+
     export_parser = subparsers.add_parser(
         "export-eda",
         help="Export editable schematic packages from the current structured project revision.",
@@ -6241,6 +6274,24 @@ def main() -> int:
                 projects_root=args.projects_root or None,
                 workspace_id=args.workspace_id or None,
             )
+        elif args.command == "pdk-list":
+            registry = load_pdk_registry(args.registry_path or None)
+            result = {"ok": True, **registry}
+        elif args.command in {"pdk-scan", "pdk-register"}:
+            installation = scan_pdk_installation(
+                args.root,
+                args.adapter,
+                version=args.version,
+                revision=args.revision,
+                mapping_file=args.mapping_file or None,
+            )
+            if args.command == "pdk-register":
+                installation = register_pdk_installation(
+                    installation,
+                    license_accepted=bool(args.license_accepted),
+                    path=args.registry_path or None,
+                )
+            result = {"ok": True, "installation": installation}
         elif args.command in {"create", "create-demo"}:
             resolved = resolve_projects_root(
                 projects_root=args.projects_root or None,

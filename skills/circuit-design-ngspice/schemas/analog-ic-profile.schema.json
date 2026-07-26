@@ -2,26 +2,41 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://actoviq.local/schemas/analog-ic-profile.schema.json",
   "title": "Actoviq Analog IC Profile",
-  "type": "object",
-  "required": ["schema", "simulator", "pdk"],
-  "properties": {
-    "schema": { "const": "actoviq.analog-ic-profile.v1" },
-    "simulator": { "const": "ngspice" },
-    "pdk": {
+  "oneOf": [
+    {
       "type": "object",
-      "required": ["name", "model_library"],
+      "required": ["schema", "simulator", "pdk"],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "model_library": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Project-relative or absolute SPICE model-library path."
+        "schema": { "const": "actoviq.analog-ic-profile.v1" },
+        "simulator": { "const": "ngspice" },
+        "pdk": {
+          "type": "object",
+          "required": ["name", "model_library"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "model_library": { "type": "string", "minLength": 1 },
+            "corner": { "type": "string", "minLength": 1 },
+            "temperature_c": { "type": "number" }
+          },
+          "additionalProperties": false
         },
-        "corner": { "type": "string", "minLength": 1 },
-        "temperature_c": { "type": "number" }
+        "sizing": { "$ref": "#/$defs/sizing" }
       },
       "additionalProperties": false
     },
+    {
+      "type": "object",
+      "required": ["schema", "simulation_profile_id", "pdk_binding"],
+      "properties": {
+        "schema": { "const": "actoviq.analog-ic-profile.v2" },
+        "simulation_profile_id": { "type": "string", "minLength": 1 },
+        "pdk_binding": { "$ref": "pdk-binding.schema.json" },
+        "sizing": { "$ref": "#/$defs/sizing" }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
     "sizing": {
       "type": "object",
       "properties": {
@@ -30,6 +45,5 @@
       },
       "additionalProperties": false
     }
-  },
-  "additionalProperties": false
+  }
 }

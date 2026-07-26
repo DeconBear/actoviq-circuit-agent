@@ -1941,6 +1941,46 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
+  ipcMain.handle('pdk:choose-root', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select local PDK root',
+      properties: ['openDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  ipcMain.handle('pdk:choose-mapping-pack', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select commercial PDK mapping pack',
+      properties: ['openFile'],
+      filters: [{ name: 'Actoviq PDK mapping pack', extensions: ['json'] }],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  const pdkArgs = (command: 'pdk-scan' | 'pdk-register', input: {
+    root: string;
+    adapter: string;
+    version?: string;
+    revision?: string;
+    mappingFile?: string;
+    licenseAccepted?: boolean;
+  }): string[] => {
+    const args = [command, '--root', input.root, '--adapter', input.adapter];
+    if (input.version) args.push('--version', input.version);
+    if (input.revision) args.push('--revision', input.revision);
+    if (input.mappingFile) args.push('--mapping-file', input.mappingFile);
+    if (command === 'pdk-register' && input.licenseAccepted) args.push('--license-accepted');
+    return args;
+  };
+
+  ipcMain.handle('pdk:list', async () => runProjectTool(['pdk-list']));
+  ipcMain.handle('pdk:scan', async (_event, input) => runProjectTool(pdkArgs('pdk-scan', input)));
+  ipcMain.handle('pdk:register', async (_event, input) => {
+    if (!input?.licenseAccepted) throw new Error('PDK registration requires license acceptance.');
+    return runProjectTool(pdkArgs('pdk-register', input));
+  });
+
   ipcMain.handle('project:choose-bridge-peer-root', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Select KiCad / 嘉立创 EDA project folder',

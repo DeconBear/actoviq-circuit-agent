@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/pdk-binding.schema.json",
+  "title": "Actoviq Portable PDK Binding",
+  "type": "object",
+  "required": ["schema", "pdk_ref"],
+  "properties": {
+    "schema": { "const": "actoviq.pdk-binding.v1" },
+    "pdk_ref": { "type": "string", "minLength": 1 },
+    "version": { "type": "string" },
+    "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "model_set": { "type": "string" },
+    "default_corner": { "type": "string" },
+    "corner_sweep": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "temperature_c": { "type": "number" },
+    "device_mapping": { "type": "string" }
+  },
+  "additionalProperties": false
+}

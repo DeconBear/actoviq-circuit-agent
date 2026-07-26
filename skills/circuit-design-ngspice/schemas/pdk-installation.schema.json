@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/pdk-installation.schema.json",
+  "title": "Actoviq Local PDK Installation",
+  "type": "object",
+  "required": ["schema", "installation_id", "logical_id", "name", "vendor", "process", "fingerprint", "root", "source_kind", "license", "views", "capabilities"],
+  "properties": {
+    "schema": { "const": "actoviq.pdk-installation.v1" },
+    "installation_id": { "type": "string", "minLength": 1 },
+    "logical_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "vendor": { "type": "string", "minLength": 1 },
+    "process": { "type": "string", "minLength": 1 },
+    "version": { "type": "string" },
+    "revision": { "type": "string" },
+    "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "root": { "type": "string", "minLength": 1 },
+    "source_kind": { "enum": ["open", "commercial"] },
+    "license": { "type": "string", "minLength": 1 },
+    "support_status": { "type": "string" },
+    "views": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } } },
+    "capabilities": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "probe_status": { "enum": ["available", "partial", "unavailable"] },
+    "diagnostics": { "type": "array", "items": { "type": "string" } },
+    "registered_at": { "type": "string" },
+    "license_accepted": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}
