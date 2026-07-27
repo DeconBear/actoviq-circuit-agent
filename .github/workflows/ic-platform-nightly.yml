@@ -19,6 +19,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: requirements-circuit.txt
       - run: sudo apt-get update
       - name: Install available IC tools
         run: |
