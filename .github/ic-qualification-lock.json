@@ -1,0 +1,21 @@
+{
+  "schema": "actoviq.ic-qualification-lock.v1",
+  "captured_at": "2026-07-27",
+  "open_pdks": {
+    "ihp-sg13g2": {
+      "repository": "https://github.com/IHP-GmbH/IHP-Open-PDK.git",
+      "revision": "22f2a25f1734796de3debbbf29cf697cbbc54081",
+      "required": true
+    },
+    "sky130": {
+      "repository": "https://github.com/google/skywater-pdk.git",
+      "revision": "7198cf647113f56041e02abf3eb623692820c5e1",
+      "required": false
+    },
+    "gf180mcu": {
+      "repository": "https://github.com/google/gf180mcu-pdk.git",
+      "revision": "de3240d7529a6970437ac3344820aaae7839f215",
+      "required": false
+    }
+  }
+}

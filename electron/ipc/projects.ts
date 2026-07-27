@@ -2621,9 +2621,6 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     if (relativeRoot.startsWith('..') || path.isAbsolute(relativeRoot)) {
       throw new Error('The active project must be inside the execution profile allowedRoots.');
     }
-    if (profile.target === 'ssh_linux') {
-      throw new Error('SSH execution requires the staged-run workflow; use a local profile until staging is configured.');
-    }
     const runId = `${timestampForId()}-${Math.random().toString(36).slice(2, 8)}`;
     const outputDirectory = path.resolve(root, 'build', 'licensed-eda', runId);
     await mkdir(outputDirectory, { recursive: true });

@@ -1,0 +1,2 @@
+# Runtime dependency used by the optional schemdraw renderer.
+schemdraw==0.22

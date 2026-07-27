@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, readFile } from 'node:fs/promises';
+import { access, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -38,6 +38,7 @@ export interface LicensedExecutionProfile {
   ssh?: {
     host: string;
     executable?: string;
+    scpExecutable?: string;
     remoteWorkingDirectory: string;
   };
   qualification: QualificationState;
@@ -152,8 +153,9 @@ function assertWithinRoots(target: string, roots: readonly string[], label: stri
 function sshPrepared(job: PreparedJob, profile: LicensedExecutionProfile): PreparedJob {
   if (!profile.ssh) throw new Error('ssh_linux profile requires ssh settings');
   if (!/^[A-Za-z0-9_.@-]+$/.test(profile.ssh.host)) throw new Error('Invalid SSH host');
-  if (!profile.ssh.remoteWorkingDirectory.startsWith('/') || /[\r\n\0]/.test(profile.ssh.remoteWorkingDirectory)) {
-    throw new Error('SSH working directory must be an absolute Linux path');
+  if (!/^\/[A-Za-z0-9_./-]+$/.test(profile.ssh.remoteWorkingDirectory)
+    || profile.ssh.remoteWorkingDirectory.split('/').includes('..')) {
+    throw new Error('SSH working directory must be a shell-safe absolute Linux path');
   }
   return {
     ...job,
@@ -174,11 +176,29 @@ function sshPrepared(job: PreparedJob, profile: LicensedExecutionProfile): Prepa
   };
 }
 
-function assertRemotePath(value: string, label: string): string {
-  if (!value.startsWith('/') || /[\r\n\0]/.test(value)) {
-    throw new Error(`${label} must be an absolute Linux path for ssh_linux`);
+function remotePath(root: string, ...parts: string[]): string {
+  const value = [root.replace(/\/+$/, ''), ...parts].join('/');
+  if (!/^\/[A-Za-z0-9_./-]+$/.test(value) || value.split('/').includes('..')) {
+    throw new Error(`Unsafe staged SSH path: ${value}`);
   }
   return value;
+}
+
+interface SshStaging {
+  host: string;
+  remoteRunRoot: string;
+  remoteInputPath: string;
+  remoteOutputDirectory: string;
+  localInputPath: string;
+  localOutputDirectory: string;
+}
+
+function scpExecutable(sshExecutable: string): string {
+  const name = path.basename(sshExecutable).toLowerCase();
+  if (path.isAbsolute(sshExecutable) && (name === 'ssh' || name === 'ssh.exe')) {
+    return path.resolve(path.dirname(sshExecutable), process.platform === 'win32' ? 'scp.exe' : 'scp');
+  }
+  return 'scp';
 }
 
 function parseMeasurements(text: string): Array<{ name: string; value: number }> {
@@ -249,14 +269,33 @@ export class LicensedEdaProvider implements ToolProvider<LicensedEdaJob> {
 
   async prepare(job: LicensedEdaJob): Promise<PreparedJob> {
     const cwd = assertWithinRoots(job.cwd, this.profile.allowedRoots, 'working directory');
-    const inputPath = this.target === 'ssh_linux'
-      ? assertRemotePath(job.inputPath, 'input')
-      : assertWithinRoots(job.inputPath, this.profile.allowedRoots, 'input');
-    const outputDirectory = this.target === 'ssh_linux'
-      ? assertRemotePath(job.outputDirectory, 'output')
-      : assertWithinRoots(job.outputDirectory, this.profile.allowedRoots, 'output');
-    if (this.target !== 'ssh_linux') await access(inputPath);
-    const normalized = { ...job, cwd, inputPath, outputDirectory };
+    const inputPath = assertWithinRoots(job.inputPath, this.profile.allowedRoots, 'input');
+    const outputDirectory = assertWithinRoots(job.outputDirectory, this.profile.allowedRoots, 'output');
+    await access(inputPath);
+    if (job.top && !/^[A-Za-z_][A-Za-z0-9_.$-]*$/.test(job.top)) {
+      throw new Error('EDA top contains unsupported characters');
+    }
+    let normalized = { ...job, cwd, inputPath, outputDirectory };
+    let sshStaging: SshStaging | undefined;
+    if (this.target === 'ssh_linux') {
+      if (!this.profile.ssh) throw new Error('ssh_linux profile requires ssh settings');
+      const safeId = job.id.replace(/[^A-Za-z0-9_.-]/g, '-');
+      const suffix = path.extname(inputPath).replace(/[^A-Za-z0-9.]/g, '') || '.in';
+      const remoteRunRoot = remotePath(this.profile.ssh.remoteWorkingDirectory, safeId);
+      sshStaging = {
+        host: this.profile.ssh.host,
+        remoteRunRoot,
+        remoteInputPath: remotePath(remoteRunRoot, `input${suffix}`),
+        remoteOutputDirectory: remotePath(remoteRunRoot, 'results'),
+        localInputPath: inputPath,
+        localOutputDirectory: outputDirectory,
+      };
+      normalized = {
+        ...normalized,
+        inputPath: sshStaging.remoteInputPath,
+        outputDirectory: sshStaging.remoteOutputDirectory,
+      };
+    }
     const environment = sanitizeEnvironment(
       this.profile.environment ?? {},
       this.profile.allowedEnvironmentKeys ?? this.definition.environmentKeys,
@@ -267,15 +306,66 @@ export class LicensedEdaProvider implements ToolProvider<LicensedEdaJob> {
       args: this.definition.prepareArgs(normalized),
       env: this.target === 'ssh_linux' ? {} : environment,
       sensitiveValues: this.target === 'ssh_linux' ? [] : Object.values(environment),
+      metadata: {
+        ...job.metadata,
+        ...(sshStaging ? { sshStaging } : {}),
+      },
     };
   }
 
-  run(job: PreparedJob, signal?: AbortSignal): Promise<ToolExecution> {
-    return runPreparedTool(
-      this.target === 'ssh_linux' ? sshPrepared(job, this.profile) : job,
-      this.target,
-      signal,
-    );
+  async run(job: PreparedJob, signal?: AbortSignal): Promise<ToolExecution> {
+    if (this.target !== 'ssh_linux') return runPreparedTool(job, this.target, signal);
+    const staging = job.metadata?.sshStaging as SshStaging | undefined;
+    if (!staging || !this.profile.ssh) throw new Error('Prepared SSH job is missing staging metadata');
+    const ssh = this.profile.ssh.executable || 'ssh';
+    const scp = this.profile.ssh.scpExecutable || scpExecutable(ssh);
+    const base = {
+      id: `${job.id}-stage`,
+      kind: 'ssh_stage',
+      cwd: this.profile.allowedRoots[0]!,
+      timeoutMs: job.timeoutMs,
+      env: {},
+      sensitiveValues: [],
+    };
+    const create = await runPreparedTool({
+      ...base,
+      executable: ssh,
+      args: [
+        '-o', 'BatchMode=yes',
+        staging.host,
+        '--',
+        'mkdir', '-p', staging.remoteRunRoot, staging.remoteOutputDirectory,
+      ],
+    }, this.target, signal);
+    if (create.code !== 0) return create;
+    const upload = await runPreparedTool({
+      ...base,
+      executable: scp,
+      args: ['-q', staging.localInputPath, `${staging.host}:${staging.remoteInputPath}`],
+    }, this.target, signal);
+    if (upload.code !== 0) return upload;
+    const execution = await runPreparedTool(sshPrepared(job, this.profile), this.target, signal);
+    if (execution.code !== 0) return execution;
+    await mkdir(staging.localOutputDirectory, { recursive: true });
+    const download = await runPreparedTool({
+      ...base,
+      id: `${job.id}-retrieve`,
+      executable: scp,
+      args: ['-q', '-r', `${staging.host}:${staging.remoteOutputDirectory}/.`, staging.localOutputDirectory],
+    }, this.target, signal);
+    if (download.code !== 0) {
+      return {
+        ...download,
+        stdout: [execution.stdout, download.stdout].filter(Boolean).join('\n'),
+        stderr: [execution.stderr, 'remote artifact retrieval failed', download.stderr].filter(Boolean).join('\n'),
+      };
+    }
+    return {
+      ...execution,
+      stdout: [execution.stdout, download.stdout].filter(Boolean).join('\n'),
+      stderr: [execution.stderr, download.stderr].filter(Boolean).join('\n'),
+      finishedAt: download.finishedAt,
+    };
   }
 
   async parse(job: LicensedEdaJob, execution: ToolExecution): Promise<VerificationResult> {

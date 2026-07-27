@@ -27,7 +27,7 @@
       "minItems": 1,
       "items": { "type": "string", "minLength": 1 }
     },
-    "allowedEnvironmentKeys": {
+    "environmentKeys": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 }
     },
@@ -37,6 +37,7 @@
       "properties": {
         "host": { "type": "string", "pattern": "^[A-Za-z0-9_.@-]+$" },
         "executable": { "type": "string", "minLength": 1 },
+        "scpExecutable": { "type": "string", "minLength": 1 },
         "remoteWorkingDirectory": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": false

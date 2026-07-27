@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Produce an honest, machine-readable open-tool qualification record."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+TOOLS = {
+    "ngspice": (["ngspice", "--version"],),
+    "xyce": (["Xyce", "-v"], ["xyce", "-v"]),
+    "openvaf": (["openvaf", "--version"],),
+    "xschem": (["xschem", "--version"],),
+    "klayout": (["klayout", "-v"],),
+    "magic": (["magic", "--version"],),
+    "netgen": (["netgen", "-version"],),
+    "iverilog": (["iverilog", "-V"],),
+    "yosys": (["yosys", "-V"],),
+    "openroad": (["openroad", "-version"],),
+}
+
+
+def probe(candidates: tuple[list[str], ...]) -> dict[str, object]:
+    for command in candidates:
+        executable = shutil.which(command[0])
+        if not executable:
+            continue
+        completed = subprocess.run(
+            [executable, *command[1:]],
+            shell=False,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        text = "\n".join((completed.stdout, completed.stderr)).strip()
+        return {
+            "available": completed.returncode == 0,
+            "executable": executable,
+            "version": text.splitlines()[0][:240] if text else "",
+            "exit_code": completed.returncode,
+        }
+    return {"available": False, "executable": "", "version": "", "exit_code": None}
+
+
+def smoke(tools: dict[str, dict[str, object]]) -> dict[str, object]:
+    results: dict[str, object] = {}
+    with tempfile.TemporaryDirectory(prefix="actoviq-tool-qualification-") as temporary:
+        root = Path(temporary)
+        if tools["ngspice"]["available"]:
+            deck = root / "smoke.cir"
+            deck.write_text("smoke\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n", encoding="utf-8")
+            completed = subprocess.run(
+                [str(tools["ngspice"]["executable"]), "-b", str(deck)],
+                cwd=root,
+                shell=False,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            results["ngspice"] = {"passed": completed.returncode == 0}
+        if tools["iverilog"]["available"]:
+            source = root / "smoke.v"
+            output = root / "smoke.vvp"
+            source.write_text("module smoke(input a, output y); assign y=a; endmodule\n", encoding="utf-8")
+            completed = subprocess.run(
+                [str(tools["iverilog"]["executable"]), "-g2005", "-s", "smoke", "-o", str(output), str(source)],
+                cwd=root,
+                shell=False,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            results["iverilog"] = {"passed": completed.returncode == 0 and output.is_file()}
+        if tools["yosys"]["available"]:
+            source = root / "smoke.v"
+            if not source.is_file():
+                source.write_text("module smoke(input a, output y); assign y=a; endmodule\n", encoding="utf-8")
+            completed = subprocess.run(
+                [str(tools["yosys"]["executable"]), "-q", "-p", f"read_verilog {source}; hierarchy -top smoke; synth"],
+                cwd=root,
+                shell=False,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            results["yosys"] = {"passed": completed.returncode == 0}
+    return results
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--require", default="")
+    args = parser.parse_args()
+    tools = {name: probe(commands) for name, commands in TOOLS.items()}
+    smoke_results = smoke(tools)
+    required = [value.strip() for value in args.require.split(",") if value.strip()]
+    missing = [name for name in required if not tools.get(name, {}).get("available")]
+    failed_smoke = [
+        name for name in required
+        if name in smoke_results and not bool(smoke_results[name].get("passed"))
+    ]
+    passed = (not missing and not failed_smoke) if required else None
+    record = {
+        "schema": "actoviq.ic-tool-qualification.v1",
+        "qualified_at": datetime.now(timezone.utc).isoformat(),
+        "platform": sys.platform,
+        "tools": tools,
+        "smoke": smoke_results,
+        "required": required,
+        "passed": passed,
+        "missing": missing,
+        "failed_smoke": failed_smoke,
+    }
+    target = Path(args.output).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({"passed": record["passed"], "output": str(target)}))
+    return 0 if passed is not False else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

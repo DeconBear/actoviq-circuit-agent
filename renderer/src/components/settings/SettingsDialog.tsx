@@ -933,6 +933,7 @@ export function SettingsDialog({ onClose }: Props) {
                         host: value,
                         remoteWorkingDirectory: executionDraft.ssh?.remoteWorkingDirectory ?? '/work/actoviq',
                         ...(executionDraft.ssh?.executable ? { executable: executionDraft.ssh.executable } : {}),
+                        ...(executionDraft.ssh?.scpExecutable ? { scpExecutable: executionDraft.ssh.scpExecutable } : {}),
                       })}
                       placeholder="eda-user@workstation"
                       testId="execution-profile-ssh-host"
@@ -944,9 +945,34 @@ export function SettingsDialog({ onClose }: Props) {
                         host: executionDraft.ssh?.host ?? '',
                         remoteWorkingDirectory: value,
                         ...(executionDraft.ssh?.executable ? { executable: executionDraft.ssh.executable } : {}),
+                        ...(executionDraft.ssh?.scpExecutable ? { scpExecutable: executionDraft.ssh.scpExecutable } : {}),
                       })}
                       placeholder="/work/actoviq"
                       testId="execution-profile-ssh-root"
+                    />
+                    <Field
+                      label="SSH client (optional)"
+                      value={executionDraft.ssh?.executable ?? ''}
+                      onChange={(value) => updateExecutionDraft('ssh', {
+                        host: executionDraft.ssh?.host ?? '',
+                        remoteWorkingDirectory: executionDraft.ssh?.remoteWorkingDirectory ?? '/work/actoviq',
+                        ...(value ? { executable: value } : {}),
+                        ...(executionDraft.ssh?.scpExecutable ? { scpExecutable: executionDraft.ssh.scpExecutable } : {}),
+                      })}
+                      placeholder="ssh"
+                      testId="execution-profile-ssh-executable"
+                    />
+                    <Field
+                      label="SCP client (optional)"
+                      value={executionDraft.ssh?.scpExecutable ?? ''}
+                      onChange={(value) => updateExecutionDraft('ssh', {
+                        host: executionDraft.ssh?.host ?? '',
+                        remoteWorkingDirectory: executionDraft.ssh?.remoteWorkingDirectory ?? '/work/actoviq',
+                        ...(executionDraft.ssh?.executable ? { executable: executionDraft.ssh.executable } : {}),
+                        ...(value ? { scpExecutable: value } : {}),
+                      })}
+                      placeholder="scp"
+                      testId="execution-profile-scp-executable"
                     />
                   </>
                 )}

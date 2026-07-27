@@ -28,6 +28,7 @@ export interface ResolvedExecutionProfile {
   ssh?: {
     host: string;
     executable?: string;
+    scpExecutable?: string;
     remoteWorkingDirectory: string;
   };
   qualification: QualificationState;
@@ -56,6 +57,7 @@ export interface StoredExecutionProfile {
   ssh?: {
     host: string;
     executable?: string;
+    scpExecutable?: string;
     remoteWorkingDirectory: string;
   };
   qualification: QualificationState;
@@ -114,15 +116,19 @@ export function validateStoredExecutionProfile(input: unknown): StoredExecutionP
     const host = String(raw.ssh?.host ?? '').trim();
     const remoteWorkingDirectory = String(raw.ssh?.remoteWorkingDirectory ?? '').trim();
     const sshExecutable = String(raw.ssh?.executable ?? '').trim();
+    const scpExecutable = String(raw.ssh?.scpExecutable ?? '').trim();
     if (!/^[A-Za-z0-9_.@-]+$/.test(host)) throw new Error('SSH host is invalid');
-    if (!remoteWorkingDirectory.startsWith('/') || /[\r\n\0]/.test(remoteWorkingDirectory)) {
-      throw new Error('SSH working directory must be an absolute Linux path');
+    if (!/^\/[A-Za-z0-9_./-]+$/.test(remoteWorkingDirectory)
+      || remoteWorkingDirectory.split('/').includes('..')) {
+      throw new Error('SSH working directory must be a shell-safe absolute Linux path');
     }
     if (/[\r\n\0]/.test(sshExecutable)) throw new Error('SSH executable contains unsupported characters');
+    if (/[\r\n\0]/.test(scpExecutable)) throw new Error('SCP executable contains unsupported characters');
     ssh = {
       host,
       remoteWorkingDirectory,
       ...(sshExecutable ? { executable: sshExecutable } : {}),
+      ...(scpExecutable ? { scpExecutable } : {}),
     };
   }
   return {

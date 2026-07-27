@@ -1,0 +1,64 @@
+name: IC platform nightly qualification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 19 * * 1'
+
+jobs:
+  open-pdk-qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: sudo apt-get update
+      - name: Install available IC tools
+        run: |
+          packages="ngspice iverilog yosys xschem klayout magic netgen-lvs xyce"
+          available=""
+          for package in $packages; do
+            if apt-cache show "$package" >/dev/null 2>&1; then available="$available $package"; fi
+          done
+          sudo apt-get install -y $available
+      - run: python -m pip install --requirement requirements-circuit.txt
+      - run: npm ci
+      - run: npm run test:ic-platform
+      - name: Checkout locked PDK source revisions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess
+          lock = json.loads(pathlib.Path(".github/ic-qualification-lock.json").read_text())
+          root = pathlib.Path("output/pdks")
+          root.mkdir(parents=True, exist_ok=True)
+          for adapter, item in lock["open_pdks"].items():
+              target = root / adapter
+              subprocess.run(["git", "init", str(target)], check=True)
+              subprocess.run(["git", "-C", str(target), "remote", "add", "origin", item["repository"]], check=True)
+              subprocess.run(["git", "-C", str(target), "fetch", "--depth", "1", "origin", item["revision"]], check=True)
+              subprocess.run(["git", "-C", str(target), "checkout", "--detach", "FETCH_HEAD"], check=True)
+              subprocess.run(["git", "-C", str(target), "submodule", "update", "--init", "--recursive", "--depth", "1"], check=True)
+          PY
+      - name: Scan locked PDKs without registering or copying content
+        shell: bash
+        run: |
+          mkdir -p output/qualification
+          for adapter in ihp-sg13g2 sky130 gf180mcu; do
+            python skills/circuit-design-ngspice/scripts/circuit_project.py pdk-scan \
+              --root "output/pdks/$adapter" --adapter "$adapter" \
+              > "output/qualification/$adapter-scan.json"
+          done
+      - run: python scripts/open-tool-qualification.py --require ngspice,iverilog,yosys --output output/qualification/nightly-tools.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-ic-qualification
+          path: output/qualification/

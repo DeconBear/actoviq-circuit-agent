@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/ic-tool-qualification.schema.json",
+  "title": "Actoviq IC Tool Qualification",
+  "type": "object",
+  "required": ["schema", "qualified_at", "platform", "tools", "smoke", "required", "passed"],
+  "properties": {
+    "schema": { "const": "actoviq.ic-tool-qualification.v1" },
+    "qualified_at": { "type": "string", "minLength": 1 },
+    "platform": { "type": "string", "minLength": 1 },
+    "tools": { "type": "object" },
+    "smoke": { "type": "object" },
+    "required": { "type": "array", "items": { "type": "string" } },
+    "passed": { "type": ["boolean", "null"] },
+    "missing": { "type": "array", "items": { "type": "string" } },
+    "failed_smoke": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

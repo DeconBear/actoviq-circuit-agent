@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/pdk-install-receipt.schema.json",
+  "title": "Actoviq Open PDK Install Receipt",
+  "type": "object",
+  "required": [
+    "schema",
+    "adapter_id",
+    "source_url",
+    "resolved_revision",
+    "destination",
+    "license",
+    "license_accepted",
+    "installed_at",
+    "log"
+  ],
+  "properties": {
+    "schema": { "const": "actoviq.pdk-install-receipt.v1" },
+    "adapter_id": { "enum": ["ihp-sg13g2", "sky130", "gf180mcu"] },
+    "source_url": { "type": "string", "minLength": 1 },
+    "requested_revision": { "type": "string" },
+    "resolved_revision": { "type": "string", "minLength": 1 },
+    "destination": { "type": "string", "minLength": 1 },
+    "license": { "type": "string", "minLength": 1 },
+    "license_accepted": { "const": true },
+    "installed_at": { "type": "string", "minLength": 1 },
+    "log": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

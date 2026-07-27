@@ -93,6 +93,7 @@ export interface StoredExecutionProfile {
   ssh?: {
     host: string;
     executable?: string;
+    scpExecutable?: string;
     remoteWorkingDirectory: string;
   };
   qualification: 'configured' | 'unverified' | 'native_verified';

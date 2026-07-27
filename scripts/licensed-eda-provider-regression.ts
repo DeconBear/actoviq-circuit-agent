@@ -168,13 +168,21 @@ async function main(): Promise<void> {
   const sshProvider = new LicensedEdaProvider(sshProfile, definition);
   const sshPrepared = await sshProvider.prepare({
     ...job,
-    inputPath: '/work/actoviq/deck.cir',
-    outputDirectory: '/work/actoviq/results',
+    inputPath: deck,
+    outputDirectory: output,
   });
   assert.equal(sshPrepared.env && Object.keys(sshPrepared.env).length, 0);
+  assert.equal(
+    (sshPrepared.metadata?.sshStaging as { remoteInputPath: string }).remoteInputPath,
+    '/work/actoviq/spectre-run/input.cir',
+  );
   await assert.rejects(
-    sshProvider.prepare({ ...job, inputPath: 'relative.cir', outputDirectory: '/tmp/out' }),
-    /absolute Linux path/,
+    sshProvider.prepare({
+      ...job,
+      inputPath: path.resolve(root, '..', 'outside.cir'),
+      outputDirectory: output,
+    }),
+    /outside the execution profile allowlist/,
   );
 
   process.stdout.write('licensed EDA provider regression passed\n');
