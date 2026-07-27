@@ -2104,6 +2104,14 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
+  ipcMain.handle('pdk:choose-install-destination', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select an empty folder for the open PDK source',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
   ipcMain.handle('pdk:choose-mapping-pack', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Select commercial PDK mapping pack',
@@ -2130,6 +2138,18 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   };
 
   ipcMain.handle('pdk:list', async () => runProjectTool(['pdk-list']));
+  ipcMain.handle('pdk:install-open', async (_event, input) => {
+    if (!input?.licenseAccepted) throw new Error('Open PDK installation requires license acceptance.');
+    if (input.adapter === 'commercial') throw new Error('Commercial PDKs must be imported in place.');
+    const args = [
+      'pdk-install-open',
+      '--adapter', String(input.adapter),
+      '--destination', String(input.destination),
+      '--license-accepted',
+    ];
+    if (input.revision) args.push('--revision', String(input.revision));
+    return runProjectTool(args, { timeoutMs: 3_700_000 });
+  });
   ipcMain.handle('pdk:scan', async (_event, input) => runProjectTool(pdkArgs('pdk-scan', input)));
   ipcMain.handle('pdk:register', async (_event, input) => {
     if (!input?.licenseAccepted) throw new Error('PDK registration requires license acceptance.');
@@ -2171,6 +2191,21 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       ]))
     ));
   }
+  ipcMain.handle(
+    'project:xschem-validate',
+    async (_event, projectId: string, moduleId: string, peerFile: string) => {
+      assertModuleId(moduleId);
+      const root = await resolveProjectRoot(projectId);
+      const runRoot = path.resolve(root, 'build', 'xschem-validation', moduleId, String(Date.now()));
+      return runProjectTool([
+        'xschem-validate',
+        '--peer-file', peerFile,
+        '--run-root', runRoot,
+        '--project-root', root,
+        '--module-id', moduleId,
+      ]);
+    },
+  );
 
   ipcMain.handle('project:choose-bridge-peer-root', async () => {
     const result = await dialog.showOpenDialog({

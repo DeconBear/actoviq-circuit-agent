@@ -70,6 +70,7 @@ from analog_ic import (
     validate_profile as validate_analog_ic_profile,
 )
 from pdk_registry import (
+    install_open_pdk,
     load_registry as load_pdk_registry,
     register_installation as register_pdk_installation,
     scan_installation as scan_pdk_installation,
@@ -6292,12 +6293,28 @@ def build_parser() -> argparse.ArgumentParser:
     xschem_validate_parser.add_argument("--peer-file", required=True)
     xschem_validate_parser.add_argument("--run-root", required=True)
     xschem_validate_parser.add_argument("--xschem-bin", default="")
+    xschem_validate_parser.add_argument("--project-root", default="")
+    xschem_validate_parser.add_argument("--module-id", default="")
 
     pdk_list_parser = subparsers.add_parser(
         "pdk-list",
         help="List local-only registered PDK installations.",
     )
     pdk_list_parser.add_argument("--registry-path", default="")
+
+    pdk_install_parser = subparsers.add_parser(
+        "pdk-install-open",
+        help="Acquire an open PDK source tree after explicit user license acceptance.",
+    )
+    pdk_install_parser.add_argument(
+        "--adapter",
+        choices=["ihp-sg13g2", "sky130", "gf180mcu"],
+        required=True,
+    )
+    pdk_install_parser.add_argument("--destination", required=True)
+    pdk_install_parser.add_argument("--revision", default="")
+    pdk_install_parser.add_argument("--git-bin", default="")
+    pdk_install_parser.add_argument("--license-accepted", action="store_true")
 
     for name in ("pdk-scan", "pdk-register"):
         pdk_parser = subparsers.add_parser(
@@ -6540,6 +6557,17 @@ def main() -> int:
         elif args.command == "pdk-list":
             registry = load_pdk_registry(args.registry_path or None)
             result = {"ok": True, **registry}
+        elif args.command == "pdk-install-open":
+            result = {
+                "ok": True,
+                "receipt": install_open_pdk(
+                    args.adapter,
+                    args.destination,
+                    revision=args.revision,
+                    license_accepted=bool(args.license_accepted),
+                    git_bin=args.git_bin,
+                ),
+            }
         elif args.command in {"pdk-scan", "pdk-register"}:
             installation = scan_pdk_installation(
                 args.root,
@@ -6632,10 +6660,19 @@ def main() -> int:
             })
             result = {**sync_result, "revision": applied["revision"], "erc": applied["erc"]}
         elif args.command == "xschem-validate":
+            source_module = None
+            if args.project_root or args.module_id:
+                if not args.project_root or not args.module_id:
+                    raise ValueError("Xschem connectivity validation requires both project root and module id")
+                _, source_modules = load_project(Path(args.project_root).resolve())
+                source_module = source_modules.get(args.module_id)
+                if source_module is None:
+                    raise ValueError(f"unknown module: {args.module_id}")
             result = validate_xschem_headless(
                 Path(args.peer_file),
                 Path(args.run_root),
                 args.xschem_bin,
+                source_module,
             )
         elif args.command in {"create", "create-demo"}:
             resolved = resolve_projects_root(

@@ -413,8 +413,21 @@ const electronAPI = {
     return ipcRenderer.invoke('pdk:choose-mapping-pack');
   },
 
+  choosePdkInstallDestination(): Promise<string | null> {
+    return ipcRenderer.invoke('pdk:choose-install-destination');
+  },
+
   listPdkInstallations(): Promise<unknown> {
     return ipcRenderer.invoke('pdk:list');
+  },
+
+  installOpenPdk(input: {
+    adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu';
+    destination: string;
+    revision?: string;
+    licenseAccepted: boolean;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('pdk:install-open', input);
   },
 
   scanPdkInstallation(input: {
@@ -460,6 +473,10 @@ const electronAPI = {
 
   takeXschemOwnership(projectId: string, moduleId: string): Promise<unknown> {
     return ipcRenderer.invoke('project:xschem-take-ownership', projectId, moduleId);
+  },
+
+  validateXschemPeer(projectId: string, moduleId: string, peerFile: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:xschem-validate', projectId, moduleId, peerFile);
   },
 
   chooseEdaBridgePeerRoot(): Promise<string | null> {

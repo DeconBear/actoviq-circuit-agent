@@ -68,6 +68,7 @@ export function SettingsDialog({ onClose }: Props) {
       root: string;
       adapter: typeof pdkAdapter;
       mappingFile?: string;
+      revision?: string;
     };
     installation: Record<string, unknown>;
   } | null>(null);
@@ -358,6 +359,41 @@ export function SettingsDialog({ onClose }: Props) {
       setPdkImportStatus(`Scan failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [pdkAdapter]);
+
+  const handleOpenPdkInstall = useCallback(async () => {
+    if (pdkAdapter === 'commercial') {
+      setPdkImportStatus('Commercial PDKs must be imported in place and are never downloaded by Actoviq.');
+      return;
+    }
+    if (!pdkLicenseAccepted) {
+      setPdkImportStatus('Review and accept the open PDK license before acquiring its source.');
+      return;
+    }
+    const destination = await window.electronAPI.choosePdkInstallDestination();
+    if (!destination) return;
+    setPdkImportStatus('Acquiring the open PDK source and submodules. This can take several minutes...');
+    setPendingPdk(null);
+    try {
+      const installed = await window.electronAPI.installOpenPdk({
+        adapter: pdkAdapter,
+        destination,
+        licenseAccepted: true,
+      });
+      const revision = String(installed.receipt?.resolved_revision ?? '');
+      const scanned = await window.electronAPI.scanPdkInstallation({
+        root: destination,
+        adapter: pdkAdapter,
+        revision,
+      });
+      setPendingPdk({
+        input: { root: destination, adapter: pdkAdapter, revision },
+        installation: scanned.installation ?? {},
+      });
+      setPdkImportStatus('Source acquired. Review discovered capabilities, then confirm local registration.');
+    } catch (err: unknown) {
+      setPdkImportStatus(`Installation failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [pdkAdapter, pdkLicenseAccepted]);
 
   const confirmPdkImport = useCallback(async () => {
     if (!pendingPdk || !pdkLicenseAccepted) return;
@@ -696,6 +732,18 @@ export function SettingsDialog({ onClose }: Props) {
                   >
                     Scan local PDK
                   </button>
+                  <button
+                    type="button"
+                    className="av-btn av-btn--secondary"
+                    onClick={() => { void handleOpenPdkInstall(); }}
+                    disabled={pdkAdapter === 'commercial' || !pdkLicenseAccepted}
+                    title={pdkAdapter === 'commercial'
+                      ? 'Commercial PDK files must remain in the user-provided installation.'
+                      : 'Clone the official open-PDK source into an empty local folder.'}
+                    data-testid="install-open-pdk"
+                  >
+                    Acquire open PDK
+                  </button>
                 </div>
                 {pendingPdk ? (
                   <div className="av-form-status" data-testid="pdk-scan-review">
@@ -721,6 +769,16 @@ export function SettingsDialog({ onClose }: Props) {
                         {Object.values(
                           (pendingPdk.installation.capabilities ?? {}) as Record<string, unknown>,
                         ).filter(Boolean).length}
+                      </strong>
+                    </div>
+                    <div className="av-form-meta">
+                      <span>Mapped devices</span>
+                      <strong>
+                        {Array.isArray(
+                          (pendingPdk.installation.device_catalog as { devices?: unknown[] } | undefined)?.devices,
+                        )
+                          ? (pendingPdk.installation.device_catalog as { devices: unknown[] }).devices.length
+                          : 0}
                       </strong>
                     </div>
                     <p className="av-form-hint">

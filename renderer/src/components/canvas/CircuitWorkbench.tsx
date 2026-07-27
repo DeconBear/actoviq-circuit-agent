@@ -70,6 +70,19 @@ interface EdaExportFormState {
   strictLayout: boolean;
 }
 
+interface XschemValidationResult {
+  status?: 'passed' | 'failed' | 'cancelled';
+  diagnostics?: string[];
+  metadata?: {
+    connectivity_comparison?: {
+      ok?: boolean;
+      compared_instance_count?: number;
+      expected_instance_count?: number;
+      diagnostics?: string[];
+    } | null;
+  };
+}
+
 const BOARD_MARGIN = 1200;
 
 const PROJECT_KIND_OPTIONS: Array<{ value: ProjectKind; label: string }> = [
@@ -439,6 +452,7 @@ export function CircuitWorkbench({
   const [lcscBindComponentId, setLcscBindComponentId] = useState('');
   const [lcscSearching, setLcscSearching] = useState(false);
   const [xschemConflicts, setXschemConflicts] = useState<XschemSyncConflict[]>([]);
+  const [xschemValidation, setXschemValidation] = useState<XschemValidationResult | null>(null);
   const [simulationProfiles, setSimulationProfiles] = useState<StoredExecutionProfile[]>([]);
 
   const project = bundle?.project ?? null;
@@ -512,6 +526,7 @@ export function CircuitWorkbench({
   useEffect(() => {
     setNoteDraft(selectedRef?.notes ?? '');
     setModuleSimulation(null);
+    setXschemValidation(null);
   }, [selectedRef?.id, selectedRef?.notes]);
 
   useEffect(() => {
@@ -1234,6 +1249,31 @@ export function CircuitWorkbench({
       }
     } finally {
       if (isActiveProject(operationProjectId)) setBusy(false);
+    }
+  }
+
+  async function validateXschem(): Promise<void> {
+    const peerFile = selectedModule?.schematic_peer?.peer_file;
+    if (!currentProjectId || !activeModuleId || !peerFile || busy) return;
+    setBusy(true);
+    setError('');
+    setXschemValidation(null);
+    setNotice('Generating Xschem reference netlist and comparing connectivity...');
+    try {
+      const result = await window.electronAPI.validateXschemPeer(
+        currentProjectId,
+        activeModuleId,
+        peerFile,
+      ) as XschemValidationResult;
+      setXschemValidation(result);
+      setNotice(result.status === 'passed'
+        ? 'Xschem reference connectivity matches the Actoviq module.'
+        : 'Xschem reference connectivity differs; review diagnostics below.');
+    } catch (validationError) {
+      setError(validationError instanceof Error ? validationError.message : String(validationError));
+      setNotice('');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -2294,8 +2334,10 @@ export function CircuitWorkbench({
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
               onProbe={(probe) => openSimulationProbe(selectedRef.id, probe)}
               xschemConflicts={xschemConflicts}
+              xschemValidation={xschemValidation}
               onXschemMode={linkXschemMode}
               onXschemSync={syncXschem}
+              onXschemValidate={validateXschem}
             />
           ) : null}
         </div>
@@ -2725,8 +2767,10 @@ function ModuleSchematic({
   onResetLayout,
   onProbe,
   xschemConflicts,
+  xschemValidation,
   onXschemMode,
   onXschemSync,
+  onXschemValidate,
 }: {
   module: CircuitModuleRef;
   moduleData?: CircuitModule;
@@ -2743,8 +2787,10 @@ function ModuleSchematic({
   onResetLayout: (itemIds: string[]) => Promise<void>;
   onProbe: (probe: SchematicProbeSelection) => void;
   xschemConflicts: XschemSyncConflict[];
+  xschemValidation: XschemValidationResult | null;
   onXschemMode: (mode: 'native' | 'bridge' | 'external') => Promise<void>;
   onXschemSync: (action: 'push' | 'pull' | 'take-ownership') => Promise<void>;
+  onXschemValidate: () => Promise<void>;
 }) {
   const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
   const [editLayout, setEditLayout] = useState(false);
@@ -3165,8 +3211,36 @@ function ModuleSchematic({
               </button>
             </>
           ) : null}
+          {moduleData?.schematic_peer?.peer_file ? (
+            <button
+              type="button"
+              style={styles.secondaryButton}
+              onClick={() => void onXschemValidate()}
+              disabled={busy}
+              data-testid="xschem-validate-connectivity"
+            >
+              Validate connectivity
+            </button>
+          ) : null}
         </div>
       </div>
+      {xschemValidation ? (
+        <div
+          className={`av-form-status${xschemValidation.status === 'passed' ? '' : ' av-form-status--error'}`}
+          data-testid="xschem-validation-result"
+        >
+          <strong>Reference netlist: {xschemValidation.status ?? 'unknown'}</strong>
+          {xschemValidation.metadata?.connectivity_comparison ? (
+            <div>
+              Compared {xschemValidation.metadata.connectivity_comparison.compared_instance_count ?? 0}
+              /{xschemValidation.metadata.connectivity_comparison.expected_instance_count ?? 0} instances
+            </div>
+          ) : null}
+          {(xschemValidation.diagnostics ?? []).map((diagnostic, index) => (
+            <div key={`${diagnostic}-${index}`}>{diagnostic}</div>
+          ))}
+        </div>
+      ) : null}
       {xschemConflicts.length > 0 ? (
         <div className="av-form-status av-form-status--error" data-testid="xschem-conflict-review">
           <strong>Sync stopped for review</strong>

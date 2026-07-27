@@ -17,6 +17,7 @@ sys.path.insert(0, str(SKILL_SCRIPTS))
 from analog_ic import PROFILE_SCHEMA_V2, audit_project, validate_profile  # noqa: E402
 from pdk_registry import (  # noqa: E402
     BINDING_SCHEMA,
+    install_open_pdk,
     load_registry,
     register_installation,
     resolve_binding,
@@ -44,6 +45,11 @@ def main() -> int:
         assert scanned["capabilities"]["model_library"]
         assert scanned["capabilities"]["xschem"]
         assert scanned["capabilities"]["klayout"]
+        assert scanned["device_catalog"]["schema"] == "actoviq.pdk-device-catalog.v1"
+        assert {
+            device["device_id"] for device in scanned["device_catalog"]["devices"]
+        } == {"nmos", "pmos"}
+        assert scanned["device_catalog"]["devices"][0]["spice"]["pin_order"] == ["D", "G", "S", "B"]
         assert not Path(scanned["views"]["model_library"][0]).is_absolute()
         assert not registry.exists()
 
@@ -116,10 +122,43 @@ def main() -> int:
             "process": "N1",
             "license": "proprietary",
             "views": {"model_library": ["models/*.scs"], "klayout": ["klayout"]},
+            "devices": [{
+                "device_id": "nmos-core",
+                "pins": ["D", "G", "S", "B"],
+                "spice": {"model": "nmos_core", "pin_order": ["D", "G", "S", "B"]},
+                "views": {"generic_fallback": "mos4"},
+            }],
         }), encoding="utf-8")
         commercial_scan = scan_installation(commercial, "commercial", mapping_file=mapping)
         assert commercial_scan["source_kind"] == "commercial"
         assert commercial_scan["capabilities"]["model_library"]
+        assert commercial_scan["device_catalog"]["devices"][0]["device_id"] == "nmos-core"
+
+        fake_git = root / "fake_git.py"
+        fake_git.write_text(
+            "import pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "if 'clone' in args:\n"
+            "    target = pathlib.Path(args[-1]); target.mkdir(parents=True)\n"
+            "    (target / 'LICENSE').write_text('synthetic Apache license', encoding='utf-8')\n"
+            "elif 'rev-parse' in args:\n"
+            "    print('0123456789abcdef0123456789abcdef01234567')\n",
+            encoding="utf-8",
+        )
+        acquired = install_open_pdk(
+            "ihp-sg13g2",
+            root / "acquired-ihp",
+            revision="test-revision",
+            license_accepted=True,
+            git_bin=str(fake_git),
+        )
+        assert acquired["source_url"].endswith("/IHP-Open-PDK.git")
+        assert acquired["resolved_revision"] == "0123456789abcdef0123456789abcdef01234567"
+        assert (root / "acquired-ihp" / ".actoviq-install.json").is_file()
+        acquired_scan = scan_installation(root / "acquired-ihp", "ihp-sg13g2")
+        assert acquired_scan["revision"] == acquired["resolved_revision"]
+        assert acquired_scan["source"]["url"] == acquired["source_url"]
+        assert acquired_scan["license_hash"]
 
     print(json.dumps({"ok": True, "suite": "pdk-registry-regression"}))
     return 0

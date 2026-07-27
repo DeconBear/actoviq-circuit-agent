@@ -62,12 +62,19 @@ def main() -> int:
             "import pathlib, sys\n"
             "out = pathlib.Path(sys.argv[sys.argv.index('-o') + 1])\n"
             "name = sys.argv[sys.argv.index('-N') + 1]\n"
-            "(out / name).write_text('* reference netlist\\n.end\\n', encoding='utf-8')\n",
+            "(out / name).write_text('M1 in out sg13_lv_nmos\\n.end\\n', encoding='utf-8')\n",
             encoding="utf-8",
         )
-        validation = headless_validate(peer_file, root / "headless", str(fake_xschem))
+        validation = headless_validate(peer_file, root / "headless", str(fake_xschem), module)
         assert validation["status"] == "passed"
+        assert validation["metadata"]["connectivity_comparison"]["compared_instance_count"] == 1
         assert validation["metadata"]["topology_writeback"] is False
+
+        mismatched = json.loads(json.dumps(module))
+        mismatched["components"][0]["pins"][1]["net"] = "different"
+        mismatch = headless_validate(peer_file, root / "headless-mismatch", str(fake_xschem), mismatched)
+        assert mismatch["status"] == "failed"
+        assert any("connectivity differs" in item for item in mismatch["diagnostics"])
 
         edited = peer_file.read_text(encoding="utf-8")
         edited = edited.replace("100.000 200.000 0 0", "120.000 220.000 1 0", 1)

@@ -7,6 +7,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +19,13 @@ from typing import Any
 INSTALLATION_SCHEMA = "actoviq.pdk-installation.v1"
 BINDING_SCHEMA = "actoviq.pdk-binding.v1"
 REGISTRY_SCHEMA = "actoviq.pdk-registry.v1"
+DEVICE_CATALOG_SCHEMA = "actoviq.pdk-device-catalog.v1"
+INSTALL_RECEIPT_SCHEMA = "actoviq.pdk-install-receipt.v1"
+OPEN_PDK_SOURCES = {
+    "ihp-sg13g2": "https://github.com/IHP-GmbH/IHP-Open-PDK.git",
+    "sky130": "https://github.com/google/skywater-pdk.git",
+    "gf180mcu": "https://github.com/google/gf180mcu-pdk.git",
+}
 ADAPTERS: dict[str, dict[str, Any]] = {
     "ihp-sg13g2": {
         "name": "IHP SG13G2",
@@ -80,6 +90,61 @@ ADAPTERS: dict[str, dict[str, Any]] = {
     },
 }
 
+MOS_PARAMETER_CONSTRAINTS = {
+    "w": {"required": True, "minimum": 0.0, "exclusive_minimum": True},
+    "l": {"required": True, "minimum": 0.0, "exclusive_minimum": True},
+    "m": {"required": True, "minimum": 1, "integer": True},
+    "nf": {"required": True, "minimum": 1, "integer": True},
+}
+DEVICE_MODELS = {
+    "ihp-sg13g2": {
+        "nmos": "sg13_lv_nmos",
+        "pmos": "sg13_lv_pmos",
+    },
+    "sky130": {
+        "nmos": "sky130_fd_pr__nfet_01v8",
+        "pmos": "sky130_fd_pr__pfet_01v8",
+    },
+    "gf180mcu": {
+        "nmos": "gf180mcu_fd_pr__nfet_03v3",
+        "pmos": "gf180mcu_fd_pr__pfet_03v3",
+    },
+}
+
+
+def _device_catalog(logical_id: str, custom_devices: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    devices = custom_devices
+    if devices is None:
+        models = DEVICE_MODELS.get(logical_id, {})
+        devices = [
+            {
+                "device_id": kind,
+                "kind": kind,
+                "pins": ["D", "G", "S", "B"],
+                "spice": {"primitive": "M", "model": model, "pin_order": ["D", "G", "S", "B"]},
+                "parameters": MOS_PARAMETER_CONSTRAINTS,
+                "views": {
+                    "xschem_symbol": "",
+                    "klayout_pcell": "",
+                    "magic_pcell": "",
+                    "generic_fallback": "mos4",
+                },
+                "netlist_formats": {
+                    "spice": model,
+                    "cdl": model,
+                    "spectre": model,
+                    "hspice": model,
+                    "xyce": model,
+                },
+            }
+            for kind, model in models.items()
+        ]
+    return {
+        "schema": DEVICE_CATALOG_SCHEMA,
+        "pdk_ref": logical_id,
+        "devices": devices,
+    }
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -142,6 +207,23 @@ def _discover(root: Path, patterns: tuple[str, ...]) -> list[str]:
     return [_safe_relative(root, path) for path in unique[:256]]
 
 
+def _license_hash(root: Path) -> str:
+    license_files = sorted(
+        {
+            path.resolve()
+            for pattern in ("LICENSE", "LICENSE.*", "COPYING", "COPYING.*")
+            for path in root.glob(pattern)
+            if path.is_file()
+        },
+        key=lambda path: path.name.casefold(),
+    )
+    digest = hashlib.sha256()
+    for path in license_files:
+        digest.update(path.name.encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest() if license_files else ""
+
+
 def load_mapping_pack(path: str | Path) -> dict[str, Any]:
     target = Path(path).expanduser().resolve()
     value = json.loads(target.read_text(encoding="utf-8"))
@@ -158,7 +240,96 @@ def load_mapping_pack(path: str | Path) -> dict[str, Any]:
             raise ValueError("mapping-pack view patterns must be string arrays")
         if any(Path(pattern).is_absolute() or ".." in Path(pattern).parts for pattern in patterns):
             raise ValueError("mapping-pack patterns must remain relative to the selected PDK root")
+    devices = value.get("devices", [])
+    if not isinstance(devices, list):
+        raise ValueError("mapping-pack devices must be an array")
+    for device in devices:
+        if not isinstance(device, dict) or not str(device.get("device_id") or "").strip():
+            raise ValueError("each mapping-pack device requires device_id")
+        pins = device.get("pins")
+        if not isinstance(pins, list) or not pins or not all(isinstance(pin, str) and pin for pin in pins):
+            raise ValueError("each mapping-pack device requires a non-empty pins array")
+        if not isinstance(device.get("spice"), dict) or not isinstance(device.get("views", {}), dict):
+            raise ValueError("mapping-pack device spice and views must be objects")
     return value
+
+
+def install_open_pdk(
+    adapter_id: str,
+    destination: str | Path,
+    *,
+    revision: str = "",
+    license_accepted: bool,
+    git_bin: str = "",
+) -> dict[str, Any]:
+    if adapter_id not in OPEN_PDK_SOURCES:
+        raise ValueError(f"open PDK installation does not support adapter: {adapter_id}")
+    if not license_accepted:
+        raise ValueError("open PDK installation requires explicit license acceptance")
+    revision = revision.strip()
+    if revision and (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,159}", revision)
+        or ".." in revision
+    ):
+        raise ValueError("PDK revision contains unsupported characters")
+    target = Path(destination).expanduser().resolve()
+    if target.exists() and (not target.is_dir() or any(target.iterdir())):
+        raise ValueError(f"PDK install destination must be absent or empty: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    candidate = git_bin.strip() or "git"
+    executable = shutil.which(candidate)
+    if not executable and Path(candidate).expanduser().is_file():
+        executable = str(Path(candidate).expanduser().resolve())
+    if not executable:
+        raise FileNotFoundError(f"git executable not found: {candidate}")
+    source_url = OPEN_PDK_SOURCES[adapter_id]
+    runner = [sys.executable, executable] if Path(executable).suffix.casefold() == ".py" else [executable]
+    commands = [
+        [*runner, "clone", "--filter=blob:none", source_url, str(target)],
+    ]
+    if revision:
+        commands.append([*runner, "-C", str(target), "checkout", "--detach", revision])
+    commands.append([*runner, "-C", str(target), "submodule", "update", "--init", "--recursive"])
+    logs: list[str] = []
+    for command in commands:
+        completed = subprocess.run(
+            command,
+            cwd=str(target.parent),
+            shell=False,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        logs.extend(text for text in (completed.stdout.strip(), completed.stderr.strip()) if text)
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"PDK source installation failed with exit code {completed.returncode}: "
+                f"{logs[-1] if logs else 'no diagnostics'}"
+            )
+    resolved_revision = subprocess.run(
+        [*runner, "-C", str(target), "rev-parse", "HEAD"],
+        cwd=str(target.parent),
+        shell=False,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    receipt = {
+        "schema": INSTALL_RECEIPT_SCHEMA,
+        "adapter_id": adapter_id,
+        "source_url": source_url,
+        "requested_revision": revision,
+        "resolved_revision": resolved_revision,
+        "destination": str(target),
+        "license": ADAPTERS[adapter_id]["license"],
+        "license_accepted": True,
+        "installed_at": utc_now(),
+        "log": logs,
+    }
+    _atomic_write(target / ".actoviq-install.json", receipt)
+    return receipt
 
 
 def scan_installation(
@@ -190,12 +361,25 @@ def scan_installation(
             },
         }
         logical_id = str(mapping["id"])
+        custom_devices = list(mapping.get("devices") or [])
     else:
         spec = ADAPTERS.get(adapter_id)
         if spec is None:
             raise ValueError(f"unsupported PDK adapter: {adapter_id}")
         logical_id = adapter_id
+        custom_devices = None
     pdk_root = _first_existing_root(selected_root, tuple(spec["roots"]))
+    receipt_path = selected_root / ".actoviq-install.json"
+    receipt: dict[str, Any] = {}
+    if receipt_path.is_file():
+        candidate_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if (
+            isinstance(candidate_receipt, dict)
+            and candidate_receipt.get("schema") == INSTALL_RECEIPT_SCHEMA
+            and candidate_receipt.get("adapter_id") == logical_id
+        ):
+            receipt = candidate_receipt
+            revision = revision or str(receipt.get("resolved_revision") or "")
     views = {
         name: _discover(pdk_root, tuple(patterns))
         for name, patterns in spec["views"].items()
@@ -224,9 +408,16 @@ def scan_installation(
         "root": str(pdk_root),
         "source_kind": spec["source_kind"],
         "license": spec["license"],
+        "license_hash": _license_hash(pdk_root) or _license_hash(selected_root),
+        "source": {
+            "url": str(receipt.get("source_url") or ""),
+            "requested_revision": str(receipt.get("requested_revision") or ""),
+            "receipt": _safe_relative(selected_root, receipt_path) if receipt else "",
+        },
         "support_status": spec["status"],
         "views": views,
         "capabilities": capabilities,
+        "device_catalog": _device_catalog(logical_id, custom_devices),
         "probe_status": "available" if capabilities.get("model_library") else "partial",
         "diagnostics": [] if capabilities.get("model_library") else ["no model library was discovered"],
     }

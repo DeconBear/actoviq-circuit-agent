@@ -72,6 +72,63 @@ def connectivity_hash(module: dict[str, Any]) -> str:
     })
 
 
+def compare_reference_netlist(module: dict[str, Any], netlist_text: str) -> dict[str, Any]:
+    actual_instances: dict[str, list[str]] = {}
+    subcircuit_ports: list[str] | None = None
+    for raw_line in netlist_text.splitlines():
+        line = raw_line.strip()
+        if not line or line[0] in {"*", ";", "+", "."}:
+            if line.casefold().startswith(".subckt "):
+                tokens = line.split()
+                subcircuit_ports = [token.casefold() for token in tokens[2:]]
+            continue
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError:
+            tokens = line.split()
+        if len(tokens) >= 2:
+            actual_instances[tokens[0].casefold()] = [token.casefold() for token in tokens[1:]]
+
+    diagnostics: list[str] = []
+    compared = 0
+    for component in module.get("components", []):
+        name = str(component.get("name") or component.get("id") or "").strip()
+        if not name:
+            continue
+        actual = actual_instances.get(name.casefold())
+        if actual is None:
+            diagnostics.append(f"reference netlist is missing instance {name}")
+            continue
+        expected_nodes = [
+            str(pin.get("net") or pin.get("net_id") or "").strip().casefold()
+            for pin in component.get("pins", [])
+            if str(pin.get("net") or pin.get("net_id") or "").strip()
+        ]
+        actual_nodes = actual[:len(expected_nodes)]
+        compared += 1
+        if sorted(actual_nodes) != sorted(expected_nodes):
+            diagnostics.append(
+                f"{name} connectivity differs: expected {expected_nodes}, reference has {actual_nodes}"
+            )
+
+    expected_ports = sorted(
+        str(port.get("net") or port.get("name") or "").strip().casefold()
+        for port in module.get("ports", [])
+        if str(port.get("net") or port.get("name") or "").strip()
+    )
+    if subcircuit_ports is not None and sorted(subcircuit_ports) != expected_ports:
+        diagnostics.append(
+            f"subcircuit ports differ: expected {expected_ports}, reference has {sorted(subcircuit_ports)}"
+        )
+    return {
+        "ok": not diagnostics,
+        "source_connectivity_hash": connectivity_hash(module),
+        "compared_instance_count": compared,
+        "expected_instance_count": len(module.get("components", [])),
+        "diagnostics": diagnostics,
+    }
+
+
 def _atomic_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -120,6 +177,7 @@ def headless_validate(
     peer_file: Path,
     run_root: Path,
     executable: str = "",
+    source_module: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     peer = peer_file.expanduser().resolve()
     if not peer.is_file() or peer.suffix.casefold() != ".sch":
@@ -158,7 +216,19 @@ def headless_validate(
     diagnostics = [
         text for text in (completed.stdout.strip(), completed.stderr.strip()) if text
     ]
-    success = completed.returncode == 0 and netlist.is_file()
+    comparison = (
+        compare_reference_netlist(
+            source_module,
+            netlist.read_text(encoding="utf-8", errors="replace"),
+        )
+        if source_module is not None and netlist.is_file()
+        else None
+    )
+    if comparison:
+        diagnostics.extend(comparison["diagnostics"])
+    success = completed.returncode == 0 and netlist.is_file() and (
+        comparison is None or comparison["ok"]
+    )
     artifacts = [{"kind": "xschem_schematic", "path": str(peer), "hash": file_hash(peer)}]
     if netlist.is_file():
         artifacts.append({"kind": "reference_netlist", "path": str(netlist), "hash": file_hash(netlist)})
@@ -174,6 +244,7 @@ def headless_validate(
         "metadata": {
             "peer_hash": file_hash(peer),
             "reference_netlist_hash": file_hash(netlist) if netlist.is_file() else "",
+            "connectivity_comparison": comparison,
             "topology_writeback": False,
         },
     })

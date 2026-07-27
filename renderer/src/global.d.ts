@@ -237,7 +237,14 @@ declare global {
       probeExecutionProfile(id: string): Promise<ExecutionProfileProbe>;
       choosePdkRoot(): Promise<string | null>;
       choosePdkMappingPack(): Promise<string | null>;
+      choosePdkInstallDestination(): Promise<string | null>;
       listPdkInstallations(): Promise<Record<string, unknown>>;
+      installOpenPdk(input: {
+        adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu';
+        destination: string;
+        revision?: string;
+        licenseAccepted: boolean;
+      }): Promise<{ ok: true; receipt?: Record<string, unknown> }>;
       scanPdkInstallation(input: {
         root: string;
         adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial';
@@ -262,6 +269,11 @@ declare global {
       pushXschemPeer(projectId: string, moduleId: string): Promise<XschemSyncResult>;
       pullXschemPeer(projectId: string, moduleId: string): Promise<XschemSyncResult>;
       takeXschemOwnership(projectId: string, moduleId: string): Promise<XschemSyncResult>;
+      validateXschemPeer(
+        projectId: string,
+        moduleId: string,
+        peerFile: string,
+      ): Promise<Record<string, unknown>>;
       getAppVersion(): Promise<string>;
       getCircuitSkillStatus(): Promise<CircuitSkillStatus>;
       syncCircuitSkill(): Promise<CircuitSkillStatus>;
