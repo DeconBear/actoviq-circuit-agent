@@ -68,7 +68,16 @@ import sys
 if "-version" in sys.argv or "--version" in sys.argv:
     print("Netgen test 1.5")
     raise SystemExit(0)
-pathlib.Path(sys.argv[-1]).write_text(json.dumps({"equivalent": True}), encoding="utf-8")
+report = pathlib.Path(sys.argv[-1])
+# Assert Netgen-style "file cell" args are space-free relative names.
+for value in sys.argv[3:5]:
+    path_part = value.rsplit(" ", 1)[0]
+    if " " in path_part or pathlib.Path(path_part).is_absolute():
+        raise SystemExit(3)
+if report.name == "missing.json":
+    print("Netlists match uniquely.")
+    raise SystemExit(0)
+report.write_text(json.dumps({"equivalent": True}), encoding="utf-8")
 print("Netlists match uniquely.")
 """
 
@@ -141,18 +150,41 @@ def main() -> int:
 
         fake_netgen = root / "fake_netgen.py"
         fake_netgen.write_text(FAKE_NETGEN, encoding="utf-8")
+        spaced = root / "path with spaces"
+        spaced.mkdir()
+        spaced_extracted = spaced / "extracted.spice"
+        spaced_schematic = spaced / "schematic.cdl"
+        spaced_extracted.write_text(extracted.read_text(encoding="utf-8"), encoding="utf-8")
+        spaced_schematic.write_text(schematic.read_text(encoding="utf-8"), encoding="utf-8")
         netgen = NetgenProvider(str(fake_netgen)).run_lvs(
-            extracted,
-            schematic,
+            spaced_extracted,
+            spaced_schematic,
             netgen_setup,
             root / "run-netgen",
             "inverter",
             "inverter",
         )
         assert netgen["status"] == "passed"
+        assert netgen["executed"] is True
         assert netgen["metadata"]["lvs_clean"]
+        assert netgen["metadata"]["report_valid"] is True
         assert netgen["metadata"]["schematic_hash"]
         assert netgen["metadata"]["extracted_hash"]
+
+        no_report = root / "fake_netgen_no_report.py"
+        no_report.write_text("import sys\nprint('Netlists match uniquely.')\n", encoding="utf-8")
+        missing_run = NetgenProvider(str(no_report)).run_lvs(
+            spaced_extracted,
+            spaced_schematic,
+            netgen_setup,
+            root / "run-netgen-missing-report",
+            "inverter",
+            "inverter",
+        )
+        assert missing_run["executed"] is True
+        assert missing_run["status"] == "failed"
+        assert missing_run["metadata"]["report_valid"] is False
+        assert any("was not created" in message for message in missing_run["diagnostics"])
 
     print(json.dumps({"ok": True, "suite": "physical-verification-regression"}))
     return 0

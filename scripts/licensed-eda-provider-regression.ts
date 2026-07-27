@@ -7,6 +7,8 @@ import process from 'node:process';
 import {
   LICENSED_PROVIDER_DEFINITIONS,
   LicensedEdaProvider,
+  remoteEnvAssignments,
+  sshPrepared as buildSshPrepared,
   type LicensedExecutionProfile,
 } from '../src/eda/licensedEdaProviders.js';
 import {
@@ -166,16 +168,20 @@ async function main(): Promise<void> {
     },
   };
   const sshProvider = new LicensedEdaProvider(sshProfile, definition);
-  const sshPrepared = await sshProvider.prepare({
+  const sshPreparedJob = await sshProvider.prepare({
     ...job,
     inputPath: deck,
     outputDirectory: output,
   });
-  assert.equal(sshPrepared.env && Object.keys(sshPrepared.env).length, 0);
+  assert.equal(sshPreparedJob.env?.LM_LICENSE_FILE, 'secret-license-server');
   assert.equal(
-    (sshPrepared.metadata?.sshStaging as { remoteInputPath: string }).remoteInputPath,
+    (sshPreparedJob.metadata?.sshStaging as { remoteInputPath: string }).remoteInputPath,
     '/work/actoviq/spectre-run/input.cir',
   );
+  const remoteJob = buildSshPrepared(sshPreparedJob, sshProfile);
+  assert.equal(remoteJob.env && Object.keys(remoteJob.env).length, 0);
+  assert.ok(remoteJob.args.includes('LM_LICENSE_FILE=secret-license-server'));
+  assert.deepEqual(remoteEnvAssignments({ LM_LICENSE_FILE: '27000@lic' }), ['LM_LICENSE_FILE=27000@lic']);
   await assert.rejects(
     sshProvider.prepare({
       ...job,
@@ -184,6 +190,22 @@ async function main(): Promise<void> {
     }),
     /outside the execution profile allowlist/,
   );
+
+  await saveExecutionProfile({
+    schema: 'actoviq.execution-profile.v1',
+    id: 'spectre-configured',
+    providerId: 'cadence_spectre',
+    target,
+    executable: process.execPath,
+    allowedRoots: [root],
+    environmentKeys: ['LM_LICENSE_FILE'],
+    qualification: 'configured',
+  }, registryPath);
+  assert.equal(
+    (await resolveExecutionProfile('spectre-configured', {}, registryPath)).qualification,
+    'configured',
+  );
+  await deleteExecutionProfile('spectre-configured', registryPath);
 
   process.stdout.write('licensed EDA provider regression passed\n');
 }

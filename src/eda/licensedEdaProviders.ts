@@ -150,13 +150,26 @@ function assertWithinRoots(target: string, roots: readonly string[], label: stri
   return resolved;
 }
 
-function sshPrepared(job: PreparedJob, profile: LicensedExecutionProfile): PreparedJob {
+export function remoteEnvAssignments(env: Record<string, string> | undefined): string[] {
+  return Object.entries(env ?? {}).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error(`Unsafe environment key for SSH: ${key}`);
+    }
+    if (/[\r\n\0]/.test(value)) {
+      throw new Error(`Unsafe environment value for ${key}`);
+    }
+    return `${key}=${value}`;
+  });
+}
+
+export function sshPrepared(job: PreparedJob, profile: LicensedExecutionProfile): PreparedJob {
   if (!profile.ssh) throw new Error('ssh_linux profile requires ssh settings');
   if (!/^[A-Za-z0-9_.@-]+$/.test(profile.ssh.host)) throw new Error('Invalid SSH host');
   if (!/^\/[A-Za-z0-9_./-]+$/.test(profile.ssh.remoteWorkingDirectory)
     || profile.ssh.remoteWorkingDirectory.split('/').includes('..')) {
     throw new Error('SSH working directory must be a shell-safe absolute Linux path');
   }
+  const remoteEnv = remoteEnvAssignments(job.env);
   return {
     ...job,
     executable: profile.ssh.executable || 'ssh',
@@ -167,12 +180,13 @@ function sshPrepared(job: PreparedJob, profile: LicensedExecutionProfile): Prepa
       'env',
       '-C',
       profile.ssh.remoteWorkingDirectory,
+      ...remoteEnv,
       job.executable,
       ...job.args,
     ],
     cwd: profile.allowedRoots[0]!,
     env: {},
-    sensitiveValues: [],
+    sensitiveValues: [...(job.sensitiveValues ?? []), ...Object.values(job.env ?? {})],
   };
 }
 
@@ -304,8 +318,8 @@ export class LicensedEdaProvider implements ToolProvider<LicensedEdaJob> {
       ...normalized,
       executable: this.profile.executable || this.definition.executable,
       args: this.definition.prepareArgs(normalized),
-      env: this.target === 'ssh_linux' ? {} : environment,
-      sensitiveValues: this.target === 'ssh_linux' ? [] : Object.values(environment),
+      env: environment,
+      sensitiveValues: Object.values(environment),
       metadata: {
         ...job.metadata,
         ...(sshStaging ? { sshStaging } : {}),

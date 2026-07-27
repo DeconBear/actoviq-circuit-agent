@@ -45,7 +45,7 @@ jobs:
               subprocess.run(["git", "-C", str(target), "remote", "add", "origin", item["repository"]], check=True)
               subprocess.run(["git", "-C", str(target), "fetch", "--depth", "1", "origin", item["revision"]], check=True)
               subprocess.run(["git", "-C", str(target), "checkout", "--detach", "FETCH_HEAD"], check=True)
-              subprocess.run(["git", "-C", str(target), "submodule", "update", "--init", "--recursive", "--depth", "1"], check=True)
+              subprocess.run(["git", "-C", str(target), "submodule", "update", "--init", "--recursive"], check=True)
           PY
       - name: Scan locked PDKs without registering or copying content
         shell: bash

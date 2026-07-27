@@ -105,6 +105,11 @@ def supports_virtuoso_export(project_kind: str) -> bool:
     return normalize_project_kind(project_kind) in {"analog_ic", "mixed_signal_ic"}
 
 
+def supports_analog_ic_profile(project_kind: str | None) -> bool:
+    """Analog IC profile/PDK binding is shared by pure analog and mixed-signal IC."""
+    return normalize_project_kind(project_kind) in {"analog_ic", "mixed_signal_ic"}
+
+
 def kind_summary(project_kind: str) -> dict[str, Any]:
     kind = normalize_project_kind(project_kind)
     return {

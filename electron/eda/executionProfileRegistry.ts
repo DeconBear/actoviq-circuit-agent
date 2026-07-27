@@ -140,7 +140,9 @@ export function validateStoredExecutionProfile(input: unknown): StoredExecutionP
     allowedRoots,
     environmentKeys,
     ...(ssh ? { ssh } : {}),
-    qualification: raw.qualification === 'native_verified' ? 'native_verified' : 'unverified',
+    qualification: raw.qualification === 'native_verified' || raw.qualification === 'configured'
+      ? raw.qualification
+      : 'unverified',
   };
 }
 

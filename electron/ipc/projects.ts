@@ -2223,9 +2223,33 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
-  ipcMain.handle('project:open-physical-artifact', async (_event, artifactPath: string) => {
+  ipcMain.handle('project:open-physical-artifact', async (_event, projectId: string, artifactPath: string) => {
+    if (!projectId || typeof artifactPath !== 'string' || !artifactPath.trim()) {
+      throw new Error('projectId and artifactPath are required');
+    }
+    const root = await resolveProjectRoot(projectId);
     const target = path.resolve(artifactPath);
     await access(target);
+    const info = await stat(target);
+    if (!info.isFile()) throw new Error('Artifact path must be a file');
+    const ext = path.extname(target).toLowerCase();
+    const blocked = new Set([
+      '.exe', '.bat', '.cmd', '.com', '.msi', '.ps1', '.scr',
+      '.js', '.jse', '.vbs', '.vbe', '.wsf', '.wsh', '.msc',
+    ]);
+    if (blocked.has(ext)) {
+      throw new Error('Refusing to open executable or script artifact');
+    }
+    const relative = path.relative(root, target);
+    const underProject = relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+    const safeOutside = new Set([
+      '.gds', '.gdsii', '.oas', '.oasis', '.mag', '.lyrdb', '.json',
+      '.cir', '.sp', '.spi', '.spice', '.cdl', '.txt', '.log', '.tcl',
+      '.drc', '.lvs', '.lydrc', '.lylvs',
+    ]);
+    if (!underProject && !safeOutside.has(ext)) {
+      throw new Error('Artifacts outside the project must use a known IC design or report extension');
+    }
     const error = await shell.openPath(target);
     if (error) throw new Error(error);
     return target;
@@ -2625,8 +2649,11 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       throw new Error('Select a licensed analog or AMS execution profile.');
     }
     const profile = { ...resolved };
-    const relativeRoot = path.relative(profile.allowedRoots[0]!, root);
-    if (relativeRoot.startsWith('..') || path.isAbsolute(relativeRoot)) {
+    const projectInsideAllowlist = profile.allowedRoots.some((rootPath) => {
+      const relativeRoot = path.relative(rootPath, root);
+      return relativeRoot === '' || (!relativeRoot.startsWith('..') && !path.isAbsolute(relativeRoot));
+    });
+    if (!projectInsideAllowlist) {
       throw new Error('The active project must be inside the execution profile allowedRoots.');
     }
     const runId = `${timestampForId()}-${Math.random().toString(36).slice(2, 8)}`;

@@ -60,6 +60,7 @@ from project_kinds import (
     kind_summary,
     normalize_project_kind,
     requires_simulation,
+    supports_analog_ic_profile,
     supports_eda_bridge,
     supports_lcsc_binding,
     supports_virtuoso_export,
@@ -250,8 +251,8 @@ def validate_project(project: dict[str, Any]) -> None:
     kind = ensure_project_kind(project)
     analog_profile = project.get("analog_ic_profile")
     if analog_profile is not None:
-        if kind != "analog_ic":
-            raise ValueError("analog_ic_profile requires project_kind=analog_ic")
+        if not supports_analog_ic_profile(kind):
+            raise ValueError("analog_ic_profile requires project_kind=analog_ic or mixed_signal_ic")
         profile_errors = validate_analog_ic_profile(analog_profile)
         if profile_errors:
             raise ValueError(profile_errors[0]["message"])
@@ -1901,8 +1902,8 @@ def apply_operation(
             }
         return
     if op == "set_analog_ic_profile":
-        if normalize_project_kind(project.get("project_kind")) != "analog_ic":
-            raise ValueError("set_analog_ic_profile requires project_kind=analog_ic")
+        if not supports_analog_ic_profile(project.get("project_kind")):
+            raise ValueError("set_analog_ic_profile requires project_kind=analog_ic or mixed_signal_ic")
         profile = operation.get("profile")
         profile_errors = validate_analog_ic_profile(profile)
         if profile_errors:
@@ -5346,8 +5347,8 @@ def simulate_project(
     osdi_paths: list[Path] | None = None,
 ) -> dict[str, Any]:
     project, modules = load_project(root)
-    analog_ic = normalize_project_kind(project.get("project_kind")) == "analog_ic"
-    if analog_ic:
+    analog_ic = supports_analog_ic_profile(project.get("project_kind"))
+    if analog_ic and project.get("analog_ic_profile"):
         audit = audit_analog_ic_project(root, project, modules)
         atomic_write_json(root / "build" / "analog-ic" / "audit.json", audit)
         if not audit.get("ok"):
@@ -5355,7 +5356,7 @@ def simulate_project(
             raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_project(root)
     netlist_path = Path(compile_result["netlist_path"])
-    if analog_ic:
+    if analog_ic and project.get("analog_ic_profile"):
         atomic_write_text(
             netlist_path,
             rewrite_analog_ic_model_paths(netlist_path.read_text(encoding="utf-8"), root),
@@ -5393,8 +5394,8 @@ def simulate_module(
     osdi_paths: list[Path] | None = None,
 ) -> dict[str, Any]:
     project, modules = load_project(root)
-    analog_ic = normalize_project_kind(project.get("project_kind")) == "analog_ic"
-    if analog_ic:
+    analog_ic = supports_analog_ic_profile(project.get("project_kind"))
+    if analog_ic and project.get("analog_ic_profile"):
         audit = audit_analog_ic_project(root, project, modules)
         atomic_write_json(root / "build" / "analog-ic" / "audit.json", audit)
         if not audit.get("ok"):
@@ -5402,7 +5403,7 @@ def simulate_module(
             raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_module(root, module_id)
     netlist_path = Path(compile_result["netlist_path"])
-    if analog_ic:
+    if analog_ic and project.get("analog_ic_profile"):
         atomic_write_text(
             netlist_path,
             rewrite_analog_ic_model_paths(netlist_path.read_text(encoding="utf-8"), root),
@@ -5472,8 +5473,12 @@ def agent_context(root: Path) -> dict[str, Any]:
     )
     bridges = list_bridges(root)
     pcb_readiness = pcb_export_readiness(project, modules) if supports_eda_bridge(kind) else None
-    analog_ic_audit = audit_analog_ic_project(root, project, modules) if kind == "analog_ic" else None
-    if kind == "analog_ic" and not project.get("analog_ic_profile"):
+    analog_ic_audit = (
+        audit_analog_ic_project(root, project, modules)
+        if supports_analog_ic_profile(kind) and project.get("analog_ic_profile")
+        else None
+    )
+    if supports_analog_ic_profile(kind) and not project.get("analog_ic_profile"):
         next_action = "configure_analog_ic"
     elif analog_ic_audit and not analog_ic_audit.get("ok"):
         next_action = "fix_analog_ic_audit"
@@ -5510,7 +5515,7 @@ def agent_context(root: Path) -> dict[str, Any]:
     ]
     if supports_lcsc_binding(kind):
         allowed_operations.append("bind_lcsc_part")
-    if kind == "analog_ic":
+    if supports_analog_ic_profile(kind):
         allowed_operations.append("set_analog_ic_profile")
     return {
         "ok": True,
@@ -5533,7 +5538,7 @@ def agent_context(root: Path) -> dict[str, Any]:
             "tools": ["search_lcsc_parts", "get_lcsc_part", "bind_lcsc_part"] if supports_lcsc_binding(kind) else [],
         },
         "analog_ic": {
-            "supported": kind == "analog_ic",
+            "supported": supports_analog_ic_profile(kind),
             "audit": analog_ic_audit,
             "virtuoso_export": supports_virtuoso_export(kind),
         },

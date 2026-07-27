@@ -192,8 +192,11 @@ function probeIcTool(
       });
     };
     const probeEnvironment = Object.fromEntries(
-      ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'ComSpec', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL']
-        .flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!]]),
+      [
+        'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'ComSpec',
+        'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL',
+        'CDS_LIC_FILE', 'LM_LICENSE_FILE', 'SNPSLMD_LICENSE_FILE', 'MGLS_LICENSE_FILE',
+      ].flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!]]),
     );
     const child = spawn(executable, [...args], {
       shell: false,

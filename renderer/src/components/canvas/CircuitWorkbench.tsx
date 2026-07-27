@@ -1987,7 +1987,10 @@ export function CircuitWorkbench({
                 <button
                   type="button"
                   className="av-btn av-btn--secondary"
-                  onClick={() => { void window.electronAPI.openPhysicalArtifact(physicalForm.layout); }}
+                  onClick={() => {
+                    if (!currentProjectId) return;
+                    void window.electronAPI.openPhysicalArtifact(currentProjectId, physicalForm.layout);
+                  }}
                   data-testid="open-physical-layout"
                 >
                   Open layout externally
@@ -2009,7 +2012,10 @@ export function CircuitWorkbench({
                           key={`${artifact.kind}-${artifact.path}`}
                           type="button"
                           className="av-btn av-btn--secondary"
-                          onClick={() => { void window.electronAPI.openPhysicalArtifact(artifact.path); }}
+                          onClick={() => {
+                            if (!currentProjectId) return;
+                            void window.electronAPI.openPhysicalArtifact(currentProjectId, artifact.path);
+                          }}
                         >
                           Open {artifact.kind}
                         </button>

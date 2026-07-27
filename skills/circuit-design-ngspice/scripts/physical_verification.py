@@ -215,7 +215,7 @@ class KLayoutProvider:
             run_root.name,
             "drc",
             self.provider_id,
-            completed.returncode == 0,
+            True,
             completed.returncode == 0
             and parsed["report_valid"]
             and parsed["violation_count"] == 0,
@@ -282,7 +282,7 @@ class KLayoutProvider:
             run_root.name,
             "lvs",
             self.provider_id,
-            completed.returncode == 0,
+            True,
             clean,
             diagnostics,
             artifacts,
@@ -351,7 +351,7 @@ class MagicProvider:
             run_root.name,
             "extraction",
             self.provider_id,
-            completed.returncode == 0,
+            True,
             success,
             diagnostics,
             artifacts,
@@ -407,7 +407,7 @@ class MagicProvider:
             run_root.name,
             "pex",
             self.provider_id,
-            completed.returncode == 0,
+            True,
             success,
             diagnostics,
             artifacts,
@@ -424,17 +424,31 @@ class MagicProvider:
 
 
 def _parse_netgen_report(path: Path, text: str) -> dict[str, Any]:
-    if path.is_file():
-        try:
-            value = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-            clean = bool(value.get("equivalent") or value.get("lvs_clean") or value.get("match"))
-            return {"lvs_clean": clean, "report": value}
-        except (json.JSONDecodeError, AttributeError):
-            pass
-    folded = text.casefold()
-    clean = bool(re.search(r"netlists\s+match|circuits\s+match|lvs\s+clean", folded))
-    mismatch = bool(re.search(r"\bmismatch(?:es)?\b|\bdo not match\b|\bnot equivalent\b", folded))
-    return {"lvs_clean": clean and not mismatch, "report": {"text": text[-8000:]}}
+    if not path.is_file():
+        return {
+            "report_present": False,
+            "report_valid": False,
+            "lvs_clean": False,
+            "report_error": f"expected Netgen report was not created: {path}",
+            "report": {"text": text[-8000:]},
+        }
+    try:
+        value = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        clean = bool(value.get("equivalent") or value.get("lvs_clean") or value.get("match"))
+        return {
+            "report_present": True,
+            "report_valid": True,
+            "lvs_clean": clean,
+            "report": value,
+        }
+    except (json.JSONDecodeError, AttributeError) as error:
+        return {
+            "report_present": True,
+            "report_valid": False,
+            "lvs_clean": False,
+            "parse_error": str(error),
+            "report": {"text": text[-8000:]},
+        }
 
 
 class NetgenProvider:
@@ -461,22 +475,37 @@ class NetgenProvider:
                 raise ValueError(f"{label} contains unsupported characters")
         run_root = run_root.expanduser().resolve()
         run_root.mkdir(parents=True, exist_ok=True)
+        # Netgen splits each "file cell" argv on whitespace, so stage space-free
+        # relative names inside the run directory and invoke with cwd=run_root.
+        extracted_local = run_root / "extracted.cir"
+        schematic_local = run_root / "schematic.cir"
+        setup_local = run_root / "setup.tcl"
         report = run_root / "lvs.json"
+        if extracted.resolve() != extracted_local:
+            shutil.copy2(extracted, extracted_local)
+        if schematic.resolve() != schematic_local:
+            shutil.copy2(schematic, schematic_local)
+        if setup_file.resolve() != setup_local:
+            shutil.copy2(setup_file, setup_local)
         completed = _run(
             self.executable,
             [
                 "-batch",
                 "lvs",
-                f"{extracted} {extracted_cell}",
-                f"{schematic} {schematic_cell}",
-                str(setup_file),
-                str(report),
+                f"{extracted_local.name} {extracted_cell}",
+                f"{schematic_local.name} {schematic_cell}",
+                setup_local.name,
+                report.name,
             ],
             run_root,
         )
         combined = "\n".join((completed.stdout, completed.stderr))
         parsed = _parse_netgen_report(report, combined)
-        clean = completed.returncode == 0 and parsed["lvs_clean"]
+        clean = (
+            completed.returncode == 0
+            and parsed.get("report_valid") is True
+            and parsed.get("lvs_clean") is True
+        )
         artifacts = [
             _artifact("extracted_spice", extracted),
             _artifact("schematic", schematic),
@@ -484,13 +513,18 @@ class NetgenProvider:
         ]
         if report.is_file():
             artifacts.append(_artifact("lvs_report", report))
+        diagnostics = [part for part in (completed.stdout.strip(), completed.stderr.strip()) if part]
+        if parsed.get("report_error"):
+            diagnostics.append(str(parsed["report_error"]))
+        if parsed.get("parse_error"):
+            diagnostics.append(f"netgen report parse error: {parsed['parse_error']}")
         result = _run_result(
             run_root.name,
             "lvs",
             self.provider_id,
-            completed.returncode == 0,
+            True,
             clean,
-            [part for part in (completed.stdout.strip(), completed.stderr.strip()) if part],
+            diagnostics,
             artifacts,
             {
                 "tool_version": self.version,

@@ -329,7 +329,7 @@ class XyceProvider:
             },
             "execution_target": self.execution_target,
             "verification": {
-                "executed": completed.returncode == 0,
+                "executed": True,
                 "measured": bool(metrics),
                 "spec_passed": False,
                 "lvs_clean": None,
