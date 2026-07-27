@@ -12,6 +12,7 @@ import {
   type VerificationResult,
   runPreparedTool,
   sanitizeEnvironment,
+  validateVerificationResult,
 } from './toolProvider.js';
 
 export type LicensedProviderId =
@@ -305,7 +306,7 @@ export class LicensedEdaProvider implements ToolProvider<LicensedEdaJob> {
       }
     }
     const success = execution.code === 0;
-    return {
+    return validateVerificationResult({
       schema: 'actoviq.verification-run.v1',
       runId: job.id,
       kind: job.kind,
@@ -329,6 +330,6 @@ export class LicensedEdaProvider implements ToolProvider<LicensedEdaJob> {
         && this.profile.qualification === 'native_verified'
       ),
       measurements,
-    } as VerificationResult;
+    } as VerificationResult);
   }
 }

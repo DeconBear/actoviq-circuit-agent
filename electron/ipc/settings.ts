@@ -727,6 +727,8 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
   ipcMain.handle('settings:probe-execution-profile', async (_event, id: string) => {
     const profile = await resolveExecutionProfile(id);
     const providerTools: Record<string, string> = {
+      ngspice: 'ngspice',
+      xyce: 'xyce',
       cadence_spectre: 'spectre',
       synopsys_primesim_hspice: 'hspice',
       synopsys_primesim_xa: 'xa',

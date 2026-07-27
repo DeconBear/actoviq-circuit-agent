@@ -88,6 +88,8 @@ from open_sim_providers import (
     inject_ngspice_osdi,
 )
 from physical_verification import KLayoutProvider, MagicProvider, NetgenProvider
+from execution_profiles import assert_profile_path, resolve_simulation_profile, simulation_profile_id
+from verification_contracts import validate_simulation_run
 from hdl_flow import (
     IcarusProvider,
     OpenRoadProvider,
@@ -5088,9 +5090,99 @@ def execute_simulation_run(
         "ngspice": provider.executable,
         "simulated_at": utc_now(),
     }
+    validate_simulation_run(result)
     atomic_write_json(run_root / "run.json", result)
     atomic_write_json(simulation_root / "result.json", result)
     return result
+
+
+def execute_xyce_simulation_run(
+    provider: XyceProvider,
+    profile: dict[str, Any],
+    netlist_path: Path,
+    source_revision: int,
+    document_hash: str,
+    scope: str,
+    pdk_hash: str = "",
+) -> dict[str, Any]:
+    simulation_root = netlist_path.parent / "simulation"
+    run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}-{document_hash[:8] or 'document'}"
+    run_root = simulation_root / "runs" / run_id
+    result = provider.run_deck(netlist_path, run_root)
+    specifications, specification_diagnostics = parse_simulation_specifications(
+        netlist_path.read_text(encoding="utf-8", errors="replace")
+    )
+    specification_status, specification_results = evaluate_simulation_specifications(
+        result.get("metrics", []),
+        specifications,
+    )
+    if specification_diagnostics:
+        specification_status = "invalid"
+    result.update({
+        "run_id": run_id,
+        "scope": scope,
+        "source_revision": source_revision,
+        "document_hash": document_hash,
+        "pdk_fingerprint": pdk_hash,
+        "specification_status": specification_status,
+        "verified": specification_status == "passed",
+        "specifications": specification_results,
+        "specification_diagnostics": specification_diagnostics,
+        "simulation_profile_id": str(profile["id"]),
+    })
+    result["verification"]["spec_passed"] = specification_status == "passed"
+    validate_simulation_run(result)
+    atomic_write_json(run_root / "run.json", result)
+    atomic_write_json(simulation_root / "result.json", result)
+    return result
+
+
+def execute_profiled_simulation(
+    project: dict[str, Any],
+    netlist_path: Path,
+    source_revision: int,
+    document_hash: str,
+    scope: str,
+    ngspice_bin: str,
+    osdi_paths: list[Path] | None = None,
+) -> dict[str, Any]:
+    try:
+        profile = resolve_simulation_profile(project, legacy_ngspice=ngspice_bin)
+    except FileNotFoundError:
+        if simulation_profile_id(project) != "ngspice-local":
+            raise
+        profile = resolve_simulation_profile(
+            project,
+            legacy_ngspice=resolve_ngspice(ngspice_bin),
+        )
+    netlist_path = assert_profile_path(profile, netlist_path)
+    provider_id = str(profile["providerId"])
+    if provider_id == "ngspice":
+        result = execute_simulation_run(
+            netlist_path.parents[2],
+            NgspiceSimulationProvider(str(profile["executable"]), osdi_paths),
+            netlist_path,
+            source_revision,
+            document_hash,
+            scope,
+            pdk_fingerprint(project),
+        )
+        result["simulation_profile_id"] = str(profile["id"])
+        run_path = netlist_path.parent / "simulation" / "runs" / result["run_id"] / "run.json"
+        atomic_write_json(run_path, result)
+        atomic_write_json(netlist_path.parent / "simulation" / "result.json", result)
+        return result
+    if osdi_paths:
+        raise ValueError("OSDI artifacts can only be loaded by an ngspice execution profile")
+    return execute_xyce_simulation_run(
+        XyceProvider(str(profile["executable"])),
+        profile,
+        netlist_path,
+        source_revision,
+        document_hash,
+        scope,
+        pdk_fingerprint(project),
+    )
 
 
 def simulate_project(
@@ -5107,7 +5199,6 @@ def simulate_project(
             codes = ", ".join(str(item.get("code")) for item in audit.get("errors", []))
             raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_project(root)
-    provider = NgspiceSimulationProvider(resolve_ngspice(ngspice_bin), osdi_paths)
     netlist_path = Path(compile_result["netlist_path"])
     if analog_ic:
         atomic_write_text(
@@ -5116,14 +5207,14 @@ def simulate_project(
         )
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path)
-    result = execute_simulation_run(
-        root,
-        provider,
+    result = execute_profiled_simulation(
+        project,
         netlist_path,
         int(manifest.get("source_revision", manifest.get("revision", compile_result.get("revision", 0)))),
         str(manifest.get("document_hash", "")),
         "project",
-        pdk_fingerprint(project),
+        ngspice_bin,
+        osdi_paths,
     )
     manifest["status"] = "simulated" if result["ok"] else "simulation_failed"
     manifest["simulation"] = "system/simulation/result.json"
@@ -5155,7 +5246,6 @@ def simulate_module(
             codes = ", ".join(str(item.get("code")) for item in audit.get("errors", []))
             raise ValueError(f"analog IC audit failed before simulation: {codes}")
     compile_result = compile_module(root, module_id)
-    provider = NgspiceSimulationProvider(resolve_ngspice(ngspice_bin), osdi_paths)
     netlist_path = Path(compile_result["netlist_path"])
     if analog_ic:
         atomic_write_text(
@@ -5164,14 +5254,14 @@ def simulate_module(
         )
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path)
-    result = execute_simulation_run(
-        root,
-        provider,
+    result = execute_profiled_simulation(
+        project,
         netlist_path,
         int(manifest.get("source_revision", manifest.get("revision", 0))),
         str(manifest.get("document_hash", project_document_hash(*load_project(root)))),
         f"module:{module_id}",
-        pdk_fingerprint(project),
+        ngspice_bin,
+        osdi_paths,
     )
     result["module_id"] = module_id
     atomic_write_json(netlist_path.parent / "simulation" / "result.json", result)

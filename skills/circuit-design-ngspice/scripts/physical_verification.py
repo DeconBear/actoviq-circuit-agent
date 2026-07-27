@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from verification_contracts import validate_verification_run
 
 
 def _utc_now() -> str:
@@ -105,7 +106,7 @@ def _run_result(
     artifacts: list[dict[str, str]],
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
-    return {
+    return validate_verification_run({
         "schema": "actoviq.verification-run.v1",
         "run_id": run_id,
         "kind": kind,
@@ -116,7 +117,7 @@ def _run_result(
         "artifacts": artifacts,
         "metadata": metadata,
         "finished_at": _utc_now(),
-    }
+    })
 
 
 def parse_lyrdb(path: Path) -> dict[str, Any]:

@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 export type LicensedProviderId =
+  | 'ngspice'
+  | 'xyce'
   | 'cadence_spectre'
   | 'synopsys_primesim_hspice'
   | 'synopsys_primesim_xa'
@@ -32,6 +34,8 @@ export interface ResolvedExecutionProfile {
 }
 
 const PROVIDER_ENVIRONMENT_KEYS: Record<LicensedProviderId, readonly string[]> = {
+  ngspice: [],
+  xyce: [],
   cadence_spectre: ['CDS_LIC_FILE', 'LM_LICENSE_FILE'],
   synopsys_primesim_hspice: ['SNPSLMD_LICENSE_FILE', 'LM_LICENSE_FILE'],
   synopsys_primesim_xa: ['SNPSLMD_LICENSE_FILE', 'LM_LICENSE_FILE'],

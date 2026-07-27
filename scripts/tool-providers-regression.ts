@@ -6,6 +6,7 @@ import {
   redactToolText,
   runPreparedTool,
   sanitizeEnvironment,
+  validateVerificationResult,
 } from '../src/eda/toolProvider.js';
 
 async function main(): Promise<void> {
@@ -28,6 +29,16 @@ async function main(): Promise<void> {
     sanitizeEnvironment({ PATH: 'bin', SECRET: 'nope' }, ['PATH']),
     { PATH: 'bin' },
   );
+  assert.throws(() => validateVerificationResult({
+    schema: 'actoviq.verification-run.v1',
+    runId: '',
+    kind: 'drc',
+    providerId: 'klayout',
+    executed: true,
+    status: 'passed',
+    diagnostics: [],
+    artifacts: [],
+  }));
 
   const timeout = await runPreparedTool({
     id: 'provider-timeout',

@@ -14,6 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from verification_contracts import validate_verification_run
 
 
 BINDING_SCHEMA = "actoviq.schematic-peer-binding.v1"
@@ -161,7 +162,7 @@ def headless_validate(
     artifacts = [{"kind": "xschem_schematic", "path": str(peer), "hash": file_hash(peer)}]
     if netlist.is_file():
         artifacts.append({"kind": "reference_netlist", "path": str(netlist), "hash": file_hash(netlist)})
-    result = {
+    result = validate_verification_run({
         "schema": "actoviq.verification-run.v1",
         "run_id": run_root.name,
         "kind": "schematic_reference_netlist",
@@ -175,7 +176,7 @@ def headless_validate(
             "reference_netlist_hash": file_hash(netlist) if netlist.is_file() else "",
             "topology_writeback": False,
         },
-    }
+    })
     _atomic_json(run_root / "run.json", result)
     return result
 

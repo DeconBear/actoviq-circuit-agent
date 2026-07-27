@@ -903,6 +903,8 @@ export interface IcDiagnostics {
 }
 
 export type LicensedProviderId =
+  | 'ngspice'
+  | 'xyce'
   | 'cadence_spectre'
   | 'synopsys_primesim_hspice'
   | 'synopsys_primesim_xa'

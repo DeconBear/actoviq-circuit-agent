@@ -79,6 +79,28 @@ export interface ToolProvider<TJob extends ToolJob = ToolJob> {
   openNative?(artifact: { kind: string; path: string }): Promise<void> | void;
 }
 
+export function validateVerificationResult(result: VerificationResult): VerificationResult {
+  if (result.schema !== 'actoviq.verification-run.v1') throw new Error('Invalid verification result schema');
+  if (!result.runId.trim() || !result.kind.trim() || !result.providerId.trim()) {
+    throw new Error('Verification result requires runId, kind, and providerId');
+  }
+  if (!['passed', 'failed', 'cancelled'].includes(result.status)) {
+    throw new Error(`Invalid verification result status: ${String(result.status)}`);
+  }
+  if (typeof result.executed !== 'boolean') {
+    throw new Error('Verification result executed must be boolean');
+  }
+  if (!Array.isArray(result.diagnostics) || !result.diagnostics.every((item) => typeof item === 'string')) {
+    throw new Error('Verification result diagnostics must be a string array');
+  }
+  if (!Array.isArray(result.artifacts) || result.artifacts.some((artifact) => (
+    !artifact.kind?.trim() || !artifact.path?.trim()
+  ))) {
+    throw new Error('Verification result artifacts must contain kind and path');
+  }
+  return result;
+}
+
 const SECRET_KEY = /(api[_-]?key|token|secret|password|license|lm_license_file)/i;
 const SAFE_BASE_ENVIRONMENT_KEYS = [
   'PATH',

@@ -15,6 +15,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from verification_contracts import validate_simulation_run
 
 
 def _utc_now() -> str:
@@ -337,5 +338,6 @@ class XyceProvider:
             "simulated_at": _utc_now(),
             "diagnostics": combined,
         }
+        validate_simulation_run(result)
         _atomic_json(run_root / "run.json", result)
         return result

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -20,6 +21,9 @@ from open_sim_providers import (  # noqa: E402
     inject_ngspice_osdi,
     validate_xyce_deck,
 )
+from circuit_project import execute_profiled_simulation  # noqa: E402
+from execution_profiles import assert_profile_path, resolve_simulation_profile  # noqa: E402
+from verification_contracts import validate_simulation_run, validate_verification_run  # noqa: E402
 
 
 FAKE_OPENVAF = r"""
@@ -89,6 +93,57 @@ def main() -> int:
         assert {metric["name"] for metric in result["metrics"]} == {"gain", "settling"}
         assert result["analyses"][0]["tables"]["wave.prn"]["V(out)"] == [0.0, 1.0]
 
+        registry = root / "execution-profiles.json"
+        registry.write_text(json.dumps({
+            "schema": "actoviq.execution-profile-registry.v1",
+            "profiles": [{
+                "schema": "actoviq.execution-profile.v1",
+                "id": "xyce-local",
+                "providerId": "xyce",
+                "target": "local_windows" if os.name == "nt" else "local_linux",
+                "executable": str(fake_xyce),
+                "allowedRoots": [str(root)],
+                "environmentKeys": [],
+                "qualification": "unverified",
+            }],
+        }), encoding="utf-8")
+        previous_registry = os.environ.get("ACTOVIQ_EXECUTION_PROFILE_REGISTRY")
+        os.environ["ACTOVIQ_EXECUTION_PROFILE_REGISTRY"] = str(registry)
+        try:
+            project = {
+                "analog_ic_profile": {
+                    "simulation_profile_id": "xyce-local",
+                },
+            }
+            resolved = resolve_simulation_profile(project)
+            assert resolved["providerId"] == "xyce"
+            try:
+                assert_profile_path(resolved, root.parent / "outside.cir")
+                raise AssertionError("profile paths outside allowedRoots must be rejected")
+            except ValueError:
+                pass
+            system_root = root / "project" / "build" / "system"
+            system_root.mkdir(parents=True)
+            profiled_deck = system_root / "system.cir"
+            profiled_deck.write_text("Title\nR1 1 0 1k\n.op\n.end\n", encoding="utf-8")
+            profiled = execute_profiled_simulation(
+                project,
+                profiled_deck,
+                3,
+                "document-hash",
+                "project",
+                "",
+            )
+            assert profiled["ok"]
+            assert profiled["simulation_profile_id"] == "xyce-local"
+            assert profiled["provider"]["id"] == "xyce"
+            assert (system_root / "simulation" / "result.json").is_file()
+        finally:
+            if previous_registry is None:
+                os.environ.pop("ACTOVIQ_EXECUTION_PROFILE_REGISTRY", None)
+            else:
+                os.environ["ACTOVIQ_EXECUTION_PROFILE_REGISTRY"] = previous_registry
+
         comparison = compare_simulation_metrics(
             {"metrics": [{"name": "gain", "value": 10.0}]},
             {"metrics": [{"name": "gain", "value": 10.005}]},
@@ -102,6 +157,26 @@ def main() -> int:
             relative_tolerance=0.001,
             absolute_tolerance=1e-6,
         )["ok"]
+
+        try:
+            validate_simulation_run({"schema": "actoviq.simulation.v3"})
+            raise AssertionError("incomplete simulation results must be rejected")
+        except ValueError:
+            pass
+        try:
+            validate_verification_run({
+                "schema": "actoviq.verification-run.v1",
+                "run_id": "invalid",
+                "kind": "drc",
+                "provider_id": "klayout",
+                "executed": "yes",
+                "status": "passed",
+                "diagnostics": [],
+                "artifacts": [],
+            })
+            raise AssertionError("non-boolean execution state must be rejected")
+        except ValueError:
+            pass
 
     print(json.dumps({"ok": True, "suite": "open-ic-flow-regression"}))
     return 0

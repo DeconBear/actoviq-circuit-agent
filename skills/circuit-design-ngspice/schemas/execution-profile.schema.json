@@ -9,6 +9,8 @@
     "id": { "type": "string", "minLength": 1 },
     "providerId": {
       "enum": [
+        "ngspice",
+        "xyce",
         "cadence_spectre",
         "synopsys_primesim_hspice",
         "synopsys_primesim_xa",

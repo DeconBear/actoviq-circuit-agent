@@ -29,6 +29,7 @@ import type {
   ProjectKind,
   SchematicOverrides,
   SimulationRun,
+  StoredExecutionProfile,
   XschemSyncConflict,
 } from '../../types';
 import { SchematicEditor, type SchematicProbeSelection } from './SchematicEditor';
@@ -438,9 +439,13 @@ export function CircuitWorkbench({
   const [lcscBindComponentId, setLcscBindComponentId] = useState('');
   const [lcscSearching, setLcscSearching] = useState(false);
   const [xschemConflicts, setXschemConflicts] = useState<XschemSyncConflict[]>([]);
+  const [simulationProfiles, setSimulationProfiles] = useState<StoredExecutionProfile[]>([]);
 
   const project = bundle?.project ?? null;
   const projectKind = project?.project_kind ?? 'simulation';
+  const projectSimulationProfileId = project?.analog_ic_profile?.schema === 'actoviq.analog-ic-profile.v2'
+    ? project.analog_ic_profile.simulation_profile_id
+    : '';
   const edaBridgeEnabled = supportsEdaBridge(projectKind);
   const erc = bundle?.erc ?? build?.erc ?? null;
   const currentProjectId = project?.project_id ?? activeProjectId;
@@ -555,6 +560,23 @@ export function CircuitWorkbench({
   useEffect(() => {
     void refreshDesignMemory();
   }, [refreshDesignMemory, activeProjectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.listExecutionProfiles()
+      .then((registry) => {
+        if (cancelled) return;
+        setSimulationProfiles(registry.profiles.filter(
+          (profile) => profile.providerId === 'ngspice' || profile.providerId === 'xyce',
+        ));
+      })
+      .catch(() => {
+        if (!cancelled) setSimulationProfiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId]);
 
   const refreshHistory = useCallback(async () => {
     if (!currentProjectId) {
@@ -1124,6 +1146,18 @@ export function CircuitWorkbench({
     } finally {
       if (isActiveProject(operationProjectId)) setBusy(false);
     }
+  }
+
+  async function setSimulationProfile(simulationProfileId: string): Promise<void> {
+    const analogProfile = project?.analog_ic_profile;
+    if (!analogProfile || analogProfile.schema !== 'actoviq.analog-ic-profile.v2') return;
+    await applyOperations('Set simulation execution profile', [{
+      op: 'set_analog_ic_profile',
+      profile: {
+        ...analogProfile,
+        simulation_profile_id: simulationProfileId,
+      },
+    }]);
   }
 
   async function linkXschemMode(mode: 'native' | 'bridge' | 'external'): Promise<void> {
@@ -1707,6 +1741,34 @@ export function CircuitWorkbench({
             {build && (build.manifest.source_revision ?? build.manifest.revision) !== project.revision ? ' | build stale' : ''}
             {erc ? ` | ERC ${erc.status}` : ''}
           </div>
+          {projectKind === 'analog_ic' || projectKind === 'mixed_signal_ic' ? (
+            <label style={styles.simulationProfile} data-testid="project-simulation-profile">
+              <span>Simulation</span>
+              <select
+                value={projectSimulationProfileId}
+                onChange={(event) => { void setSimulationProfile(event.target.value); }}
+                disabled={busy || project.analog_ic_profile?.schema !== 'actoviq.analog-ic-profile.v2'}
+                aria-label="Project simulation execution profile"
+              >
+                <option value="">
+                  {project.analog_ic_profile?.schema === 'actoviq.analog-ic-profile.v1'
+                    ? 'Legacy ngspice profile (explicit migration required)'
+                    : 'Configure PDK binding first'}
+                </option>
+                {projectSimulationProfileId
+                  && !simulationProfiles.some((profile) => profile.id === projectSimulationProfileId) ? (
+                    <option value={projectSimulationProfileId}>
+                      {projectSimulationProfileId} · unavailable
+                    </option>
+                  ) : null}
+                {simulationProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.id} · {profile.providerId} · {profile.target}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
         <WorkbenchToolbar
           view={view}
@@ -3653,6 +3715,14 @@ const styles: Record<string, CSSProperties> = {
   eyebrow: { fontSize: 10, color: '#7a818b', textTransform: 'uppercase', fontWeight: 750 },
   projectTitle: { fontSize: 18, fontWeight: 760, marginTop: 2 },
   projectMeta: { fontSize: 11, color: '#7a818b', marginTop: 2 },
+  simulationProfile: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    fontSize: 11,
+    color: '#7a818b',
+  },
   primaryButton: {
     border: '1px solid #2563eb',
     borderRadius: 6,

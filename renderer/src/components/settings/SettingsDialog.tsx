@@ -21,6 +21,8 @@ const EXECUTION_PROVIDERS: Array<{
   label: string;
   environmentKeys: string[];
 }> = [
+  { id: 'ngspice', label: 'ngspice', environmentKeys: [] },
+  { id: 'xyce', label: 'Xyce', environmentKeys: [] },
   { id: 'cadence_spectre', label: 'Cadence Spectre', environmentKeys: ['CDS_LIC_FILE', 'LM_LICENSE_FILE'] },
   { id: 'synopsys_primesim_hspice', label: 'Synopsys PrimeSim HSPICE', environmentKeys: ['SNPSLMD_LICENSE_FILE', 'LM_LICENSE_FILE'] },
   { id: 'synopsys_primesim_xa', label: 'Synopsys PrimeSim XA', environmentKeys: ['SNPSLMD_LICENSE_FILE', 'LM_LICENSE_FILE'] },
