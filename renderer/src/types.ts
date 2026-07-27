@@ -360,6 +360,23 @@ export interface CircuitModule {
   };
 }
 
+export interface XschemSyncConflict {
+  kind: string;
+  field?: string;
+  component?: string;
+  message: string;
+}
+
+export interface XschemSyncResult {
+  ok: true;
+  revision?: number;
+  peer_file?: string;
+  connectivity_hash?: string;
+  requires_review?: boolean;
+  conflicts?: XschemSyncConflict[];
+  opaque_record_count?: number;
+}
+
 export interface CircuitProjectSummary {
   projectId: string;
   name: string;
@@ -922,6 +939,19 @@ export interface ExecutionProfileProbe {
   version?: string;
   target: StoredExecutionProfile['target'];
   diagnostics: string[];
+}
+
+export interface HdlVerificationRun {
+  schema: 'actoviq.verification-run.v1';
+  run_id: string;
+  kind: string;
+  provider_id: string;
+  executed: boolean;
+  status: 'passed' | 'failed' | 'cancelled';
+  diagnostics: string[];
+  artifacts: Array<{ kind: string; path: string; hash?: string }>;
+  metadata: Record<string, unknown>;
+  finished_at?: string;
 }
 
 export interface ProviderTestResult {

@@ -346,6 +346,18 @@ const electronAPI = {
     return ipcRenderer.invoke('project:write-hdl-file', projectId, relativePath, content);
   },
 
+  initializeHdlWorkspace(projectId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:initialize-hdl', projectId);
+  },
+
+  createHdlFile(projectId: string, relativePath: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:create-hdl-file', projectId, relativePath);
+  },
+
+  runHdlAction(projectId: string, action: 'simulate' | 'synthesize' | 'gate-regression'): Promise<unknown> {
+    return ipcRenderer.invoke('project:run-hdl', projectId, action);
+  },
+
   applyCircuitCommand(projectId: string, command: unknown): Promise<unknown> {
     return ipcRenderer.invoke('project:apply-command', projectId, command);
   },

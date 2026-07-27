@@ -330,7 +330,7 @@ async function readJsonFile<T>(targetPath: string): Promise<T> {
   return JSON.parse(await readFile(targetPath, 'utf8')) as T;
 }
 
-const HDL_SOURCE_EXTENSIONS = new Set(['.v', '.vh', '.sv', '.svh', '.json']);
+const HDL_SOURCE_EXTENSIONS = new Set(['.v', '.vh', '.sv', '.svh', '.json', '.sdc']);
 
 function resolveHdlProjectFile(projectRoot: string, relativePath: string): string {
   const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -362,6 +362,80 @@ async function listHdlSourceFiles(root: string, prefix = ''): Promise<string[]> 
     }
   }
   return files.sort((left, right) => left.localeCompare(right));
+}
+
+async function initializeHdlWorkspace(projectRoot: string): Promise<{ files: string[] }> {
+  const hdlRoot = path.resolve(projectRoot, 'hdl');
+  await mkdir(hdlRoot, { recursive: true });
+  const sourcePath = path.resolve(hdlRoot, 'digital_top.v');
+  const manifestPath = path.resolve(hdlRoot, 'manifest.json');
+  if (!(await exists(sourcePath))) {
+    await writeFile(
+      sourcePath,
+      [
+        'module digital_top(',
+        '  input wire clk,',
+        '  input wire reset_n,',
+        '  output reg ready',
+        ');',
+        '  always @(posedge clk or negedge reset_n) begin',
+        '    if (!reset_n) ready <= 1\'b0;',
+        '    else ready <= 1\'b1;',
+        '  end',
+        'endmodule',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+  }
+  if (!(await exists(manifestPath))) {
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        schema: 'actoviq.hdl-manifest.v1',
+        language: 'verilog-2005',
+        active_source_set: 'rtl',
+        source_sets: [{
+          id: 'rtl',
+          top: 'digital_top',
+          sources: ['hdl/digital_top.v'],
+          include_paths: ['hdl'],
+          defines: {},
+        }],
+      }, null, 2)}\n`,
+      'utf8',
+    );
+  }
+  return { files: await listHdlSourceFiles(hdlRoot) };
+}
+
+async function runHdlAction(
+  projectRoot: string,
+  action: 'simulate' | 'synthesize' | 'gate-regression',
+): Promise<Record<string, unknown>> {
+  const runId = `${timestampForId()}-${Math.random().toString(36).slice(2, 8)}`;
+  const runsRoot = path.resolve(projectRoot, 'build', 'hdl', 'runs');
+  await mkdir(runsRoot, { recursive: true });
+  if (action === 'simulate') {
+    return runProjectTool([
+      'hdl-simulate',
+      '--project-root', projectRoot,
+      '--run-root', path.resolve(runsRoot, `${runId}-simulation`),
+    ]) as Promise<Record<string, unknown>>;
+  }
+  const synthesisRoot = path.resolve(runsRoot, `${runId}-synthesis`);
+  const synthesis = await runProjectTool([
+    'hdl-synthesize',
+    '--project-root', projectRoot,
+    '--run-root', synthesisRoot,
+  ]) as Record<string, unknown>;
+  if (action === 'synthesize' || synthesis.status !== 'passed') return synthesis;
+  return runProjectTool([
+    'hdl-gate-regression',
+    '--project-root', projectRoot,
+    '--synthesis-run', path.resolve(synthesisRoot, 'run.json'),
+    '--run-root', path.resolve(runsRoot, `${runId}-gate-regression`),
+  ]) as Promise<Record<string, unknown>>;
 }
 
 async function designMemoryTargetRoot(
@@ -1979,6 +2053,31 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     const root = await resolveProjectRoot(projectId);
     return listHdlSourceFiles(path.resolve(root, 'hdl'));
   });
+
+  ipcMain.handle('project:initialize-hdl', async (_event, projectId: string) => {
+    const root = await resolveProjectRoot(projectId);
+    return initializeHdlWorkspace(root);
+  });
+
+  ipcMain.handle('project:create-hdl-file', async (_event, projectId: string, relativePath: string) => {
+    const root = await resolveProjectRoot(projectId);
+    const target = resolveHdlProjectFile(root, relativePath);
+    await mkdir(path.dirname(target), { recursive: true });
+    const template = path.extname(target).toLowerCase() === '.json' ? '{}\n' : '';
+    await writeFile(target, template, { encoding: 'utf8', flag: 'wx' });
+    return { ok: true, path: relativePath };
+  });
+
+  ipcMain.handle(
+    'project:run-hdl',
+    async (_event, projectId: string, action: 'simulate' | 'synthesize' | 'gate-regression') => {
+      if (!['simulate', 'synthesize', 'gate-regression'].includes(action)) {
+        throw new Error(`Unsupported HDL action: ${String(action)}`);
+      }
+      const root = await resolveProjectRoot(projectId);
+      return runHdlAction(root, action);
+    },
+  );
 
   ipcMain.handle('project:read-hdl-file', async (_event, projectId: string, relativePath: string) => {
     const root = await resolveProjectRoot(projectId);

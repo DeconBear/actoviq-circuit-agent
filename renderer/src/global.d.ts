@@ -7,6 +7,7 @@ import type {
   EdaColdStartImportResult,
   LayoutModelTestResult,
   IcDiagnostics,
+  HdlVerificationRun,
   LcscBindResult,
   LcscPartResult,
   LcscSearchResult,
@@ -40,6 +41,7 @@ import type {
   TechnicalReportResult,
   WorkflowEvent,
   WorkspaceSummary,
+  XschemSyncResult,
 } from './types';
 
 export {};
@@ -123,6 +125,12 @@ declare global {
         relativePath: string,
         content: string,
       ): Promise<{ ok: true; path: string; hash: string }>;
+      initializeHdlWorkspace(projectId: string): Promise<{ files: string[] }>;
+      createHdlFile(projectId: string, relativePath: string): Promise<{ ok: true; path: string }>;
+      runHdlAction(
+        projectId: string,
+        action: 'simulate' | 'synthesize' | 'gate-regression',
+      ): Promise<HdlVerificationRun>;
       applyCircuitCommand(projectId: string, command: CircuitCommand): Promise<{
         ok: true;
         revision: number;
@@ -245,6 +253,15 @@ declare global {
         mappingFile?: string;
         licenseAccepted: boolean;
       }): Promise<{ ok: true; installation?: Record<string, unknown> }>;
+      chooseXschemPeerFile(mode: 'bridge' | 'external'): Promise<string | null>;
+      linkXschemPeer(projectId: string, input: {
+        moduleId: string;
+        mode: 'native' | 'bridge' | 'external';
+        peerFile?: string;
+      }): Promise<XschemSyncResult>;
+      pushXschemPeer(projectId: string, moduleId: string): Promise<XschemSyncResult>;
+      pullXschemPeer(projectId: string, moduleId: string): Promise<XschemSyncResult>;
+      takeXschemOwnership(projectId: string, moduleId: string): Promise<XschemSyncResult>;
       getAppVersion(): Promise<string>;
       getCircuitSkillStatus(): Promise<CircuitSkillStatus>;
       syncCircuitSkill(): Promise<CircuitSkillStatus>;

@@ -61,6 +61,14 @@ export function SettingsDialog({ onClose }: Props) {
   const [pdkAdapter, setPdkAdapter] = useState<'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial'>('ihp-sg13g2');
   const [pdkLicenseAccepted, setPdkLicenseAccepted] = useState(false);
   const [pdkImportStatus, setPdkImportStatus] = useState('');
+  const [pendingPdk, setPendingPdk] = useState<{
+    input: {
+      root: string;
+      adapter: typeof pdkAdapter;
+      mappingFile?: string;
+    };
+    installation: Record<string, unknown>;
+  } | null>(null);
   const [executionProfiles, setExecutionProfiles] = useState<ExecutionProfileRegistry | null>(null);
   const [executionDraft, setExecutionDraft] = useState<StoredExecutionProfile>(emptyExecutionProfile);
   const [executionProfileStatus, setExecutionProfileStatus] = useState('');
@@ -321,8 +329,8 @@ export function SettingsDialog({ onClose }: Props) {
   }, []);
 
   const handlePdkImport = useCallback(async () => {
-    if (!pdkLicenseAccepted) return;
     setPdkImportStatus('');
+    setPendingPdk(null);
     try {
       const root = await window.electronAPI.choosePdkRoot();
       if (!root) return;
@@ -335,18 +343,39 @@ export function SettingsDialog({ onClose }: Props) {
         adapter: pdkAdapter,
         mappingFile: mappingFile || undefined,
       });
+      setPendingPdk({
+        input: {
+          root,
+          adapter: pdkAdapter,
+          mappingFile: mappingFile || undefined,
+        },
+        installation: scanned.installation ?? {},
+      });
+      setPdkImportStatus('Scan complete. Review the discovered identity and capabilities before registering.');
+    } catch (err: unknown) {
+      setPdkImportStatus(`Scan failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [pdkAdapter]);
+
+  const confirmPdkImport = useCallback(async () => {
+    if (!pendingPdk || !pdkLicenseAccepted) return;
+    try {
       const registered = await window.electronAPI.registerPdkInstallation({
-        root,
-        adapter: pdkAdapter,
-        mappingFile: mappingFile || undefined,
+        ...pendingPdk.input,
         licenseAccepted: true,
       });
-      setPdkImportStatus(`Registered ${String(registered.installation?.id ?? scanned.installation?.id ?? pdkAdapter)}`);
+      setPdkImportStatus(`Registered ${String(
+        registered.installation?.installation_id
+        ?? pendingPdk.installation.installation_id
+        ?? pdkAdapter,
+      )}`);
+      setPendingPdk(null);
+      setPdkLicenseAccepted(false);
       await handleIcDiagnostics();
     } catch (err: unknown) {
-      setPdkImportStatus(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+      setPdkImportStatus(`Registration failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [handleIcDiagnostics, pdkAdapter, pdkLicenseAccepted]);
+  }, [handleIcDiagnostics, pdkAdapter, pdkLicenseAccepted, pendingPdk]);
 
   const updateExecutionDraft = useCallback(<K extends keyof StoredExecutionProfile>(
     key: K,
@@ -661,12 +690,42 @@ export function SettingsDialog({ onClose }: Props) {
                     type="button"
                     className="av-btn av-btn--secondary"
                     onClick={() => { void handlePdkImport(); }}
-                    disabled={!pdkLicenseAccepted}
                     data-testid="import-local-pdk"
                   >
-                    Scan and register
+                    Scan local PDK
                   </button>
                 </div>
+                {pendingPdk ? (
+                  <div className="av-form-status" data-testid="pdk-scan-review">
+                    <div className="av-form-meta">
+                      <span>Installation</span>
+                      <strong>{String(pendingPdk.installation.name ?? pendingPdk.installation.logical_id ?? 'Unknown')}</strong>
+                    </div>
+                    <div className="av-form-meta">
+                      <span>ID</span>
+                      <strong>{String(pendingPdk.installation.installation_id ?? 'Not generated')}</strong>
+                    </div>
+                    <div className="av-form-meta">
+                      <span>Process</span>
+                      <strong>{String(pendingPdk.installation.process ?? 'Unknown')}</strong>
+                    </div>
+                    <div className="av-form-meta">
+                      <span>Support</span>
+                      <strong>{String(pendingPdk.installation.support_status ?? 'Unqualified')}</strong>
+                    </div>
+                    <div className="av-form-meta">
+                      <span>Capabilities found</span>
+                      <strong>
+                        {Object.values(
+                          (pendingPdk.installation.capabilities ?? {}) as Record<string, unknown>,
+                        ).filter(Boolean).length}
+                      </strong>
+                    </div>
+                    <p className="av-form-hint">
+                      Root: {String(pendingPdk.installation.root ?? pendingPdk.input.root)}
+                    </p>
+                  </div>
+                ) : null}
                 <label className="av-form-check">
                   <input
                     type="checkbox"
@@ -676,6 +735,30 @@ export function SettingsDialog({ onClose }: Props) {
                   />
                   I have reviewed and accept this PDK&apos;s license; keep all files in place.
                 </label>
+                {pendingPdk ? (
+                  <div className="av-form-meta" style={{ justifyContent: 'flex-end', gap: 8 }}>
+                    <button
+                      type="button"
+                      className="av-btn av-btn--secondary"
+                      onClick={() => {
+                        setPendingPdk(null);
+                        setPdkImportStatus('Registration cancelled; no registry changes were made.');
+                      }}
+                      data-testid="cancel-pdk-registration"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="av-btn av-btn--primary"
+                      onClick={() => { void confirmPdkImport(); }}
+                      disabled={!pdkLicenseAccepted}
+                      data-testid="confirm-pdk-registration"
+                    >
+                      Confirm registration
+                    </button>
+                  </div>
+                ) : null}
                 {pdkImportStatus && <p className="av-form-hint" role="status">{pdkImportStatus}</p>}
               </section>
 

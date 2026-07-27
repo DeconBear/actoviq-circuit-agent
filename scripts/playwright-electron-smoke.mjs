@@ -375,6 +375,8 @@ try {
   await page.getByTestId('execution-profile-provider').waitFor();
   await page.getByTestId('execution-profile-target').waitFor();
   assert.equal(await page.getByTestId('save-execution-profile').isDisabled(), true);
+  assert.equal(await page.getByTestId('import-local-pdk').isEnabled(), true);
+  assert.equal((await page.getByTestId('import-local-pdk').textContent())?.trim(), 'Scan local PDK');
   await page.getByTestId('settings-dialog-close').click();
   await page.getByTestId('settings-dialog').waitFor({ state: 'detached', timeout: 10_000 });
   await clickApplicationMenuPath(electronApp, ['File', 'New Design']);
@@ -581,6 +583,14 @@ try {
   assert.equal(sidebarDemoProjectManifest.project.modules.length, 0);
   await page.getByTestId('topbar-tab-hdl').click();
   await page.getByTestId('hdl-workspace-empty').waitFor();
+  await page.getByTestId('initialize-hdl-workspace').click();
+  await page.getByTestId('hdl-workspace').waitFor({ timeout: 20_000 });
+  await page.getByTestId('hdl-run-controls').waitFor();
+  await page.getByTestId('hdl-simulate').waitFor();
+  await page.getByTestId('hdl-synthesize').waitFor();
+  await page.getByTestId('hdl-gate-regression').waitFor();
+  await page.getByTestId('create-hdl-file').waitFor();
+  await page.screenshot({ path: path.resolve(outputRoot, 'hdl-workspace.png') });
   await page.getByTestId('topbar-tab-design').click();
   await page.getByTestId('open-project-erc').click();
   await page.getByTestId('project-erc-panel').waitFor();
@@ -1003,6 +1013,10 @@ try {
 
   await page.getByTestId('module-card-filter').dblclick();
   await page.getByTestId('module-canvas').waitFor();
+  await page.getByTestId('xschem-peer-panel').waitFor();
+  await page.getByTestId('xschem-mode').getByText('Mode: native', { exact: true }).waitFor();
+  await page.getByTestId('xschem-mode-bridge').waitFor();
+  await page.getByTestId('xschem-mode-external').waitFor();
   await page.getByTestId('schematic-editor').waitFor();
   assert.equal(await page.getByTestId('schematic-editor').getAttribute('data-schematic-source'), 'document');
   assert.equal(await page.getByTestId('schematic-editor-svg').getAttribute('data-schematic-source'), 'document');

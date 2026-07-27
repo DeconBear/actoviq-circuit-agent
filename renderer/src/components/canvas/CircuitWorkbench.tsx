@@ -29,6 +29,7 @@ import type {
   ProjectKind,
   SchematicOverrides,
   SimulationRun,
+  XschemSyncConflict,
 } from '../../types';
 import { SchematicEditor, type SchematicProbeSelection } from './SchematicEditor';
 import { WorkbenchToolbar } from './WorkbenchToolbar';
@@ -436,6 +437,7 @@ export function CircuitWorkbench({
   const [lcscSelectedId, setLcscSelectedId] = useState('');
   const [lcscBindComponentId, setLcscBindComponentId] = useState('');
   const [lcscSearching, setLcscSearching] = useState(false);
+  const [xschemConflicts, setXschemConflicts] = useState<XschemSyncConflict[]>([]);
 
   const project = bundle?.project ?? null;
   const projectKind = project?.project_kind ?? 'simulation';
@@ -523,6 +525,7 @@ export function CircuitWorkbench({
     setLcscResults([]);
     setLcscSelectedId('');
     setLcscBindComponentId('');
+    setXschemConflicts([]);
     modulePreviewBusyRef.current = new Set();
   }, [activeProjectId]);
 
@@ -1116,6 +1119,83 @@ export function CircuitWorkbench({
     } catch (simulationError) {
       if (isActiveProject(operationProjectId)) {
         setError(simulationError instanceof Error ? simulationError.message : String(simulationError));
+        setNotice('');
+      }
+    } finally {
+      if (isActiveProject(operationProjectId)) setBusy(false);
+    }
+  }
+
+  async function linkXschemMode(mode: 'native' | 'bridge' | 'external'): Promise<void> {
+    if (!currentProjectId || !activeModuleId || busy) return;
+    if (mode === 'native' && selectedModule?.schematic_peer?.mode === 'external') {
+      setNotice('Pull and take ownership explicitly before switching an external Xschem module to native mode.');
+      return;
+    }
+    if (mode === 'native' && selectedModule?.schematic_peer?.mode === 'bridge'
+      && !window.confirm('Disconnect the Xschem bridge and keep the current Actoviq schematic as authoritative?')) {
+      return;
+    }
+    let peerFile: string | undefined;
+    if (mode !== 'native') {
+      const selected = await window.electronAPI.chooseXschemPeerFile(mode);
+      if (!selected) return;
+      peerFile = selected;
+    }
+    const operationProjectId = currentProjectId;
+    const operationModuleId = activeModuleId;
+    setBusy(true);
+    setError('');
+    setXschemConflicts([]);
+    setNotice(mode === 'bridge' ? 'Creating controlled Xschem bridge...' : mode === 'external'
+      ? 'Linking authoritative Xschem schematic...' : 'Switching to Actoviq native mode...');
+    try {
+      await window.electronAPI.linkXschemPeer(operationProjectId, {
+        moduleId: operationModuleId,
+        mode,
+        peerFile,
+      });
+      await onReloadProject(operationProjectId);
+      if (isActiveProject(operationProjectId)) setNotice(`Xschem mode is now ${mode}.`);
+    } catch (operationError) {
+      if (isActiveProject(operationProjectId)) {
+        setError(operationError instanceof Error ? operationError.message : String(operationError));
+        setNotice('');
+      }
+    } finally {
+      if (isActiveProject(operationProjectId)) setBusy(false);
+    }
+  }
+
+  async function syncXschem(action: 'push' | 'pull' | 'take-ownership'): Promise<void> {
+    if (!currentProjectId || !activeModuleId || busy) return;
+    const operationProjectId = currentProjectId;
+    const operationModuleId = activeModuleId;
+    setBusy(true);
+    setError('');
+    setXschemConflicts([]);
+    setNotice(action === 'push' ? 'Pushing safe Actoviq projection to Xschem...'
+      : action === 'pull' ? 'Reviewing Xschem changes...' : 'Pulling Xschem changes before taking ownership...');
+    try {
+      const result = action === 'push'
+        ? await window.electronAPI.pushXschemPeer(operationProjectId, operationModuleId)
+        : action === 'pull'
+          ? await window.electronAPI.pullXschemPeer(operationProjectId, operationModuleId)
+          : await window.electronAPI.takeXschemOwnership(operationProjectId, operationModuleId);
+      if (result.requires_review) {
+        setXschemConflicts(result.conflicts ?? []);
+        setNotice('Xschem changes require review; no topology or conflicting edits were applied.');
+      } else {
+        await onReloadProject(operationProjectId);
+        if (isActiveProject(operationProjectId)) {
+          setNotice(action === 'take-ownership'
+            ? 'Xschem changes pulled; Actoviq is now authoritative.'
+            : `Xschem ${action} completed.`);
+        }
+      }
+    } catch (operationError) {
+      if (isActiveProject(operationProjectId)) {
+        setError(operationError instanceof Error ? operationError.message : String(operationError));
         setNotice('');
       }
     } finally {
@@ -2151,6 +2231,9 @@ export function CircuitWorkbench({
               onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
               onProbe={(probe) => openSimulationProbe(selectedRef.id, probe)}
+              xschemConflicts={xschemConflicts}
+              onXschemMode={linkXschemMode}
+              onXschemSync={syncXschem}
             />
           ) : null}
         </div>
@@ -2579,6 +2662,9 @@ function ModuleSchematic({
   onResetItem,
   onResetLayout,
   onProbe,
+  xschemConflicts,
+  onXschemMode,
+  onXschemSync,
 }: {
   module: CircuitModuleRef;
   moduleData?: CircuitModule;
@@ -2594,6 +2680,9 @@ function ModuleSchematic({
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
   onProbe: (probe: SchematicProbeSelection) => void;
+  xschemConflicts: XschemSyncConflict[];
+  onXschemMode: (mode: 'native' | 'bridge' | 'external') => Promise<void>;
+  onXschemSync: (action: 'push' | 'pull' | 'take-ownership') => Promise<void>;
 }) {
   const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
   const [editLayout, setEditLayout] = useState(false);
@@ -2952,6 +3041,80 @@ function ModuleSchematic({
           </button>
         </div>
       </div>
+      <div style={styles.xschemPeerPanel} data-testid="xschem-peer-panel">
+        <div style={styles.xschemPeerSummary}>
+          <strong>Xschem peer</strong>
+          <span data-testid="xschem-mode">
+            Mode: {moduleData?.schematic_peer?.mode ?? 'native'}
+          </span>
+          {moduleData?.schematic_peer?.peer_file ? (
+            <span style={styles.xschemPeerPath} title={moduleData.schematic_peer.peer_file}>
+              {moduleData.schematic_peer.peer_file}
+            </span>
+          ) : (
+            <span style={styles.xschemPeerPath}>No external peer linked</span>
+          )}
+        </div>
+        <div style={styles.xschemPeerActions}>
+          <button
+            type="button"
+            style={styles.secondaryButton}
+            onClick={() => void onXschemMode('native')}
+            disabled={busy || !moduleData || moduleData.schematic_peer?.mode === 'external'}
+            data-testid="xschem-mode-native"
+          >
+            Use Actoviq
+          </button>
+          <button
+            type="button"
+            style={styles.secondaryButton}
+            onClick={() => void onXschemMode('bridge')}
+            disabled={busy || !moduleData}
+            data-testid="xschem-mode-bridge"
+          >
+            Create bridge
+          </button>
+          <button
+            type="button"
+            style={styles.secondaryButton}
+            onClick={() => void onXschemMode('external')}
+            disabled={busy || !moduleData}
+            data-testid="xschem-mode-external"
+          >
+            Link external
+          </button>
+          {moduleData?.schematic_peer?.mode === 'bridge' ? (
+            <>
+              <button type="button" style={styles.secondaryButton} onClick={() => void onXschemSync('push')} disabled={busy} data-testid="xschem-push">
+                Push
+              </button>
+              <button type="button" style={styles.secondaryButton} onClick={() => void onXschemSync('pull')} disabled={busy} data-testid="xschem-pull">
+                Pull
+              </button>
+            </>
+          ) : null}
+          {moduleData?.schematic_peer?.mode === 'external' ? (
+            <>
+              <button type="button" style={styles.secondaryButton} onClick={() => void onXschemSync('pull')} disabled={busy} data-testid="xschem-pull">
+                Pull safe fields
+              </button>
+              <button type="button" style={styles.primaryButton} onClick={() => void onXschemSync('take-ownership')} disabled={busy} data-testid="xschem-take-ownership">
+                Pull and take ownership
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
+      {xschemConflicts.length > 0 ? (
+        <div className="av-form-status av-form-status--error" data-testid="xschem-conflict-review">
+          <strong>Sync stopped for review</strong>
+          {xschemConflicts.map((conflict, index) => (
+            <div key={`${conflict.kind}-${conflict.field ?? ''}-${index}`}>
+              {conflict.kind}{conflict.field ? ` / ${conflict.field}` : ''}: {conflict.message}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {layoutFeedback ? (
         <div style={styles.layoutFeedback} data-testid="layout-optimization-feedback">
           <strong>Layout quality {Math.round(layoutFeedback.initial_quality.readability_score)} → {Math.round(layoutFeedback.final_quality.readability_score)}</strong>
@@ -3668,6 +3831,41 @@ const styles: Record<string, CSSProperties> = {
   moduleViewerActions: { display: 'flex', alignItems: 'center', gap: 8 },
   moduleViewerTitle: { margin: '2px 0', fontSize: 18 },
   moduleViewerId: { color: '#7b8490', fontFamily: 'Consolas, monospace', fontSize: 10 },
+  xschemPeerPanel: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    margin: '-2px 0 10px',
+    padding: '8px 10px',
+    border: '1px solid #d7dce3',
+    borderRadius: 6,
+    background: '#ffffff',
+  },
+  xschemPeerSummary: {
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    color: '#4e5965',
+    fontSize: 11,
+  },
+  xschemPeerPath: {
+    maxWidth: 320,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: '#7b8490',
+    fontFamily: 'Consolas, monospace',
+    fontSize: 10,
+  },
+  xschemPeerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
   layoutFeedback: {
     display: 'flex',
     alignItems: 'center',
