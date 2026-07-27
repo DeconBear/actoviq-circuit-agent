@@ -1983,6 +1983,16 @@ export function CircuitWorkbench({
               <button type="button" className="av-btn av-btn--primary" onClick={() => { void runPhysicalVerification(); }} disabled={busy} data-testid="run-physical-verification">
                 {busy ? 'Running...' : 'Run controlled provider'}
               </button>
+              {physicalForm.layout ? (
+                <button
+                  type="button"
+                  className="av-btn av-btn--secondary"
+                  onClick={() => { void window.electronAPI.openPhysicalArtifact(physicalForm.layout); }}
+                  data-testid="open-physical-layout"
+                >
+                  Open layout externally
+                </button>
+              ) : null}
               {physicalResult ? (
                 <div className={`av-form-status${(
                   'status' in physicalResult ? physicalResult.status === 'passed' : physicalResult.ok
@@ -1992,6 +2002,28 @@ export function CircuitWorkbench({
                     {'status' in physicalResult ? ` ${physicalResult.status}` : ` ${physicalResult.execution_status}`}
                   </strong>
                   {'artifacts' in physicalResult ? <div>{physicalResult.artifacts.length} artifacts</div> : null}
+                  {'artifacts' in physicalResult ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {physicalResult.artifacts.map((artifact) => (
+                        <button
+                          key={`${artifact.kind}-${artifact.path}`}
+                          type="button"
+                          className="av-btn av-btn--secondary"
+                          onClick={() => { void window.electronAPI.openPhysicalArtifact(artifact.path); }}
+                        >
+                          Open {artifact.kind}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {'metadata' in physicalResult && typeof physicalResult.metadata.violation_count === 'number' ? (
+                    <div>Violations: {physicalResult.metadata.violation_count}</div>
+                  ) : null}
+                  {'metadata' in physicalResult && Array.isArray(physicalResult.metadata.items) ? (
+                    <pre style={{ maxHeight: 180, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                      {physicalResult.metadata.items.slice(0, 20).map((item) => JSON.stringify(item)).join('\n')}
+                    </pre>
+                  ) : null}
                   {'diagnostics' in physicalResult && Array.isArray(physicalResult.diagnostics)
                     ? physicalResult.diagnostics.map((diagnostic, index) => <div key={`${diagnostic}-${index}`}>{diagnostic}</div>)
                     : null}

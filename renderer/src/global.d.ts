@@ -210,6 +210,7 @@ declare global {
         absoluteTolerance: number;
       }): Promise<HdlVerificationRun>;
       choosePhysicalVerificationFile(label: string): Promise<string | null>;
+      openPhysicalArtifact(artifactPath: string): Promise<string>;
       runPhysicalVerification(
         projectId: string,
         input: Record<string, unknown>,

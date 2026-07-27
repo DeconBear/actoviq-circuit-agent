@@ -572,6 +572,10 @@ const electronAPI = {
     return ipcRenderer.invoke('project:choose-physical-file', label);
   },
 
+  openPhysicalArtifact(artifactPath: string): Promise<string> {
+    return ipcRenderer.invoke('project:open-physical-artifact', artifactPath);
+  },
+
   runPhysicalVerification(projectId: string, input: Record<string, unknown>): Promise<unknown> {
     return ipcRenderer.invoke('project:run-physical-verification', projectId, input);
   },

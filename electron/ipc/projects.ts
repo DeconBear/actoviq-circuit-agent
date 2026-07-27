@@ -2223,6 +2223,14 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
+  ipcMain.handle('project:open-physical-artifact', async (_event, artifactPath: string) => {
+    const target = path.resolve(artifactPath);
+    await access(target);
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
+    return target;
+  });
+
   ipcMain.handle('project:choose-licensed-eda-input', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Select commercial simulator input deck or AMS file list',
