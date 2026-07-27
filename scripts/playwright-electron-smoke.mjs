@@ -370,6 +370,11 @@ try {
   await page.getByTestId('ic-tool-ngspice').waitFor();
   await page.getByTestId('ic-tool-klayout').waitFor();
   await page.getByTestId('ic-tool-yosys').waitFor();
+  await page.getByTestId('execution-profile-settings').scrollIntoViewIfNeeded();
+  await page.getByTestId('execution-profile-id').waitFor();
+  await page.getByTestId('execution-profile-provider').waitFor();
+  await page.getByTestId('execution-profile-target').waitFor();
+  assert.equal(await page.getByTestId('save-execution-profile').isDisabled(), true);
   await page.getByTestId('settings-dialog-close').click();
   await page.getByTestId('settings-dialog').waitFor({ state: 'detached', timeout: 10_000 });
   await clickApplicationMenuPath(electronApp, ['File', 'New Design']);

@@ -71,6 +71,36 @@ export interface LayoutVisionVerification {
   error?: string;
 }
 
+export type LicensedProviderId =
+  | 'cadence_spectre'
+  | 'synopsys_primesim_hspice'
+  | 'synopsys_primesim_xa'
+  | 'siemens_afs'
+  | 'cadence_xcelium_ams'
+  | 'synopsys_vcs_ams'
+  | 'siemens_questa_ams';
+
+export interface StoredExecutionProfile {
+  schema: 'actoviq.execution-profile.v1';
+  id: string;
+  providerId: LicensedProviderId;
+  target: 'local_linux' | 'local_windows' | 'ssh_linux';
+  executable?: string;
+  allowedRoots: string[];
+  environmentKeys: string[];
+  ssh?: {
+    host: string;
+    executable?: string;
+    remoteWorkingDirectory: string;
+  };
+  qualification: 'configured' | 'unverified' | 'native_verified';
+}
+
+export interface ExecutionProfileRegistry {
+  schema: 'actoviq.execution-profile-registry.v1';
+  profiles: StoredExecutionProfile[];
+}
+
 export interface AppSettings {
   actoviqProvider: ActoviqProvider;
   actoviqProviderPreset: ActoviqProviderPreset;
@@ -621,6 +651,22 @@ const electronAPI = {
 
   getIcDiagnostics(): Promise<unknown> {
     return ipcRenderer.invoke('settings:ic-diagnostics');
+  },
+
+  listExecutionProfiles(): Promise<ExecutionProfileRegistry> {
+    return ipcRenderer.invoke('settings:list-execution-profiles');
+  },
+
+  saveExecutionProfile(profile: StoredExecutionProfile): Promise<ExecutionProfileRegistry> {
+    return ipcRenderer.invoke('settings:save-execution-profile', profile);
+  },
+
+  deleteExecutionProfile(id: string): Promise<ExecutionProfileRegistry> {
+    return ipcRenderer.invoke('settings:delete-execution-profile', id);
+  },
+
+  probeExecutionProfile(id: string): Promise<unknown> {
+    return ipcRenderer.invoke('settings:probe-execution-profile', id);
   },
 
   getAppVersion(): Promise<string> {

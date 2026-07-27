@@ -29,11 +29,14 @@ import type {
   EdaBridgePeerKind,
   EdaExportRequest,
   EdaExportResult,
+  ExecutionProfileProbe,
+  ExecutionProfileRegistry,
   LayoutOptimizationRequest,
   LayoutOptimizationResult,
   SavedDesignMemorySummary,
   SimulationDataset,
   SimulationRun,
+  StoredExecutionProfile,
   TechnicalReportResult,
   WorkflowEvent,
   WorkspaceSummary,
@@ -220,6 +223,10 @@ declare global {
       testProviderSettings(settings: AppSettings): Promise<ProviderTestResult>;
       testLayoutModelSettings(settings: AppSettings): Promise<LayoutModelTestResult>;
       getIcDiagnostics(): Promise<IcDiagnostics>;
+      listExecutionProfiles(): Promise<ExecutionProfileRegistry>;
+      saveExecutionProfile(profile: StoredExecutionProfile): Promise<ExecutionProfileRegistry>;
+      deleteExecutionProfile(id: string): Promise<ExecutionProfileRegistry>;
+      probeExecutionProfile(id: string): Promise<ExecutionProfileProbe>;
       choosePdkRoot(): Promise<string | null>;
       choosePdkMappingPack(): Promise<string | null>;
       listPdkInstallations(): Promise<Record<string, unknown>>;

@@ -3,14 +3,44 @@ import type {
   ActoviqProviderPreset,
   AppSettings,
   CircuitSkillStatus,
+  ExecutionProfileProbe,
+  ExecutionProfileRegistry,
   IcDiagnostics,
   LayoutModelTestResult,
   ProviderTestResult,
+  StoredExecutionProfile,
 } from '../../types';
 import { SecretField } from './SecretField';
 
 interface Props {
   onClose: () => void;
+}
+
+const EXECUTION_PROVIDERS: Array<{
+  id: StoredExecutionProfile['providerId'];
+  label: string;
+  environmentKeys: string[];
+}> = [
+  { id: 'cadence_spectre', label: 'Cadence Spectre', environmentKeys: ['CDS_LIC_FILE', 'LM_LICENSE_FILE'] },
+  { id: 'synopsys_primesim_hspice', label: 'Synopsys PrimeSim HSPICE', environmentKeys: ['SNPSLMD_LICENSE_FILE', 'LM_LICENSE_FILE'] },
+  { id: 'synopsys_primesim_xa', label: 'Synopsys PrimeSim XA', environmentKeys: ['SNPSLMD_LICENSE_FILE', 'LM_LICENSE_FILE'] },
+  { id: 'siemens_afs', label: 'Siemens AFS', environmentKeys: ['MGLS_LICENSE_FILE', 'LM_LICENSE_FILE'] },
+  { id: 'cadence_xcelium_ams', label: 'Cadence Xcelium AMS', environmentKeys: ['CDS_LIC_FILE', 'LM_LICENSE_FILE'] },
+  { id: 'synopsys_vcs_ams', label: 'Synopsys VCS AMS', environmentKeys: ['SNPSLMD_LICENSE_FILE', 'LM_LICENSE_FILE'] },
+  { id: 'siemens_questa_ams', label: 'Siemens Questa AMS', environmentKeys: ['MGLS_LICENSE_FILE', 'LM_LICENSE_FILE'] },
+];
+
+function emptyExecutionProfile(): StoredExecutionProfile {
+  const provider = EXECUTION_PROVIDERS[0]!;
+  return {
+    schema: 'actoviq.execution-profile.v1',
+    id: '',
+    providerId: provider.id,
+    target: navigator.platform.toLowerCase().includes('win') ? 'local_windows' : 'local_linux',
+    allowedRoots: [],
+    environmentKeys: provider.environmentKeys,
+    qualification: 'unverified',
+  };
 }
 
 export function SettingsDialog({ onClose }: Props) {
@@ -31,6 +61,11 @@ export function SettingsDialog({ onClose }: Props) {
   const [pdkAdapter, setPdkAdapter] = useState<'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial'>('ihp-sg13g2');
   const [pdkLicenseAccepted, setPdkLicenseAccepted] = useState(false);
   const [pdkImportStatus, setPdkImportStatus] = useState('');
+  const [executionProfiles, setExecutionProfiles] = useState<ExecutionProfileRegistry | null>(null);
+  const [executionDraft, setExecutionDraft] = useState<StoredExecutionProfile>(emptyExecutionProfile);
+  const [executionProfileStatus, setExecutionProfileStatus] = useState('');
+  const [executionProbe, setExecutionProbe] = useState<ExecutionProfileProbe | null>(null);
+  const [savingExecutionProfile, setSavingExecutionProfile] = useState(false);
 
   useEffect(() => {
     if (!window.electronAPI) {
@@ -41,8 +76,9 @@ export function SettingsDialog({ onClose }: Props) {
     Promise.all([
       window.electronAPI.getSettings(),
       window.electronAPI.getCircuitSkillStatus().catch(() => null),
+      window.electronAPI.listExecutionProfiles().catch(() => null),
     ])
-      .then(async ([s, nextSkillStatus]) => {
+      .then(async ([s, nextSkillStatus, profileRegistry]) => {
         let next = s;
         if (s.hasActoviqAuthToken && !s.actoviqAuthToken && window.electronAPI.revealActoviqAuthToken) {
           try {
@@ -54,6 +90,7 @@ export function SettingsDialog({ onClose }: Props) {
         }
         setSettings(next);
         setSkillStatus(nextSkillStatus);
+        setExecutionProfiles(profileRegistry);
         setLoading(false);
       })
       .catch((err) => {
@@ -310,6 +347,74 @@ export function SettingsDialog({ onClose }: Props) {
       setPdkImportStatus(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [handleIcDiagnostics, pdkAdapter, pdkLicenseAccepted]);
+
+  const updateExecutionDraft = useCallback(<K extends keyof StoredExecutionProfile>(
+    key: K,
+    value: StoredExecutionProfile[K],
+  ) => {
+    setExecutionDraft((current) => ({ ...current, [key]: value }));
+    setExecutionProbe(null);
+    setExecutionProfileStatus('');
+  }, []);
+
+  const handleExecutionProviderChange = useCallback((providerId: StoredExecutionProfile['providerId']) => {
+    const provider = EXECUTION_PROVIDERS.find((entry) => entry.id === providerId)!;
+    setExecutionDraft((current) => ({
+      ...current,
+      providerId,
+      environmentKeys: provider.environmentKeys,
+    }));
+    setExecutionProbe(null);
+    setExecutionProfileStatus('');
+  }, []);
+
+  const chooseExecutionRoot = useCallback(async () => {
+    const root = await window.electronAPI.chooseWorkspaceRoot();
+    if (root) updateExecutionDraft('allowedRoots', [root]);
+  }, [updateExecutionDraft]);
+
+  const saveExecutionDraft = useCallback(async () => {
+    setSavingExecutionProfile(true);
+    setExecutionProfileStatus('');
+    try {
+      const next = await window.electronAPI.saveExecutionProfile(executionDraft);
+      setExecutionProfiles(next);
+      setExecutionProfileStatus(`Saved execution profile ${executionDraft.id}.`);
+    } catch (err: unknown) {
+      setExecutionProfileStatus(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSavingExecutionProfile(false);
+    }
+  }, [executionDraft]);
+
+  const deleteExecutionDraft = useCallback(async () => {
+    if (!executionDraft.id || !executionProfiles?.profiles.some((profile) => profile.id === executionDraft.id)) return;
+    if (!window.confirm(`Delete execution profile ${executionDraft.id}?`)) return;
+    try {
+      const next = await window.electronAPI.deleteExecutionProfile(executionDraft.id);
+      setExecutionProfiles(next);
+      setExecutionDraft(emptyExecutionProfile());
+      setExecutionProbe(null);
+      setExecutionProfileStatus('Execution profile deleted.');
+    } catch (err: unknown) {
+      setExecutionProfileStatus(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [executionDraft.id, executionProfiles]);
+
+  const probeExecutionDraft = useCallback(async () => {
+    if (!executionDraft.id) return;
+    setExecutionProfileStatus('Probing configured tool...');
+    try {
+      const result = await window.electronAPI.probeExecutionProfile(executionDraft.id);
+      setExecutionProbe(result);
+      setExecutionProfileStatus(result.available
+        ? `Available: ${result.version || result.executable}`
+        : `Probe failed: ${result.diagnostics.join('; ') || 'tool unavailable'}`);
+    } catch (err: unknown) {
+      setExecutionProbe(null);
+      setExecutionProfileStatus(`Probe failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [executionDraft.id]);
 
   const requestClose = useCallback(() => {
     if (dirty && !window.confirm('Discard unsaved settings changes?')) {
@@ -572,6 +677,178 @@ export function SettingsDialog({ onClose }: Props) {
                   I have reviewed and accept this PDK&apos;s license; keep all files in place.
                 </label>
                 {pdkImportStatus && <p className="av-form-hint" role="status">{pdkImportStatus}</p>}
+              </section>
+
+              <section className="av-form-section" data-testid="execution-profile-settings">
+                <div className="av-form-section__header">
+                  <h3 className="av-form-section__title">Licensed EDA execution profiles</h3>
+                  <button
+                    type="button"
+                    className="av-btn av-btn--secondary"
+                    onClick={() => {
+                      setExecutionDraft(emptyExecutionProfile());
+                      setExecutionProbe(null);
+                      setExecutionProfileStatus('');
+                    }}
+                    data-testid="new-execution-profile"
+                  >
+                    New profile
+                  </button>
+                </div>
+                <p className="av-form-hint">
+                  Profiles store tool paths and allowlists only. License values are read from the launch environment
+                  and are never written to the project or this registry.
+                </p>
+                <div className="av-form-meta" style={{ alignItems: 'center', gap: 8 }}>
+                  <select
+                    className="av-settings-input"
+                    value={executionDraft.id}
+                    onChange={(event) => {
+                      const selected = executionProfiles?.profiles.find((profile) => profile.id === event.target.value);
+                      if (selected) {
+                        setExecutionDraft(selected);
+                        setExecutionProbe(null);
+                        setExecutionProfileStatus('');
+                      }
+                    }}
+                    aria-label="Saved execution profile"
+                    data-testid="execution-profile-select"
+                  >
+                    <option value="">New profile</option>
+                    {executionProfiles?.profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>{profile.id}</option>
+                    ))}
+                  </select>
+                  <span>{executionProfiles?.profiles.length ?? 0} saved</span>
+                </div>
+                <Field
+                  label="Profile ID"
+                  value={executionDraft.id}
+                  onChange={(value) => updateExecutionDraft('id', value)}
+                  placeholder="spectre-local"
+                  testId="execution-profile-id"
+                />
+                <label className="av-form-field">
+                  <span className="av-form-field__label">Provider</span>
+                  <select
+                    className="av-settings-input"
+                    value={executionDraft.providerId}
+                    onChange={(event) => handleExecutionProviderChange(
+                      event.target.value as StoredExecutionProfile['providerId'],
+                    )}
+                    data-testid="execution-profile-provider"
+                  >
+                    {EXECUTION_PROVIDERS.map((provider) => (
+                      <option key={provider.id} value={provider.id}>{provider.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="av-form-field">
+                  <span className="av-form-field__label">Execution target</span>
+                  <select
+                    className="av-settings-input"
+                    value={executionDraft.target}
+                    onChange={(event) => updateExecutionDraft(
+                      'target',
+                      event.target.value as StoredExecutionProfile['target'],
+                    )}
+                    data-testid="execution-profile-target"
+                  >
+                    <option value="local_linux">Local Linux</option>
+                    <option value="local_windows">Local Windows</option>
+                    <option value="ssh_linux">SSH Linux</option>
+                  </select>
+                </label>
+                <Field
+                  label="Executable override"
+                  value={executionDraft.executable ?? ''}
+                  onChange={(value) => updateExecutionDraft('executable', value)}
+                  placeholder="Leave blank to use the provider default"
+                  testId="execution-profile-executable"
+                />
+                <div className="av-form-field">
+                  <span className="av-form-field__label">Allowed local root</span>
+                  <div className="av-form-meta" style={{ alignItems: 'center', gap: 8 }}>
+                    <input
+                      className="av-settings-input"
+                      value={executionDraft.allowedRoots[0] ?? ''}
+                      readOnly
+                      placeholder="Choose a working directory"
+                      data-testid="execution-profile-root"
+                    />
+                    <button type="button" className="av-btn av-btn--secondary" onClick={() => { void chooseExecutionRoot(); }}>
+                      Choose
+                    </button>
+                  </div>
+                </div>
+                {executionDraft.target === 'ssh_linux' && (
+                  <>
+                    <Field
+                      label="SSH host"
+                      value={executionDraft.ssh?.host ?? ''}
+                      onChange={(value) => updateExecutionDraft('ssh', {
+                        host: value,
+                        remoteWorkingDirectory: executionDraft.ssh?.remoteWorkingDirectory ?? '/work/actoviq',
+                        ...(executionDraft.ssh?.executable ? { executable: executionDraft.ssh.executable } : {}),
+                      })}
+                      placeholder="eda-user@workstation"
+                      testId="execution-profile-ssh-host"
+                    />
+                    <Field
+                      label="Remote working directory"
+                      value={executionDraft.ssh?.remoteWorkingDirectory ?? '/work/actoviq'}
+                      onChange={(value) => updateExecutionDraft('ssh', {
+                        host: executionDraft.ssh?.host ?? '',
+                        remoteWorkingDirectory: value,
+                        ...(executionDraft.ssh?.executable ? { executable: executionDraft.ssh.executable } : {}),
+                      })}
+                      placeholder="/work/actoviq"
+                      testId="execution-profile-ssh-root"
+                    />
+                  </>
+                )}
+                <p className="av-form-hint">
+                  Environment allowlist: {executionDraft.environmentKeys.join(', ') || 'none'}.
+                  Qualification remains unverified until this exact tool version passes in a licensed environment.
+                </p>
+                <div className="av-form-meta" style={{ justifyContent: 'flex-end', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="av-btn av-btn--danger-link"
+                    onClick={() => { void deleteExecutionDraft(); }}
+                    disabled={!executionProfiles?.profiles.some((profile) => profile.id === executionDraft.id)}
+                    data-testid="delete-execution-profile"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    className="av-btn av-btn--secondary"
+                    onClick={() => { void probeExecutionDraft(); }}
+                    disabled={!executionProfiles?.profiles.some((profile) => profile.id === executionDraft.id)}
+                    data-testid="probe-execution-profile"
+                  >
+                    Probe saved profile
+                  </button>
+                  <button
+                    type="button"
+                    className="av-btn av-btn--primary"
+                    onClick={() => { void saveExecutionDraft(); }}
+                    disabled={savingExecutionProfile || !executionDraft.id || !executionDraft.allowedRoots.length}
+                    data-testid="save-execution-profile"
+                  >
+                    {savingExecutionProfile ? 'Saving...' : 'Save profile'}
+                  </button>
+                </div>
+                {executionProfileStatus && (
+                  <div
+                    className={`av-form-status ${executionProbe?.available ? 'av-form-status--ok' : ''}`}
+                    role="status"
+                    data-testid="execution-profile-status"
+                  >
+                    {executionProfileStatus}
+                  </div>
+                )}
               </section>
 
               <section className="av-form-section" data-testid="circuit-skill-status">

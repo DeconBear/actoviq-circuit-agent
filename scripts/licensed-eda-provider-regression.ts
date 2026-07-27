@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -9,6 +9,12 @@ import {
   LicensedEdaProvider,
   type LicensedExecutionProfile,
 } from '../src/eda/licensedEdaProviders.js';
+import {
+  deleteExecutionProfile,
+  loadExecutionProfileRegistry,
+  resolveExecutionProfile,
+  saveExecutionProfile,
+} from '../electron/eda/executionProfileRegistry.js';
 
 const target = process.platform === 'win32' ? 'local_windows' : 'local_linux';
 
@@ -48,10 +54,37 @@ async function main(): Promise<void> {
   );
 
   const root = await mkdtemp(path.join(os.tmpdir(), 'actoviq-licensed-eda-'));
+  const registryPath = path.resolve(root, 'execution-profiles.json');
   const deck = path.resolve(root, 'deck.cir');
   const output = path.resolve(root, 'results');
   await writeFile(deck, 'Title\n.end\n', 'utf8');
   await mkdir(output);
+
+  const storedProfile = {
+    schema: 'actoviq.execution-profile.v1' as const,
+    id: 'spectre-local',
+    providerId: 'cadence_spectre' as const,
+    target,
+    executable: process.execPath,
+    allowedRoots: [root],
+    environmentKeys: ['LM_LICENSE_FILE'],
+    qualification: 'unverified' as const,
+  };
+  await saveExecutionProfile(storedProfile, registryPath);
+  const registry = await loadExecutionProfileRegistry(registryPath);
+  assert.equal(registry.profiles.length, 1);
+  const persistedText = await readFile(registryPath, 'utf8');
+  assert.ok(!persistedText.includes('secret-license-server'));
+  const resolvedProfile = await resolveExecutionProfile(
+    'spectre-local',
+    { LM_LICENSE_FILE: 'secret-license-server' },
+    registryPath,
+  );
+  assert.equal(resolvedProfile.environment?.LM_LICENSE_FILE, 'secret-license-server');
+  await assert.rejects(
+    saveExecutionProfile({ ...storedProfile, environmentKeys: ['UNAPPROVED_SECRET'] }, registryPath),
+    /not an allowed environment key/,
+  );
 
   const definition = {
     id: 'cadence_spectre' as const,
@@ -120,6 +153,9 @@ async function main(): Promise<void> {
     }),
     /outside the execution profile allowlist/,
   );
+
+  await deleteExecutionProfile('spectre-local', registryPath);
+  assert.equal((await loadExecutionProfileRegistry(registryPath)).profiles.length, 0);
 
   const sshProfile: LicensedExecutionProfile = {
     ...profile(root),

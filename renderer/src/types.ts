@@ -885,6 +885,45 @@ export interface IcDiagnostics {
   generatedAt: string;
 }
 
+export type LicensedProviderId =
+  | 'cadence_spectre'
+  | 'synopsys_primesim_hspice'
+  | 'synopsys_primesim_xa'
+  | 'siemens_afs'
+  | 'cadence_xcelium_ams'
+  | 'synopsys_vcs_ams'
+  | 'siemens_questa_ams';
+
+export interface StoredExecutionProfile {
+  schema: 'actoviq.execution-profile.v1';
+  id: string;
+  providerId: LicensedProviderId;
+  target: 'local_linux' | 'local_windows' | 'ssh_linux';
+  executable?: string;
+  allowedRoots: string[];
+  environmentKeys: string[];
+  ssh?: {
+    host: string;
+    executable?: string;
+    remoteWorkingDirectory: string;
+  };
+  qualification: 'configured' | 'unverified' | 'native_verified';
+}
+
+export interface ExecutionProfileRegistry {
+  schema: 'actoviq.execution-profile-registry.v1';
+  profiles: StoredExecutionProfile[];
+}
+
+export interface ExecutionProfileProbe {
+  providerId: string;
+  available: boolean;
+  executable: string;
+  version?: string;
+  target: StoredExecutionProfile['target'];
+  diagnostics: string[];
+}
+
 export interface ProviderTestResult {
   ok: boolean;
   provider: ActoviqProvider;

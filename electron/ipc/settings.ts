@@ -8,6 +8,13 @@ import { spawn } from 'node:child_process';
 import { createAgentSdk } from 'actoviq-agent-sdk';
 import { probeLayoutVisionModel } from '../agent/layoutVisionProbe.js';
 import { runProjectTool } from '../agent/circuitProjectCli.js';
+import {
+  deleteExecutionProfile,
+  loadExecutionProfileRegistry,
+  resolveExecutionProfile,
+  saveExecutionProfile,
+  type StoredExecutionProfile,
+} from '../eda/executionProfileRegistry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -704,6 +711,58 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
   ipcMain.handle('settings:ic-diagnostics', async () => (
     collectIcDiagnostics(await loadSettingsWithSecrets())
   ));
+
+  ipcMain.handle('settings:list-execution-profiles', async () => (
+    loadExecutionProfileRegistry()
+  ));
+
+  ipcMain.handle('settings:save-execution-profile', async (_event, profile: StoredExecutionProfile) => (
+    saveExecutionProfile(profile)
+  ));
+
+  ipcMain.handle('settings:delete-execution-profile', async (_event, id: string) => (
+    deleteExecutionProfile(id)
+  ));
+
+  ipcMain.handle('settings:probe-execution-profile', async (_event, id: string) => {
+    const profile = await resolveExecutionProfile(id);
+    const providerTools: Record<string, string> = {
+      cadence_spectre: 'spectre',
+      synopsys_primesim_hspice: 'hspice',
+      synopsys_primesim_xa: 'xa',
+      siemens_afs: 'afs',
+      cadence_xcelium_ams: 'xrun',
+      synopsys_vcs_ams: 'vcs',
+      siemens_questa_ams: 'vsim',
+    };
+    const definition = IC_TOOL_SPECS.find(([toolId]) => toolId === providerTools[profile.providerId]);
+    if (!definition) throw new Error(`No probe is defined for ${profile.providerId}`);
+    const [toolId, label, domain, fallback, args] = definition;
+    if (profile.target === 'ssh_linux') {
+      return {
+        providerId: profile.providerId,
+        available: false,
+        executable: profile.executable || fallback,
+        target: profile.target,
+        diagnostics: ['SSH profile saved; remote probing requires the SSH staging runner'],
+      };
+    }
+    const result = await probeIcTool(
+      toolId,
+      label,
+      domain,
+      profile.executable || fallback,
+      args,
+    );
+    return {
+      providerId: profile.providerId,
+      available: result.available,
+      executable: result.executable,
+      version: result.version,
+      target: profile.target,
+      diagnostics: result.diagnostic ? [result.diagnostic] : [],
+    };
+  });
 
   ipcMain.handle('settings:reveal-actoviq-auth-token', async () => {
     const settings = await loadSettingsWithSecrets();
