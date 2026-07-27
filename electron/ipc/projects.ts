@@ -2121,6 +2121,15 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
+  ipcMain.handle('project:choose-physical-file', async (_event, label: string) => {
+    const result = await dialog.showOpenDialog({
+      title: `Select ${label}`,
+      properties: ['openFile'],
+      filters: [{ name: 'IC design files', extensions: ['gds', 'gdsii', 'oas', 'oasis', 'mag', 'drc', 'lvs', 'lydrc', 'lylvs', 'cir', 'sp', 'spi', 'spice', 'cdl', 'tcl', 'tech'] }],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
   const pdkArgs = (command: 'pdk-scan' | 'pdk-register', input: {
     root: string;
     adapter: string;
@@ -2426,6 +2435,77 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
         '--ngspice-bin', settings.ngspiceBin,
       ])
     ));
+  });
+
+  ipcMain.handle('project:simulate-dual', async (_event, projectId: string, input) => {
+    const settings = await loadSettings();
+    return runProjectTool([
+      'simulate-dual',
+      '--project-root', await resolveProjectRoot(projectId),
+      '--left-profile', String(input.leftProfileId),
+      '--right-profile', String(input.rightProfileId),
+      '--relative-tolerance', String(input.relativeTolerance),
+      '--absolute-tolerance', String(input.absoluteTolerance),
+      '--ngspice-bin', settings.ngspiceBin,
+    ], { timeoutMs: 600_000 });
+  });
+
+  ipcMain.handle('project:run-physical-verification', async (_event, projectId: string, input) => {
+    const root = await resolveProjectRoot(projectId);
+    const operation = String(input.operation);
+    const runRoot = path.resolve(root, 'build', 'physical', operation, String(Date.now()));
+    const common = ['--run-root', runRoot];
+    if (operation === 'klayout_drc') {
+      return runProjectTool([
+        'verify-klayout-drc',
+        '--layout', String(input.layout),
+        '--rule-deck', String(input.ruleDeck),
+        ...common,
+      ], { timeoutMs: 600_000 });
+    }
+    if (operation === 'klayout_lvs') {
+      return runProjectTool([
+        'verify-klayout-lvs',
+        '--layout', String(input.layout),
+        '--schematic', String(input.schematic),
+        '--rule-deck', String(input.ruleDeck),
+        ...common,
+      ], { timeoutMs: 600_000 });
+    }
+    if (operation === 'magic_extract' || operation === 'magic_pex') {
+      return runProjectTool([
+        'extract-magic',
+        '--layout', String(input.layout),
+        '--tech-file', String(input.techFile),
+        '--top-cell', String(input.topCell),
+        ...(operation === 'magic_pex' ? ['--pex'] : []),
+        ...common,
+      ], { timeoutMs: 600_000 });
+    }
+    if (operation === 'netgen_lvs') {
+      return runProjectTool([
+        'verify-netgen-lvs',
+        '--extracted', String(input.extracted),
+        '--schematic', String(input.schematic),
+        '--setup-file', String(input.setupFile),
+        '--extracted-cell', String(input.extractedCell),
+        '--schematic-cell', String(input.schematicCell),
+        ...common,
+      ], { timeoutMs: 600_000 });
+    }
+    if (operation === 'post_layout_simulation') {
+      const settings = await loadSettings();
+      return runProjectTool([
+        'simulate-post-layout',
+        '--project-root', root,
+        '--deck', String(input.deck),
+        '--layout', String(input.layout),
+        '--schematic', String(input.schematic),
+        '--lvs-run', String(input.lvsRun),
+        '--ngspice-bin', settings.ngspiceBin,
+      ], { timeoutMs: 600_000 });
+    }
+    throw new Error(`Unsupported physical verification operation: ${operation}`);
   });
 
   ipcMain.handle('project:read-build', async (_event, projectId: string) => {

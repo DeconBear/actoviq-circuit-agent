@@ -558,6 +558,23 @@ const electronAPI = {
     return ipcRenderer.invoke('project:simulate-module', projectId, moduleId);
   },
 
+  simulateCircuitDual(projectId: string, input: {
+    leftProfileId: string;
+    rightProfileId: string;
+    relativeTolerance: number;
+    absoluteTolerance: number;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:simulate-dual', projectId, input);
+  },
+
+  choosePhysicalVerificationFile(label: string): Promise<string | null> {
+    return ipcRenderer.invoke('project:choose-physical-file', label);
+  },
+
+  runPhysicalVerification(projectId: string, input: Record<string, unknown>): Promise<unknown> {
+    return ipcRenderer.invoke('project:run-physical-verification', projectId, input);
+  },
+
   readCircuitBuild(projectId: string): Promise<unknown> {
     return ipcRenderer.invoke('project:read-build', projectId);
   },

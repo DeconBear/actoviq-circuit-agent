@@ -24,6 +24,7 @@ import type {
   EdaBridgePeerKind,
   EdaExportResult,
   EdaExportTarget,
+  HdlVerificationRun,
   LayoutOptimizationResult,
   LcscPart,
   ProjectKind,
@@ -81,6 +82,21 @@ interface XschemValidationResult {
       diagnostics?: string[];
     } | null;
   };
+}
+
+interface PhysicalVerificationForm {
+  operation: 'klayout_drc' | 'klayout_lvs' | 'magic_extract' | 'magic_pex' | 'netgen_lvs' | 'post_layout_simulation';
+  layout: string;
+  schematic: string;
+  ruleDeck: string;
+  techFile: string;
+  extracted: string;
+  setupFile: string;
+  topCell: string;
+  extractedCell: string;
+  schematicCell: string;
+  deck: string;
+  lvsRun: string;
 }
 
 const BOARD_MARGIN = 1200;
@@ -454,6 +470,22 @@ export function CircuitWorkbench({
   const [xschemConflicts, setXschemConflicts] = useState<XschemSyncConflict[]>([]);
   const [xschemValidation, setXschemValidation] = useState<XschemValidationResult | null>(null);
   const [simulationProfiles, setSimulationProfiles] = useState<StoredExecutionProfile[]>([]);
+  const [physicalOpen, setPhysicalOpen] = useState(false);
+  const [physicalResult, setPhysicalResult] = useState<HdlVerificationRun | SimulationRun | null>(null);
+  const [physicalForm, setPhysicalForm] = useState<PhysicalVerificationForm>({
+    operation: 'klayout_drc',
+    layout: '',
+    schematic: '',
+    ruleDeck: '',
+    techFile: '',
+    extracted: '',
+    setupFile: '',
+    topCell: '',
+    extractedCell: '',
+    schematicCell: '',
+    deck: '',
+    lvsRun: '',
+  });
 
   const project = bundle?.project ?? null;
   const projectKind = project?.project_kind ?? 'simulation';
@@ -1175,6 +1207,32 @@ export function CircuitWorkbench({
     }]);
   }
 
+  async function choosePhysicalPath(
+    key: keyof Pick<PhysicalVerificationForm, 'layout' | 'schematic' | 'ruleDeck' | 'techFile' | 'extracted' | 'setupFile' | 'deck' | 'lvsRun'>,
+    label: string,
+  ): Promise<void> {
+    const selected = await window.electronAPI.choosePhysicalVerificationFile(label);
+    if (selected) setPhysicalForm((current) => ({ ...current, [key]: selected }));
+  }
+
+  async function runPhysicalVerification(): Promise<void> {
+    if (!currentProjectId || busy) return;
+    setBusy(true);
+    setError('');
+    setPhysicalResult(null);
+    setNotice(`Running ${physicalForm.operation.replaceAll('_', ' ')}...`);
+    try {
+      const result = await window.electronAPI.runPhysicalVerification(currentProjectId, { ...physicalForm });
+      setPhysicalResult(result);
+      setNotice(`Physical verification ${'status' in result ? result.status : result.execution_status}.`);
+    } catch (physicalError) {
+      setError(physicalError instanceof Error ? physicalError.message : String(physicalError));
+      setNotice('');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function linkXschemMode(mode: 'native' | 'bridge' | 'external'): Promise<void> {
     if (!currentProjectId || !activeModuleId || busy) return;
     if (mode === 'native' && selectedModule?.schematic_peer?.mode === 'external') {
@@ -1809,6 +1867,16 @@ export function CircuitWorkbench({
               </select>
             </label>
           ) : null}
+          {projectKind === 'analog_ic' || projectKind === 'mixed_signal_ic' ? (
+            <button
+              type="button"
+              style={styles.physicalButton}
+              onClick={() => setPhysicalOpen(true)}
+              data-testid="open-physical-verification"
+            >
+              Physical verification
+            </button>
+          ) : null}
         </div>
         <WorkbenchToolbar
           view={view}
@@ -1849,6 +1917,90 @@ export function CircuitWorkbench({
           {error || notice}
         </div>
       )}
+
+      {physicalOpen ? (
+        <div style={styles.historyOverlay} data-testid="physical-verification-dialog">
+          <section className="av-sheet" aria-label="External physical verification">
+            <div className="av-sheet__header">
+              <div>
+                <div className="av-sheet__title">External physical verification</div>
+                <div className="av-sheet__subtitle">Rule decks remain in the selected PDK installation and are never modified.</div>
+              </div>
+              <button type="button" className="av-btn av-btn--secondary" onClick={() => setPhysicalOpen(false)} disabled={busy}>
+                Close
+              </button>
+            </div>
+            <div className="av-sheet__body">
+              <label className="av-form-field">
+                <span>Operation</span>
+                <select
+                  value={physicalForm.operation}
+                  onChange={(event) => setPhysicalForm((current) => ({
+                    ...current,
+                    operation: event.target.value as PhysicalVerificationForm['operation'],
+                  }))}
+                  data-testid="physical-operation"
+                >
+                  <option value="klayout_drc">KLayout DRC</option>
+                  <option value="klayout_lvs">KLayout LVS</option>
+                  <option value="magic_extract">Magic extraction</option>
+                  <option value="magic_pex">Magic parasitic extraction</option>
+                  <option value="netgen_lvs">Netgen LVS</option>
+                  <option value="post_layout_simulation">Post-layout simulation (clean LVS required)</option>
+                </select>
+              </label>
+              {physicalForm.operation !== 'netgen_lvs' ? (
+                <PhysicalPathField label="Layout" value={physicalForm.layout} onChange={(value) => setPhysicalForm((current) => ({ ...current, layout: value }))} onBrowse={() => choosePhysicalPath('layout', 'layout')} />
+              ) : (
+                <PhysicalPathField label="Extracted netlist" value={physicalForm.extracted} onChange={(value) => setPhysicalForm((current) => ({ ...current, extracted: value }))} onBrowse={() => choosePhysicalPath('extracted', 'extracted netlist')} />
+              )}
+              {physicalForm.operation === 'klayout_drc' || physicalForm.operation === 'klayout_lvs' ? (
+                <PhysicalPathField label="KLayout rule deck" value={physicalForm.ruleDeck} onChange={(value) => setPhysicalForm((current) => ({ ...current, ruleDeck: value }))} onBrowse={() => choosePhysicalPath('ruleDeck', 'KLayout rule deck')} />
+              ) : null}
+              {physicalForm.operation === 'klayout_lvs' || physicalForm.operation === 'netgen_lvs' || physicalForm.operation === 'post_layout_simulation' ? (
+                <PhysicalPathField label="Schematic SPICE/CDL" value={physicalForm.schematic} onChange={(value) => setPhysicalForm((current) => ({ ...current, schematic: value }))} onBrowse={() => choosePhysicalPath('schematic', 'schematic netlist')} />
+              ) : null}
+              {physicalForm.operation === 'magic_extract' || physicalForm.operation === 'magic_pex' ? (
+                <>
+                  <PhysicalPathField label="Magic technology/rc file" value={physicalForm.techFile} onChange={(value) => setPhysicalForm((current) => ({ ...current, techFile: value }))} onBrowse={() => choosePhysicalPath('techFile', 'Magic technology file')} />
+                  <label className="av-form-field"><span>Top cell</span><input value={physicalForm.topCell} onChange={(event) => setPhysicalForm((current) => ({ ...current, topCell: event.target.value }))} /></label>
+                </>
+              ) : null}
+              {physicalForm.operation === 'netgen_lvs' ? (
+                <>
+                  <PhysicalPathField label="Netgen setup" value={physicalForm.setupFile} onChange={(value) => setPhysicalForm((current) => ({ ...current, setupFile: value }))} onBrowse={() => choosePhysicalPath('setupFile', 'Netgen setup file')} />
+                  <label className="av-form-field"><span>Extracted cell</span><input value={physicalForm.extractedCell} onChange={(event) => setPhysicalForm((current) => ({ ...current, extractedCell: event.target.value }))} /></label>
+                  <label className="av-form-field"><span>Schematic cell</span><input value={physicalForm.schematicCell} onChange={(event) => setPhysicalForm((current) => ({ ...current, schematicCell: event.target.value }))} /></label>
+                </>
+              ) : null}
+              {physicalForm.operation === 'post_layout_simulation' ? (
+                <>
+                  <PhysicalPathField label="Self-contained PEX testbench" value={physicalForm.deck} onChange={(value) => setPhysicalForm((current) => ({ ...current, deck: value }))} onBrowse={() => choosePhysicalPath('deck', 'post-layout simulation deck')} />
+                  <PhysicalPathField label="Clean KLayout LVS run.json" value={physicalForm.lvsRun} onChange={(value) => setPhysicalForm((current) => ({ ...current, lvsRun: value }))} onBrowse={() => choosePhysicalPath('lvsRun', 'clean LVS run result')} />
+                  <p className="av-form-hint">The deck is copied into the project run directory; use absolute model/include paths. Layout and schematic hashes must match the selected clean LVS result.</p>
+                </>
+              ) : null}
+              <button type="button" className="av-btn av-btn--primary" onClick={() => { void runPhysicalVerification(); }} disabled={busy} data-testid="run-physical-verification">
+                {busy ? 'Running...' : 'Run controlled provider'}
+              </button>
+              {physicalResult ? (
+                <div className={`av-form-status${(
+                  'status' in physicalResult ? physicalResult.status === 'passed' : physicalResult.ok
+                ) ? '' : ' av-form-status--error'}`} data-testid="physical-verification-result">
+                  <strong>
+                    {'kind' in physicalResult ? physicalResult.kind : 'post_layout_simulation'}:
+                    {'status' in physicalResult ? ` ${physicalResult.status}` : ` ${physicalResult.execution_status}`}
+                  </strong>
+                  {'artifacts' in physicalResult ? <div>{physicalResult.artifacts.length} artifacts</div> : null}
+                  {'diagnostics' in physicalResult && Array.isArray(physicalResult.diagnostics)
+                    ? physicalResult.diagnostics.map((diagnostic, index) => <div key={`${diagnostic}-${index}`}>{diagnostic}</div>)
+                    : null}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {edaExportOpen ? (
         <div style={styles.historyOverlay} data-testid="eda-export-dialog">
@@ -2748,6 +2900,28 @@ function InterfaceBadge({
       {' '}
       <span style={styles.interfaceNetworks}>{networks.join(', ')}</span>
     </span>
+  );
+}
+
+function PhysicalPathField({
+  label,
+  value,
+  onChange,
+  onBrowse,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onBrowse: () => Promise<void>;
+}) {
+  return (
+    <label className="av-form-field">
+      <span>{label}</span>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input value={value} onChange={(event) => onChange(event.target.value)} style={{ flex: 1 }} />
+        <button type="button" className="av-btn av-btn--secondary" onClick={() => { void onBrowse(); }}>Browse</button>
+      </div>
+    </label>
   );
 }
 
@@ -3796,6 +3970,17 @@ const styles: Record<string, CSSProperties> = {
     marginTop: 6,
     fontSize: 11,
     color: '#7a818b',
+  },
+  physicalButton: {
+    marginTop: 6,
+    width: 'fit-content',
+    border: '1px solid #aeb8c4',
+    borderRadius: 4,
+    background: '#fff',
+    color: '#435160',
+    cursor: 'pointer',
+    fontSize: 10,
+    padding: '3px 7px',
   },
   primaryButton: {
     border: '1px solid #2563eb',

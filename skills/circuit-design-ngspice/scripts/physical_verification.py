@@ -365,6 +365,63 @@ class MagicProvider:
         _atomic_json(run_root / "run.json", result)
         return result
 
+    def extract_pex(
+        self,
+        layout: Path,
+        tech_file: Path,
+        run_root: Path,
+        top_cell: str,
+    ) -> dict[str, Any]:
+        layout = _require_file(layout, "Magic layout", {".mag", ".gds", ".gdsii"})
+        tech_file = _require_file(tech_file, "Magic technology/rc file")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$-]*", top_cell):
+            raise ValueError("Magic top cell contains unsupported characters")
+        run_root = run_root.expanduser().resolve()
+        run_root.mkdir(parents=True, exist_ok=True)
+        output = run_root / "pex.spice"
+        commands = "\n".join([
+            f"load {_tcl_braced(layout)}",
+            "select top cell",
+            "extract do local",
+            "extract do resistance",
+            "extract all",
+            "ext2spice cthresh 0",
+            "ext2spice rthresh 0",
+            "ext2spice extresist on",
+            f"ext2spice -o {_tcl_braced(output)} {top_cell}",
+            "quit -noprompt",
+            "",
+        ])
+        completed = _run(
+            self.executable,
+            ["-dnull", "-noconsole", "-rcfile", str(tech_file)],
+            run_root,
+            input_text=commands,
+        )
+        diagnostics = [part for part in (completed.stdout.strip(), completed.stderr.strip()) if part]
+        success = completed.returncode == 0 and output.is_file()
+        artifacts = [_artifact("layout", layout), _artifact("magic_tech", tech_file)]
+        if output.is_file():
+            artifacts.append(_artifact("pex_spice", output))
+        result = _run_result(
+            run_root.name,
+            "pex",
+            self.provider_id,
+            completed.returncode == 0,
+            success,
+            diagnostics,
+            artifacts,
+            {
+                "tool_version": self.version,
+                "layout_hash": _hash(layout),
+                "pex_hash": _hash(output) if output.is_file() else "",
+                "top_cell": top_cell,
+                "controlled_commands": True,
+            },
+        )
+        _atomic_json(run_root / "run.json", result)
+        return result
+
 
 def _parse_netgen_report(path: Path, text: str) -> dict[str, Any]:
     if path.is_file():

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 import tempfile
@@ -21,7 +22,12 @@ from open_sim_providers import (  # noqa: E402
     inject_ngspice_osdi,
     validate_xyce_deck,
 )
-from circuit_project import execute_profiled_simulation  # noqa: E402
+from circuit_project import (  # noqa: E402
+    execute_profiled_simulation,
+    initialize_project,
+    simulate_dual_profiles,
+    simulate_post_layout,
+)
 from execution_profiles import assert_profile_path, resolve_simulation_profile  # noqa: E402
 from verification_contracts import validate_simulation_run, validate_verification_run  # noqa: E402
 
@@ -105,6 +111,15 @@ def main() -> int:
                 "allowedRoots": [str(root)],
                 "environmentKeys": [],
                 "qualification": "unverified",
+            }, {
+                "schema": "actoviq.execution-profile.v1",
+                "id": "xyce-local-second",
+                "providerId": "xyce",
+                "target": "local_windows" if os.name == "nt" else "local_linux",
+                "executable": str(fake_xyce),
+                "allowedRoots": [str(root)],
+                "environmentKeys": [],
+                "qualification": "unverified",
             }],
         }), encoding="utf-8")
         previous_registry = os.environ.get("ACTOVIQ_EXECUTION_PROFILE_REGISTRY")
@@ -138,6 +153,60 @@ def main() -> int:
             assert profiled["simulation_profile_id"] == "xyce-local"
             assert profiled["provider"]["id"] == "xyce"
             assert (system_root / "simulation" / "result.json").is_file()
+            dual_project = initialize_project(root / "projects", "dual", None, True)
+            dual = simulate_dual_profiles(
+                dual_project,
+                "xyce-local",
+                "xyce-local-second",
+                0.001,
+                1e-9,
+            )
+            assert dual["status"] == "passed"
+            assert dual["metadata"]["comparison"]["comparisons"]
+            assert (
+                dual_project / "build" / "system" / "simulation" / "dual-comparison.json"
+            ).is_file()
+            dual_project_file = dual_project / "project.circuit.json"
+            dual_project_value = json.loads(dual_project_file.read_text(encoding="utf-8"))
+            dual_project_value["project_kind"] = "analog_ic"
+            dual_project_value["analog_ic_profile"] = {
+                "schema": "actoviq.analog-ic-profile.v2",
+                "simulation_profile_id": "xyce-local",
+                "pdk_binding": {"schema": "actoviq.pdk-binding.v1", "pdk_ref": "synthetic"},
+            }
+            dual_project_file.write_text(json.dumps(dual_project_value), encoding="utf-8")
+            layout = dual_project / "layout.gds"
+            layout.write_bytes(b"synthetic-layout")
+            schematic = dual_project / "schematic.cdl"
+            schematic.write_text(".subckt test in out\n.ends\n", encoding="utf-8")
+            post_deck = dual_project / "post.cir"
+            post_deck.write_text("Title\nR1 out 0 1k\n.op\n.end\n", encoding="utf-8")
+            lvs_run = dual_project / "lvs-run.json"
+            lvs_run.write_text(json.dumps({
+                "schema": "actoviq.verification-run.v1",
+                "run_id": "lvs-clean",
+                "kind": "lvs",
+                "provider_id": "klayout",
+                "executed": True,
+                "status": "passed",
+                "diagnostics": [],
+                "artifacts": [],
+                "metadata": {
+                    "lvs_clean": True,
+                    "layout_hash": hashlib.sha256(layout.read_bytes()).hexdigest(),
+                    "schematic_hash": hashlib.sha256(schematic.read_bytes()).hexdigest(),
+                },
+            }), encoding="utf-8")
+            post = simulate_post_layout(
+                dual_project,
+                post_deck,
+                layout,
+                schematic,
+                lvs_run,
+            )
+            assert post["ok"]
+            assert post["verification"]["lvs_clean"]
+            assert post["post_layout"]["layout_hash"]
         finally:
             if previous_registry is None:
                 os.environ.pop("ACTOVIQ_EXECUTION_PROFILE_REGISTRY", None)

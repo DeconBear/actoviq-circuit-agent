@@ -86,11 +86,12 @@ from xschem_bridge import (
 from open_sim_providers import (
     OpenVafProvider,
     XyceProvider,
+    compare_simulation_metrics,
     inject_ngspice_osdi,
 )
 from physical_verification import KLayoutProvider, MagicProvider, NetgenProvider
 from execution_profiles import assert_profile_path, resolve_simulation_profile, simulation_profile_id
-from verification_contracts import validate_simulation_run
+from verification_contracts import validate_simulation_run, validate_verification_run
 from hdl_flow import (
     IcarusProvider,
     OpenRoadProvider,
@@ -5186,6 +5187,159 @@ def execute_profiled_simulation(
     )
 
 
+def simulate_dual_profiles(
+    root: Path,
+    left_profile_id: str,
+    right_profile_id: str,
+    relative_tolerance: float,
+    absolute_tolerance: float,
+    ngspice_bin: str = "",
+) -> dict[str, Any]:
+    if not left_profile_id or not right_profile_id or left_profile_id == right_profile_id:
+        raise ValueError("dual simulation requires two different execution profiles")
+    if relative_tolerance < 0 or absolute_tolerance < 0:
+        raise ValueError("simulation comparison tolerances cannot be negative")
+    project, _ = load_project(root)
+    compiled = compile_project(root)
+    manifest = read_json(root / "build" / "build-manifest.json")
+    netlist_path = Path(compiled["netlist_path"])
+    source_revision = int(manifest.get("source_revision", manifest.get("revision", 0)))
+    document_hash = str(manifest.get("document_hash", ""))
+
+    def run(profile_id: str) -> dict[str, Any]:
+        profile_project = json.loads(json.dumps(project))
+        current = profile_project.get("analog_ic_profile")
+        if not isinstance(current, dict) or current.get("schema") != "actoviq.analog-ic-profile.v2":
+            current = {
+                "schema": "actoviq.analog-ic-profile.v2",
+                "pdk_binding": {"schema": "actoviq.pdk-binding.v1", "pdk_ref": "unbound"},
+            }
+        profile_project["analog_ic_profile"] = {
+            **current,
+            "simulation_profile_id": profile_id,
+        }
+        return execute_profiled_simulation(
+            profile_project,
+            netlist_path,
+            source_revision,
+            document_hash,
+            "project",
+            ngspice_bin,
+        )
+
+    left = run(left_profile_id)
+    right = run(right_profile_id)
+    comparison = compare_simulation_metrics(
+        left,
+        right,
+        relative_tolerance,
+        absolute_tolerance,
+    )
+    comparison_root = netlist_path.parent / "simulation" / "comparisons"
+    run_id = f"dual-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
+    result = validate_verification_run({
+        "schema": "actoviq.verification-run.v1",
+        "run_id": run_id,
+        "kind": "dual_simulation_comparison",
+        "provider_id": "actoviq",
+        "executed": bool(
+            left.get("verification", {}).get("executed")
+            and right.get("verification", {}).get("executed")
+        ),
+        "status": "passed" if comparison["ok"] else "failed",
+        "diagnostics": [] if comparison["ok"] else ["simulation metrics differ or have no common measured values"],
+        "artifacts": [
+            {
+                "kind": "left_simulation",
+                "path": str(netlist_path.parent / "simulation" / "runs" / left["run_id"] / "run.json"),
+            },
+            {
+                "kind": "right_simulation",
+                "path": str(netlist_path.parent / "simulation" / "runs" / right["run_id"] / "run.json"),
+            },
+        ],
+        "metadata": {
+            "source_revision": source_revision,
+            "document_hash": document_hash,
+            "left_profile_id": left_profile_id,
+            "right_profile_id": right_profile_id,
+            "left_run_id": left["run_id"],
+            "right_run_id": right["run_id"],
+            "comparison": comparison,
+        },
+        "finished_at": utc_now(),
+    })
+    atomic_write_json(comparison_root / f"{run_id}.json", result)
+    atomic_write_json(netlist_path.parent / "simulation" / "dual-comparison.json", result)
+    return result
+
+
+def simulate_post_layout(
+    root: Path,
+    deck: Path,
+    layout: Path,
+    schematic: Path,
+    lvs_run_path: Path,
+    ngspice_bin: str = "",
+) -> dict[str, Any]:
+    project, _ = load_project(root)
+    deck = deck.expanduser().resolve()
+    layout = layout.expanduser().resolve()
+    schematic = schematic.expanduser().resolve()
+    lvs_run_path = lvs_run_path.expanduser().resolve()
+    for path, label in (
+        (deck, "post-layout deck"),
+        (layout, "layout"),
+        (schematic, "schematic netlist"),
+        (lvs_run_path, "LVS run"),
+    ):
+        if not path.is_file():
+            raise ValueError(f"{label} does not exist: {path}")
+    lvs_run = read_json(lvs_run_path)
+    lvs_metadata = lvs_run.get("metadata") if isinstance(lvs_run.get("metadata"), dict) else {}
+    if (
+        lvs_run.get("schema") != "actoviq.verification-run.v1"
+        or lvs_run.get("kind") != "lvs"
+        or lvs_run.get("status") != "passed"
+        or lvs_metadata.get("lvs_clean") is not True
+    ):
+        raise ValueError("post-layout simulation requires a passed, clean LVS run")
+    layout_hash = hashlib.sha256(layout.read_bytes()).hexdigest()
+    schematic_hash = hashlib.sha256(schematic.read_bytes()).hexdigest()
+    if lvs_metadata.get("layout_hash") != layout_hash:
+        raise ValueError("selected layout does not match the clean LVS run")
+    if lvs_metadata.get("schematic_hash") != schematic_hash:
+        raise ValueError("selected schematic does not match the clean LVS run")
+    run_root = root / "build" / "physical" / "post_layout" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    run_root.mkdir(parents=True, exist_ok=False)
+    local_deck = run_root / f"post-layout{deck.suffix or '.cir'}"
+    shutil.copy2(deck, local_deck)
+    result = execute_profiled_simulation(
+        project,
+        local_deck,
+        int(project.get("revision", 0)),
+        project_document_hash(*load_project(root)),
+        "post_layout",
+        ngspice_bin,
+    )
+    result["verification"]["lvs_clean"] = True
+    result["post_layout"] = {
+        "layout_path": str(layout),
+        "layout_hash": layout_hash,
+        "schematic_path": str(schematic),
+        "schematic_hash": schematic_hash,
+        "lvs_run_path": str(lvs_run_path),
+        "lvs_run_id": str(lvs_run.get("run_id") or ""),
+        "source_deck_path": str(deck),
+        "source_deck_hash": hashlib.sha256(deck.read_bytes()).hexdigest(),
+    }
+    validate_simulation_run(result)
+    simulation_root = local_deck.parent / "simulation"
+    atomic_write_json(simulation_root / "runs" / result["run_id"] / "run.json", result)
+    atomic_write_json(simulation_root / "result.json", result)
+    return result
+
+
 def simulate_project(
     root: Path,
     ngspice_bin: str,
@@ -6203,6 +6357,28 @@ def build_parser() -> argparse.ArgumentParser:
     xyce_parser.add_argument("--xyce-bin", default="")
     xyce_parser.add_argument("--arg", action="append", default=[])
 
+    dual_sim_parser = subparsers.add_parser(
+        "simulate-dual",
+        help="Compile once, run two configured open simulators, and compare measured metrics.",
+    )
+    dual_sim_parser.add_argument("--project-root", required=True)
+    dual_sim_parser.add_argument("--left-profile", required=True)
+    dual_sim_parser.add_argument("--right-profile", required=True)
+    dual_sim_parser.add_argument("--relative-tolerance", type=float, default=0.001)
+    dual_sim_parser.add_argument("--absolute-tolerance", type=float, default=1e-9)
+    dual_sim_parser.add_argument("--ngspice-bin", default="")
+
+    post_layout_parser = subparsers.add_parser(
+        "simulate-post-layout",
+        help="Run a self-contained PEX testbench only after hash-bound clean LVS.",
+    )
+    post_layout_parser.add_argument("--project-root", required=True)
+    post_layout_parser.add_argument("--deck", required=True)
+    post_layout_parser.add_argument("--layout", required=True)
+    post_layout_parser.add_argument("--schematic", required=True)
+    post_layout_parser.add_argument("--lvs-run", required=True)
+    post_layout_parser.add_argument("--ngspice-bin", default="")
+
     klayout_drc_parser = subparsers.add_parser("verify-klayout-drc")
     klayout_drc_parser.add_argument("--layout", required=True)
     klayout_drc_parser.add_argument("--rule-deck", required=True)
@@ -6222,6 +6398,7 @@ def build_parser() -> argparse.ArgumentParser:
     magic_parser.add_argument("--run-root", required=True)
     magic_parser.add_argument("--top-cell", required=True)
     magic_parser.add_argument("--magic-bin", default="")
+    magic_parser.add_argument("--pex", action="store_true")
 
     netgen_parser = subparsers.add_parser("verify-netgen-lvs")
     netgen_parser.add_argument("--extracted", required=True)
@@ -6729,6 +6906,24 @@ def main() -> int:
                 Path(args.run_root),
                 list(args.arg),
             )
+        elif args.command == "simulate-dual":
+            result = simulate_dual_profiles(
+                Path(args.project_root).resolve(),
+                args.left_profile,
+                args.right_profile,
+                args.relative_tolerance,
+                args.absolute_tolerance,
+                args.ngspice_bin,
+            )
+        elif args.command == "simulate-post-layout":
+            result = simulate_post_layout(
+                Path(args.project_root).resolve(),
+                Path(args.deck),
+                Path(args.layout),
+                Path(args.schematic),
+                Path(args.lvs_run),
+                args.ngspice_bin,
+            )
         elif args.command == "verify-klayout-drc":
             result = KLayoutProvider(args.klayout_bin).run_drc(
                 Path(args.layout),
@@ -6743,11 +6938,21 @@ def main() -> int:
                 Path(args.run_root),
             )
         elif args.command == "extract-magic":
-            result = MagicProvider(args.magic_bin).extract(
-                Path(args.layout),
-                Path(args.tech_file),
-                Path(args.run_root),
-                args.top_cell,
+            magic_provider = MagicProvider(args.magic_bin)
+            result = (
+                magic_provider.extract_pex(
+                    Path(args.layout),
+                    Path(args.tech_file),
+                    Path(args.run_root),
+                    args.top_cell,
+                )
+                if args.pex
+                else magic_provider.extract(
+                    Path(args.layout),
+                    Path(args.tech_file),
+                    Path(args.run_root),
+                    args.top_cell,
+                )
             )
         elif args.command == "verify-netgen-lvs":
             result = NetgenProvider(args.netgen_bin).run_lvs(

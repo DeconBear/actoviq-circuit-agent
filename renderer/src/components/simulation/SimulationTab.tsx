@@ -13,11 +13,13 @@ import {
 } from 'recharts';
 import { useAppStore, type SimulationMetric } from '../../store/appStore';
 import type {
+  HdlVerificationRun,
   SimulationAnalysisSummary,
   SimulationDataset,
   SimulationDatasetTrace,
   SimulationRun,
   SimulationRunMetric,
+  StoredExecutionProfile,
 } from '../../types';
 
 type DiagramMode = 'cartesian' | 'bode' | 'polar' | 'smith' | 'table';
@@ -93,8 +95,51 @@ function ProjectSimulation({
   const probeRequest = useAppStore((state) => state.simulationProbeRequest);
   const setProbeRequest = useAppStore((state) => state.setSimulationProbeRequest);
   const activeProbe = probeRequest?.projectId === projectId ? probeRequest : null;
+  const [openProfiles, setOpenProfiles] = useState<StoredExecutionProfile[]>([]);
+  const [leftProfileId, setLeftProfileId] = useState('');
+  const [rightProfileId, setRightProfileId] = useState('');
+  const [dualBusy, setDualBusy] = useState(false);
+  const [dualResult, setDualResult] = useState<HdlVerificationRun | null>(null);
+  const [dualError, setDualError] = useState('');
 
   const selectedAnalysis = analyses.find((analysis) => analysis.id === analysisId) ?? analyses[0];
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.listExecutionProfiles().then((registry) => {
+      if (cancelled) return;
+      const profiles = registry.profiles.filter(
+        (profile) => profile.providerId === 'ngspice' || profile.providerId === 'xyce',
+      );
+      setOpenProfiles(profiles);
+      setLeftProfileId((current) => current || profiles.find((profile) => profile.providerId === 'ngspice')?.id || profiles[0]?.id || '');
+      setRightProfileId((current) => current || profiles.find((profile) => profile.providerId === 'xyce')?.id || profiles[1]?.id || '');
+    }).catch(() => {
+      if (!cancelled) setOpenProfiles([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  async function runDualComparison(): Promise<void> {
+    if (!leftProfileId || !rightProfileId || leftProfileId === rightProfileId) return;
+    setDualBusy(true);
+    setDualError('');
+    setDualResult(null);
+    try {
+      setDualResult(await window.electronAPI.simulateCircuitDual(projectId, {
+        leftProfileId,
+        rightProfileId,
+        relativeTolerance: 0.001,
+        absoluteTolerance: 1e-9,
+      }));
+    } catch (error) {
+      setDualError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDualBusy(false);
+    }
+  }
 
   useEffect(() => {
     const next = analyses[0];
@@ -184,6 +229,36 @@ function ProjectSimulation({
           <Status label="Measurements" value={simulation.measurement_status ?? 'unknown'} />
           <Status label="Specifications" value={simulation.specification_status ?? 'not_evaluated'} />
         </div>
+      </div>
+
+      <div style={styles.dualPanel} data-testid="dual-simulation-panel">
+        <strong>Cross-simulator check</strong>
+        <select value={leftProfileId} onChange={(event) => setLeftProfileId(event.target.value)} style={styles.dualSelect}>
+          <option value="">Left profile</option>
+          {openProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.id} · {profile.providerId}</option>)}
+        </select>
+        <span>vs</span>
+        <select value={rightProfileId} onChange={(event) => setRightProfileId(event.target.value)} style={styles.dualSelect}>
+          <option value="">Right profile</option>
+          {openProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.id} · {profile.providerId}</option>)}
+        </select>
+        <button
+          type="button"
+          style={styles.dualButton}
+          onClick={() => { void runDualComparison(); }}
+          disabled={dualBusy || !leftProfileId || !rightProfileId || leftProfileId === rightProfileId}
+          data-testid="run-dual-simulation"
+        >
+          {dualBusy ? 'Comparing...' : 'Run both'}
+        </button>
+        {dualResult ? (
+          <span style={dualResult.status === 'passed' ? styles.dualPass : styles.dualFail} data-testid="dual-simulation-result">
+            {dualResult.status} · {Number(
+              (dualResult.metadata?.comparison as { comparisons?: unknown[] } | undefined)?.comparisons?.length ?? 0,
+            )} metrics
+          </span>
+        ) : null}
+        {dualError ? <span style={styles.dualFail}>{dualError}</span> : null}
       </div>
 
       {probeMessage ? (
@@ -554,6 +629,11 @@ function LegacySimulation({ data }: { data: SimulationMetric[] | null }) {
 const styles: Record<string, CSSProperties> = {
   workbench: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: '#f5f6f8', color: '#2d3540' },
   runHeader: { minHeight: 54, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '8px 14px', borderBottom: '1px solid #d9dee4', background: '#fff' },
+  dualPanel: { minHeight: 40, display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px', borderBottom: '1px solid #d9dee4', background: '#f8fafc', color: '#65707c', fontSize: 10 },
+  dualSelect: { minWidth: 150, height: 27, border: '1px solid #c6cdd5', borderRadius: 4, background: '#fff', color: '#303a46', fontSize: 10, padding: '0 6px' },
+  dualButton: { height: 27, border: '1px solid #2d6da3', borderRadius: 4, background: '#edf5fc', color: '#1f5f96', cursor: 'pointer', fontSize: 10, fontWeight: 700, padding: '0 9px' },
+  dualPass: { color: '#267346', fontWeight: 700 },
+  dualFail: { color: '#a32d38', fontWeight: 700 },
   runIdentity: { minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11, color: '#737d88' },
   probeStatus: { minHeight: 30, display: 'flex', alignItems: 'center', padding: '4px 14px', borderBottom: '1px solid #cddbea', background: '#eef5fb', color: '#275f8a', fontSize: 11 },
   stale: { color: '#a32d38', fontWeight: 700 },

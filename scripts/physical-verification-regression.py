@@ -129,6 +129,15 @@ def main() -> int:
         assert extraction["status"] == "passed"
         extracted = root / "run-magic" / "extracted.spice"
         assert extracted.is_file()
+        pex = MagicProvider(str(fake_magic)).extract_pex(
+            magic_layout,
+            magic_tech,
+            root / "run-magic-pex",
+            "inverter",
+        )
+        assert pex["status"] == "passed"
+        assert pex["metadata"]["pex_hash"]
+        assert (root / "run-magic-pex" / "pex.spice").is_file()
 
         fake_netgen = root / "fake_netgen.py"
         fake_netgen.write_text(FAKE_NETGEN, encoding="utf-8")

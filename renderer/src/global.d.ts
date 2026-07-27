@@ -203,6 +203,17 @@ declare global {
         };
       }>;
       simulateCircuitModule(projectId: string, moduleId: string): Promise<SimulationRun & { module_id: string }>;
+      simulateCircuitDual(projectId: string, input: {
+        leftProfileId: string;
+        rightProfileId: string;
+        relativeTolerance: number;
+        absoluteTolerance: number;
+      }): Promise<HdlVerificationRun>;
+      choosePhysicalVerificationFile(label: string): Promise<string | null>;
+      runPhysicalVerification(
+        projectId: string,
+        input: Record<string, unknown>,
+      ): Promise<HdlVerificationRun | SimulationRun>;
       readCircuitBuild(projectId: string): Promise<CircuitBuildState | null>;
       readCircuitSimulationDataset(projectId: string, input: {
         runId: string;
