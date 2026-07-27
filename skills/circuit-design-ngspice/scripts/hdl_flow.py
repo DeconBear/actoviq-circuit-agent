@@ -330,6 +330,11 @@ class YosysProvider:
             _resolve_project_path(project_root, str(source_set["constraints"]), "constraint file")
             if source_set.get("constraints") else None
         )
+        if constraints:
+            raise ValueError(
+                "YosysProvider does not apply timing constraints; remove source_set.constraints "
+                "or run a provider with explicit SDC support"
+            )
         run_root = run_root.expanduser().resolve()
         run_root.mkdir(parents=True, exist_ok=True)
         netlist = run_root / "netlist.v"
@@ -378,7 +383,9 @@ class YosysProvider:
                 "top": source_set["top"],
                 "source_hash": _combined_hash(sources),
                 "liberty_hash": _hash(liberty) if liberty else "",
-                "constraints_hash": _hash(constraints) if constraints else "",
+                "constraints_hash": "",
+                "constraints_status": "not_declared",
+                "constraints_applied": False,
                 "technology_mapped": bool(liberty),
                 "script_hash": _hash(script),
                 "domain_verified": success,

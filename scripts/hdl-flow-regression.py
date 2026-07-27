@@ -126,12 +126,23 @@ def main() -> int:
         assert any(artifact["kind"] == "waveform" for artifact in simulation["artifacts"])
 
         yosys = YosysProvider(str(fake_yosys))
-        generic = yosys.synthesize(root, manifest, root / "runs" / "generic-synth")
+        unconstrained_manifest = json.loads(json.dumps(manifest))
+        del unconstrained_manifest["source_sets"][0]["constraints"]
+        generic = yosys.synthesize(root, unconstrained_manifest, root / "runs" / "generic-synth")
         assert generic["status"] == "passed"
         assert not generic["metadata"]["technology_mapped"]
-        assert generic["metadata"]["constraints_hash"]
+        assert not generic["metadata"]["constraints_hash"]
+        assert generic["metadata"]["constraints_status"] == "not_declared"
+        assert not generic["metadata"]["constraints_applied"]
 
-        mapped_manifest = json.loads(json.dumps(manifest))
+        try:
+            yosys.synthesize(root, manifest, root / "runs" / "constrained-synth")
+        except ValueError as error:
+            assert "does not apply timing constraints" in str(error)
+        else:
+            raise AssertionError("Yosys synthesis must reject unapplied timing constraints")
+
+        mapped_manifest = json.loads(json.dumps(unconstrained_manifest))
         mapped_manifest["source_sets"][0]["liberty"] = "hdl/cells.lib"
         mapped = yosys.synthesize(root, mapped_manifest, root / "runs" / "mapped-synth")
         assert mapped["status"] == "passed"
@@ -140,7 +151,7 @@ def main() -> int:
 
         gate = run_gate_regression(
             root,
-            manifest,
+            unconstrained_manifest,
             generic,
             root / "runs" / "gate-regression",
             icarus,

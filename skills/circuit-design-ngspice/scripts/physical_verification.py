@@ -121,11 +121,20 @@ def _run_result(
 
 def parse_lyrdb(path: Path) -> dict[str, Any]:
     if not path.is_file():
-        return {"violation_count": 0, "categories": [], "items": []}
+        return {
+            "report_present": False,
+            "report_valid": False,
+            "violation_count": 0,
+            "categories": [],
+            "items": [],
+            "report_error": f"expected KLayout report was not created: {path}",
+        }
     try:
         root = ET.parse(path).getroot()
     except ET.ParseError as error:
         return {
+            "report_present": True,
+            "report_valid": False,
             "violation_count": 0,
             "categories": [],
             "items": [],
@@ -144,6 +153,8 @@ def parse_lyrdb(path: Path) -> dict[str, Any]:
         }
         items.append(values)
     return {
+        "report_present": True,
+        "report_valid": True,
         "violation_count": len(items),
         "categories": sorted(set(categories)),
         "items": items,
@@ -195,6 +206,8 @@ class KLayoutProvider:
         if report.is_file():
             artifacts.append(_artifact("lyrdb", report))
         diagnostics = [part for part in (completed.stdout.strip(), completed.stderr.strip()) if part]
+        if parsed.get("report_error"):
+            diagnostics.append(str(parsed["report_error"]))
         if parsed.get("parse_error"):
             diagnostics.append(f"lyrdb parse error: {parsed['parse_error']}")
         result = _run_result(
@@ -202,7 +215,9 @@ class KLayoutProvider:
             "drc",
             self.provider_id,
             completed.returncode == 0,
-            completed.returncode == 0 and parsed["violation_count"] == 0 and not parsed.get("parse_error"),
+            completed.returncode == 0
+            and parsed["report_valid"]
+            and parsed["violation_count"] == 0,
             diagnostics,
             artifacts,
             {
@@ -251,16 +266,24 @@ class KLayoutProvider:
         clean = (
             completed.returncode == 0
             and not explicit_mismatch
+            and parsed["report_valid"]
+            and extracted.is_file()
             and parsed["violation_count"] == 0
-            and not parsed.get("parse_error")
         )
+        diagnostics = [part for part in (completed.stdout.strip(), completed.stderr.strip()) if part]
+        if parsed.get("report_error"):
+            diagnostics.append(str(parsed["report_error"]))
+        if parsed.get("parse_error"):
+            diagnostics.append(f"lyrdb parse error: {parsed['parse_error']}")
+        if not extracted.is_file():
+            diagnostics.append(f"expected KLayout extracted netlist was not created: {extracted}")
         result = _run_result(
             run_root.name,
             "lvs",
             self.provider_id,
             completed.returncode == 0,
             clean,
-            [part for part in (completed.stdout.strip(), completed.stderr.strip()) if part],
+            diagnostics,
             artifacts,
             {
                 "tool_version": self.version,

@@ -29,8 +29,14 @@ for index, value in enumerate(sys.argv):
         key, content = sys.argv[index + 1].split("=", 1)
         values[key] = content
 deck = pathlib.Path(sys.argv[sys.argv.index("-r") + 1])
+deck_text = deck.read_text(encoding="utf-8")
+if "missing-report" in deck_text:
+    raise SystemExit(0)
 report = pathlib.Path(values["report"])
-violate = "violate" in deck.read_text(encoding="utf-8")
+if "invalid-report" in deck_text:
+    report.write_text("<report-database>", encoding="utf-8")
+    raise SystemExit(0)
+violate = "violate" in deck_text
 item = "<item><category>min_width</category><value>1,2</value></item>" if violate else ""
 report.write_text("<report-database><items>" + item + "</items></report-database>", encoding="utf-8")
 if "extracted" in values:
@@ -78,6 +84,10 @@ def main() -> int:
         clean_drc.write_text("# synthetic clean rule\n", encoding="utf-8")
         bad_drc = root / "bad.drc"
         bad_drc.write_text("# violate\n", encoding="utf-8")
+        missing_report_drc = root / "missing-report.drc"
+        missing_report_drc.write_text("# missing-report\n", encoding="utf-8")
+        invalid_report_drc = root / "invalid-report.drc"
+        invalid_report_drc.write_text("# invalid-report\n", encoding="utf-8")
         lvs_deck = root / "compare.lvs"
         lvs_deck.write_text("# synthetic lvs rule\n", encoding="utf-8")
         magic_tech = root / "magicrc"
@@ -94,6 +104,14 @@ def main() -> int:
         bad = klayout.run_drc(layout, bad_drc, root / "run-drc-bad")
         assert bad["status"] == "failed"
         assert bad["metadata"]["violation_count"] == 1
+        missing = klayout.run_drc(layout, missing_report_drc, root / "run-drc-missing")
+        assert missing["status"] == "failed"
+        assert not missing["metadata"]["report_present"]
+        assert any("was not created" in message for message in missing["diagnostics"])
+        invalid = klayout.run_drc(layout, invalid_report_drc, root / "run-drc-invalid")
+        assert invalid["status"] == "failed"
+        assert not invalid["metadata"]["report_valid"]
+        assert any("parse error" in message for message in invalid["diagnostics"])
         lvs = klayout.run_lvs(layout, schematic, lvs_deck, root / "run-klayout-lvs")
         assert lvs["status"] == "passed"
         assert lvs["metadata"]["lvs_clean"]
