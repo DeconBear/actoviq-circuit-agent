@@ -101,6 +101,13 @@ function ProjectSimulation({
   const [dualBusy, setDualBusy] = useState(false);
   const [dualResult, setDualResult] = useState<HdlVerificationRun | null>(null);
   const [dualError, setDualError] = useState('');
+  const [licensedProfiles, setLicensedProfiles] = useState<StoredExecutionProfile[]>([]);
+  const [licensedProfileId, setLicensedProfileId] = useState('');
+  const [licensedInput, setLicensedInput] = useState('');
+  const [licensedTop, setLicensedTop] = useState('');
+  const [licensedBusy, setLicensedBusy] = useState(false);
+  const [licensedResult, setLicensedResult] = useState<HdlVerificationRun | null>(null);
+  const [licensedError, setLicensedError] = useState('');
 
   const selectedAnalysis = analyses.find((analysis) => analysis.id === analysisId) ?? analyses[0];
 
@@ -112,6 +119,11 @@ function ProjectSimulation({
         (profile) => profile.providerId === 'ngspice' || profile.providerId === 'xyce',
       );
       setOpenProfiles(profiles);
+      const commercial = registry.profiles.filter(
+        (profile) => profile.providerId !== 'ngspice' && profile.providerId !== 'xyce',
+      );
+      setLicensedProfiles(commercial);
+      setLicensedProfileId((current) => current || commercial[0]?.id || '');
       setLeftProfileId((current) => current || profiles.find((profile) => profile.providerId === 'ngspice')?.id || profiles[0]?.id || '');
       setRightProfileId((current) => current || profiles.find((profile) => profile.providerId === 'xyce')?.id || profiles[1]?.id || '');
     }).catch(() => {
@@ -138,6 +150,31 @@ function ProjectSimulation({
       setDualError(error instanceof Error ? error.message : String(error));
     } finally {
       setDualBusy(false);
+    }
+  }
+
+  async function chooseLicensedInput(): Promise<void> {
+    const selected = await window.electronAPI.chooseLicensedEdaInput();
+    if (selected) setLicensedInput(selected);
+  }
+
+  async function runLicensedSimulation(): Promise<void> {
+    if (!licensedProfileId || !licensedInput) return;
+    const profile = licensedProfiles.find((entry) => entry.id === licensedProfileId);
+    setLicensedBusy(true);
+    setLicensedError('');
+    setLicensedResult(null);
+    try {
+      setLicensedResult(await window.electronAPI.runLicensedEda(projectId, {
+        profileId: licensedProfileId,
+        inputPath: licensedInput,
+        kind: profile?.providerId.includes('ams') ? 'ams_simulation' : 'licensed_simulation',
+        top: licensedTop || undefined,
+      }));
+    } catch (error) {
+      setLicensedError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLicensedBusy(false);
     }
   }
 
@@ -259,6 +296,36 @@ function ProjectSimulation({
           </span>
         ) : null}
         {dualError ? <span style={styles.dualFail}>{dualError}</span> : null}
+      </div>
+      <div style={styles.dualPanel} data-testid="licensed-eda-run-panel">
+        <strong>Licensed EDA</strong>
+        <select value={licensedProfileId} onChange={(event) => setLicensedProfileId(event.target.value)} style={styles.dualSelect}>
+          <option value="">Execution profile</option>
+          {licensedProfiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.id} · {profile.providerId} · {profile.qualification}
+            </option>
+          ))}
+        </select>
+        <input value={licensedInput} onChange={(event) => setLicensedInput(event.target.value)} placeholder="Deck / AMS file list" style={styles.licensedInput} />
+        <button type="button" style={styles.dualButton} onClick={() => { void chooseLicensedInput(); }}>Browse</button>
+        <input value={licensedTop} onChange={(event) => setLicensedTop(event.target.value)} placeholder="Top (AMS optional)" style={styles.licensedTop} />
+        <button
+          type="button"
+          style={styles.dualButton}
+          onClick={() => { void runLicensedSimulation(); }}
+          disabled={licensedBusy || !licensedProfileId || !licensedInput}
+          data-testid="run-licensed-eda"
+        >
+          {licensedBusy ? 'Running...' : 'Run'}
+        </button>
+        {licensedResult ? (
+          <span style={licensedResult.status === 'passed' ? styles.dualPass : styles.dualFail} data-testid="licensed-eda-result">
+            {licensedResult.status} · {licensedResult.provider_id}
+            {licensedResult.metadata?.ams_verified === true ? ' · AMS verified' : ''}
+          </span>
+        ) : null}
+        {licensedError ? <span style={styles.dualFail}>{licensedError}</span> : null}
       </div>
 
       {probeMessage ? (
@@ -632,6 +699,8 @@ const styles: Record<string, CSSProperties> = {
   dualPanel: { minHeight: 40, display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px', borderBottom: '1px solid #d9dee4', background: '#f8fafc', color: '#65707c', fontSize: 10 },
   dualSelect: { minWidth: 150, height: 27, border: '1px solid #c6cdd5', borderRadius: 4, background: '#fff', color: '#303a46', fontSize: 10, padding: '0 6px' },
   dualButton: { height: 27, border: '1px solid #2d6da3', borderRadius: 4, background: '#edf5fc', color: '#1f5f96', cursor: 'pointer', fontSize: 10, fontWeight: 700, padding: '0 9px' },
+  licensedInput: { minWidth: 210, height: 25, border: '1px solid #c6cdd5', borderRadius: 4, padding: '0 6px', fontSize: 10 },
+  licensedTop: { width: 120, height: 25, border: '1px solid #c6cdd5', borderRadius: 4, padding: '0 6px', fontSize: 10 },
   dualPass: { color: '#267346', fontWeight: 700 },
   dualFail: { color: '#a32d38', fontWeight: 700 },
   runIdentity: { minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11, color: '#737d88' },

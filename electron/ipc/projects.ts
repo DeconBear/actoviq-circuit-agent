@@ -9,6 +9,21 @@ import { layoutVisionModelFingerprint, loadSettings, loadSettingsWithSecrets } f
 import { getActiveWorkspace } from '../workspaceState.js';
 import { generateDesktopTechnicalReport } from '../agent/desktopAgentService.js';
 import { runProjectTool } from '../agent/circuitProjectCli.js';
+import { resolveExecutionProfile } from '../eda/executionProfileRegistry.js';
+
+interface LicensedProviderRuntime {
+  prepare(job: Record<string, unknown>): Promise<Record<string, unknown>>;
+  run(job: Record<string, unknown>): Promise<Record<string, unknown>>;
+  parse(job: Record<string, unknown>, execution: Record<string, unknown>): Promise<Record<string, unknown>>;
+}
+
+async function createLicensedProvider(profile: Record<string, unknown>): Promise<LicensedProviderRuntime> {
+  const runtimeUrl = new URL('../../dist/eda/licensedEdaProviders.js', import.meta.url).href;
+  const runtime = await import(runtimeUrl) as {
+    LicensedEdaProvider: new (value: Record<string, unknown>) => LicensedProviderRuntime;
+  };
+  return new runtime.LicensedEdaProvider(profile);
+}
 
 interface ProjectSummary {
   projectId: string;
@@ -330,7 +345,7 @@ async function readJsonFile<T>(targetPath: string): Promise<T> {
   return JSON.parse(await readFile(targetPath, 'utf8')) as T;
 }
 
-const HDL_SOURCE_EXTENSIONS = new Set(['.v', '.vh', '.sv', '.svh', '.json', '.sdc']);
+const HDL_SOURCE_EXTENSIONS = new Set(['.v', '.vh', '.sv', '.svh', '.json', '.sdc', '.tcl']);
 
 function resolveHdlProjectFile(projectRoot: string, relativePath: string): string {
   const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -406,16 +421,94 @@ async function initializeHdlWorkspace(projectRoot: string): Promise<{ files: str
       'utf8',
     );
   }
+  const project = JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8')) as {
+    project_kind?: string;
+  };
+  const mixedContractPath = path.resolve(hdlRoot, 'mixed-signal.json');
+  if (project.project_kind === 'mixed_signal_ic' && !(await exists(mixedContractPath))) {
+    await writeFile(
+      mixedContractPath,
+      `${JSON.stringify({
+        schema: 'actoviq.mixed-signal-contract.v1',
+        boundaries: [{
+          id: 'boundary_1',
+          analog_net: 'analog_net',
+          digital_signal: 'digital_signal',
+          direction: 'analog_to_digital',
+          supply_domain: { vss: 0, vdd: 1.8 },
+          threshold: { low_max: 0.5, high_min: 1.3 },
+          sampling: { mode: 'edge', edge: 'rising' },
+          conversion_model: 'connectrules/boundary.vams',
+          vectors: [],
+        }],
+      }, null, 2)}\n`,
+      'utf8',
+    );
+  }
   return { files: await listHdlSourceFiles(hdlRoot) };
+}
+
+async function latestPassedHdlRun(root: string): Promise<string | null> {
+  if (!(await exists(root))) return null;
+  const candidates: Array<{ path: string; modified: number }> = [];
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const target = path.resolve(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(target);
+      } else if (entry.isFile() && entry.name === 'run.json') {
+        try {
+          const value = JSON.parse(await readFile(target, 'utf8')) as { kind?: string; status?: string };
+          if (value.status === 'passed' && value.kind?.startsWith('hdl_')) {
+            candidates.push({ path: target, modified: (await stat(target)).mtimeMs });
+          }
+        } catch {
+          // Ignore incomplete run records while another provider is writing.
+        }
+      }
+    }
+  }
+  await visit(root);
+  return candidates.sort((left, right) => right.modified - left.modified)[0]?.path ?? null;
 }
 
 async function runHdlAction(
   projectRoot: string,
-  action: 'simulate' | 'synthesize' | 'gate-regression',
+  action: 'simulate' | 'synthesize' | 'gate-regression' | 'openroad' | 'mixed-contract',
 ): Promise<Record<string, unknown>> {
   const runId = `${timestampForId()}-${Math.random().toString(36).slice(2, 8)}`;
   const runsRoot = path.resolve(projectRoot, 'build', 'hdl', 'runs');
   await mkdir(runsRoot, { recursive: true });
+  if (action === 'mixed-contract') {
+    const contract = path.resolve(projectRoot, 'hdl', 'mixed-signal.json');
+    if (!(await exists(contract))) throw new Error('Initialize or create hdl/mixed-signal.json first.');
+    const analogRun = path.resolve(projectRoot, 'build', 'system', 'simulation', 'result.json');
+    const digitalRun = await latestPassedHdlRun(runsRoot);
+    const args = [
+      'mixed-signal-check',
+      '--contract', contract,
+      '--run-root', path.resolve(runsRoot, `${runId}-mixed-contract`),
+    ];
+    if (await exists(analogRun)) args.push('--analog-run', analogRun);
+    if (digitalRun) args.push('--digital-run', digitalRun);
+    return runProjectTool(args);
+  }
+  if (action === 'openroad') {
+    const manifest = JSON.parse(await readFile(path.resolve(projectRoot, 'hdl', 'manifest.json'), 'utf8')) as {
+      active_source_set?: string;
+      source_sets?: Array<{ id?: string; openroad_script?: string }>;
+    };
+    const sourceSet = manifest.source_sets?.find((entry) => entry.id === manifest.active_source_set)
+      ?? manifest.source_sets?.[0];
+    const script = sourceSet?.openroad_script?.trim();
+    if (!script) throw new Error('Active HDL source set does not declare openroad_script.');
+    return runProjectTool([
+      'hdl-openroad',
+      '--project-root', projectRoot,
+      '--script', script,
+      '--run-root', path.resolve(runsRoot, `${runId}-openroad`),
+    ], { timeoutMs: 1_200_000 });
+  }
   if (action === 'simulate') {
     return runProjectTool([
       'hdl-simulate',
@@ -2070,8 +2163,8 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(
     'project:run-hdl',
-    async (_event, projectId: string, action: 'simulate' | 'synthesize' | 'gate-regression') => {
-      if (!['simulate', 'synthesize', 'gate-regression'].includes(action)) {
+    async (_event, projectId: string, action: 'simulate' | 'synthesize' | 'gate-regression' | 'openroad' | 'mixed-contract') => {
+      if (!['simulate', 'synthesize', 'gate-regression', 'openroad', 'mixed-contract'].includes(action)) {
         throw new Error(`Unsupported HDL action: ${String(action)}`);
       }
       const root = await resolveProjectRoot(projectId);
@@ -2126,6 +2219,15 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       title: `Select ${label}`,
       properties: ['openFile'],
       filters: [{ name: 'IC design files', extensions: ['gds', 'gdsii', 'oas', 'oasis', 'mag', 'drc', 'lvs', 'lydrc', 'lylvs', 'cir', 'sp', 'spi', 'spice', 'cdl', 'tcl', 'tech'] }],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  ipcMain.handle('project:choose-licensed-eda-input', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select commercial simulator input deck or AMS file list',
+      properties: ['openFile'],
+      filters: [{ name: 'EDA inputs', extensions: ['scs', 'cir', 'sp', 'spi', 'spice', 'hsp', 'f', 'fl', 'tcl', 'do'] }],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
@@ -2506,6 +2608,64 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       ], { timeoutMs: 600_000 });
     }
     throw new Error(`Unsupported physical verification operation: ${operation}`);
+  });
+
+  ipcMain.handle('project:run-licensed-eda', async (_event, projectId: string, input) => {
+    const root = await resolveProjectRoot(projectId);
+    const resolved = await resolveExecutionProfile(String(input.profileId));
+    if (resolved.providerId === 'ngspice' || resolved.providerId === 'xyce') {
+      throw new Error('Select a licensed analog or AMS execution profile.');
+    }
+    const profile = { ...resolved };
+    const relativeRoot = path.relative(profile.allowedRoots[0]!, root);
+    if (relativeRoot.startsWith('..') || path.isAbsolute(relativeRoot)) {
+      throw new Error('The active project must be inside the execution profile allowedRoots.');
+    }
+    if (profile.target === 'ssh_linux') {
+      throw new Error('SSH execution requires the staged-run workflow; use a local profile until staging is configured.');
+    }
+    const runId = `${timestampForId()}-${Math.random().toString(36).slice(2, 8)}`;
+    const outputDirectory = path.resolve(root, 'build', 'licensed-eda', runId);
+    await mkdir(outputDirectory, { recursive: true });
+    const project = JSON.parse(await readFile(path.resolve(root, 'project.circuit.json'), 'utf8')) as {
+      revision?: number;
+    };
+    const provider = await createLicensedProvider(profile);
+    const job = {
+      id: runId,
+      kind: String(input.kind || 'licensed_simulation'),
+      cwd: root,
+      inputPath: String(input.inputPath),
+      outputDirectory,
+      top: String(input.top || ''),
+      measurementCsv: input.measurementCsv ? String(input.measurementCsv) : undefined,
+      sourceRevision: project.revision,
+    };
+    const prepared = await provider.prepare(job);
+    const execution = await provider.run(prepared);
+    const parsed = await provider.parse(job, execution);
+    const normalized = {
+      schema: 'actoviq.verification-run.v1',
+      run_id: parsed.runId,
+      kind: parsed.kind,
+      provider_id: parsed.providerId,
+      executed: parsed.executed,
+      status: parsed.status,
+      diagnostics: parsed.diagnostics,
+      artifacts: parsed.artifacts,
+      metadata: {
+        qualification: parsed.qualification,
+        measured: parsed.measured,
+        measurements: parsed.measurements,
+        ams_verified: parsed.amsVerified === true,
+        target: profile.target,
+        tool_profile_id: profile.id,
+        source_revision: project.revision,
+        output_directory: outputDirectory,
+      },
+    };
+    await writeFile(path.resolve(outputDirectory, 'run.json'), `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+    return normalized;
   });
 
   ipcMain.handle('project:read-build', async (_event, projectId: string) => {

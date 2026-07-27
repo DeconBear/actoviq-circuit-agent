@@ -8,6 +8,83 @@ interface HdlSymbol {
   line: number;
 }
 
+interface HdlSourceSetDraft {
+  id: string;
+  top: string;
+  sources: string[];
+  testbench?: string;
+  testbench_top?: string;
+  include_paths?: string[];
+  defines?: Record<string, string | number | boolean>;
+  gate_libraries?: string[];
+  liberty?: string;
+  constraints?: string;
+  openroad_script?: string;
+}
+
+interface HdlManifestDraft {
+  schema: 'actoviq.hdl-manifest.v1';
+  language: 'verilog-2005';
+  active_source_set: string;
+  source_sets: HdlSourceSetDraft[];
+}
+
+interface MixedBoundaryDraft {
+  id: string;
+  analog_net: string;
+  digital_signal: string;
+  direction: string;
+  supply_domain: { vss: number; vdd: number };
+  threshold: { low_max: number; high_min: number };
+  sampling: { mode: 'edge' | 'periodic' | 'continuous'; edge?: string };
+  conversion_model: string;
+  vectors: Array<{ time_s: number; analog_voltage: number; digital_value: number }>;
+}
+
+interface MixedContractDraft {
+  schema: 'actoviq.mixed-signal-contract.v1';
+  boundaries: MixedBoundaryDraft[];
+}
+
+function parseManifestDraft(value: string): HdlManifestDraft | null {
+  try {
+    const parsed = JSON.parse(value) as HdlManifestDraft;
+    return parsed.schema === 'actoviq.hdl-manifest.v1' && Array.isArray(parsed.source_sets)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseMixedContract(value: string): MixedContractDraft | null {
+  try {
+    const parsed = JSON.parse(value) as MixedContractDraft;
+    return parsed.schema === 'actoviq.mixed-signal-contract.v1' && Array.isArray(parsed.boundaries)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseDefines(value: string): Record<string, string | number | boolean> {
+  const result: Record<string, string | number | boolean> = {};
+  for (const entry of value.split(',')) {
+    const [rawKey, ...rawValue] = entry.split('=');
+    const key = rawKey?.trim();
+    if (!key) continue;
+    const text = rawValue.join('=').trim();
+    if (text === 'true' || text === 'false') {
+      result[key] = text === 'true';
+      continue;
+    }
+    const number = Number(text);
+    result[key] = text && Number.isFinite(number) ? number : text || 1;
+  }
+  return result;
+}
+
 function inspectVerilog(content: string): { diagnostics: string[]; symbols: HdlSymbol[] } {
   const diagnostics: string[] = [];
   const symbols: HdlSymbol[] = [];
@@ -95,6 +172,40 @@ export function HdlEditor() {
       : inspectVerilog(draft),
     [activeFile, draft],
   );
+  const manifestDraft = useMemo(
+    () => activeFile.endsWith('manifest.json') ? parseManifestDraft(draft) : null,
+    [activeFile, draft],
+  );
+  const mixedContract = useMemo(
+    () => activeFile.endsWith('mixed-signal.json') ? parseMixedContract(draft) : null,
+    [activeFile, draft],
+  );
+  const activeSourceSet = manifestDraft?.source_sets.find(
+    (sourceSet) => sourceSet.id === manifestDraft.active_source_set,
+  ) ?? manifestDraft?.source_sets[0];
+
+  function updateManifest(mutator: (manifest: HdlManifestDraft) => void) {
+    if (!manifestDraft) return;
+    const next = JSON.parse(JSON.stringify(manifestDraft)) as HdlManifestDraft;
+    mutator(next);
+    setDraft(`${JSON.stringify(next, null, 2)}\n`);
+  }
+
+  function updateSourceSet(patch: Partial<HdlSourceSetDraft>) {
+    if (!activeSourceSet) return;
+    updateManifest((manifest) => {
+      const sourceSet = manifest.source_sets.find((entry) => entry.id === manifest.active_source_set)
+        ?? manifest.source_sets[0];
+      if (sourceSet) Object.assign(sourceSet, patch);
+    });
+  }
+
+  function updateMixedBoundary(index: number, patch: Partial<MixedBoundaryDraft>) {
+    if (!mixedContract) return;
+    const next = JSON.parse(JSON.stringify(mixedContract)) as MixedContractDraft;
+    Object.assign(next.boundaries[index]!, patch);
+    setDraft(`${JSON.stringify(next, null, 2)}\n`);
+  }
 
   async function saveFile() {
     if (!projectId || !activeFile) return;
@@ -135,12 +246,15 @@ export function HdlEditor() {
     }
   }
 
-  async function runHdl(action: 'simulate' | 'synthesize' | 'gate-regression') {
+  async function runHdl(action: 'simulate' | 'synthesize' | 'gate-regression' | 'openroad' | 'mixed-contract') {
     if (!projectId || draft !== saved || inspection.diagnostics.length) return;
     setRunBusy(true);
     setVerificationRun(null);
     setStatus(action === 'simulate' ? 'Running Icarus simulation...'
-      : action === 'synthesize' ? 'Running Yosys synthesis...' : 'Running synthesis and gate regression...');
+      : action === 'synthesize' ? 'Running Yosys synthesis...'
+        : action === 'openroad' ? 'Running explicit OpenROAD Tcl flow...'
+          : action === 'mixed-contract' ? 'Checking explicit analog/digital boundary contract...'
+          : 'Running synthesis and gate regression...');
     try {
       const result = await window.electronAPI.runHdlAction(projectId, action);
       setVerificationRun(result);
@@ -237,7 +351,87 @@ export function HdlEditor() {
         >
           Gate regression
         </button>
+        <button
+          style={styles.secondaryAction}
+          onClick={() => void runHdl('openroad')}
+          disabled={runBusy || draft !== saved || inspection.diagnostics.length > 0}
+          title="Runs only the explicit project-local Tcl declared by the active source set."
+          data-testid="hdl-openroad"
+        >
+          OpenROAD
+        </button>
+        {bundle?.project.project_kind === 'mixed_signal_ic' ? (
+          <button
+            style={styles.secondaryAction}
+            onClick={() => void runHdl('mixed-contract')}
+            disabled={runBusy || draft !== saved || inspection.diagnostics.length > 0}
+            data-testid="hdl-mixed-contract"
+          >
+            Verify interface
+          </button>
+        ) : null}
       </div>
+      {manifestDraft && activeSourceSet ? (
+        <div style={styles.manifestPanel} data-testid="hdl-manifest-form">
+          <label style={styles.manifestField}>
+            Source set
+            <select
+              value={manifestDraft.active_source_set}
+              onChange={(event) => updateManifest((manifest) => { manifest.active_source_set = event.target.value; })}
+            >
+              {manifestDraft.source_sets.map((sourceSet) => <option key={sourceSet.id} value={sourceSet.id}>{sourceSet.id}</option>)}
+            </select>
+          </label>
+          <label style={styles.manifestField}>Top<input value={activeSourceSet.top} onChange={(event) => updateSourceSet({ top: event.target.value })} /></label>
+          <label style={styles.manifestField}>Sources<input value={activeSourceSet.sources.join(', ')} onChange={(event) => updateSourceSet({ sources: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} /></label>
+          <label style={styles.manifestField}>Testbench<input value={activeSourceSet.testbench ?? ''} onChange={(event) => updateSourceSet({ testbench: event.target.value || undefined })} /></label>
+          <label style={styles.manifestField}>TB top<input value={activeSourceSet.testbench_top ?? ''} onChange={(event) => updateSourceSet({ testbench_top: event.target.value || undefined })} /></label>
+          <label style={styles.manifestField}>Includes<input value={(activeSourceSet.include_paths ?? []).join(', ')} onChange={(event) => updateSourceSet({ include_paths: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} /></label>
+          <label style={styles.manifestField}>Defines<input value={Object.entries(activeSourceSet.defines ?? {}).map(([key, value]) => `${key}=${String(value)}`).join(', ')} onChange={(event) => updateSourceSet({ defines: parseDefines(event.target.value) })} /></label>
+          <label style={styles.manifestField}>Liberty<input value={activeSourceSet.liberty ?? ''} onChange={(event) => updateSourceSet({ liberty: event.target.value || undefined })} /></label>
+          <label style={styles.manifestField}>Gate libs<input value={(activeSourceSet.gate_libraries ?? []).join(', ')} onChange={(event) => updateSourceSet({ gate_libraries: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} /></label>
+          <label style={styles.manifestField}>OpenROAD Tcl<input value={activeSourceSet.openroad_script ?? ''} onChange={(event) => updateSourceSet({ openroad_script: event.target.value || undefined })} /></label>
+          <label style={styles.manifestField} title="Yosys provider rejects declared timing constraints until a provider can apply them.">Constraints<input value={activeSourceSet.constraints ?? ''} onChange={(event) => updateSourceSet({ constraints: event.target.value || undefined })} /></label>
+        </div>
+      ) : null}
+      {mixedContract ? (
+        <div style={styles.contractPanel} data-testid="mixed-signal-contract-form">
+          {mixedContract.boundaries.map((boundary, index) => (
+            <div key={`${boundary.id}-${index}`} style={styles.contractBoundary}>
+              <label style={styles.manifestField}>ID<input value={boundary.id} onChange={(event) => updateMixedBoundary(index, { id: event.target.value })} /></label>
+              <label style={styles.manifestField}>Analog net<input value={boundary.analog_net} onChange={(event) => updateMixedBoundary(index, { analog_net: event.target.value })} /></label>
+              <label style={styles.manifestField}>Digital signal<input value={boundary.digital_signal} onChange={(event) => updateMixedBoundary(index, { digital_signal: event.target.value })} /></label>
+              <label style={styles.manifestField}>Direction<select value={boundary.direction} onChange={(event) => updateMixedBoundary(index, { direction: event.target.value })}><option value="analog_to_digital">Analog → digital</option><option value="digital_to_analog">Digital → analog</option><option value="bidirectional">Bidirectional</option></select></label>
+              <label style={styles.manifestField}>VSS<input type="number" value={boundary.supply_domain.vss} onChange={(event) => updateMixedBoundary(index, { supply_domain: { ...boundary.supply_domain, vss: Number(event.target.value) } })} /></label>
+              <label style={styles.manifestField}>VDD<input type="number" value={boundary.supply_domain.vdd} onChange={(event) => updateMixedBoundary(index, { supply_domain: { ...boundary.supply_domain, vdd: Number(event.target.value) } })} /></label>
+              <label style={styles.manifestField}>Low max<input type="number" value={boundary.threshold.low_max} onChange={(event) => updateMixedBoundary(index, { threshold: { ...boundary.threshold, low_max: Number(event.target.value) } })} /></label>
+              <label style={styles.manifestField}>High min<input type="number" value={boundary.threshold.high_min} onChange={(event) => updateMixedBoundary(index, { threshold: { ...boundary.threshold, high_min: Number(event.target.value) } })} /></label>
+              <label style={styles.manifestField}>Sampling<select value={boundary.sampling.mode} onChange={(event) => updateMixedBoundary(index, { sampling: { ...boundary.sampling, mode: event.target.value as MixedBoundaryDraft['sampling']['mode'] } })}><option value="edge">Edge</option><option value="periodic">Periodic</option><option value="continuous">Continuous</option></select></label>
+              <label style={styles.manifestField}>Conversion model<input value={boundary.conversion_model} onChange={(event) => updateMixedBoundary(index, { conversion_model: event.target.value })} /></label>
+            </div>
+          ))}
+          <button
+            style={styles.secondaryAction}
+            onClick={() => {
+              const next = JSON.parse(JSON.stringify(mixedContract)) as MixedContractDraft;
+              next.boundaries.push({
+                id: `boundary_${next.boundaries.length + 1}`,
+                analog_net: '',
+                digital_signal: '',
+                direction: 'analog_to_digital',
+                supply_domain: { vss: 0, vdd: 1.8 },
+                threshold: { low_max: 0.5, high_min: 1.3 },
+                sampling: { mode: 'edge', edge: 'rising' },
+                conversion_model: '',
+                vectors: [],
+              });
+              setDraft(`${JSON.stringify(next, null, 2)}\n`);
+            }}
+          >
+            Add boundary
+          </button>
+        </div>
+      ) : null}
       {verificationRun ? (
         <div
           style={verificationRun.status === 'passed' ? styles.runResultOk : styles.runResultError}
@@ -310,6 +504,23 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#f8fafc',
   },
   runHint: { flex: 1, color: '#66717e', fontSize: 11 },
+  manifestPanel: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(5, minmax(150px, 1fr))',
+    gap: 7,
+    padding: '8px 12px',
+    borderBottom: '1px solid #dfe3e8',
+    background: '#f8fafc',
+  },
+  manifestField: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+    color: '#66717e',
+    fontSize: 10,
+  },
+  contractPanel: { padding: '8px 12px', borderBottom: '1px solid #dfe3e8', background: '#f8fafc' },
+  contractBoundary: { display: 'grid', gridTemplateColumns: 'repeat(5, minmax(130px, 1fr))', gap: 7, marginBottom: 8 },
   primaryAction: {
     padding: '7px 12px',
     border: 0,

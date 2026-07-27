@@ -356,7 +356,7 @@ const electronAPI = {
     return ipcRenderer.invoke('project:create-hdl-file', projectId, relativePath);
   },
 
-  runHdlAction(projectId: string, action: 'simulate' | 'synthesize' | 'gate-regression'): Promise<unknown> {
+  runHdlAction(projectId: string, action: 'simulate' | 'synthesize' | 'gate-regression' | 'openroad' | 'mixed-contract'): Promise<unknown> {
     return ipcRenderer.invoke('project:run-hdl', projectId, action);
   },
 
@@ -573,6 +573,20 @@ const electronAPI = {
 
   runPhysicalVerification(projectId: string, input: Record<string, unknown>): Promise<unknown> {
     return ipcRenderer.invoke('project:run-physical-verification', projectId, input);
+  },
+
+  chooseLicensedEdaInput(): Promise<string | null> {
+    return ipcRenderer.invoke('project:choose-licensed-eda-input');
+  },
+
+  runLicensedEda(projectId: string, input: {
+    profileId: string;
+    inputPath: string;
+    kind: string;
+    top?: string;
+    measurementCsv?: string;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:run-licensed-eda', projectId, input);
   },
 
   readCircuitBuild(projectId: string): Promise<unknown> {

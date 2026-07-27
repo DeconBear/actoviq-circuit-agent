@@ -129,7 +129,7 @@ declare global {
       createHdlFile(projectId: string, relativePath: string): Promise<{ ok: true; path: string }>;
       runHdlAction(
         projectId: string,
-        action: 'simulate' | 'synthesize' | 'gate-regression',
+        action: 'simulate' | 'synthesize' | 'gate-regression' | 'openroad' | 'mixed-contract',
       ): Promise<HdlVerificationRun>;
       applyCircuitCommand(projectId: string, command: CircuitCommand): Promise<{
         ok: true;
@@ -214,6 +214,14 @@ declare global {
         projectId: string,
         input: Record<string, unknown>,
       ): Promise<HdlVerificationRun | SimulationRun>;
+      chooseLicensedEdaInput(): Promise<string | null>;
+      runLicensedEda(projectId: string, input: {
+        profileId: string;
+        inputPath: string;
+        kind: string;
+        top?: string;
+        measurementCsv?: string;
+      }): Promise<HdlVerificationRun>;
       readCircuitBuild(projectId: string): Promise<CircuitBuildState | null>;
       readCircuitSimulationDataset(projectId: string, input: {
         runId: string;

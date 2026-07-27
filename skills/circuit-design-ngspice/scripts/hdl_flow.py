@@ -511,7 +511,7 @@ def verify_mixed_signal_contract(
         run_root.name,
         "mixed_signal_contract",
         "actoviq-interface-contract",
-        contract_ok and analog_ok and digital_ok,
+        interface_verified,
         diagnostics,
         [{"kind": "interface_contract", "path": str(contract_path), "hash": _hash(contract_path)}],
         {
