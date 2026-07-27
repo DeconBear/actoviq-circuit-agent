@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -127,6 +128,8 @@ function currentVectorCandidates(instance: string, type?: CircuitModule['compone
 }
 const BOARD_MIN_WIDTH = 3600;
 const BOARD_MIN_HEIGHT = 2600;
+/** Matches `styles.boardViewport.padding`; used by zoom focal-point scroll math. */
+const BOARD_VIEWPORT_PADDING = 20;
 
 function commandId(): string {
   return `gui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -428,8 +431,14 @@ export function CircuitWorkbench({
   const [moduleEditorError, setModuleEditorError] = useState('');
   const [emptyProjectForm, setEmptyProjectForm] = useState<EmptyProjectFormState | null>(null);
   const canvasPanelRef = useRef<HTMLDivElement | null>(null);
+  const zoomRef = useRef(zoom);
+  const viewRef = useRef(view);
+  const pendingCanvasScrollRef = useRef<{ left: number; top: number } | null>(null);
+  const handleCanvasWheelRef = useRef<(event: WheelEvent) => void>(() => {});
   const suppressContextMenuRef = useRef(false);
   const emptyProjectCreateRef = useRef(false);
+  zoomRef.current = zoom;
+  viewRef.current = view;
   const [modulePreviewPositions, setModulePreviewPositions] = useState<
     Record<string, { x: number; y: number }>
   >({});
@@ -593,6 +602,17 @@ export function CircuitWorkbench({
     });
   }, [activeProjectId, project?.project_id, view]);
 
+  useLayoutEffect(() => {
+    const pending = pendingCanvasScrollRef.current;
+    if (!pending) return;
+    pendingCanvasScrollRef.current = null;
+    const panel = canvasPanelRef.current;
+    if (!panel) return;
+    panel.scrollLeft = pending.left;
+    panel.scrollTop = pending.top;
+    setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
+  }, [zoom]);
+
   const refreshDesignMemory = useCallback(async () => {
     setDesignMemoryLoading(true);
     try {
@@ -682,10 +702,10 @@ export function CircuitWorkbench({
   useEffect(() => {
     const panel = canvasPanelRef.current;
     if (!panel || view !== 'board') return;
-    const listener = (event: WheelEvent) => handleCanvasWheel(event);
+    const listener = (event: WheelEvent) => handleCanvasWheelRef.current(event);
     panel.addEventListener('wheel', listener, { passive: false });
     return () => panel.removeEventListener('wheel', listener);
-  }, [view, zoom, project?.project_id]);
+  }, [view, project?.project_id]);
 
   async function applyOperations(
     message: string,
@@ -1446,46 +1466,46 @@ export function CircuitWorkbench({
     await applyOperations('Arrange module canvas', operations);
   }
 
+  function zoomCanvasAroundPoint(nextZoom: number, focalX: number, focalY: number) {
+    const panel = canvasPanelRef.current;
+    const clampedZoom = clampCanvasZoom(nextZoom);
+    const currentZoom = zoomRef.current;
+    if (!panel || clampedZoom === currentZoom) return;
+    const oldScale = currentZoom / 100;
+    const nextScale = clampedZoom / 100;
+    const pad = BOARD_VIEWPORT_PADDING;
+    const boardX = (panel.scrollLeft + focalX - pad) / oldScale;
+    const boardY = (panel.scrollTop + focalY - pad) / oldScale;
+    pendingCanvasScrollRef.current = {
+      left: boardX * nextScale - focalX + pad,
+      top: boardY * nextScale - focalY + pad,
+    };
+    setZoom(clampedZoom);
+  }
+
   function handleCanvasWheel(event: WheelEvent) {
-    if (view !== 'board') return;
+    if (viewRef.current !== 'board') return;
     event.preventDefault();
     const panel = canvasPanelRef.current;
     if (!panel) return;
     const rect = panel.getBoundingClientRect();
-    const oldScale = zoom / 100;
-    const nextZoom = clampCanvasZoom(zoom + (event.deltaY < 0 ? 10 : -10));
-    if (nextZoom === zoom) return;
-    const boardX = (panel.scrollLeft + event.clientX - rect.left) / oldScale;
-    const boardY = (panel.scrollTop + event.clientY - rect.top) / oldScale;
-    setZoom(nextZoom);
-    window.requestAnimationFrame(() => {
-      const nextScale = nextZoom / 100;
-      panel.scrollLeft = boardX * nextScale - (event.clientX - rect.left);
-      panel.scrollTop = boardY * nextScale - (event.clientY - rect.top);
-      setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
-    });
+    zoomCanvasAroundPoint(
+      zoomRef.current + (event.deltaY < 0 ? 10 : -10),
+      event.clientX - rect.left,
+      event.clientY - rect.top,
+    );
   }
+  handleCanvasWheelRef.current = handleCanvasWheel;
 
   function zoomCanvasAtPanelCenter(nextZoom: number) {
     const panel = canvasPanelRef.current;
-    const clampedZoom = clampCanvasZoom(nextZoom);
-    if (!panel || clampedZoom === zoom) return;
-    const oldScale = zoom / 100;
+    if (!panel) return;
     const rect = panel.getBoundingClientRect();
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const boardX = (panel.scrollLeft + centerX) / oldScale;
-    const boardY = (panel.scrollTop + centerY) / oldScale;
-    setZoom(clampedZoom);
-    window.requestAnimationFrame(() => {
-      const nextScale = clampedZoom / 100;
-      panel.scrollLeft = boardX * nextScale - centerX;
-      panel.scrollTop = boardY * nextScale - centerY;
-      setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
-    });
+    zoomCanvasAroundPoint(nextZoom, rect.width / 2, rect.height / 2);
   }
 
   function resetCanvasView() {
+    pendingCanvasScrollRef.current = null;
     setZoom(65);
     const panel = canvasPanelRef.current;
     if (!panel) return;
@@ -2708,12 +2728,16 @@ function ModuleBoard({
   onContextMenu: (event: ReactMouseEvent, moduleId?: string) => void;
 }) {
   const scale = zoom / 100;
+  const pad = BOARD_VIEWPORT_PADDING;
   return (
     <div
       style={{
         ...styles.boardViewport,
-        minWidth: metrics.width * scale,
-        minHeight: metrics.height * scale,
+        width: metrics.width * scale + pad * 2,
+        height: metrics.height * scale + pad * 2,
+        padding: pad,
+        boxSizing: 'border-box',
+        overflow: 'hidden',
       }}
       data-testid="system-canvas"
       data-board-origin-x={metrics.originX}
@@ -4052,8 +4076,14 @@ const styles: Record<string, CSSProperties> = {
   notice: { padding: '6px 14px', background: '#e9f7ee', color: '#23653e', borderBottom: '1px solid #c2e2ce', fontSize: 12 },
   noticeError: { background: '#fbe9e9', color: '#9c2525', borderBottom: '1px solid #e9b7b7' },
   body: { flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 310px' },
-  canvasPanel: { overflow: 'auto', position: 'relative', background: '#f3f4f6', minWidth: 0 },
-  boardViewport: { position: 'relative', padding: 20 },
+  canvasPanel: {
+    overflow: 'auto',
+    position: 'relative',
+    background: '#f3f4f6',
+    minWidth: 0,
+    overflowAnchor: 'none',
+  },
+  boardViewport: { position: 'relative' },
   board: {
     position: 'relative',
     transformOrigin: 'top left',
