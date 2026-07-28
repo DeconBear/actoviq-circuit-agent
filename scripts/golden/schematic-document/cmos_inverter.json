@@ -1,0 +1,354 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "cmos_inverter",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": 150,
+    "minY": 10,
+    "maxX": 860,
+    "maxY": 530
+  },
+  "viewBox": {
+    "minX": 110,
+    "minY": -30,
+    "maxX": 900,
+    "maxY": 570
+  },
+  "componentCount": 3,
+  "wireCount": 5,
+  "portCount": 4,
+  "netLabelCount": 3,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "cload",
+      "type": "C",
+      "name": "CLOAD",
+      "value": "10p",
+      "position": {
+        "x": 620,
+        "y": 320
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "mn1",
+      "type": "M",
+      "name": "MN1",
+      "value": "NMOS W=20u L=1u",
+      "position": {
+        "x": 420,
+        "y": 380
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "in",
+          "net_id": "net_in"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "mp1",
+      "type": "M",
+      "name": "MP1",
+      "value": "PMOS W=40u L=1u",
+      "position": {
+        "x": 420,
+        "y": 160
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "in",
+          "net_id": "net_in"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 440,
+        "y": 560
+      }
+    },
+    {
+      "id": "input",
+      "name": "IN",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "in",
+      "net_id": "net_in",
+      "connected": true,
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "out",
+      "net_id": "net_out",
+      "connected": true,
+      "position": {
+        "x": 740,
+        "y": 220
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_in_1",
+      "net": "in",
+      "source": "net",
+      "from": "pin:mp1.g",
+      "to": "pin:mn1.g",
+      "fromPoint": {
+        "x": 362,
+        "y": 160
+      },
+      "toPoint": {
+        "x": 362,
+        "y": 380
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 362,
+          "y": 160
+        },
+        {
+          "x": 362,
+          "y": 380
+        }
+      ]
+    },
+    {
+      "id": "net_in_2",
+      "net": "in",
+      "source": "net",
+      "from": "pin:mp1.g",
+      "to": "port:input",
+      "fromPoint": {
+        "x": 362,
+        "y": 160
+      },
+      "toPoint": {
+        "x": 260,
+        "y": 160
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 362,
+          "y": 160
+        },
+        {
+          "x": 260,
+          "y": 160
+        }
+      ]
+    },
+    {
+      "id": "net_out_1",
+      "net": "out",
+      "source": "net",
+      "from": "pin:mp1.d",
+      "to": "pin:mn1.d",
+      "fromPoint": {
+        "x": 442,
+        "y": 212
+      },
+      "toPoint": {
+        "x": 442,
+        "y": 328
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 442,
+          "y": 212
+        },
+        {
+          "x": 442,
+          "y": 328
+        }
+      ]
+    },
+    {
+      "id": "net_out_2",
+      "net": "out",
+      "source": "net",
+      "from": "pin:mp1.d",
+      "to": "pin:cload.a",
+      "fromPoint": {
+        "x": 442,
+        "y": 212
+      },
+      "toPoint": {
+        "x": 620,
+        "y": 268
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 442,
+          "y": 212
+        },
+        {
+          "x": 442,
+          "y": 220
+        },
+        {
+          "x": 620,
+          "y": 220
+        },
+        {
+          "x": 620,
+          "y": 268
+        }
+      ]
+    },
+    {
+      "id": "net_out_3",
+      "net": "out",
+      "source": "net",
+      "from": "pin:mp1.d",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 442,
+        "y": 212
+      },
+      "toPoint": {
+        "x": 740,
+        "y": 220
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 442,
+          "y": 212
+        },
+        {
+          "x": 442,
+          "y": 220
+        },
+        {
+          "x": 740,
+          "y": 220
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_cload_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 620,
+        "y": 412
+      }
+    },
+    {
+      "id": "label_0_mn1_s",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 442,
+        "y": 472
+      }
+    },
+    {
+      "id": "label_vdd_mp1_s",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 442,
+        "y": 68
+      }
+    }
+  ],
+  "junctions": []
+}

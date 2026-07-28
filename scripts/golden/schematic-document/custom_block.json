@@ -1,0 +1,204 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "custom_block",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": -150,
+    "minY": -12,
+    "maxX": 520,
+    "maxY": 372
+  },
+  "viewBox": {
+    "minX": -190,
+    "minY": -52,
+    "maxX": 560,
+    "maxY": 412
+  },
+  "componentCount": 1,
+  "wireCount": 2,
+  "portCount": 4,
+  "netLabelCount": 2,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "adc_block",
+      "type": "BLOCK",
+      "name": "U1",
+      "value": "ADC + DSP",
+      "position": {
+        "x": 180,
+        "y": 180
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "ain",
+          "name": "AIN",
+          "net": "in",
+          "net_id": "net_in",
+          "side": "left",
+          "order": 0
+        },
+        {
+          "id": "data",
+          "name": "DATA",
+          "net": "out",
+          "net_id": "net_out",
+          "side": "right",
+          "order": 0
+        },
+        {
+          "id": "gnd",
+          "name": "GND",
+          "net": "0",
+          "net_id": "net_0",
+          "side": "bottom",
+          "order": 0
+        },
+        {
+          "id": "vdd",
+          "name": "VDD",
+          "net": "vdd",
+          "net_id": "net_vdd",
+          "side": "top",
+          "order": 0
+        }
+      ],
+      "block": {
+        "width": 180,
+        "height": 140
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 180,
+        "y": 400
+      }
+    },
+    {
+      "id": "input",
+      "name": "IN",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "in",
+      "net_id": "net_in",
+      "connected": true,
+      "position": {
+        "x": -40,
+        "y": 180
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "out",
+      "net_id": "net_out",
+      "connected": true,
+      "position": {
+        "x": 400,
+        "y": 180
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 180,
+        "y": -20
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_in_1",
+      "net": "in",
+      "source": "net",
+      "from": "pin:adc_block.ain",
+      "to": "port:input",
+      "fromPoint": {
+        "x": 66,
+        "y": 180
+      },
+      "toPoint": {
+        "x": -40,
+        "y": 180
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 66,
+          "y": 180
+        },
+        {
+          "x": -40,
+          "y": 180
+        }
+      ]
+    },
+    {
+      "id": "net_out_1",
+      "net": "out",
+      "source": "net",
+      "from": "pin:adc_block.data",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 294,
+        "y": 180
+      },
+      "toPoint": {
+        "x": 400,
+        "y": 180
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 294,
+          "y": 180
+        },
+        {
+          "x": 400,
+          "y": 180
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_adc_block_gnd",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 180,
+        "y": 314
+      }
+    },
+    {
+      "id": "label_vdd_adc_block_vdd",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 180,
+        "y": 46
+      }
+    }
+  ],
+  "junctions": []
+}

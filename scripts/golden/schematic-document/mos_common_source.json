@@ -1,0 +1,251 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "mos_common_source",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": 110,
+    "minY": -50,
+    "maxX": 640,
+    "maxY": 390
+  },
+  "viewBox": {
+    "minX": 70,
+    "minY": -90,
+    "maxX": 680,
+    "maxY": 430
+  },
+  "componentCount": 2,
+  "wireCount": 3,
+  "portCount": 4,
+  "netLabelCount": 2,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "m1",
+      "type": "M",
+      "name": "M1",
+      "value": "NMOS W=10u L=1u",
+      "position": {
+        "x": 380,
+        "y": 240
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "in",
+          "net_id": "net_in"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rd",
+      "type": "R",
+      "name": "RD",
+      "value": "10k",
+      "position": {
+        "x": 400,
+        "y": 100
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "out",
+          "net_id": "net_out"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 400,
+        "y": 420
+      }
+    },
+    {
+      "id": "input",
+      "name": "IN",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "in",
+      "net_id": "net_in",
+      "connected": true,
+      "position": {
+        "x": 220,
+        "y": 240
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "out",
+      "net_id": "net_out",
+      "connected": true,
+      "position": {
+        "x": 520,
+        "y": 180
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 400,
+        "y": -60
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_in_1",
+      "net": "in",
+      "source": "net",
+      "from": "pin:m1.g",
+      "to": "port:input",
+      "fromPoint": {
+        "x": 322,
+        "y": 240
+      },
+      "toPoint": {
+        "x": 220,
+        "y": 240
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 322,
+          "y": 240
+        },
+        {
+          "x": 220,
+          "y": 240
+        }
+      ]
+    },
+    {
+      "id": "net_out_1",
+      "net": "out",
+      "source": "net",
+      "from": "pin:m1.d",
+      "to": "pin:rd.b",
+      "fromPoint": {
+        "x": 402,
+        "y": 188
+      },
+      "toPoint": {
+        "x": 400,
+        "y": 152
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 402,
+          "y": 188
+        },
+        {
+          "x": 402,
+          "y": 152
+        },
+        {
+          "x": 400,
+          "y": 152
+        }
+      ]
+    },
+    {
+      "id": "net_out_2",
+      "net": "out",
+      "source": "net",
+      "from": "pin:m1.d",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 402,
+        "y": 188
+      },
+      "toPoint": {
+        "x": 520,
+        "y": 180
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 402,
+          "y": 188
+        },
+        {
+          "x": 520,
+          "y": 188
+        },
+        {
+          "x": 520,
+          "y": 180
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_m1_s",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 402,
+        "y": 332
+      }
+    },
+    {
+      "id": "label_vdd_rd_a",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 400,
+        "y": 8
+      }
+    }
+  ],
+  "junctions": []
+}

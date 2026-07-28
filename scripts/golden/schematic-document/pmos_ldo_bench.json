@@ -1,0 +1,685 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "pmos_ldo_bench",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": 68,
+    "minY": 120,
+    "maxX": 1540,
+    "maxY": 830
+  },
+  "viewBox": {
+    "minX": -2,
+    "minY": 50,
+    "maxX": 1610,
+    "maxY": 900
+  },
+  "componentCount": 9,
+  "wireCount": 8,
+  "portCount": 3,
+  "netLabelCount": 11,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "cout",
+      "type": "C",
+      "name": "COUT",
+      "value": "{COUTVAL}",
+      "position": {
+        "x": 1300,
+        "y": 640
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "iload",
+      "type": "I",
+      "name": "ILOAD",
+      "value": "DC 0 PULSE(0 {ILOAD_STEP} 0.5m 1u 1u 0.5m 5m)",
+      "position": {
+        "x": 1160,
+        "y": 640
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "out",
+          "net_id": "net_out"
+        }
+      ]
+    },
+    {
+      "id": "mpass",
+      "type": "M",
+      "name": "MPASS",
+      "value": "PMOSPASS W=20m L=1u",
+      "position": {
+        "x": 820,
+        "y": 340
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "vin",
+          "net_id": "net_vin"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "gate",
+          "net_id": "net_gate"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "vin",
+          "net_id": "net_vin"
+        }
+      ]
+    },
+    {
+      "id": "qerr",
+      "type": "Q",
+      "name": "QERR",
+      "value": "QNPN",
+      "position": {
+        "x": 320,
+        "y": 500
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "vref",
+          "net_id": "net_vref"
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "net": "gate",
+          "net_id": "net_gate"
+        },
+        {
+          "id": "e",
+          "name": "E",
+          "net": "fb",
+          "net_id": "net_fb"
+        }
+      ]
+    },
+    {
+      "id": "rfb1",
+      "type": "R",
+      "name": "RFB1",
+      "value": "{RTOP}",
+      "position": {
+        "x": 1020,
+        "y": 440
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "fb",
+          "net_id": "net_fb"
+        }
+      ]
+    },
+    {
+      "id": "rfb2",
+      "type": "R",
+      "name": "RFB2",
+      "value": "{RBOT}",
+      "position": {
+        "x": 1020,
+        "y": 680
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "fb",
+          "net_id": "net_fb"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rpu",
+      "type": "R",
+      "name": "RPU",
+      "value": "47k",
+      "position": {
+        "x": 700,
+        "y": 180
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vin",
+          "net_id": "net_vin"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "gate",
+          "net_id": "net_gate"
+        }
+      ]
+    },
+    {
+      "id": "vin",
+      "type": "V",
+      "name": "VIN",
+      "value": "DC {VIN_NOM} AC 0",
+      "position": {
+        "x": 140,
+        "y": 420
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "vin",
+          "net_id": "net_vin"
+        }
+      ]
+    },
+    {
+      "id": "vref_src",
+      "type": "V",
+      "name": "VREF_SRC",
+      "value": "DC {VREF} AC 1",
+      "position": {
+        "x": 140,
+        "y": 660
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "vref",
+          "net_id": "net_vref"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 1020,
+        "y": 860
+      }
+    },
+    {
+      "id": "input",
+      "name": "IN",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "vin",
+      "net_id": "net_vin",
+      "connected": true,
+      "position": {
+        "x": 980,
+        "y": 340
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "out",
+      "net_id": "net_out",
+      "connected": true,
+      "position": {
+        "x": 1420,
+        "y": 380
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_out_1",
+      "net": "out",
+      "source": "net",
+      "from": "port:output",
+      "to": "pin:cout.a",
+      "fromPoint": {
+        "x": 1420,
+        "y": 380
+      },
+      "toPoint": {
+        "x": 1300,
+        "y": 588
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 1420,
+          "y": 380
+        },
+        {
+          "x": 1300,
+          "y": 380
+        },
+        {
+          "x": 1300,
+          "y": 588
+        }
+      ]
+    },
+    {
+      "id": "net_out_2",
+      "net": "out",
+      "source": "net",
+      "from": "pin:cout.a",
+      "to": "pin:iload.p",
+      "fromPoint": {
+        "x": 1300,
+        "y": 588
+      },
+      "toPoint": {
+        "x": 1160,
+        "y": 588
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 1300,
+          "y": 588
+        },
+        {
+          "x": 1160,
+          "y": 588
+        }
+      ]
+    },
+    {
+      "id": "net_out_3",
+      "net": "out",
+      "source": "net",
+      "from": "pin:iload.p",
+      "to": "pin:rfb1.a",
+      "fromPoint": {
+        "x": 1160,
+        "y": 588
+      },
+      "toPoint": {
+        "x": 1020,
+        "y": 388
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 1160,
+          "y": 588
+        },
+        {
+          "x": 1160,
+          "y": 388
+        },
+        {
+          "x": 1020,
+          "y": 388
+        }
+      ]
+    },
+    {
+      "id": "net_out_4",
+      "net": "out",
+      "source": "net",
+      "from": "pin:rfb1.a",
+      "to": "pin:mpass.d",
+      "fromPoint": {
+        "x": 1020,
+        "y": 388
+      },
+      "toPoint": {
+        "x": 842,
+        "y": 392
+      },
+      "pointCount": 5,
+      "points": [
+        {
+          "x": 1020,
+          "y": 388
+        },
+        {
+          "x": 1020,
+          "y": 360
+        },
+        {
+          "x": 840,
+          "y": 360
+        },
+        {
+          "x": 840,
+          "y": 392
+        },
+        {
+          "x": 842,
+          "y": 392
+        }
+      ]
+    },
+    {
+      "id": "net_vin_1",
+      "net": "vin",
+      "source": "net",
+      "from": "pin:vin.p",
+      "to": "pin:rpu.a",
+      "fromPoint": {
+        "x": 140,
+        "y": 368
+      },
+      "toPoint": {
+        "x": 700,
+        "y": 128
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 140,
+          "y": 368
+        },
+        {
+          "x": 140,
+          "y": 120
+        },
+        {
+          "x": 700,
+          "y": 120
+        },
+        {
+          "x": 700,
+          "y": 128
+        }
+      ]
+    },
+    {
+      "id": "net_vin_2",
+      "net": "vin",
+      "source": "net",
+      "from": "pin:vin.p",
+      "to": "pin:mpass.s",
+      "fromPoint": {
+        "x": 140,
+        "y": 368
+      },
+      "toPoint": {
+        "x": 842,
+        "y": 288
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 140,
+          "y": 368
+        },
+        {
+          "x": 140,
+          "y": 120
+        },
+        {
+          "x": 842,
+          "y": 120
+        },
+        {
+          "x": 842,
+          "y": 288
+        }
+      ]
+    },
+    {
+      "id": "net_vin_3",
+      "net": "vin",
+      "source": "net",
+      "from": "pin:vin.p",
+      "to": "port:input",
+      "fromPoint": {
+        "x": 140,
+        "y": 368
+      },
+      "toPoint": {
+        "x": 980,
+        "y": 340
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 140,
+          "y": 368
+        },
+        {
+          "x": 140,
+          "y": 120
+        },
+        {
+          "x": 980,
+          "y": 120
+        },
+        {
+          "x": 980,
+          "y": 340
+        }
+      ]
+    },
+    {
+      "id": "net_vref_1",
+      "net": "vref",
+      "source": "net",
+      "from": "pin:vref_src.p",
+      "to": "pin:qerr.b",
+      "fromPoint": {
+        "x": 140,
+        "y": 608
+      },
+      "toPoint": {
+        "x": 262,
+        "y": 500
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 140,
+          "y": 608
+        },
+        {
+          "x": 140,
+          "y": 500
+        },
+        {
+          "x": 262,
+          "y": 500
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_cout_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1300,
+        "y": 732
+      }
+    },
+    {
+      "id": "label_0_iload_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1160,
+        "y": 732
+      }
+    },
+    {
+      "id": "label_0_rfb2_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1020,
+        "y": 772
+      }
+    },
+    {
+      "id": "label_0_vin_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 140,
+        "y": 512
+      }
+    },
+    {
+      "id": "label_0_vref_src_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 140,
+        "y": 752
+      }
+    },
+    {
+      "id": "label_fb_qerr_e",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "bottom",
+      "position": {
+        "x": 350,
+        "y": 552
+      }
+    },
+    {
+      "id": "label_fb_rfb1_b",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "bottom",
+      "position": {
+        "x": 1020,
+        "y": 492
+      }
+    },
+    {
+      "id": "label_fb_rfb2_a",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "top",
+      "position": {
+        "x": 1020,
+        "y": 628
+      }
+    },
+    {
+      "id": "label_gate_mpass_g",
+      "kind": "signal",
+      "net": "gate",
+      "name": "GATE",
+      "side": "left",
+      "position": {
+        "x": 762,
+        "y": 340
+      }
+    },
+    {
+      "id": "label_gate_qerr_c",
+      "kind": "signal",
+      "net": "gate",
+      "name": "GATE",
+      "side": "top",
+      "position": {
+        "x": 350,
+        "y": 448
+      }
+    },
+    {
+      "id": "label_gate_rpu_b",
+      "kind": "signal",
+      "net": "gate",
+      "name": "GATE",
+      "side": "bottom",
+      "position": {
+        "x": 700,
+        "y": 232
+      }
+    }
+  ],
+  "junctions": []
+}

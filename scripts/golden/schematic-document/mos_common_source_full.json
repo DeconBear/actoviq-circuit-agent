@@ -1,0 +1,668 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "mos_common_source_full",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": -110,
+    "minY": -50,
+    "maxX": 980,
+    "maxY": 570
+  },
+  "viewBox": {
+    "minX": -170,
+    "minY": -110,
+    "maxX": 1040,
+    "maxY": 630
+  },
+  "componentCount": 9,
+  "wireCount": 10,
+  "portCount": 4,
+  "netLabelCount": 6,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "cin",
+      "type": "C",
+      "name": "CIN",
+      "value": "100n",
+      "position": {
+        "x": 160,
+        "y": 240
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "in",
+          "net_id": "net_in"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "gate",
+          "net_id": "net_gate"
+        }
+      ]
+    },
+    {
+      "id": "cout",
+      "type": "C",
+      "name": "COUT",
+      "value": "1u",
+      "position": {
+        "x": 600,
+        "y": 180
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "drain",
+          "net_id": "net_drain"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "out",
+          "net_id": "net_out"
+        }
+      ]
+    },
+    {
+      "id": "cs",
+      "type": "C",
+      "name": "CS",
+      "value": "10u",
+      "position": {
+        "x": 540,
+        "y": 420
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "source",
+          "net_id": "net_source"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "m1",
+      "type": "M",
+      "name": "M1",
+      "value": "NMOS W=20u L=1u",
+      "position": {
+        "x": 380,
+        "y": 240
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "drain",
+          "net_id": "net_drain"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "gate",
+          "net_id": "net_gate"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "source",
+          "net_id": "net_source"
+        }
+      ]
+    },
+    {
+      "id": "rd",
+      "type": "R",
+      "name": "RD",
+      "value": "10k",
+      "position": {
+        "x": 400,
+        "y": 100
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "drain",
+          "net_id": "net_drain"
+        }
+      ]
+    },
+    {
+      "id": "rg1",
+      "type": "R",
+      "name": "RG1",
+      "value": "1M",
+      "position": {
+        "x": 280,
+        "y": 120
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "gate",
+          "net_id": "net_gate"
+        }
+      ]
+    },
+    {
+      "id": "rg2",
+      "type": "R",
+      "name": "RG2",
+      "value": "220k",
+      "position": {
+        "x": 280,
+        "y": 360
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "gate",
+          "net_id": "net_gate"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rload",
+      "type": "R",
+      "name": "RLOAD",
+      "value": "100k",
+      "position": {
+        "x": 740,
+        "y": 360
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rs",
+      "type": "R",
+      "name": "RS",
+      "value": "1k",
+      "position": {
+        "x": 400,
+        "y": 420
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "source",
+          "net_id": "net_source"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 400,
+        "y": 600
+      }
+    },
+    {
+      "id": "input",
+      "name": "IN",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "in",
+      "net_id": "net_in",
+      "connected": true,
+      "position": {
+        "x": 0,
+        "y": 240
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "out",
+      "net_id": "net_out",
+      "connected": true,
+      "position": {
+        "x": 860,
+        "y": 300
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 400,
+        "y": -60
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_drain_1",
+      "net": "drain",
+      "source": "net",
+      "from": "pin:rd.b",
+      "to": "pin:m1.d",
+      "fromPoint": {
+        "x": 400,
+        "y": 152
+      },
+      "toPoint": {
+        "x": 402,
+        "y": 188
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 400,
+          "y": 152
+        },
+        {
+          "x": 402,
+          "y": 152
+        },
+        {
+          "x": 402,
+          "y": 188
+        }
+      ]
+    },
+    {
+      "id": "net_drain_2",
+      "net": "drain",
+      "source": "net",
+      "from": "pin:rd.b",
+      "to": "pin:cout.a",
+      "fromPoint": {
+        "x": 400,
+        "y": 152
+      },
+      "toPoint": {
+        "x": 548,
+        "y": 180
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 400,
+          "y": 152
+        },
+        {
+          "x": 400,
+          "y": 180
+        },
+        {
+          "x": 548,
+          "y": 180
+        }
+      ]
+    },
+    {
+      "id": "net_gate_1",
+      "net": "gate",
+      "source": "net",
+      "from": "pin:rg1.b",
+      "to": "pin:cin.b",
+      "fromPoint": {
+        "x": 280,
+        "y": 172
+      },
+      "toPoint": {
+        "x": 212,
+        "y": 240
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 280,
+          "y": 172
+        },
+        {
+          "x": 280,
+          "y": 240
+        },
+        {
+          "x": 212,
+          "y": 240
+        }
+      ]
+    },
+    {
+      "id": "net_gate_2",
+      "net": "gate",
+      "source": "net",
+      "from": "pin:rg1.b",
+      "to": "pin:rg2.a",
+      "fromPoint": {
+        "x": 280,
+        "y": 172
+      },
+      "toPoint": {
+        "x": 280,
+        "y": 308
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 280,
+          "y": 172
+        },
+        {
+          "x": 280,
+          "y": 308
+        }
+      ]
+    },
+    {
+      "id": "net_gate_3",
+      "net": "gate",
+      "source": "net",
+      "from": "pin:rg1.b",
+      "to": "pin:m1.g",
+      "fromPoint": {
+        "x": 280,
+        "y": 172
+      },
+      "toPoint": {
+        "x": 322,
+        "y": 240
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 280,
+          "y": 172
+        },
+        {
+          "x": 280,
+          "y": 240
+        },
+        {
+          "x": 322,
+          "y": 240
+        }
+      ]
+    },
+    {
+      "id": "net_in_1",
+      "net": "in",
+      "source": "net",
+      "from": "pin:cin.a",
+      "to": "port:input",
+      "fromPoint": {
+        "x": 108,
+        "y": 240
+      },
+      "toPoint": {
+        "x": 0,
+        "y": 240
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 108,
+          "y": 240
+        },
+        {
+          "x": 0,
+          "y": 240
+        }
+      ]
+    },
+    {
+      "id": "net_out_1",
+      "net": "out",
+      "source": "net",
+      "from": "pin:rload.a",
+      "to": "pin:cout.b",
+      "fromPoint": {
+        "x": 740,
+        "y": 308
+      },
+      "toPoint": {
+        "x": 652,
+        "y": 180
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 740,
+          "y": 308
+        },
+        {
+          "x": 740,
+          "y": 180
+        },
+        {
+          "x": 652,
+          "y": 180
+        }
+      ]
+    },
+    {
+      "id": "net_out_2",
+      "net": "out",
+      "source": "net",
+      "from": "pin:rload.a",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 740,
+        "y": 308
+      },
+      "toPoint": {
+        "x": 860,
+        "y": 300
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 740,
+          "y": 308
+        },
+        {
+          "x": 740,
+          "y": 300
+        },
+        {
+          "x": 860,
+          "y": 300
+        }
+      ]
+    },
+    {
+      "id": "net_source_1",
+      "net": "source",
+      "source": "net",
+      "from": "pin:rs.a",
+      "to": "pin:m1.s",
+      "fromPoint": {
+        "x": 400,
+        "y": 368
+      },
+      "toPoint": {
+        "x": 402,
+        "y": 292
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 400,
+          "y": 368
+        },
+        {
+          "x": 402,
+          "y": 368
+        },
+        {
+          "x": 402,
+          "y": 292
+        }
+      ]
+    },
+    {
+      "id": "net_source_2",
+      "net": "source",
+      "source": "net",
+      "from": "pin:rs.a",
+      "to": "pin:cs.a",
+      "fromPoint": {
+        "x": 400,
+        "y": 368
+      },
+      "toPoint": {
+        "x": 540,
+        "y": 368
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 400,
+          "y": 368
+        },
+        {
+          "x": 540,
+          "y": 368
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_cs_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 540,
+        "y": 512
+      }
+    },
+    {
+      "id": "label_0_rg2_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 280,
+        "y": 452
+      }
+    },
+    {
+      "id": "label_0_rload_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 740,
+        "y": 452
+      }
+    },
+    {
+      "id": "label_0_rs_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 400,
+        "y": 512
+      }
+    },
+    {
+      "id": "label_vdd_rd_a",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 400,
+        "y": 8
+      }
+    },
+    {
+      "id": "label_vdd_rg1_a",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 280,
+        "y": 28
+      }
+    }
+  ],
+  "junctions": []
+}

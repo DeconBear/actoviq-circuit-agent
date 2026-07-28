@@ -1,0 +1,612 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "bjt_reset_network",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": 202,
+    "minY": -70,
+    "maxX": 1020,
+    "maxY": 700
+  },
+  "viewBox": {
+    "minX": 162,
+    "minY": -110,
+    "maxX": 1060,
+    "maxY": 740
+  },
+  "componentCount": 7,
+  "wireCount": 10,
+  "portCount": 6,
+  "netLabelCount": 2,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "d_rst",
+      "type": "D",
+      "name": "D_RST",
+      "value": "1N4148W",
+      "position": {
+        "x": 480,
+        "y": 160
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "A",
+          "net": "rst",
+          "net_id": "net_rst"
+        },
+        {
+          "id": "b",
+          "name": "K",
+          "net": "rst_pull",
+          "net_id": "net_rst_pull"
+        }
+      ]
+    },
+    {
+      "id": "q_boot",
+      "type": "Q",
+      "name": "Q_BOOT",
+      "value": "S8050",
+      "position": {
+        "x": 260,
+        "y": 300
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "rts_drive",
+          "net_id": "net_rts_drive"
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "e",
+          "name": "E",
+          "net": "boot_node",
+          "net_id": "net_boot_node"
+        }
+      ]
+    },
+    {
+      "id": "q_rst",
+      "type": "Q",
+      "name": "Q_RST",
+      "value": "S8050",
+      "position": {
+        "x": 620,
+        "y": 220
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "dtr_drive",
+          "net_id": "net_dtr_drive"
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "net": "rst_pull",
+          "net_id": "net_rst_pull"
+        },
+        {
+          "id": "e",
+          "name": "E",
+          "net": "rts",
+          "net_id": "net_rts"
+        }
+      ]
+    },
+    {
+      "id": "r49",
+      "type": "R",
+      "name": "R49",
+      "value": "1k",
+      "position": {
+        "x": 420,
+        "y": 320
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "rts_drive",
+          "net_id": "net_rts_drive"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "rts",
+          "net_id": "net_rts"
+        }
+      ]
+    },
+    {
+      "id": "r50",
+      "type": "R",
+      "name": "R50",
+      "value": "10k",
+      "position": {
+        "x": 660,
+        "y": 80
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "rst_pull",
+          "net_id": "net_rst_pull"
+        }
+      ]
+    },
+    {
+      "id": "r51",
+      "type": "R",
+      "name": "R51",
+      "value": "1k",
+      "position": {
+        "x": 740,
+        "y": 220
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "dtr_drive",
+          "net_id": "net_dtr_drive"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "dtr",
+          "net_id": "net_dtr"
+        }
+      ]
+    },
+    {
+      "id": "r52",
+      "type": "R",
+      "name": "R52",
+      "value": "1k",
+      "position": {
+        "x": 300,
+        "y": 460
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "boot_node",
+          "net_id": "net_boot_node"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "boot0",
+          "net_id": "net_boot0"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "boot0",
+      "name": "BOOT0",
+      "direction": "output",
+      "signal_type": "digital",
+      "net": "boot0",
+      "net_id": "net_boot0",
+      "connected": true,
+      "position": {
+        "x": 420,
+        "y": 540
+      }
+    },
+    {
+      "id": "dtr",
+      "name": "DTR",
+      "direction": "input",
+      "signal_type": "digital",
+      "net": "dtr",
+      "net_id": "net_dtr",
+      "connected": true,
+      "position": {
+        "x": 900,
+        "y": 220
+      }
+    },
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": false,
+      "position": {
+        "x": 320,
+        "y": 620
+      }
+    },
+    {
+      "id": "rst",
+      "name": "RST",
+      "direction": "input",
+      "signal_type": "digital",
+      "net": "rst",
+      "net_id": "net_rst",
+      "connected": true,
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    {
+      "id": "rts",
+      "name": "RTS",
+      "direction": "output",
+      "signal_type": "digital",
+      "net": "rts",
+      "net_id": "net_rts",
+      "connected": true,
+      "position": {
+        "x": 760,
+        "y": 340
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "+3.3V",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 660,
+        "y": -80
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_boot_node_1",
+      "net": "boot_node",
+      "source": "net",
+      "from": "pin:q_boot.e",
+      "to": "pin:r52.a",
+      "fromPoint": {
+        "x": 290,
+        "y": 352
+      },
+      "toPoint": {
+        "x": 300,
+        "y": 408
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 290,
+          "y": 352
+        },
+        {
+          "x": 290,
+          "y": 408
+        },
+        {
+          "x": 300,
+          "y": 408
+        }
+      ]
+    },
+    {
+      "id": "net_boot0_1",
+      "net": "boot0",
+      "source": "net",
+      "from": "pin:r52.b",
+      "to": "port:boot0",
+      "fromPoint": {
+        "x": 300,
+        "y": 512
+      },
+      "toPoint": {
+        "x": 420,
+        "y": 540
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 300,
+          "y": 512
+        },
+        {
+          "x": 300,
+          "y": 540
+        },
+        {
+          "x": 420,
+          "y": 540
+        }
+      ]
+    },
+    {
+      "id": "net_dtr_1",
+      "net": "dtr",
+      "source": "net",
+      "from": "pin:r51.b",
+      "to": "port:dtr",
+      "fromPoint": {
+        "x": 792,
+        "y": 220
+      },
+      "toPoint": {
+        "x": 900,
+        "y": 220
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 792,
+          "y": 220
+        },
+        {
+          "x": 900,
+          "y": 220
+        }
+      ]
+    },
+    {
+      "id": "net_dtr_drive_1",
+      "net": "dtr_drive",
+      "source": "net",
+      "from": "pin:q_rst.b",
+      "to": "pin:r51.a",
+      "fromPoint": {
+        "x": 562,
+        "y": 220
+      },
+      "toPoint": {
+        "x": 688,
+        "y": 220
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 562,
+          "y": 220
+        },
+        {
+          "x": 562,
+          "y": 200
+        },
+        {
+          "x": 688,
+          "y": 200
+        },
+        {
+          "x": 688,
+          "y": 220
+        }
+      ]
+    },
+    {
+      "id": "net_rst_1",
+      "net": "rst",
+      "source": "net",
+      "from": "pin:d_rst.a",
+      "to": "port:rst",
+      "fromPoint": {
+        "x": 428,
+        "y": 160
+      },
+      "toPoint": {
+        "x": 320,
+        "y": 160
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 428,
+          "y": 160
+        },
+        {
+          "x": 320,
+          "y": 160
+        }
+      ]
+    },
+    {
+      "id": "net_rst_pull_1",
+      "net": "rst_pull",
+      "source": "net",
+      "from": "pin:d_rst.b",
+      "to": "pin:q_rst.c",
+      "fromPoint": {
+        "x": 532,
+        "y": 160
+      },
+      "toPoint": {
+        "x": 650,
+        "y": 168
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 532,
+          "y": 160
+        },
+        {
+          "x": 650,
+          "y": 160
+        },
+        {
+          "x": 650,
+          "y": 168
+        }
+      ]
+    },
+    {
+      "id": "net_rst_pull_2",
+      "net": "rst_pull",
+      "source": "net",
+      "from": "pin:d_rst.b",
+      "to": "pin:r50.b",
+      "fromPoint": {
+        "x": 532,
+        "y": 160
+      },
+      "toPoint": {
+        "x": 660,
+        "y": 132
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 532,
+          "y": 160
+        },
+        {
+          "x": 660,
+          "y": 160
+        },
+        {
+          "x": 660,
+          "y": 132
+        }
+      ]
+    },
+    {
+      "id": "net_rts_1",
+      "net": "rts",
+      "source": "net",
+      "from": "pin:q_rst.e",
+      "to": "pin:r49.b",
+      "fromPoint": {
+        "x": 650,
+        "y": 272
+      },
+      "toPoint": {
+        "x": 472,
+        "y": 320
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 650,
+          "y": 272
+        },
+        {
+          "x": 650,
+          "y": 320
+        },
+        {
+          "x": 472,
+          "y": 320
+        }
+      ]
+    },
+    {
+      "id": "net_rts_2",
+      "net": "rts",
+      "source": "net",
+      "from": "pin:q_rst.e",
+      "to": "port:rts",
+      "fromPoint": {
+        "x": 650,
+        "y": 272
+      },
+      "toPoint": {
+        "x": 760,
+        "y": 340
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 650,
+          "y": 272
+        },
+        {
+          "x": 650,
+          "y": 340
+        },
+        {
+          "x": 760,
+          "y": 340
+        }
+      ]
+    },
+    {
+      "id": "net_rts_drive_1",
+      "net": "rts_drive",
+      "source": "net",
+      "from": "pin:q_boot.b",
+      "to": "pin:r49.a",
+      "fromPoint": {
+        "x": 202,
+        "y": 300
+      },
+      "toPoint": {
+        "x": 368,
+        "y": 320
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 202,
+          "y": 300
+        },
+        {
+          "x": 202,
+          "y": 320
+        },
+        {
+          "x": 368,
+          "y": 320
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_vdd_q_boot_c",
+      "kind": "power",
+      "net": "vdd",
+      "name": "+3.3V",
+      "position": {
+        "x": 290,
+        "y": 208
+      }
+    },
+    {
+      "id": "label_vdd_r50_a",
+      "kind": "power",
+      "net": "vdd",
+      "name": "+3.3V",
+      "position": {
+        "x": 660,
+        "y": -12
+      }
+    }
+  ],
+  "junctions": []
+}

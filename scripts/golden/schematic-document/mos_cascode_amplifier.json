@@ -1,0 +1,925 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "mos_cascode_amplifier",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": 50,
+    "minY": -110,
+    "maxX": 1320,
+    "maxY": 650
+  },
+  "viewBox": {
+    "minX": -20,
+    "minY": -180,
+    "maxX": 1390,
+    "maxY": 720
+  },
+  "componentCount": 13,
+  "wireCount": 11,
+  "portCount": 4,
+  "netLabelCount": 15,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "ccomp",
+      "type": "C",
+      "name": "CCOMP",
+      "value": "0.8p",
+      "position": {
+        "x": 620,
+        "y": 240
+      },
+      "rotation": 180,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "no",
+          "net_id": "net_no"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "in",
+          "net_id": "net_in"
+        }
+      ]
+    },
+    {
+      "id": "cint",
+      "type": "C",
+      "name": "CINT",
+      "value": "1.5p",
+      "position": {
+        "x": 740,
+        "y": 300
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "no",
+          "net_id": "net_no"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "cload",
+      "type": "C",
+      "name": "CLOAD",
+      "value": "12p",
+      "position": {
+        "x": 960,
+        "y": 300
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "i1",
+      "type": "I",
+      "name": "I1",
+      "value": "DC 350u",
+      "position": {
+        "x": 840,
+        "y": 480
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "ns",
+          "net_id": "net_ns"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        }
+      ]
+    },
+    {
+      "id": "m1",
+      "type": "M",
+      "name": "M1",
+      "value": "NMOS W=800u L=1u",
+      "position": {
+        "x": 480,
+        "y": 360
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "nd",
+          "net_id": "net_nd"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "in",
+          "net_id": "net_in"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "ns",
+          "net_id": "net_ns"
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "type": "M",
+      "name": "M2",
+      "value": "NMOS W=500u L=1u",
+      "position": {
+        "x": 480,
+        "y": 180
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "no",
+          "net_id": "net_no"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "vb",
+          "net_id": "net_vb"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "nd",
+          "net_id": "net_nd"
+        }
+      ]
+    },
+    {
+      "id": "rl",
+      "type": "R",
+      "name": "RL",
+      "value": "25k",
+      "position": {
+        "x": 500,
+        "y": 40
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "no",
+          "net_id": "net_no"
+        }
+      ]
+    },
+    {
+      "id": "rout",
+      "type": "R",
+      "name": "ROUT",
+      "value": "8ohm",
+      "position": {
+        "x": 700,
+        "y": 120
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "no",
+          "net_id": "net_no"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "out",
+          "net_id": "net_out"
+        }
+      ]
+    },
+    {
+      "id": "rprobe",
+      "type": "R",
+      "name": "RPROBE",
+      "value": "1Meg",
+      "position": {
+        "x": 1080,
+        "y": 300
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rs",
+      "type": "R",
+      "name": "RS",
+      "value": "1.2k",
+      "position": {
+        "x": 500,
+        "y": 500
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "ns",
+          "net_id": "net_ns"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "vbias",
+      "type": "V",
+      "name": "VBIAS",
+      "value": "DC 1.85",
+      "position": {
+        "x": 260,
+        "y": 260
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "vb",
+          "net_id": "net_vb"
+        }
+      ]
+    },
+    {
+      "id": "vddsrc",
+      "type": "V",
+      "name": "VDDSRC",
+      "value": "DC 5",
+      "position": {
+        "x": 140,
+        "y": 180
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        }
+      ]
+    },
+    {
+      "id": "vin",
+      "type": "V",
+      "name": "VIN",
+      "value": "AC 1",
+      "position": {
+        "x": 260,
+        "y": 440
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "in",
+          "net_id": "net_in"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 500,
+        "y": 680
+      }
+    },
+    {
+      "id": "input",
+      "name": "IN",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "in",
+      "net_id": "net_in",
+      "connected": true,
+      "position": {
+        "x": 160,
+        "y": 380
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "out",
+      "net_id": "net_out",
+      "connected": true,
+      "position": {
+        "x": 1200,
+        "y": 120
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 500,
+        "y": -120
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_in_1",
+      "net": "in",
+      "source": "net",
+      "from": "pin:vin.p",
+      "to": "pin:m1.g",
+      "fromPoint": {
+        "x": 260,
+        "y": 388
+      },
+      "toPoint": {
+        "x": 422,
+        "y": 360
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 260,
+          "y": 388
+        },
+        {
+          "x": 260,
+          "y": 420
+        },
+        {
+          "x": 422,
+          "y": 420
+        },
+        {
+          "x": 422,
+          "y": 360
+        }
+      ]
+    },
+    {
+      "id": "net_in_2",
+      "net": "in",
+      "source": "net",
+      "from": "pin:vin.p",
+      "to": "pin:ccomp.b",
+      "fromPoint": {
+        "x": 260,
+        "y": 388
+      },
+      "toPoint": {
+        "x": 568,
+        "y": 240
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 260,
+          "y": 388
+        },
+        {
+          "x": 260,
+          "y": 420
+        },
+        {
+          "x": 568,
+          "y": 420
+        },
+        {
+          "x": 568,
+          "y": 240
+        }
+      ]
+    },
+    {
+      "id": "net_in_3",
+      "net": "in",
+      "source": "net",
+      "from": "pin:vin.p",
+      "to": "port:input",
+      "fromPoint": {
+        "x": 260,
+        "y": 388
+      },
+      "toPoint": {
+        "x": 160,
+        "y": 380
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 260,
+          "y": 388
+        },
+        {
+          "x": 260,
+          "y": 420
+        },
+        {
+          "x": 160,
+          "y": 420
+        },
+        {
+          "x": 160,
+          "y": 380
+        }
+      ]
+    },
+    {
+      "id": "net_nd_1",
+      "net": "nd",
+      "source": "net",
+      "from": "pin:m2.s",
+      "to": "pin:m1.d",
+      "fromPoint": {
+        "x": 502,
+        "y": 232
+      },
+      "toPoint": {
+        "x": 502,
+        "y": 308
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 502,
+          "y": 232
+        },
+        {
+          "x": 502,
+          "y": 308
+        }
+      ]
+    },
+    {
+      "id": "net_no_1",
+      "net": "no",
+      "source": "net",
+      "from": "pin:rl.b",
+      "to": "pin:m2.d",
+      "fromPoint": {
+        "x": 500,
+        "y": 92
+      },
+      "toPoint": {
+        "x": 502,
+        "y": 128
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 500,
+          "y": 92
+        },
+        {
+          "x": 502,
+          "y": 92
+        },
+        {
+          "x": 502,
+          "y": 128
+        }
+      ]
+    },
+    {
+      "id": "net_no_2",
+      "net": "no",
+      "source": "net",
+      "from": "pin:m2.d",
+      "to": "pin:rout.a",
+      "fromPoint": {
+        "x": 502,
+        "y": 128
+      },
+      "toPoint": {
+        "x": 648,
+        "y": 120
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 502,
+          "y": 128
+        },
+        {
+          "x": 648,
+          "y": 128
+        },
+        {
+          "x": 648,
+          "y": 120
+        }
+      ]
+    },
+    {
+      "id": "net_no_3",
+      "net": "no",
+      "source": "net",
+      "from": "pin:rout.a",
+      "to": "pin:ccomp.a",
+      "fromPoint": {
+        "x": 648,
+        "y": 120
+      },
+      "toPoint": {
+        "x": 672,
+        "y": 240
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 648,
+          "y": 120
+        },
+        {
+          "x": 648,
+          "y": 160
+        },
+        {
+          "x": 672,
+          "y": 160
+        },
+        {
+          "x": 672,
+          "y": 240
+        }
+      ]
+    },
+    {
+      "id": "net_no_4",
+      "net": "no",
+      "source": "net",
+      "from": "pin:ccomp.a",
+      "to": "pin:cint.a",
+      "fromPoint": {
+        "x": 672,
+        "y": 240
+      },
+      "toPoint": {
+        "x": 740,
+        "y": 248
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 672,
+          "y": 240
+        },
+        {
+          "x": 740,
+          "y": 240
+        },
+        {
+          "x": 740,
+          "y": 248
+        }
+      ]
+    },
+    {
+      "id": "net_out_1",
+      "net": "out",
+      "source": "net",
+      "from": "pin:rout.b",
+      "to": "pin:cload.a",
+      "fromPoint": {
+        "x": 752,
+        "y": 120
+      },
+      "toPoint": {
+        "x": 960,
+        "y": 248
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 752,
+          "y": 120
+        },
+        {
+          "x": 960,
+          "y": 120
+        },
+        {
+          "x": 960,
+          "y": 248
+        }
+      ]
+    },
+    {
+      "id": "net_out_2",
+      "net": "out",
+      "source": "net",
+      "from": "pin:rout.b",
+      "to": "pin:rprobe.a",
+      "fromPoint": {
+        "x": 752,
+        "y": 120
+      },
+      "toPoint": {
+        "x": 1080,
+        "y": 248
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 752,
+          "y": 120
+        },
+        {
+          "x": 1080,
+          "y": 120
+        },
+        {
+          "x": 1080,
+          "y": 248
+        }
+      ]
+    },
+    {
+      "id": "net_out_3",
+      "net": "out",
+      "source": "net",
+      "from": "pin:rout.b",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 752,
+        "y": 120
+      },
+      "toPoint": {
+        "x": 1200,
+        "y": 120
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 752,
+          "y": 120
+        },
+        {
+          "x": 1200,
+          "y": 120
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_cint_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 740,
+        "y": 392
+      }
+    },
+    {
+      "id": "label_0_cload_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 960,
+        "y": 392
+      }
+    },
+    {
+      "id": "label_0_rprobe_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1080,
+        "y": 392
+      }
+    },
+    {
+      "id": "label_0_rs_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 500,
+        "y": 592
+      }
+    },
+    {
+      "id": "label_0_vbias_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 260,
+        "y": 352
+      }
+    },
+    {
+      "id": "label_0_vddsrc_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 140,
+        "y": 272
+      }
+    },
+    {
+      "id": "label_0_vin_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 260,
+        "y": 532
+      }
+    },
+    {
+      "id": "label_ns_i1_n",
+      "kind": "signal",
+      "net": "ns",
+      "name": "NS",
+      "side": "bottom",
+      "position": {
+        "x": 840,
+        "y": 532
+      }
+    },
+    {
+      "id": "label_ns_m1_s",
+      "kind": "signal",
+      "net": "ns",
+      "name": "NS",
+      "side": "bottom",
+      "position": {
+        "x": 502,
+        "y": 412
+      }
+    },
+    {
+      "id": "label_ns_rs_a",
+      "kind": "signal",
+      "net": "ns",
+      "name": "NS",
+      "side": "top",
+      "position": {
+        "x": 500,
+        "y": 448
+      }
+    },
+    {
+      "id": "label_vb_m2_g",
+      "kind": "signal",
+      "net": "vb",
+      "name": "VB",
+      "side": "left",
+      "position": {
+        "x": 422,
+        "y": 180
+      }
+    },
+    {
+      "id": "label_vb_vbias_p",
+      "kind": "signal",
+      "net": "vb",
+      "name": "VB",
+      "side": "top",
+      "position": {
+        "x": 260,
+        "y": 208
+      }
+    },
+    {
+      "id": "label_vdd_i1_p",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 840,
+        "y": 388
+      }
+    },
+    {
+      "id": "label_vdd_rl_a",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 500,
+        "y": -52
+      }
+    },
+    {
+      "id": "label_vdd_vddsrc_p",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 140,
+        "y": 88
+      }
+    }
+  ],
+  "junctions": []
+}

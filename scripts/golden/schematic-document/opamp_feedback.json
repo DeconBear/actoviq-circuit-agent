@@ -1,0 +1,553 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "opamp_feedback",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": -150,
+    "minY": -30,
+    "maxX": 960,
+    "maxY": 550
+  },
+  "viewBox": {
+    "minX": -210,
+    "minY": -90,
+    "maxX": 1020,
+    "maxY": 610
+  },
+  "componentCount": 7,
+  "wireCount": 6,
+  "portCount": 4,
+  "netLabelCount": 10,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "cload",
+      "type": "C",
+      "name": "CLOAD",
+      "value": "10p",
+      "position": {
+        "x": 600,
+        "y": 360
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vout",
+          "net_id": "net_vout"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "eopamp",
+      "type": "E",
+      "name": "EOPAMP",
+      "value": "100k",
+      "position": {
+        "x": 380,
+        "y": 240
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "cn",
+          "name": "-",
+          "net": "fb",
+          "net_id": "net_fb"
+        },
+        {
+          "id": "cp",
+          "name": "+",
+          "net": "in",
+          "net_id": "net_in"
+        },
+        {
+          "id": "n",
+          "name": "OUT-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "OUT+",
+          "net": "vout",
+          "net_id": "net_vout"
+        }
+      ]
+    },
+    {
+      "id": "r1f",
+      "type": "R",
+      "name": "R1F",
+      "value": "10k",
+      "position": {
+        "x": 320,
+        "y": 400
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "fb",
+          "net_id": "net_fb"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "r2f",
+      "type": "R",
+      "name": "R2F",
+      "value": "90k",
+      "position": {
+        "x": 380,
+        "y": 100
+      },
+      "rotation": 180,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vout",
+          "net_id": "net_vout"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "fb",
+          "net_id": "net_fb"
+        }
+      ]
+    },
+    {
+      "id": "rload",
+      "type": "R",
+      "name": "RLOAD",
+      "value": "10k",
+      "position": {
+        "x": 720,
+        "y": 360
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vout",
+          "net_id": "net_vout"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "vin",
+      "type": "V",
+      "name": "VIN",
+      "value": "DC 1 AC 1",
+      "position": {
+        "x": 60,
+        "y": 320
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "in",
+          "net_id": "net_in"
+        }
+      ]
+    },
+    {
+      "id": "vsupply",
+      "type": "V",
+      "name": "VSUPPLY",
+      "value": "DC 5",
+      "position": {
+        "x": 140,
+        "y": 120
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "n",
+          "name": "-",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "p",
+          "name": "+",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 320,
+        "y": 580
+      }
+    },
+    {
+      "id": "input",
+      "name": "IN",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "in",
+      "net_id": "net_in",
+      "connected": true,
+      "position": {
+        "x": -40,
+        "y": 260
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "vout",
+      "net_id": "net_vout",
+      "connected": true,
+      "position": {
+        "x": 840,
+        "y": 300
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 140,
+        "y": -40
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_in_1",
+      "net": "in",
+      "source": "net",
+      "from": "pin:vin.p",
+      "to": "pin:eopamp.cp",
+      "fromPoint": {
+        "x": 60,
+        "y": 268
+      },
+      "toPoint": {
+        "x": 322,
+        "y": 264
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 60,
+          "y": 268
+        },
+        {
+          "x": 322,
+          "y": 268
+        },
+        {
+          "x": 322,
+          "y": 264
+        }
+      ]
+    },
+    {
+      "id": "net_in_2",
+      "net": "in",
+      "source": "net",
+      "from": "pin:vin.p",
+      "to": "port:input",
+      "fromPoint": {
+        "x": 60,
+        "y": 268
+      },
+      "toPoint": {
+        "x": -40,
+        "y": 260
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 60,
+          "y": 268
+        },
+        {
+          "x": 60,
+          "y": 260
+        },
+        {
+          "x": -40,
+          "y": 260
+        }
+      ]
+    },
+    {
+      "id": "net_vout_1",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:r2f.a",
+      "to": "pin:eopamp.p",
+      "fromPoint": {
+        "x": 432,
+        "y": 100
+      },
+      "toPoint": {
+        "x": 444,
+        "y": 240
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 432,
+          "y": 100
+        },
+        {
+          "x": 444,
+          "y": 100
+        },
+        {
+          "x": 444,
+          "y": 240
+        }
+      ]
+    },
+    {
+      "id": "net_vout_2",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:r2f.a",
+      "to": "pin:cload.a",
+      "fromPoint": {
+        "x": 432,
+        "y": 100
+      },
+      "toPoint": {
+        "x": 600,
+        "y": 308
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 432,
+          "y": 100
+        },
+        {
+          "x": 600,
+          "y": 100
+        },
+        {
+          "x": 600,
+          "y": 308
+        }
+      ]
+    },
+    {
+      "id": "net_vout_3",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:r2f.a",
+      "to": "pin:rload.a",
+      "fromPoint": {
+        "x": 432,
+        "y": 100
+      },
+      "toPoint": {
+        "x": 720,
+        "y": 308
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 432,
+          "y": 100
+        },
+        {
+          "x": 720,
+          "y": 100
+        },
+        {
+          "x": 720,
+          "y": 308
+        }
+      ]
+    },
+    {
+      "id": "net_vout_4",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:r2f.a",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 432,
+        "y": 100
+      },
+      "toPoint": {
+        "x": 840,
+        "y": 300
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 432,
+          "y": 100
+        },
+        {
+          "x": 840,
+          "y": 100
+        },
+        {
+          "x": 840,
+          "y": 300
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_cload_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 600,
+        "y": 452
+      }
+    },
+    {
+      "id": "label_0_eopamp_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 380,
+        "y": 338
+      }
+    },
+    {
+      "id": "label_0_r1f_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 320,
+        "y": 492
+      }
+    },
+    {
+      "id": "label_0_rload_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 720,
+        "y": 452
+      }
+    },
+    {
+      "id": "label_0_vin_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 60,
+        "y": 412
+      }
+    },
+    {
+      "id": "label_0_vsupply_n",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 140,
+        "y": 212
+      }
+    },
+    {
+      "id": "label_fb_eopamp_cn",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "left",
+      "position": {
+        "x": 322,
+        "y": 216
+      }
+    },
+    {
+      "id": "label_fb_r1f_a",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "top",
+      "position": {
+        "x": 320,
+        "y": 348
+      }
+    },
+    {
+      "id": "label_fb_r2f_b",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "left",
+      "position": {
+        "x": 328,
+        "y": 100
+      }
+    },
+    {
+      "id": "label_vdd_vsupply_p",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 140,
+        "y": 28
+      }
+    }
+  ],
+  "junctions": []
+}

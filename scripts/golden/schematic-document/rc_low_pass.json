@@ -1,0 +1,229 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "rc_low_pass",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": -50,
+    "minY": -40,
+    "maxX": 520,
+    "maxY": 430
+  },
+  "viewBox": {
+    "minX": -90,
+    "minY": -80,
+    "maxX": 560,
+    "maxY": 470
+  },
+  "componentCount": 2,
+  "wireCount": 3,
+  "portCount": 4,
+  "netLabelCount": 1,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "c1",
+      "type": "C",
+      "name": "C1",
+      "value": "15.9n",
+      "position": {
+        "x": 280,
+        "y": 280
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "out",
+          "net_id": "net_out"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "r1",
+      "type": "R",
+      "name": "R1",
+      "value": "10k",
+      "position": {
+        "x": 220,
+        "y": 180
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "in",
+          "net_id": "net_in"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "out",
+          "net_id": "net_out"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 280,
+        "y": 460
+      }
+    },
+    {
+      "id": "input",
+      "name": "IN",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "in",
+      "net_id": "net_in",
+      "connected": true,
+      "position": {
+        "x": 60,
+        "y": 180
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "out",
+      "net_id": "net_out",
+      "connected": true,
+      "position": {
+        "x": 400,
+        "y": 220
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": false,
+      "position": {
+        "x": 280,
+        "y": 40
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_in_1",
+      "net": "in",
+      "source": "net",
+      "from": "pin:r1.a",
+      "to": "port:input",
+      "fromPoint": {
+        "x": 168,
+        "y": 180
+      },
+      "toPoint": {
+        "x": 60,
+        "y": 180
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 168,
+          "y": 180
+        },
+        {
+          "x": 60,
+          "y": 180
+        }
+      ]
+    },
+    {
+      "id": "net_out_1",
+      "net": "out",
+      "source": "net",
+      "from": "pin:c1.a",
+      "to": "pin:r1.b",
+      "fromPoint": {
+        "x": 280,
+        "y": 228
+      },
+      "toPoint": {
+        "x": 272,
+        "y": 180
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 280,
+          "y": 228
+        },
+        {
+          "x": 280,
+          "y": 180
+        },
+        {
+          "x": 272,
+          "y": 180
+        }
+      ]
+    },
+    {
+      "id": "net_out_2",
+      "net": "out",
+      "source": "net",
+      "from": "pin:c1.a",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 280,
+        "y": 228
+      },
+      "toPoint": {
+        "x": 400,
+        "y": 220
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 280,
+          "y": 228
+        },
+        {
+          "x": 280,
+          "y": 220
+        },
+        {
+          "x": 400,
+          "y": 220
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_c1_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 280,
+        "y": 372
+      }
+    }
+  ],
+  "junctions": []
+}

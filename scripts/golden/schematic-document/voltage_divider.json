@@ -1,0 +1,265 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "voltage_divider",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": 208,
+    "minY": 10,
+    "maxX": 660,
+    "maxY": 490
+  },
+  "viewBox": {
+    "minX": 172,
+    "minY": -26,
+    "maxX": 696,
+    "maxY": 526
+  },
+  "componentCount": 3,
+  "wireCount": 3,
+  "portCount": 3,
+  "netLabelCount": 3,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "cflt",
+      "type": "C",
+      "name": "CFLT",
+      "value": "100n",
+      "position": {
+        "x": 420,
+        "y": 340
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vout",
+          "net_id": "net_vout"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rbot",
+      "type": "R",
+      "name": "RBOT",
+      "value": "20k",
+      "position": {
+        "x": 280,
+        "y": 340
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vout",
+          "net_id": "net_vout"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rtop",
+      "type": "R",
+      "name": "RTOP",
+      "value": "10k",
+      "position": {
+        "x": 280,
+        "y": 160
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "vout",
+          "net_id": "net_vout"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 280,
+        "y": 520
+      }
+    },
+    {
+      "id": "output",
+      "name": "VOUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "vout",
+      "net_id": "net_vout",
+      "connected": true,
+      "position": {
+        "x": 540,
+        "y": 280
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "+5V",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 280,
+        "y": 0
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_vout_1",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:rtop.b",
+      "to": "pin:rbot.a",
+      "fromPoint": {
+        "x": 280,
+        "y": 212
+      },
+      "toPoint": {
+        "x": 280,
+        "y": 288
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 280,
+          "y": 212
+        },
+        {
+          "x": 280,
+          "y": 288
+        }
+      ]
+    },
+    {
+      "id": "net_vout_2",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:rtop.b",
+      "to": "pin:cflt.a",
+      "fromPoint": {
+        "x": 280,
+        "y": 212
+      },
+      "toPoint": {
+        "x": 420,
+        "y": 288
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 280,
+          "y": 212
+        },
+        {
+          "x": 280,
+          "y": 280
+        },
+        {
+          "x": 420,
+          "y": 280
+        },
+        {
+          "x": 420,
+          "y": 288
+        }
+      ]
+    },
+    {
+      "id": "net_vout_3",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:rtop.b",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 280,
+        "y": 212
+      },
+      "toPoint": {
+        "x": 540,
+        "y": 280
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 280,
+          "y": 212
+        },
+        {
+          "x": 280,
+          "y": 280
+        },
+        {
+          "x": 540,
+          "y": 280
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_cflt_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 420,
+        "y": 432
+      }
+    },
+    {
+      "id": "label_0_rbot_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 280,
+        "y": 432
+      }
+    },
+    {
+      "id": "label_vdd_rtop_a",
+      "kind": "power",
+      "net": "vdd",
+      "name": "+5V",
+      "position": {
+        "x": 280,
+        "y": 68
+      }
+    }
+  ],
+  "junctions": []
+}

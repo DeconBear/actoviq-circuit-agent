@@ -1,0 +1,1038 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "baseband_conditioning",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": 48,
+    "minY": -30,
+    "maxX": 1500,
+    "maxY": 690
+  },
+  "viewBox": {
+    "minX": -22,
+    "minY": -100,
+    "maxX": 1570,
+    "maxY": 760
+  },
+  "componentCount": 15,
+  "wireCount": 12,
+  "portCount": 6,
+  "netLabelCount": 17,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "cdec",
+      "type": "C",
+      "name": "CDEC",
+      "value": "100n",
+      "position": {
+        "x": 240,
+        "y": 160
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "bb_vdd",
+          "net_id": "net_bb_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "csk1",
+      "type": "C",
+      "name": "CSK1",
+      "value": "1n",
+      "position": {
+        "x": 920,
+        "y": 420
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "n2",
+          "net_id": "net_n2"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "csk2",
+      "type": "C",
+      "name": "CSK2",
+      "value": "1n",
+      "position": {
+        "x": 1100,
+        "y": 460
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "bb_drive",
+          "net_id": "net_bb_drive"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "Q",
+      "name": "Q2",
+      "value": "QNPN",
+      "position": {
+        "x": 700,
+        "y": 340
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "base",
+          "net_id": "net_base"
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "net": "n1",
+          "net_id": "net_n1"
+        },
+        {
+          "id": "e",
+          "name": "E",
+          "net": "tail",
+          "net_id": "net_tail"
+        }
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "Q",
+      "name": "Q3",
+      "value": "QNPN",
+      "position": {
+        "x": 320,
+        "y": 340
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "ref",
+          "net_id": "net_ref"
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "net": "fb",
+          "net_id": "net_fb"
+        },
+        {
+          "id": "e",
+          "name": "E",
+          "net": "tail",
+          "net_id": "net_tail"
+        }
+      ]
+    },
+    {
+      "id": "q4",
+      "type": "Q",
+      "name": "Q4",
+      "value": "QNPN",
+      "position": {
+        "x": 1220,
+        "y": 340
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "bb_drive",
+          "net_id": "net_bb_drive"
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "net": "bb_out",
+          "net_id": "net_bb_out"
+        },
+        {
+          "id": "e",
+          "name": "E",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rbias1",
+      "type": "R",
+      "name": "RBIAS1",
+      "value": "100k",
+      "position": {
+        "x": 540,
+        "y": 200
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "bb_vdd",
+          "net_id": "net_bb_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "base",
+          "net_id": "net_base"
+        }
+      ]
+    },
+    {
+      "id": "rdec",
+      "type": "R",
+      "name": "RDEC",
+      "value": "10",
+      "position": {
+        "x": 120,
+        "y": 120
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vdd",
+          "net_id": "net_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "bb_vdd",
+          "net_id": "net_bb_vdd"
+        }
+      ]
+    },
+    {
+      "id": "re_tail",
+      "type": "R",
+      "name": "RE_TAIL",
+      "value": "1k",
+      "position": {
+        "x": 520,
+        "y": 520
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "tail",
+          "net_id": "net_tail"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rf",
+      "type": "R",
+      "name": "RF",
+      "value": "100k",
+      "position": {
+        "x": 800,
+        "y": 200
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "fb",
+          "net_id": "net_fb"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "bb_out",
+          "net_id": "net_bb_out"
+        }
+      ]
+    },
+    {
+      "id": "rg",
+      "type": "R",
+      "name": "RG",
+      "value": "10k",
+      "position": {
+        "x": 220,
+        "y": 540
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "fb",
+          "net_id": "net_fb"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rin",
+      "type": "R",
+      "name": "RIN",
+      "value": "10k",
+      "position": {
+        "x": 520,
+        "y": 340
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "det_out",
+          "net_id": "net_det_out"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "base",
+          "net_id": "net_base"
+        }
+      ]
+    },
+    {
+      "id": "rload_bb",
+      "type": "R",
+      "name": "RLOAD_BB",
+      "value": "10k",
+      "position": {
+        "x": 1260,
+        "y": 160
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "bb_vdd",
+          "net_id": "net_bb_vdd"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "bb_out",
+          "net_id": "net_bb_out"
+        }
+      ]
+    },
+    {
+      "id": "rsk1",
+      "type": "R",
+      "name": "RSK1",
+      "value": "10k",
+      "position": {
+        "x": 860,
+        "y": 280
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "n1",
+          "net_id": "net_n1"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "n2",
+          "net_id": "net_n2"
+        }
+      ]
+    },
+    {
+      "id": "rsk2",
+      "type": "R",
+      "name": "RSK2",
+      "value": "10k",
+      "position": {
+        "x": 1040,
+        "y": 320
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "n2",
+          "net_id": "net_n2"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "bb_drive",
+          "net_id": "net_bb_drive"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "bb_out",
+      "name": "BB_OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "bb_out",
+      "net_id": "net_bb_out",
+      "connected": true,
+      "position": {
+        "x": 1380,
+        "y": 220
+      }
+    },
+    {
+      "id": "bb_vdd",
+      "name": "BB_VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "bb_vdd",
+      "net_id": "net_bb_vdd",
+      "connected": true,
+      "position": {
+        "x": 320,
+        "y": 0
+      }
+    },
+    {
+      "id": "det_out",
+      "name": "DET_OUT",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "det_out",
+      "net_id": "net_det_out",
+      "connected": true,
+      "position": {
+        "x": 360,
+        "y": 440
+      }
+    },
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 220,
+        "y": 720
+      }
+    },
+    {
+      "id": "ref",
+      "name": "VREF",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "ref",
+      "net_id": "net_ref",
+      "connected": true,
+      "position": {
+        "x": 160,
+        "y": 340
+      }
+    },
+    {
+      "id": "vdd",
+      "name": "VDD",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vdd",
+      "net_id": "net_vdd",
+      "connected": true,
+      "position": {
+        "x": 120,
+        "y": -40
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_base_1",
+      "net": "base",
+      "source": "net",
+      "from": "pin:rbias1.b",
+      "to": "pin:rin.b",
+      "fromPoint": {
+        "x": 540,
+        "y": 252
+      },
+      "toPoint": {
+        "x": 572,
+        "y": 340
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 540,
+          "y": 252
+        },
+        {
+          "x": 572,
+          "y": 252
+        },
+        {
+          "x": 572,
+          "y": 340
+        }
+      ]
+    },
+    {
+      "id": "net_base_2",
+      "net": "base",
+      "source": "net",
+      "from": "pin:rbias1.b",
+      "to": "pin:q2.b",
+      "fromPoint": {
+        "x": 540,
+        "y": 252
+      },
+      "toPoint": {
+        "x": 642,
+        "y": 340
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 540,
+          "y": 252
+        },
+        {
+          "x": 642,
+          "y": 252
+        },
+        {
+          "x": 642,
+          "y": 340
+        }
+      ]
+    },
+    {
+      "id": "net_bb_drive_1",
+      "net": "bb_drive",
+      "source": "net",
+      "from": "pin:rsk2.b",
+      "to": "pin:csk2.a",
+      "fromPoint": {
+        "x": 1092,
+        "y": 320
+      },
+      "toPoint": {
+        "x": 1100,
+        "y": 408
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 1092,
+          "y": 320
+        },
+        {
+          "x": 1100,
+          "y": 320
+        },
+        {
+          "x": 1100,
+          "y": 408
+        }
+      ]
+    },
+    {
+      "id": "net_bb_drive_2",
+      "net": "bb_drive",
+      "source": "net",
+      "from": "pin:rsk2.b",
+      "to": "pin:q4.b",
+      "fromPoint": {
+        "x": 1092,
+        "y": 320
+      },
+      "toPoint": {
+        "x": 1162,
+        "y": 340
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 1092,
+          "y": 320
+        },
+        {
+          "x": 1162,
+          "y": 320
+        },
+        {
+          "x": 1162,
+          "y": 340
+        }
+      ]
+    },
+    {
+      "id": "net_bb_out_1",
+      "net": "bb_out",
+      "source": "net",
+      "from": "port:bb_out",
+      "to": "pin:rload_bb.b",
+      "fromPoint": {
+        "x": 1380,
+        "y": 220
+      },
+      "toPoint": {
+        "x": 1260,
+        "y": 212
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 1380,
+          "y": 220
+        },
+        {
+          "x": 1260,
+          "y": 220
+        },
+        {
+          "x": 1260,
+          "y": 212
+        }
+      ]
+    },
+    {
+      "id": "net_bb_out_2",
+      "net": "bb_out",
+      "source": "net",
+      "from": "pin:rload_bb.b",
+      "to": "pin:q4.c",
+      "fromPoint": {
+        "x": 1260,
+        "y": 212
+      },
+      "toPoint": {
+        "x": 1250,
+        "y": 288
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 1260,
+          "y": 212
+        },
+        {
+          "x": 1260,
+          "y": 288
+        },
+        {
+          "x": 1250,
+          "y": 288
+        }
+      ]
+    },
+    {
+      "id": "net_bb_out_3",
+      "net": "bb_out",
+      "source": "net",
+      "from": "pin:rload_bb.b",
+      "to": "pin:rf.b",
+      "fromPoint": {
+        "x": 1260,
+        "y": 212
+      },
+      "toPoint": {
+        "x": 852,
+        "y": 200
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 1260,
+          "y": 212
+        },
+        {
+          "x": 960,
+          "y": 212
+        },
+        {
+          "x": 960,
+          "y": 200
+        },
+        {
+          "x": 852,
+          "y": 200
+        }
+      ]
+    },
+    {
+      "id": "net_det_out_1",
+      "net": "det_out",
+      "source": "net",
+      "from": "pin:rin.a",
+      "to": "port:det_out",
+      "fromPoint": {
+        "x": 468,
+        "y": 340
+      },
+      "toPoint": {
+        "x": 360,
+        "y": 440
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 468,
+          "y": 340
+        },
+        {
+          "x": 468,
+          "y": 440
+        },
+        {
+          "x": 360,
+          "y": 440
+        }
+      ]
+    },
+    {
+      "id": "net_n1_1",
+      "net": "n1",
+      "source": "net",
+      "from": "pin:q2.c",
+      "to": "pin:rsk1.a",
+      "fromPoint": {
+        "x": 730,
+        "y": 288
+      },
+      "toPoint": {
+        "x": 808,
+        "y": 280
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 730,
+          "y": 288
+        },
+        {
+          "x": 808,
+          "y": 288
+        },
+        {
+          "x": 808,
+          "y": 280
+        }
+      ]
+    },
+    {
+      "id": "net_n2_1",
+      "net": "n2",
+      "source": "net",
+      "from": "pin:rsk1.b",
+      "to": "pin:csk1.a",
+      "fromPoint": {
+        "x": 912,
+        "y": 280
+      },
+      "toPoint": {
+        "x": 920,
+        "y": 368
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 912,
+          "y": 280
+        },
+        {
+          "x": 920,
+          "y": 280
+        },
+        {
+          "x": 920,
+          "y": 368
+        }
+      ]
+    },
+    {
+      "id": "net_n2_2",
+      "net": "n2",
+      "source": "net",
+      "from": "pin:rsk1.b",
+      "to": "pin:rsk2.a",
+      "fromPoint": {
+        "x": 912,
+        "y": 280
+      },
+      "toPoint": {
+        "x": 988,
+        "y": 320
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 912,
+          "y": 280
+        },
+        {
+          "x": 988,
+          "y": 280
+        },
+        {
+          "x": 988,
+          "y": 320
+        }
+      ]
+    },
+    {
+      "id": "net_ref_1",
+      "net": "ref",
+      "source": "net",
+      "from": "pin:q3.b",
+      "to": "port:ref",
+      "fromPoint": {
+        "x": 262,
+        "y": 340
+      },
+      "toPoint": {
+        "x": 160,
+        "y": 340
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 262,
+          "y": 340
+        },
+        {
+          "x": 160,
+          "y": 340
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_cdec_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 240,
+        "y": 252
+      }
+    },
+    {
+      "id": "label_0_csk1_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 920,
+        "y": 512
+      }
+    },
+    {
+      "id": "label_0_csk2_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1100,
+        "y": 552
+      }
+    },
+    {
+      "id": "label_0_q4_e",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1250,
+        "y": 432
+      }
+    },
+    {
+      "id": "label_0_re_tail_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 520,
+        "y": 612
+      }
+    },
+    {
+      "id": "label_0_rg_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 220,
+        "y": 632
+      }
+    },
+    {
+      "id": "label_bb_vdd_cdec_a",
+      "kind": "power",
+      "net": "bb_vdd",
+      "name": "BB_VDD",
+      "position": {
+        "x": 240,
+        "y": 68
+      }
+    },
+    {
+      "id": "label_bb_vdd_rbias1_a",
+      "kind": "power",
+      "net": "bb_vdd",
+      "name": "BB_VDD",
+      "position": {
+        "x": 540,
+        "y": 108
+      }
+    },
+    {
+      "id": "label_bb_vdd_rdec_b",
+      "kind": "power",
+      "net": "bb_vdd",
+      "name": "BB_VDD",
+      "position": {
+        "x": 120,
+        "y": 132
+      }
+    },
+    {
+      "id": "label_bb_vdd_rload_bb_a",
+      "kind": "power",
+      "net": "bb_vdd",
+      "name": "BB_VDD",
+      "position": {
+        "x": 1260,
+        "y": 68
+      }
+    },
+    {
+      "id": "label_fb_q3_c",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "top",
+      "position": {
+        "x": 350,
+        "y": 288
+      }
+    },
+    {
+      "id": "label_fb_rf_a",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "left",
+      "position": {
+        "x": 748,
+        "y": 200
+      }
+    },
+    {
+      "id": "label_fb_rg_a",
+      "kind": "signal",
+      "net": "fb",
+      "name": "FB",
+      "side": "top",
+      "position": {
+        "x": 220,
+        "y": 488
+      }
+    },
+    {
+      "id": "label_tail_q2_e",
+      "kind": "signal",
+      "net": "tail",
+      "name": "TAIL",
+      "side": "bottom",
+      "position": {
+        "x": 730,
+        "y": 392
+      }
+    },
+    {
+      "id": "label_tail_q3_e",
+      "kind": "signal",
+      "net": "tail",
+      "name": "TAIL",
+      "side": "bottom",
+      "position": {
+        "x": 350,
+        "y": 392
+      }
+    },
+    {
+      "id": "label_tail_re_tail_a",
+      "kind": "signal",
+      "net": "tail",
+      "name": "TAIL",
+      "side": "top",
+      "position": {
+        "x": 520,
+        "y": 468
+      }
+    },
+    {
+      "id": "label_vdd_rdec_a",
+      "kind": "power",
+      "net": "vdd",
+      "name": "VDD",
+      "position": {
+        "x": 120,
+        "y": 28
+      }
+    }
+  ],
+  "junctions": []
+}

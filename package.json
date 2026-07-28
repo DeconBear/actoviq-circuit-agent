@@ -43,6 +43,7 @@
     "test": "npm run typecheck && npm run test:unit",
     "test:unit": "tsx src/tests/runTests.ts",
     "test:schematic-document": "tsx scripts/schematic-document-regression.ts",
+    "test:schematic-golden": "tsx scripts/schematic-document-golden.ts",
     "test:e2e:electron": "npm run build:src && npm run build:electron && node scripts/playwright-electron-smoke.mjs",
     "test:e2e:agent-flow": "npm run build:src && npm run build:electron && node scripts/playwright-agent-flow.mjs",
     "test:e2e:schematic-editor": "npm run build:src && npm run build:electron && node scripts/playwright-schematic-editor-smoke.mjs",

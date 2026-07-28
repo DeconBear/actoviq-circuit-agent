@@ -1,0 +1,1052 @@
+{
+  "schema": "actoviq.schematic-document.v1.golden",
+  "moduleId": "buck_boost_power_stage",
+  "moduleRevision": 0,
+  "bounds": {
+    "minX": 88,
+    "minY": -70,
+    "maxX": 1560,
+    "maxY": 460
+  },
+  "viewBox": {
+    "minX": 18,
+    "minY": -140,
+    "maxX": 1630,
+    "maxY": 530
+  },
+  "componentCount": 12,
+  "wireCount": 16,
+  "portCount": 7,
+  "netLabelCount": 9,
+  "junctionCount": 0,
+  "components": [
+    {
+      "id": "cin",
+      "type": "C",
+      "name": "CIN",
+      "value": "100u",
+      "position": {
+        "x": 260,
+        "y": 280
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vin",
+          "net_id": "net_vin"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "cout",
+      "type": "C",
+      "name": "COUT",
+      "value": "470u",
+      "position": {
+        "x": 1180,
+        "y": 280
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vout",
+          "net_id": "net_vout"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "d1",
+      "type": "D",
+      "name": "D1",
+      "value": "DMOD",
+      "position": {
+        "x": 160,
+        "y": 80
+      },
+      "rotation": 270,
+      "pins": [
+        {
+          "id": "a",
+          "name": "A",
+          "net": "sw1",
+          "net_id": "net_sw1"
+        },
+        {
+          "id": "b",
+          "name": "K",
+          "net": "vin",
+          "net_id": "net_vin"
+        }
+      ]
+    },
+    {
+      "id": "d2",
+      "type": "D",
+      "name": "D2",
+      "value": "DMOD",
+      "position": {
+        "x": 160,
+        "y": 280
+      },
+      "rotation": 270,
+      "pins": [
+        {
+          "id": "a",
+          "name": "A",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "b",
+          "name": "K",
+          "net": "sw1",
+          "net_id": "net_sw1"
+        }
+      ]
+    },
+    {
+      "id": "d3",
+      "type": "D",
+      "name": "D3",
+      "value": "DMOD",
+      "position": {
+        "x": 1060,
+        "y": 80
+      },
+      "rotation": 270,
+      "pins": [
+        {
+          "id": "a",
+          "name": "A",
+          "net": "sw2",
+          "net_id": "net_sw2"
+        },
+        {
+          "id": "b",
+          "name": "K",
+          "net": "vout",
+          "net_id": "net_vout"
+        }
+      ]
+    },
+    {
+      "id": "d4",
+      "type": "D",
+      "name": "D4",
+      "value": "DMOD",
+      "position": {
+        "x": 1060,
+        "y": 280
+      },
+      "rotation": 270,
+      "pins": [
+        {
+          "id": "a",
+          "name": "A",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "b",
+          "name": "K",
+          "net": "sw2",
+          "net_id": "net_sw2"
+        }
+      ]
+    },
+    {
+      "id": "l1",
+      "type": "L",
+      "name": "L1",
+      "value": "100u",
+      "position": {
+        "x": 620,
+        "y": 200
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "sw1",
+          "net_id": "net_sw1"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "sw2",
+          "net_id": "net_sw2"
+        }
+      ]
+    },
+    {
+      "id": "m1",
+      "type": "M",
+      "name": "M1",
+      "value": "NMOS W=0.01 L=1e-6",
+      "position": {
+        "x": 380,
+        "y": 120
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "vin",
+          "net_id": "net_vin"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "g1",
+          "net_id": "net_g1"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "sw1",
+          "net_id": "net_sw1"
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "type": "M",
+      "name": "M2",
+      "value": "NMOS W=0.01 L=1e-6",
+      "position": {
+        "x": 380,
+        "y": 280
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "sw1",
+          "net_id": "net_sw1"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "g2",
+          "net_id": "net_g2"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "m3",
+      "type": "M",
+      "name": "M3",
+      "value": "NMOS W=0.01 L=1e-6",
+      "position": {
+        "x": 820,
+        "y": 120
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "vout",
+          "net_id": "net_vout"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "g3",
+          "net_id": "net_g3"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "sw2",
+          "net_id": "net_sw2"
+        }
+      ]
+    },
+    {
+      "id": "m4",
+      "type": "M",
+      "name": "M4",
+      "value": "NMOS W=0.01 L=1e-6",
+      "position": {
+        "x": 820,
+        "y": 280
+      },
+      "rotation": 0,
+      "pins": [
+        {
+          "id": "b",
+          "name": "B",
+          "net": "0",
+          "net_id": "net_0"
+        },
+        {
+          "id": "d",
+          "name": "D",
+          "net": "sw2",
+          "net_id": "net_sw2"
+        },
+        {
+          "id": "g",
+          "name": "G",
+          "net": "g4",
+          "net_id": "net_g4"
+        },
+        {
+          "id": "s",
+          "name": "S",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    },
+    {
+      "id": "rload",
+      "type": "R",
+      "name": "RLOAD",
+      "value": "10",
+      "position": {
+        "x": 1320,
+        "y": 280
+      },
+      "rotation": 90,
+      "pins": [
+        {
+          "id": "a",
+          "name": "1",
+          "net": "vout",
+          "net_id": "net_vout"
+        },
+        {
+          "id": "b",
+          "name": "2",
+          "net": "0",
+          "net_id": "net_0"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": "g1",
+      "name": "G1",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "g1",
+      "net_id": "net_g1",
+      "connected": true,
+      "position": {
+        "x": 220,
+        "y": 180
+      }
+    },
+    {
+      "id": "g2",
+      "name": "G2",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "g2",
+      "net_id": "net_g2",
+      "connected": true,
+      "position": {
+        "x": 220,
+        "y": 380
+      }
+    },
+    {
+      "id": "g3",
+      "name": "G3",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "g3",
+      "net_id": "net_g3",
+      "connected": true,
+      "position": {
+        "x": 660,
+        "y": 120
+      }
+    },
+    {
+      "id": "g4",
+      "name": "G4",
+      "direction": "input",
+      "signal_type": "analog",
+      "net": "g4",
+      "net_id": "net_g4",
+      "connected": true,
+      "position": {
+        "x": 660,
+        "y": 280
+      }
+    },
+    {
+      "id": "gnd",
+      "name": "GND",
+      "direction": "bidirectional",
+      "signal_type": "ground",
+      "net": "0",
+      "net_id": "net_0",
+      "connected": true,
+      "position": {
+        "x": 400,
+        "y": 460
+      }
+    },
+    {
+      "id": "output",
+      "name": "OUT",
+      "direction": "output",
+      "signal_type": "analog",
+      "net": "vout",
+      "net_id": "net_vout",
+      "connected": true,
+      "position": {
+        "x": 1440,
+        "y": 20
+      }
+    },
+    {
+      "id": "vin_power",
+      "name": "VIN",
+      "direction": "input",
+      "signal_type": "power",
+      "net": "vin",
+      "net_id": "net_vin",
+      "connected": true,
+      "position": {
+        "x": 160,
+        "y": -80
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "net_g1_1",
+      "net": "g1",
+      "source": "net",
+      "from": "pin:m1.g",
+      "to": "port:g1",
+      "fromPoint": {
+        "x": 322,
+        "y": 120
+      },
+      "toPoint": {
+        "x": 220,
+        "y": 180
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 322,
+          "y": 120
+        },
+        {
+          "x": 322,
+          "y": 180
+        },
+        {
+          "x": 220,
+          "y": 180
+        }
+      ]
+    },
+    {
+      "id": "net_g2_1",
+      "net": "g2",
+      "source": "net",
+      "from": "pin:m2.g",
+      "to": "port:g2",
+      "fromPoint": {
+        "x": 322,
+        "y": 280
+      },
+      "toPoint": {
+        "x": 220,
+        "y": 380
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 322,
+          "y": 280
+        },
+        {
+          "x": 300,
+          "y": 280
+        },
+        {
+          "x": 300,
+          "y": 380
+        },
+        {
+          "x": 220,
+          "y": 380
+        }
+      ]
+    },
+    {
+      "id": "net_g3_1",
+      "net": "g3",
+      "source": "net",
+      "from": "pin:m3.g",
+      "to": "port:g3",
+      "fromPoint": {
+        "x": 762,
+        "y": 120
+      },
+      "toPoint": {
+        "x": 660,
+        "y": 120
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 762,
+          "y": 120
+        },
+        {
+          "x": 660,
+          "y": 120
+        }
+      ]
+    },
+    {
+      "id": "net_g4_1",
+      "net": "g4",
+      "source": "net",
+      "from": "pin:m4.g",
+      "to": "port:g4",
+      "fromPoint": {
+        "x": 762,
+        "y": 280
+      },
+      "toPoint": {
+        "x": 660,
+        "y": 280
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 762,
+          "y": 280
+        },
+        {
+          "x": 660,
+          "y": 280
+        }
+      ]
+    },
+    {
+      "id": "net_sw1_1",
+      "net": "sw1",
+      "source": "net",
+      "from": "pin:d1.a",
+      "to": "pin:m1.s",
+      "fromPoint": {
+        "x": 160,
+        "y": 132
+      },
+      "toPoint": {
+        "x": 402,
+        "y": 172
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 160,
+          "y": 132
+        },
+        {
+          "x": 160,
+          "y": 200
+        },
+        {
+          "x": 402,
+          "y": 200
+        },
+        {
+          "x": 402,
+          "y": 172
+        }
+      ]
+    },
+    {
+      "id": "net_sw1_2",
+      "net": "sw1",
+      "source": "net",
+      "from": "pin:d1.a",
+      "to": "pin:m2.d",
+      "fromPoint": {
+        "x": 160,
+        "y": 132
+      },
+      "toPoint": {
+        "x": 402,
+        "y": 228
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 160,
+          "y": 132
+        },
+        {
+          "x": 160,
+          "y": 200
+        },
+        {
+          "x": 402,
+          "y": 200
+        },
+        {
+          "x": 402,
+          "y": 228
+        }
+      ]
+    },
+    {
+      "id": "net_sw1_3",
+      "net": "sw1",
+      "source": "net",
+      "from": "pin:d1.a",
+      "to": "pin:d2.b",
+      "fromPoint": {
+        "x": 160,
+        "y": 132
+      },
+      "toPoint": {
+        "x": 160,
+        "y": 228
+      },
+      "pointCount": 2,
+      "points": [
+        {
+          "x": 160,
+          "y": 132
+        },
+        {
+          "x": 160,
+          "y": 228
+        }
+      ]
+    },
+    {
+      "id": "net_sw1_4",
+      "net": "sw1",
+      "source": "net",
+      "from": "pin:d1.a",
+      "to": "pin:l1.a",
+      "fromPoint": {
+        "x": 160,
+        "y": 132
+      },
+      "toPoint": {
+        "x": 568,
+        "y": 200
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 160,
+          "y": 132
+        },
+        {
+          "x": 160,
+          "y": 200
+        },
+        {
+          "x": 568,
+          "y": 200
+        }
+      ]
+    },
+    {
+      "id": "net_sw2_1",
+      "net": "sw2",
+      "source": "net",
+      "from": "pin:l1.b",
+      "to": "pin:m3.s",
+      "fromPoint": {
+        "x": 672,
+        "y": 200
+      },
+      "toPoint": {
+        "x": 842,
+        "y": 172
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 672,
+          "y": 200
+        },
+        {
+          "x": 842,
+          "y": 200
+        },
+        {
+          "x": 842,
+          "y": 172
+        }
+      ]
+    },
+    {
+      "id": "net_sw2_2",
+      "net": "sw2",
+      "source": "net",
+      "from": "pin:l1.b",
+      "to": "pin:d3.a",
+      "fromPoint": {
+        "x": 672,
+        "y": 200
+      },
+      "toPoint": {
+        "x": 1060,
+        "y": 132
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 672,
+          "y": 200
+        },
+        {
+          "x": 1060,
+          "y": 200
+        },
+        {
+          "x": 1060,
+          "y": 132
+        }
+      ]
+    },
+    {
+      "id": "net_sw2_3",
+      "net": "sw2",
+      "source": "net",
+      "from": "pin:l1.b",
+      "to": "pin:m4.d",
+      "fromPoint": {
+        "x": 672,
+        "y": 200
+      },
+      "toPoint": {
+        "x": 842,
+        "y": 228
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 672,
+          "y": 200
+        },
+        {
+          "x": 842,
+          "y": 200
+        },
+        {
+          "x": 842,
+          "y": 228
+        }
+      ]
+    },
+    {
+      "id": "net_sw2_4",
+      "net": "sw2",
+      "source": "net",
+      "from": "pin:l1.b",
+      "to": "pin:d4.b",
+      "fromPoint": {
+        "x": 672,
+        "y": 200
+      },
+      "toPoint": {
+        "x": 1060,
+        "y": 228
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 672,
+          "y": 200
+        },
+        {
+          "x": 1060,
+          "y": 200
+        },
+        {
+          "x": 1060,
+          "y": 228
+        }
+      ]
+    },
+    {
+      "id": "net_vout_1",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:m3.d",
+      "to": "pin:d3.b",
+      "fromPoint": {
+        "x": 842,
+        "y": 68
+      },
+      "toPoint": {
+        "x": 1060,
+        "y": 28
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 842,
+          "y": 68
+        },
+        {
+          "x": 842,
+          "y": 20
+        },
+        {
+          "x": 1060,
+          "y": 20
+        },
+        {
+          "x": 1060,
+          "y": 28
+        }
+      ]
+    },
+    {
+      "id": "net_vout_2",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:m3.d",
+      "to": "pin:cout.a",
+      "fromPoint": {
+        "x": 842,
+        "y": 68
+      },
+      "toPoint": {
+        "x": 1180,
+        "y": 228
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 842,
+          "y": 68
+        },
+        {
+          "x": 842,
+          "y": 20
+        },
+        {
+          "x": 1180,
+          "y": 20
+        },
+        {
+          "x": 1180,
+          "y": 228
+        }
+      ]
+    },
+    {
+      "id": "net_vout_3",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:m3.d",
+      "to": "pin:rload.a",
+      "fromPoint": {
+        "x": 842,
+        "y": 68
+      },
+      "toPoint": {
+        "x": 1320,
+        "y": 228
+      },
+      "pointCount": 4,
+      "points": [
+        {
+          "x": 842,
+          "y": 68
+        },
+        {
+          "x": 842,
+          "y": 20
+        },
+        {
+          "x": 1320,
+          "y": 20
+        },
+        {
+          "x": 1320,
+          "y": 228
+        }
+      ]
+    },
+    {
+      "id": "net_vout_4",
+      "net": "vout",
+      "source": "net",
+      "from": "pin:m3.d",
+      "to": "port:output",
+      "fromPoint": {
+        "x": 842,
+        "y": 68
+      },
+      "toPoint": {
+        "x": 1440,
+        "y": 20
+      },
+      "pointCount": 3,
+      "points": [
+        {
+          "x": 842,
+          "y": 68
+        },
+        {
+          "x": 842,
+          "y": 20
+        },
+        {
+          "x": 1440,
+          "y": 20
+        }
+      ]
+    }
+  ],
+  "netLabels": [
+    {
+      "id": "label_0_cin_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 260,
+        "y": 372
+      }
+    },
+    {
+      "id": "label_0_cout_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1180,
+        "y": 372
+      }
+    },
+    {
+      "id": "label_0_d2_a",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 160,
+        "y": 372
+      }
+    },
+    {
+      "id": "label_0_d4_a",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1060,
+        "y": 372
+      }
+    },
+    {
+      "id": "label_0_m2_s",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 402,
+        "y": 372
+      }
+    },
+    {
+      "id": "label_0_m4_s",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 842,
+        "y": 372
+      }
+    },
+    {
+      "id": "label_0_rload_b",
+      "kind": "ground",
+      "net": "0",
+      "name": "GND",
+      "position": {
+        "x": 1320,
+        "y": 372
+      }
+    },
+    {
+      "id": "label_vin_cin_a",
+      "kind": "power",
+      "net": "vin",
+      "name": "VIN",
+      "position": {
+        "x": 260,
+        "y": 188
+      }
+    },
+    {
+      "id": "label_vin_d1_b",
+      "kind": "power",
+      "net": "vin",
+      "name": "VIN",
+      "position": {
+        "x": 160,
+        "y": -12
+      }
+    }
+  ],
+  "junctions": []
+}
