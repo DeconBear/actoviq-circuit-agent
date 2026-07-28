@@ -25,6 +25,7 @@ import {
   makeId,
   makePlacedBlock,
   makePlacedComponent,
+  makePlacedModuleInstance,
   netLabelBounds,
   normalizeConnectivity,
   normalizeRotation,
@@ -47,12 +48,20 @@ import {
   pinWorld,
 } from '../../schematic/schematicDocument';
 
-type ToolMode = 'select' | 'wire' | 'place' | 'place-block';
+type ToolMode = 'select' | 'wire' | 'place' | 'place-block' | 'place-module';
 type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
 const AUTOPAN_MARGIN_PX = 44;
 const AUTOPAN_STEP_RATIO = 0.055;
 const MAX_BLOCK_PINS = 32;
+
+export interface ProjectModuleLibraryItem {
+  module_id: string;
+  name: string;
+  revision: number;
+  ports: CircuitPort[];
+  parameter_defs?: CircuitModule['parameter_defs'];
+}
 
 interface BlockDraftPin {
   id: string;
@@ -88,10 +97,12 @@ interface Props {
   module: CircuitModule;
   busy: boolean;
   buildBusy?: boolean;
+  projectModules?: ProjectModuleLibraryItem[];
   onSave: (module: CircuitModule) => Promise<boolean | void>;
   onBuild: () => void;
   onProbe?: (probe: SchematicProbeSelection) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onOpenChildModule?: (moduleId: string) => void;
 }
 
 export interface SchematicProbeSelection {
@@ -194,7 +205,17 @@ interface ContextMenuState {
 
 type DraftUpdate = (current: CircuitModule) => CircuitModule;
 
-export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBuild, onProbe, onDirtyChange }: Props) {
+export function SchematicEditor({
+  module,
+  busy,
+  buildBusy = false,
+  projectModules = [],
+  onSave,
+  onBuild,
+  onProbe,
+  onDirtyChange,
+  onOpenChildModule,
+}: Props) {
   const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
   const [dirty, setDirty] = useState(false);
   const [tool, setTool] = useState<ToolMode>('select');
@@ -203,6 +224,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
   const [blockDraft, setBlockDraft] = useState<BlockDraft>(() => defaultBlockDraft());
   const [pendingBlock, setPendingBlock] = useState<BlockDefinition | null>(null);
+  const [pendingModule, setPendingModule] = useState<ProjectModuleLibraryItem | null>(null);
   const [selection, setSelection] = useState<SchematicSelection>(null);
   const [wireStart, setWireStart] = useState<EndpointHit | null>(null);
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
@@ -288,16 +310,26 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       ghost.rotation = normalizeRotation(placeRotation);
       return ghost;
     }
+    if (tool === 'place-module') {
+      if (!pendingModule || !hoverWorld) return null;
+      return makePlacedModuleInstance(cloneModule(draft), snapPoint(hoverWorld), {
+        module_id: pendingModule.module_id,
+        name: pendingModule.name,
+        revision: pendingModule.revision,
+        ports: pendingModule.ports,
+        parameter_defs: pendingModule.parameter_defs,
+      });
+    }
     if (tool !== 'place' || !hoverWorld) return null;
     const ghost = makePlacedComponent(cloneModule(draft), placeType, snapPoint(hoverWorld));
     ghost.rotation = normalizeRotation(ghost.rotation + placeRotation);
     return ghost;
-  }, [busy, contextMenu, tool, pendingBlock, hoverWorld, draft, placeType, placeRotation]);
+  }, [busy, contextMenu, tool, pendingBlock, pendingModule, hoverWorld, draft, placeType, placeRotation]);
   const editorCursor: EditorCursor = (() => {
     if (interactionCursor === 'grabbing') return 'grabbing';
     if (spacePanActive) return 'grab';
     if (tool === 'wire') return 'crosshair';
-    if (tool === 'place' || tool === 'place-block') return 'copy';
+    if (tool === 'place' || tool === 'place-block' || tool === 'place-module') return 'copy';
     return interactionCursor;
   })();
 
@@ -588,6 +620,24 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
       setSelection({ kind: 'component', id: component.id });
       // Keep place-block mode armed (qucs-style continuous placement); Esc or the
       // select tool exits, and the pending block definition stays for the next click.
+      setPlaceRotation(0);
+      return;
+    }
+
+    if (tool === 'place-module') {
+      if (!pendingModule) return;
+      if (pendingModule.module_id === draft.module_id) return;
+      const next = cloneModule(draft);
+      const component = makePlacedModuleInstance(next, snapPoint(world), {
+        module_id: pendingModule.module_id,
+        name: pendingModule.name,
+        revision: pendingModule.revision,
+        ports: pendingModule.ports,
+        parameter_defs: pendingModule.parameter_defs,
+      });
+      next.components.push(component);
+      commitDraft(next);
+      setSelection({ kind: 'component', id: component.id });
       setPlaceRotation(0);
       return;
     }
@@ -1148,6 +1198,10 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
     event.preventDefault();
     event.stopPropagation();
     setSelection({ kind: 'component', id: component.id });
+    if (component.type === 'MODULE' && component.module_ref?.module_id && onOpenChildModule) {
+      onOpenChildModule(component.module_ref.module_id);
+      return;
+    }
     // qucs parity: double-click edits the component. The property editor lives in
     // the side panel, so focus the value field and select its current text.
     window.requestAnimationFrame(() => {
@@ -1843,13 +1897,18 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
               ? `Placing ${placeType}: click to place, R / right-click rotates, Esc to exit`
               : tool === 'place-block'
                 ? 'Placing block: click to place, Esc to exit'
+                : tool === 'place-module'
+                  ? `Placing module ${pendingModule?.name || ''}: click to place, Esc to exit`
                 : hoverEndpoint
                   ? `Snap ${hoverEndpoint.label}`
-                  : dirty ? 'Unsaved' : 'Saved')}
+                  : dirty
+                    ? 'Unsaved'
+                    : `Saved · conn ${orderedConnectivityFingerprint(draft)}`)}
         zoom={zoom}
         onSelect={() => {
           setTool('select');
           setPendingBlock(null);
+          setPendingModule(null);
           setPlaceRotation(0);
           setWireStart(null);
           setHoverEndpoint(null);
@@ -1858,6 +1917,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
         onWire={() => {
           setTool('wire');
           setPendingBlock(null);
+          setPendingModule(null);
           setPlaceRotation(0);
           setWireStart(null);
           setHoverEndpoint(null);
@@ -1880,6 +1940,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             onSelectType={(type) => {
               setTool('place');
               setPendingBlock(null);
+              setPendingModule(null);
               setPlaceType(type);
               setPlaceRotation(0);
               setWireStart(null);
@@ -1888,6 +1949,36 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
             }}
             onSelectBlock={openBlockDialog}
           />
+          {projectModules.filter((item) => item.module_id !== draft.module_id).length > 0 ? (
+            <div style={styles.moduleLibrary} data-testid="schematic-module-library">
+              <div style={styles.moduleLibraryTitle}>Project modules</div>
+              {projectModules
+                .filter((item) => item.module_id !== draft.module_id)
+                .map((item) => (
+                  <button
+                    key={item.module_id}
+                    type="button"
+                    style={{
+                      ...styles.moduleLibraryButton,
+                      ...(pendingModule?.module_id === item.module_id ? styles.moduleLibraryButtonActive : {}),
+                    }}
+                    disabled={busy}
+                    onClick={() => {
+                      setTool('place-module');
+                      setPendingBlock(null);
+                      setPendingModule(item);
+                      setPlaceRotation(0);
+                      setWireStart(null);
+                      setHoverEndpoint(null);
+                      setHoverSelection(null);
+                    }}
+                    data-testid={`schematic-place-module-${item.module_id}`}
+                  >
+                    {item.name}
+                  </button>
+                ))}
+            </div>
+          ) : null}
           <SchematicDocumentSvg
             document={document}
             selection={selection}
@@ -1951,7 +2042,7 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
                   <option value="270">270</option>
                 </select>
               </label>
-              {onProbe && selectedComponent.type !== 'BLOCK' && selectedComponent.type !== 'GND' ? (
+              {onProbe && selectedComponent.type !== 'BLOCK' && selectedComponent.type !== 'MODULE' && selectedComponent.type !== 'GND' ? (
                 <div style={styles.probeActions}>
                   <button
                     type="button"
@@ -1970,6 +2061,47 @@ export function SchematicEditor({ module, busy, buildBusy = false, onSave, onBui
                     Plot current
                   </button>
                 </div>
+              ) : null}
+              {selectedComponent.type === 'MODULE' ? (
+                <>
+                  <div className="av-form-status" data-testid="schematic-editor-module-ref">
+                    Child module: {selectedComponent.module_ref?.module_id || selectedComponent.value}
+                  </div>
+                  <label style={styles.fieldLabel}>
+                    Instance parameters (key=value per line)
+                    <textarea
+                      style={{ ...styles.input, minHeight: 72 }}
+                      value={Object.entries(selectedComponent.parameters || {})
+                        .map(([key, value]) => `${key}=${value}`)
+                        .join('\n')}
+                      onChange={(event) => {
+                        const parameters: Record<string, string> = {};
+                        for (const line of event.target.value.split(/\r?\n/)) {
+                          const trimmed = line.trim();
+                          if (!trimmed || !trimmed.includes('=')) continue;
+                          const [rawKey, ...rest] = trimmed.split('=');
+                          const key = rawKey?.trim();
+                          if (!key) continue;
+                          parameters[key] = rest.join('=').trim();
+                        }
+                        updateSelectedComponent({ parameters });
+                      }}
+                      disabled={busy}
+                      data-testid="schematic-editor-module-parameters"
+                    />
+                  </label>
+                  {onOpenChildModule && selectedComponent.module_ref?.module_id ? (
+                    <button
+                      type="button"
+                      style={styles.smallButton}
+                      onClick={() => onOpenChildModule(selectedComponent.module_ref!.module_id)}
+                      disabled={busy}
+                      data-testid="schematic-editor-open-child-module"
+                    >
+                      Open child module
+                    </button>
+                  ) : null}
+                </>
               ) : null}
               {selectedComponent.type === 'BLOCK' ? (
                 <>
@@ -3412,6 +3544,26 @@ function isSpacePanKey(event: Pick<KeyboardEvent | ReactKeyboardEvent<HTMLDivEle
   return event.key === ' ' || event.key === 'Spacebar';
 }
 
+function orderedConnectivityFingerprint(module: CircuitModule): string {
+  const rows: string[] = [];
+  for (const port of module.ports || []) {
+    rows.push(`port|${port.id}|${port.net_id || port.net || ''}`);
+  }
+  for (const component of module.components || []) {
+    const identity = component.stable_id || component.id;
+    for (const pin of component.pins || []) {
+      rows.push(`pin|${identity}|${pin.id}|${pin.net_id || pin.net || ''}`);
+    }
+  }
+  let hash = 2166136261;
+  const text = rows.join(';');
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 const styles: Record<string, CSSProperties> = {
   editorShell: {
     display: 'flex',
@@ -3428,6 +3580,41 @@ const styles: Record<string, CSSProperties> = {
   editorShellFocused: {
     border: '1px solid #93b4ff',
     boxShadow: '0 0 0 2px rgba(37, 99, 235, 0.16)',
+  },
+  moduleLibrary: {
+    position: 'absolute',
+    left: 12,
+    top: 96,
+    zIndex: 4,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: 8,
+    background: 'rgba(255,255,255,0.94)',
+    border: '1px solid #d0d7de',
+    borderRadius: 8,
+    maxWidth: 180,
+    maxHeight: 220,
+    overflow: 'auto',
+  },
+  moduleLibraryTitle: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: '#57606a',
+    marginBottom: 2,
+  },
+  moduleLibraryButton: {
+    textAlign: 'left' as const,
+    border: '1px solid #d0d7de',
+    background: '#fff',
+    borderRadius: 6,
+    padding: '4px 8px',
+    fontSize: 12,
+    cursor: 'pointer',
+  },
+  moduleLibraryButtonActive: {
+    borderColor: '#0969da',
+    background: '#ddf4ff',
   },
   toolButton: {
     minWidth: 42,

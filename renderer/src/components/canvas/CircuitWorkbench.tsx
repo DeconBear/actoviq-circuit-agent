@@ -358,9 +358,9 @@ function moduleToSpiceNetlist(moduleId: string, moduleData: CircuitModule): stri
       lines.push(`* GND ${component.name} on net 0`);
       continue;
     }
-    if (component.type === 'BLOCK') {
+    if (component.type === 'BLOCK' || component.type === 'MODULE') {
       const pinSummary = component.pins.map((pin) => `${pin.name}=${pin.net}`).join(', ');
-      lines.push(`* BLOCK ${component.name}: ${component.value} [${pinSummary}]`);
+      lines.push(`* ${component.type} ${component.name}: ${component.value} [${pinSummary}]`);
       continue;
     }
     const nodes = component.pins.map((pin) => sanitizeSpiceToken(pin.net || `n_${component.id}_${pin.id}`));
@@ -2535,6 +2535,13 @@ export function CircuitWorkbench({
               overrides={selectedPreview?.schematicOverrides}
               busy={busy}
               previewBusy={selectedPreviewBusy}
+              projectModules={(project?.modules || []).map((entry) => ({
+                module_id: entry.id,
+                name: entry.name,
+                revision: bundle?.modules[entry.id]?.revision ?? 0,
+                ports: bundle?.modules[entry.id]?.ports || entry.ports || [],
+                parameter_defs: bundle?.modules[entry.id]?.parameter_defs,
+              }))}
               onBuild={() => buildModulePreview(selectedRef.id)}
               onOptimize={() => optimizeModuleSchematic(selectedRef.id)}
               layoutFeedback={layoutFeedback[selectedRef.id]}
@@ -2543,6 +2550,7 @@ export function CircuitWorkbench({
               onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
               onProbe={(probe) => openSimulationProbe(selectedRef.id, probe)}
+              onOpenChildModule={(moduleId) => void openModule(moduleId)}
               xschemConflicts={xschemConflicts}
               xschemValidation={xschemValidation}
               onXschemMode={linkXschemMode}
@@ -2994,6 +3002,7 @@ function ModuleSchematic({
   overrides,
   busy,
   previewBusy,
+  projectModules = [],
   onBuild,
   onOptimize,
   layoutFeedback,
@@ -3002,6 +3011,7 @@ function ModuleSchematic({
   onResetItem,
   onResetLayout,
   onProbe,
+  onOpenChildModule,
   xschemConflicts,
   xschemValidation,
   onXschemMode,
@@ -3014,6 +3024,13 @@ function ModuleSchematic({
   overrides?: SchematicOverrides;
   busy: boolean;
   previewBusy: boolean;
+  projectModules?: Array<{
+    module_id: string;
+    name: string;
+    revision: number;
+    ports: CircuitModule['ports'];
+    parameter_defs?: CircuitModule['parameter_defs'];
+  }>;
   onBuild: () => void;
   onOptimize: () => Promise<void>;
   layoutFeedback?: LayoutOptimizationResult;
@@ -3022,6 +3039,7 @@ function ModuleSchematic({
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
   onProbe: (probe: SchematicProbeSelection) => void;
+  onOpenChildModule?: (moduleId: string) => void;
   xschemConflicts: XschemSyncConflict[];
   xschemValidation: XschemValidationResult | null;
   onXschemMode: (mode: 'native' | 'bridge' | 'external') => Promise<void>;
@@ -3568,10 +3586,12 @@ function ModuleSchematic({
               module={moduleData}
               busy={busy || moduleData.schematic_peer?.mode === 'external'}
               buildBusy={previewBusy}
+              projectModules={projectModules}
               onSave={onSaveSchematic}
               onBuild={onBuild}
               onProbe={onProbe}
               onDirtyChange={setEditorDirty}
+              onOpenChildModule={onOpenChildModule}
             />
           </>
         ) : schematicDocument ? (

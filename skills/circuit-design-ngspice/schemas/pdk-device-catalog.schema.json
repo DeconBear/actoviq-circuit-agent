@@ -20,10 +20,44 @@
             "minItems": 1,
             "items": { "type": "string", "minLength": 1 }
           },
-          "spice": { "type": "object" },
+          "spice": {
+            "type": "object",
+            "properties": {
+              "primitive": { "type": "string" },
+              "model": { "type": "string" },
+              "pin_order": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "format": {
+                "type": "string",
+                "description": "Safe placeholder template, e.g. '{name} {D} {G} {S} {B} {model} w={w} l={l}'"
+              }
+            },
+            "additionalProperties": true
+          },
           "parameters": { "type": "object" },
           "views": { "type": "object" },
-          "netlist_formats": { "type": "object" }
+          "netlist_formats": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                { "type": "string" },
+                {
+                  "type": "object",
+                  "properties": {
+                    "model": { "type": "string" },
+                    "format": { "type": "string" },
+                    "pin_order": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              ]
+            }
+          }
         },
         "additionalProperties": true
       }

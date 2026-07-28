@@ -70,6 +70,20 @@
         "additionalProperties": false
       }
     },
+    "composition": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": ["flat", "hierarchical"],
+          "description": "flat preserves legacy connect_ports compile; hierarchical emits .subckt/X"
+        },
+        "top_module_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
     "analyses": { "type": "object" }
   },
   "$defs": {

@@ -13,7 +13,7 @@ export const PIN_REACH = 12;
 export const BLOCK_PIN_LEAD = 24;
 const ROUTE_OBSTACLE_PADDING = SCHEMATIC_GRID + 4;
 
-export type ToolComponentType = Exclude<CircuitComponent['type'], 'E' | 'BLOCK' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B'>;
+export type ToolComponentType = Exclude<CircuitComponent['type'], 'E' | 'BLOCK' | 'MODULE' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B'>;
 export type BlockPinSide = NonNullable<CircuitPin['side']>;
 
 export interface BlockDefinition {
@@ -326,6 +326,94 @@ export function makePlacedBlock(
       height: definition.height,
     },
   };
+}
+
+export function sideForPort(port: CircuitPort): BlockPinSide {
+  if (port.signal_type === 'power') return 'top';
+  if (port.signal_type === 'ground') return 'bottom';
+  if (port.direction === 'output') return 'right';
+  if (port.direction === 'input') return 'left';
+  return 'left';
+}
+
+export function portsToSymbolGeometry(ports: CircuitPort[]): {
+  pins: CircuitPin[];
+  block: { width: number; height: number };
+} {
+  const bySide: Record<BlockPinSide, CircuitPort[]> = {
+    left: [],
+    right: [],
+    top: [],
+    bottom: [],
+  };
+  for (const port of ports) {
+    bySide[sideForPort(port)].push(port);
+  }
+  (Object.keys(bySide) as BlockPinSide[]).forEach((side) => {
+    bySide[side].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  });
+  const pins: CircuitPin[] = [];
+  (['left', 'right', 'top', 'bottom'] as BlockPinSide[]).forEach((side) => {
+    bySide[side].forEach((port, index) => {
+      pins.push({
+        id: port.id,
+        name: port.name || port.id,
+        net: port.net || `n_${port.id}`,
+        net_id: port.net_id,
+        side,
+        order: index,
+      });
+    });
+  });
+  const maxVertical = Math.max(bySide.left.length, bySide.right.length, 1);
+  const maxHorizontal = Math.max(bySide.top.length, bySide.bottom.length, 1);
+  return {
+    pins,
+    block: {
+      width: Math.max(80, 40 + maxHorizontal * 24),
+      height: Math.max(80, 40 + maxVertical * 24),
+    },
+  };
+}
+
+export function makePlacedModuleInstance(
+  module: CircuitModule,
+  position: CircuitPosition,
+  child: Pick<CircuitModule, 'module_id' | 'name' | 'revision' | 'ports' | 'parameter_defs'>,
+  parameters?: Record<string, string>,
+): CircuitComponent {
+  const existingIds = new Set(module.components.map((component) => component.id));
+  const id = makeId('mod', existingIds);
+  const numericId = id.replace(/^[a-z_-]+/i, '') || String(module.components.length + 1);
+  const geometry = portsToSymbolGeometry(child.ports || []);
+  const defaults = Object.fromEntries(
+    (child.parameter_defs || [])
+      .filter((item) => item.id)
+      .map((item) => [item.id, item.default]),
+  );
+  return {
+    id,
+    type: 'MODULE',
+    name: `X${child.name?.replace(/[^A-Za-z0-9_]+/g, '') || numericId}`,
+    value: child.module_id,
+    position,
+    rotation: 0,
+    pins: geometry.pins.map((pin, index) => ({
+      ...pin,
+      net: pin.net || `n_${id}_${index + 1}`,
+    })),
+    block: geometry.block,
+    stable_id: `component-${id}`,
+    module_ref: {
+      module_id: child.module_id,
+      revision: child.revision,
+    },
+    parameters: { ...defaults, ...(parameters || {}) },
+  };
+}
+
+export function isBlockLike(component: CircuitComponent): boolean {
+  return component.type === 'BLOCK' || component.type === 'MODULE';
 }
 
 function autoLayoutModule(module: CircuitModule): CircuitModule {
@@ -2769,7 +2857,7 @@ export function blockPinBodyWorld(component: CircuitComponent, pin: CircuitPin, 
 
 export function componentBounds(component: CircuitComponent): SchematicBounds {
   const pins = component.pins.map((pin, index) => pinWorld(component, pin, index));
-  const bodyPoints = component.type === 'BLOCK'
+  const bodyPoints = (component.type === 'BLOCK' || component.type === 'MODULE')
     ? (() => {
         const { width, height } = blockBodySize(component);
         return [
@@ -4352,7 +4440,7 @@ function pointHitsComponentGraphic(component: CircuitComponent, world: CircuitPo
   if (component.type === 'E') return pointNearOpampGraphic(component, world);
 
   const local = componentLocalPoint(component, world);
-  if (component.type === 'BLOCK') {
+  if ((component.type === 'BLOCK' || component.type === 'MODULE')) {
     const { width, height } = blockBodySize(component);
     return Math.abs(local.x) <= width / 2 && Math.abs(local.y) <= height / 2;
   }
@@ -4464,7 +4552,7 @@ export function wireIdToken(value: string): string {
 function pinOffset(component: CircuitComponent, pin: CircuitPin, index: number): CircuitPosition {
   const key = `${pin.id} ${pin.name}`.toLowerCase();
   let offset: CircuitPosition;
-  if (component.type === 'BLOCK') {
+  if ((component.type === 'BLOCK' || component.type === 'MODULE')) {
     offset = blockPinLocalOffsets(component, pin, index).endpoint;
   } else if (component.type === 'M') {
     const pmos = isPmosComponent(component);

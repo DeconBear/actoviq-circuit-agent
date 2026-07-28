@@ -250,6 +250,11 @@ export interface CircuitConnection {
   network?: string;
 }
 
+export interface CircuitProjectComposition {
+  mode: 'flat' | 'hierarchical';
+  top_module_id?: string;
+}
+
 export interface CircuitProject {
   schema: 'actoviq.project.v1' | 'actoviq.project.v2';
   project_id: string;
@@ -262,6 +267,7 @@ export interface CircuitProject {
   hdl_manifest?: string;
   mixed_signal_contract?: string;
   stable_id?: string;
+  composition?: CircuitProjectComposition;
   modules: CircuitModuleRef[];
   connections: CircuitConnection[];
   analyses?: Record<string, unknown>;
@@ -323,9 +329,21 @@ export interface CircuitComponentEda {
   [k: string]: unknown;
 }
 
+export interface CircuitModuleRefBinding {
+  module_id: string;
+  revision?: number;
+}
+
+export interface CircuitParameterDef {
+  id: string;
+  default: string;
+  unit?: string;
+  description?: string;
+}
+
 export interface CircuitComponent {
   id: string;
-  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E' | 'BLOCK' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B' | 'GND';
+  type: 'R' | 'C' | 'L' | 'D' | 'Q' | 'M' | 'V' | 'I' | 'E' | 'BLOCK' | 'MODULE' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B' | 'GND';
   name: string;
   value: string;
   position: CircuitPosition;
@@ -334,6 +352,8 @@ export interface CircuitComponent {
   stable_id?: string;
   eda?: CircuitComponentEda;
   block?: CircuitBlockStyle;
+  module_ref?: CircuitModuleRefBinding;
+  parameters?: Record<string, string>;
   spice?: { raw?: string; simulated?: boolean };
 }
 
@@ -345,6 +365,7 @@ export interface CircuitModule {
   domain?: ModuleDomain;
   nets?: CircuitNet[];
   spice?: CircuitSpiceSource;
+  parameter_defs?: CircuitParameterDef[];
   ports: CircuitPort[];
   components: CircuitComponent[];
   wires: CircuitWire[];

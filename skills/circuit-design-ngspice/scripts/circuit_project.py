@@ -103,6 +103,14 @@ from hdl_flow import (
 )
 from stable_ids import ensure_module_stable_ids, ensure_project_stable_ids
 from validate_netlist_primitives import validate_netlist_text
+from module_hierarchy import (
+    connectivity_payload,
+    detect_module_cycles,
+    emit_x_instance_line,
+    ordered_connectivity_hash,
+    safe_format_interpolate,
+    spice_name_for_subckt,
+)
 
 
 PROJECT_SCHEMA = "actoviq.project.v2"
@@ -1014,30 +1022,364 @@ def component_model_name(component: dict[str, Any]) -> str:
     return value.split()[0] if value else ""
 
 
-def module_spice_text(module: dict[str, Any]) -> str:
+def module_spice_text(module: dict[str, Any], *, device_catalog: dict[str, Any] | None = None) -> str:
     spice = module.get("spice") or {}
     source = str(spice.get("source", "")).strip()
     if source:
         return source
     lines: list[str] = []
     for component in module.get("components", []):
-        if component.get("type") in {"BLOCK", "GND"}:
+        if component.get("type") in {"BLOCK", "GND", "MODULE"}:
             continue
-        pins = " ".join(str(pin.get("net", "")) for pin in component.get("pins", []))
-        lines.append(
-            f"{component.get('name', component.get('id', 'X'))} {pins} {component.get('value', '')}".strip()
-        )
+        line = emit_leaf_component_line(component, device_catalog=device_catalog)
+        if line:
+            lines.append(line)
     lines.extend(str(line) for line in spice.get("models", []))
     lines.extend(str(line) for line in spice.get("directives", []))
     lines.extend(str(line) for line in spice.get("opaque", []))
     return "\n".join(lines)
 
 
+def project_composition(project: dict[str, Any]) -> dict[str, Any]:
+    composition = project.get("composition") if isinstance(project.get("composition"), dict) else {}
+    mode = str(composition.get("mode") or "flat").strip().casefold()
+    if mode not in {"flat", "hierarchical"}:
+        mode = "flat"
+    top = str(composition.get("top_module_id") or "").strip()
+    return {"mode": mode, "top_module_id": top or None}
+
+
+def resolve_project_device_catalog(project: dict[str, Any]) -> dict[str, Any] | None:
+    profile = project.get("analog_ic_profile") if isinstance(project.get("analog_ic_profile"), dict) else {}
+    binding = profile.get("pdk_binding") if isinstance(profile.get("pdk_binding"), dict) else {}
+    logical_id = str(binding.get("logical_id") or binding.get("pdk_ref") or "").strip()
+    if not logical_id:
+        return None
+    try:
+        registry = load_pdk_registry()
+    except Exception:
+        return None
+    for installation in registry.get("installations", []) or []:
+        if str(installation.get("logical_id") or "") == logical_id:
+            catalog = installation.get("device_catalog")
+            return catalog if isinstance(catalog, dict) else None
+    return None
+
+
+def _pin_net_lookup(component: dict[str, Any]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for pin in component.get("pins", []) or []:
+        pin_id = str(pin.get("id") or "").strip()
+        pin_name = str(pin.get("name") or "").strip()
+        net = str(pin.get("net") or "").strip()
+        if pin_id:
+            lookup[pin_id] = net
+            lookup[pin_id.casefold()] = net
+        if pin_name:
+            lookup[pin_name] = net
+            lookup[pin_name.casefold()] = net
+    return lookup
+
+
+def emit_leaf_component_line(
+    component: dict[str, Any],
+    *,
+    device_catalog: dict[str, Any] | None = None,
+    node_map: dict[str, str] | None = None,
+    compiled_name: str | None = None,
+    compiled_value: str | None = None,
+) -> str:
+    """Emit one primitive SPICE line, optionally via controlled catalog format."""
+    component_type = str(component.get("type") or "").upper()
+    if component_type in {"BLOCK", "GND", "MODULE"}:
+        return ""
+    name = compiled_name or str(component.get("name") or component.get("id") or "X")
+    value = compiled_value if compiled_value is not None else str(component.get("value") or "")
+    pin_lookup = _pin_net_lookup(component)
+
+    def mapped_net(raw: str) -> str:
+        raw = str(raw or "")
+        if node_map is None:
+            return raw
+        if raw in node_map:
+            return node_map[raw]
+        folded = raw.casefold()
+        for key, mapped in node_map.items():
+            if str(key).casefold() == folded:
+                return mapped
+        return raw
+
+    catalog_devices = {
+        str(device.get("device_id") or "").casefold(): device
+        for device in (device_catalog or {}).get("devices", []) or []
+    }
+    device = catalog_devices.get(component_type.casefold())
+    spice_meta = (device or {}).get("spice") if isinstance(device, dict) else None
+    if isinstance(spice_meta, dict) and spice_meta.get("format") and spice_meta.get("pin_order"):
+        values: dict[str, str] = {
+            "name": name,
+            "model": str(spice_meta.get("model") or (value.split()[0] if value else component_type)),
+        }
+        # Parse simple key=value tokens from the component value for w/l/m/nf.
+        for token in value.replace(",", " ").split():
+            if "=" in token:
+                key, raw_value = token.split("=", 1)
+                values[key.strip().casefold()] = raw_value.strip()
+                values[key.strip()] = raw_value.strip()
+        for pin_name in spice_meta.get("pin_order", []):
+            key = str(pin_name)
+            net = pin_lookup.get(key) or pin_lookup.get(key.casefold()) or "0"
+            values[key] = mapped_net(net)
+            values[key.casefold()] = values[key]
+        if "model" not in values or not values["model"]:
+            values["model"] = str(spice_meta.get("model") or "model")
+        return safe_format_interpolate(str(spice_meta["format"]), values)
+
+    nodes = [mapped_net(str(pin.get("net") or "")) for pin in component.get("pins", []) or []]
+    return " ".join([name, *nodes, value]).strip()
+
+
+def collect_module_models(module: dict[str, Any]) -> list[str]:
+    spice = module.get("spice") if isinstance(module.get("spice"), dict) else {}
+    models = [str(line).strip() for line in spice.get("models", []) or [] if str(line).strip()]
+    return models
+
+
+def emit_module_subckt(
+    module_id: str,
+    module: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+    *,
+    device_catalog: dict[str, Any] | None = None,
+    emitted: set[str] | None = None,
+    unknown_policy: str = "error",
+) -> list[str]:
+    """Emit .subckt definitions depth-first; each module id emitted once."""
+    emitted = emitted if emitted is not None else set()
+    subckt_name = spice_name_for_subckt(module_id)
+    if subckt_name in emitted:
+        return []
+    # Emit children first.
+    lines: list[str] = []
+    for component in module.get("components", []) or []:
+        if str(component.get("type") or "").upper() != "MODULE":
+            continue
+        child_id = str((component.get("module_ref") or {}).get("module_id") or "").strip()
+        if not child_id:
+            raise ValueError(f"MODULE instance {component.get('id')} missing module_ref.module_id")
+        if child_id not in modules:
+            raise ValueError(f"MODULE instance references unknown module: {child_id}")
+        lines.extend(
+            emit_module_subckt(
+                child_id,
+                modules[child_id],
+                modules,
+                device_catalog=device_catalog,
+                emitted=emitted,
+                unknown_policy=unknown_policy,
+            )
+        )
+
+    cycle = detect_module_cycles(modules, start_module_id=module_id)
+    if cycle:
+        raise ValueError(f"MODULE hierarchy cycle detected: {' -> '.join(cycle)}")
+
+    emitted.add(subckt_name)
+    ports = module.get("ports", []) or []
+    port_names = [sanitize_node(str(port.get("net") or port.get("name") or port.get("id"))) for port in ports]
+    param_defs = module.get("parameter_defs", []) or []
+    param_tokens = []
+    for item in param_defs:
+        key = str(item.get("id") or "").strip()
+        default = str(item.get("default") or "").strip()
+        if key and default:
+            param_tokens.append(f"{key}={default}")
+    header = f".subckt {subckt_name} {' '.join(port_names)}".rstrip()
+    if param_tokens:
+        header = f"{header} {' '.join(param_tokens)}"
+    body: list[str] = [header]
+    for component in module.get("components", []) or []:
+        component_type = str(component.get("type") or "").upper()
+        if component_type == "GND":
+            continue
+        if component_type == "BLOCK":
+            body.append(
+                f"* BLOCK {component.get('name')}: {component.get('value', '')}"
+            )
+            continue
+        if component_type == "MODULE":
+            child_id = str((component.get("module_ref") or {}).get("module_id") or "").strip()
+            child = modules[child_id]
+            body.append(
+                emit_x_instance_line(
+                    component,
+                    child,
+                    unknown_policy=unknown_policy,
+                )
+            )
+            continue
+        line = emit_leaf_component_line(component, device_catalog=device_catalog)
+        if line:
+            body.append(line)
+    spice = module.get("spice") if isinstance(module.get("spice"), dict) else {}
+    for raw in spice.get("opaque", []) or []:
+        stripped = str(raw).strip()
+        if stripped:
+            body.append(stripped)
+    body.append(f".ends {subckt_name}")
+    lines.extend(body)
+    return lines
+
+
+def compile_hierarchical_project(
+    root: Path,
+    project: dict[str, Any],
+    modules: dict[str, dict[str, Any]],
+    *,
+    device_catalog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    composition = project_composition(project)
+    top_id = composition.get("top_module_id") or (project.get("modules") or [{}])[0].get("id")
+    if not top_id or top_id not in modules:
+        raise ValueError("hierarchical composition requires a valid top_module_id")
+    cycle = detect_module_cycles(modules, start_module_id=str(top_id))
+    if cycle:
+        raise ValueError(f"MODULE hierarchy cycle detected: {' -> '.join(cycle)}")
+
+    erc = write_erc_result(root, project, modules)
+    top = modules[str(top_id)]
+    lines = [
+        f"* {project['name']}",
+        "* Generated hierarchical netlist (.subckt/X) by circuit_project.py",
+    ]
+    model_lines: list[str] = []
+    for module in modules.values():
+        for model in collect_module_models(module):
+            if model not in model_lines:
+                model_lines.append(model)
+    if model_lines:
+        lines.append("* Device models")
+        lines.extend(model_lines)
+
+    lines.extend(
+        emit_module_subckt(
+            str(top_id),
+            top,
+            modules,
+            device_catalog=device_catalog,
+            unknown_policy="error",
+        )
+    )
+
+    # Top-level testbench wrapper: instantiate the top subckt once.
+    port_nodes = [
+        sanitize_node(str(port.get("net") or port.get("name") or port.get("id")))
+        for port in top.get("ports", []) or []
+    ]
+    top_name = spice_name_for_subckt(str(top_id))
+    driven: set[str] = set()
+    for port in top.get("ports", []) or []:
+        node = sanitize_node(str(port.get("net") or port.get("name") or port.get("id")))
+        if port.get("signal_type") == "analog" and port.get("direction") == "input" and node not in driven:
+            lines.append(f"Vtest_{sanitize_node(port.get('id'))} {node} 0 DC 0 AC 1")
+            driven.add(node)
+        elif port.get("signal_type") == "power" and port.get("direction") == "input" and node not in driven:
+            lines.append(f"Vtest_{sanitize_node(port.get('id'))} {node} 0 DC 5")
+            driven.add(node)
+        if port.get("signal_type") == "analog" and port.get("direction") == "output":
+            lines.append(f"Rload_{sanitize_node(port.get('id'))} {node} 0 1meg")
+    lines.append(f"Xtop {' '.join(port_nodes)} {top_name}".strip())
+    ac = project.get("analyses", {}).get("ac", {}) if isinstance(project.get("analyses"), dict) else {}
+    if ac.get("enabled", True):
+        points = int(ac.get("points_per_decade", 20))
+        start = float(ac.get("start_hz", 10))
+        stop = float(ac.get("stop_hz", 1_000_000))
+        lines.append(f".ac dec {points} {start:g} {stop:g}")
+    lines.append(".end")
+
+    build_root = root / "build" / "system"
+    build_root.mkdir(parents=True, exist_ok=True)
+    netlist_text = "\n".join(lines) + "\n"
+    netlist_path = build_root / "design.final.cir"
+    netlist_path.write_text(netlist_text, encoding="utf-8")
+    source_map = {
+        "composition_mode": "hierarchical",
+        "top_module_id": str(top_id),
+        "connectivity_hash": ordered_connectivity_hash(top),
+    }
+    atomic_write_json(build_root / "source-map.json", source_map)
+    for module_id, module in modules.items():
+        module_root = root / "build" / "modules" / module_id
+        module_root.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(module_root / "connectivity.json", connectivity_payload(module))
+        hier_lines = [
+            f"* hierarchical view for {module_id}",
+            *emit_module_subckt(
+                module_id,
+                module,
+                modules,
+                device_catalog=device_catalog,
+                unknown_policy="error",
+            ),
+            ".end",
+        ]
+        (module_root / "design.hier.cir").write_text("\n".join(hier_lines) + "\n", encoding="utf-8")
+
+    manifest = {
+        "schema": "actoviq.build.v1",
+        "project_id": project["project_id"],
+        "revision": project["revision"],
+        "source_revision": project["revision"],
+        "document_hash": project_document_hash(project, modules),
+        "built_at": utc_now(),
+        "status": "compiling",
+        "composition_mode": "hierarchical",
+        "netlist": "system/design.final.cir",
+        "source_map": "system/source-map.json",
+        "erc": "erc.json",
+        "erc_status": erc["status"],
+        "erc_summary": erc["summary"],
+        "modules": {},
+    }
+    atomic_write_json(root / "build" / "build-manifest.json", manifest)
+    write_project_report(root, project, modules, netlist_text, None)
+    module_results = []
+    for module_ref in project["modules"]:
+        module_results.append(compile_module(root, module_ref["id"]))
+    final_manifest = {
+        **manifest,
+        "built_at": utc_now(),
+        "status": "compiled",
+        "modules": {
+            result["module_id"]: {
+                "status": "compiled",
+                "revision": result["revision"],
+                "netlist": f"modules/{result['module_id']}/design.cir",
+                "schematic": (
+                    f"modules/{result['module_id']}/schematic.svg"
+                    if result.get("schematic_path")
+                    else None
+                ),
+                "hierarchical_netlist": f"modules/{result['module_id']}/design.hier.cir",
+            }
+            for result in module_results
+        },
+    }
+    atomic_write_json(root / "build" / "build-manifest.json", final_manifest)
+    return {
+        "ok": True,
+        "composition_mode": "hierarchical",
+        "netlist": str(netlist_path),
+        "manifest": final_manifest,
+        "erc": erc,
+    }
+
+
 def editable_component_count(module: dict[str, Any]) -> int:
     return sum(
         1
         for component in module.get("components", []) or []
-        if str(component.get("type", "")).upper() not in {"BLOCK", "GND"}
+        if str(component.get("type", "")).upper() not in {"BLOCK", "GND", "MODULE"}
     )
 
 
@@ -1045,7 +1387,7 @@ def module_has_active_devices(module: dict[str, Any]) -> bool:
     return any(
         str(component.get("type", "")).upper() in ACTIVE_COMPONENT_TYPES
         for component in module.get("components", []) or []
-        if str(component.get("type", "")).upper() != "BLOCK"
+        if str(component.get("type", "")).upper() not in {"BLOCK", "MODULE"}
     )
 
 
@@ -3345,6 +3687,9 @@ def write_project_report(
 
 def compile_project(root: Path) -> dict[str, Any]:
     project, modules = load_project(root)
+    device_catalog = resolve_project_device_catalog(project)
+    if project_composition(project)["mode"] == "hierarchical":
+        return compile_hierarchical_project(root, project, modules, device_catalog=device_catalog)
     erc = write_erc_result(root, project, modules)
     union = UnionFind()
     port_lookup: dict[tuple[str, str], dict[str, Any]] = {}
@@ -3458,15 +3803,30 @@ def compile_project(root: Path) -> dict[str, Any]:
                         "pins": component.get("pins", []),
                     }
                     continue
+                if component_type == "MODULE":
+                    component_name = sanitize_node(f"{module_id}_{component['name']}")
+                    child_id = str((component.get("module_ref") or {}).get("module_id") or "")
+                    lines.append(
+                        f"* MODULE {component_name}: child={child_id} "
+                        f"(ignored in flat composition; set composition.mode=hierarchical)"
+                    )
+                    continue
                 component_name = compiled_component_name(module_id, component)
-                node_values = [compiled_node_name(pin["net"]) for pin in component["pins"]]
                 compiled_value = rewrite_compiled_value_references(
                     component_type,
                     component["value"],
                     instance_names,
                     compiled_node_name,
                 )
-                lines.append(" ".join([component_name, *node_values, compiled_value]))
+                line = emit_leaf_component_line(
+                    component,
+                    device_catalog=device_catalog,
+                    node_map=local_node_map,
+                    compiled_name=component_name,
+                    compiled_value=compiled_value,
+                )
+                if line:
+                    lines.append(line)
                 source_map["components"][component_name] = {
                     "module_id": module_id,
                     "component_id": component["id"],
@@ -3790,15 +4150,29 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
             )
             body_lines.append(f"* BLOCK {component_name}: {component.get('value', '')} [{pin_summary}]")
             continue
+        if component_type == "MODULE":
+            child_id = str((component.get("module_ref") or {}).get("module_id") or "")
+            body_lines.append(
+                f"* MODULE {component.get('name')}: child={child_id} "
+                f"(see design.hier.cir for .subckt/X expansion)"
+            )
+            continue
         component_name = compiled_component_name(module_id, component)
-        nodes = [node_name(pin["net"]) for pin in component["pins"]]
         compiled_value = rewrite_compiled_value_references(
             component_type,
             component["value"],
             instance_names,
             node_name,
         )
-        body_lines.append(" ".join([component_name, *nodes, compiled_value]))
+        line = emit_leaf_component_line(
+            component,
+            device_catalog=resolve_project_device_catalog(project),
+            node_map=node_map,
+            compiled_name=component_name,
+            compiled_value=compiled_value,
+        )
+        if line:
+            body_lines.append(line)
         if component_type in {"V", "I"} and component["pins"]:
             driven_nodes.add(node_name(component["pins"][0]["net"]))
 
@@ -3849,6 +4223,14 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
     build_root.mkdir(parents=True, exist_ok=True)
     netlist_path = build_root / "design.cir"
     netlist_path.write_text(netlist_text, encoding="utf-8")
+    atomic_write_json(build_root / "connectivity.json", connectivity_payload(module))
+    if any(str(component.get("type") or "").upper() == "MODULE" for component in module.get("components", []) or []):
+        hier_lines = [
+            f"* hierarchical view for {module_id}",
+            *emit_module_subckt(module_id, module, modules, unknown_policy="error"),
+            ".end",
+        ]
+        (build_root / "design.hier.cir").write_text("\n".join(hier_lines) + "\n", encoding="utf-8")
     render_result = render_module_schematic(build_root, netlist_path, module, renderer)
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path) if manifest_path.exists() else {

@@ -121,7 +121,12 @@ def _device_catalog(logical_id: str, custom_devices: list[dict[str, Any]] | None
                 "device_id": kind,
                 "kind": kind,
                 "pins": ["D", "G", "S", "B"],
-                "spice": {"primitive": "M", "model": model, "pin_order": ["D", "G", "S", "B"]},
+                "spice": {
+                    "primitive": "M",
+                    "model": model,
+                    "pin_order": ["D", "G", "S", "B"],
+                    "format": "{name} {D} {G} {S} {B} {model} w={w} l={l}",
+                },
                 "parameters": MOS_PARAMETER_CONSTRAINTS,
                 "views": {
                     "xschem_symbol": "",
@@ -130,8 +135,16 @@ def _device_catalog(logical_id: str, custom_devices: list[dict[str, Any]] | None
                     "generic_fallback": "mos4",
                 },
                 "netlist_formats": {
-                    "spice": model,
-                    "cdl": model,
+                    "spice": {
+                        "model": model,
+                        "pin_order": ["D", "G", "S", "B"],
+                        "format": "{name} {D} {G} {S} {B} {model} w={w} l={l}",
+                    },
+                    "cdl": {
+                        "model": model,
+                        "pin_order": ["D", "G", "S", "B"],
+                        "format": "{name} {D} {G} {S} {B} {model} w={w} l={l}",
+                    },
                     "spectre": model,
                     "hspice": model,
                     "xyce": model,

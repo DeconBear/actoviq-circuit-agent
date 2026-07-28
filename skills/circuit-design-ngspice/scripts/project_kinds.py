@@ -8,7 +8,7 @@ PROJECT_KINDS = ("simulation", "pcb_schematic", "analog_ic", "mixed_signal_ic")
 DEFAULT_PROJECT_KIND = "simulation"
 
 # Desktop module model always allows these; simulation netlist gate is stricter.
-BASE_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I", "BLOCK", "GND"}
+BASE_COMPONENT_TYPES = {"R", "C", "L", "D", "Q", "M", "V", "I", "BLOCK", "MODULE", "GND"}
 PCB_COMPONENT_TYPES = BASE_COMPONENT_TYPES | {"U", "X", "E"}
 IC_COMPONENT_TYPES = PCB_COMPONENT_TYPES | {"F", "G", "H", "B"}  # controlled / behavioral IC macros
 

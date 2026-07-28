@@ -140,6 +140,7 @@
               "I",
               "E",
               "BLOCK",
+              "MODULE",
               "U",
               "X",
               "F",
@@ -297,6 +298,27 @@
             },
             "additionalProperties": false
           },
+          "module_ref": {
+            "type": "object",
+            "required": ["module_id"],
+            "properties": {
+              "module_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
           "spice": {
             "type": "object",
             "properties": {
@@ -347,6 +369,29 @@
           },
           "conflict": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "parameter_defs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "default"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
           }
         },
         "additionalProperties": false

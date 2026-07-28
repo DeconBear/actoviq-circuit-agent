@@ -15,6 +15,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 from verification_contracts import validate_verification_run
+from module_hierarchy import (
+    compare_ordered_pin_nets,
+    ordered_connectivity_hash,
+    spice_name_for_subckt,
+)
 
 
 BINDING_SCHEMA = "actoviq.schematic-peer-binding.v1"
@@ -50,26 +55,7 @@ def module_hash(module: dict[str, Any]) -> str:
 
 
 def connectivity_hash(module: dict[str, Any]) -> str:
-    return _canonical_hash({
-        "ports": sorted(
-            (str(port.get("id")), str(port.get("net_id") or port.get("net")))
-            for port in module.get("ports", [])
-        ),
-        "components": sorted(
-            (
-                str(component.get("stable_id") or component.get("id")),
-                str(component.get("type")),
-                tuple(sorted(
-                    (
-                        str(pin.get("id")),
-                        str(pin.get("net_id") or pin.get("net")),
-                    )
-                    for pin in component.get("pins", [])
-                )),
-            )
-            for component in module.get("components", [])
-        ),
-    })
+    return ordered_connectivity_hash(module)
 
 
 def compare_reference_netlist(module: dict[str, Any], netlist_text: str) -> dict[str, Any]:
@@ -87,43 +73,45 @@ def compare_reference_netlist(module: dict[str, Any], netlist_text: str) -> dict
         except ValueError:
             tokens = line.split()
         if len(tokens) >= 2:
+            # Drop trailing model/param tokens for leaf instances by keeping only
+            # as many nodes as the schematic instance declares.
             actual_instances[tokens[0].casefold()] = [token.casefold() for token in tokens[1:]]
 
-    diagnostics: list[str] = []
-    compared = 0
+    expected_by_instance: dict[str, list[str]] = {}
     for component in module.get("components", []):
         name = str(component.get("name") or component.get("id") or "").strip()
         if not name:
             continue
-        actual = actual_instances.get(name.casefold())
-        if actual is None:
-            diagnostics.append(f"reference netlist is missing instance {name}")
-            continue
-        expected_nodes = [
+        expected_by_instance[name] = [
             str(pin.get("net") or pin.get("net_id") or "").strip().casefold()
             for pin in component.get("pins", [])
             if str(pin.get("net") or pin.get("net_id") or "").strip()
         ]
-        actual_nodes = actual[:len(expected_nodes)]
-        compared += 1
-        if sorted(actual_nodes) != sorted(expected_nodes):
-            diagnostics.append(
-                f"{name} connectivity differs: expected {expected_nodes}, reference has {actual_nodes}"
-            )
 
-    expected_ports = sorted(
+    # Trim actual nodes to expected pin arity before order-sensitive compare.
+    trimmed_actual: dict[str, list[str]] = {}
+    for name, expected in expected_by_instance.items():
+        actual = actual_instances.get(name.casefold())
+        if actual is None:
+            continue
+        trimmed_actual[name.casefold()] = actual[: len(expected)]
+
+    comparison = compare_ordered_pin_nets(expected_by_instance, trimmed_actual)
+    diagnostics = list(comparison["diagnostics"])
+
+    expected_ports = [
         str(port.get("net") or port.get("name") or "").strip().casefold()
         for port in module.get("ports", [])
         if str(port.get("net") or port.get("name") or "").strip()
-    )
-    if subcircuit_ports is not None and sorted(subcircuit_ports) != expected_ports:
+    ]
+    if subcircuit_ports is not None and subcircuit_ports != expected_ports:
         diagnostics.append(
-            f"subcircuit ports differ: expected {expected_ports}, reference has {sorted(subcircuit_ports)}"
+            f"subcircuit ports differ: expected {expected_ports}, reference has {subcircuit_ports}"
         )
     return {
         "ok": not diagnostics,
         "source_connectivity_hash": connectivity_hash(module),
-        "compared_instance_count": compared,
+        "compared_instance_count": comparison["compared_instance_count"],
         "expected_instance_count": len(module.get("components", [])),
         "diagnostics": diagnostics,
     }
@@ -271,6 +259,8 @@ def _component_symbol(component: dict[str, Any]) -> str:
         "q": "devices/npn.sym",
         "v": "devices/vsource.sym",
         "i": "devices/isource.sym",
+        "module": "devices/subcircuit.sym",
+        "block": "devices/subcircuit.sym",
     }
     return standard.get(component_type, "devices/subcircuit.sym")
 
@@ -296,14 +286,23 @@ def render_xschem(module: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         symbol = _component_symbol(component)
         name = _safe_property(component.get("name") or component.get("id"))
         value = _safe_property(component.get("value"))
+        props = [
+            f'name="{name}"',
+            f'value="{value}"',
+            f'ACTOVIQ_ID="{_safe_property(stable_id)}"',
+        ]
+        if str(component.get("type") or "").upper() == "MODULE":
+            child_id = str((component.get("module_ref") or {}).get("module_id") or component.get("value") or "")
+            props.append(f'ACTOVIQ_MODULE_REF="{_safe_property(child_id)}"')
+            props.append(f'ACTOVIQ_SUBCKT="{_safe_property(spice_name_for_subckt(child_id))}"')
         lines.append(
-            f'C {{{symbol}}} {x:.3f} {y:.3f} {rotation} 0 '
-            f'{{name="{name}" value="{value}" ACTOVIQ_ID="{_safe_property(stable_id)}"}}'
+            f'C {{{symbol}}} {x:.3f} {y:.3f} {rotation} 0 {{{" ".join(props)}}}'
         )
         components[stable_id] = {
             "component_id": component.get("id"),
             "symbol": symbol,
             "type": component.get("type"),
+            "module_ref": (component.get("module_ref") or {}).get("module_id"),
         }
     wires: dict[str, Any] = {}
     for wire in module.get("wires", []):

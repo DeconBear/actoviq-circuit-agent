@@ -695,7 +695,7 @@ function ComponentSymbol({ component, selected, hovered }: { component: CircuitC
           {component.name}
         </text>
       ) : null}
-      {component.type !== 'BLOCK' && component.type !== 'GND' ? (
+      {component.type !== 'BLOCK' && component.type !== 'MODULE' && component.type !== 'GND' ? (
         <text
           x={labels.value.x}
           y={labels.value.y}
@@ -752,7 +752,7 @@ function PlaceGhostSymbol({ component }: { component: CircuitComponent }) {
           {component.name}
         </text>
       ) : null}
-      {component.type !== 'BLOCK' && component.type !== 'GND' ? (
+      {component.type !== 'BLOCK' && component.type !== 'MODULE' && component.type !== 'GND' ? (
         <text
           x={labels.value.x}
           y={labels.value.y}
@@ -888,7 +888,7 @@ function componentLabelPositions(component: CircuitComponent): {
       value: { x: x + 8, y: y + 78, anchor: 'middle' },
     };
   }
-  if (component.type === 'BLOCK') {
+  if ((component.type === 'BLOCK' || component.type === 'MODULE')) {
     const { height } = blockBodySize(component);
     return {
       name: { x, y: y - height / 2 - 18, anchor: 'middle' },
@@ -924,7 +924,7 @@ function displayComponentValue(value: string | undefined): string {
 }
 
 function LeadLines({ component }: { component: CircuitComponent }) {
-  if (component.type === 'BLOCK') {
+  if ((component.type === 'BLOCK' || component.type === 'MODULE')) {
     return (
       <g stroke={SYMBOL_COLOR} strokeWidth="2.2" pointerEvents="none" data-testid="schematic-block-leads">
         {component.pins.map((pin, index) => {
@@ -990,7 +990,7 @@ function SymbolBody({ component }: { component: CircuitComponent }) {
       </g>
     );
   }
-  if (component.type === 'BLOCK') {
+  if ((component.type === 'BLOCK' || component.type === 'MODULE')) {
     const { width, height } = blockBodySize(component);
     return (
       <g pointerEvents="none" data-testid="schematic-symbol-body" data-symbol-kind="block">
