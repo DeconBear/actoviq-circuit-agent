@@ -1,0 +1,120 @@
+/**
+ * M0-03 performance baseline: measure `createSchematicDocument` projection
+ * time and memory for generated 100- and 500-component modules.
+ *
+ * This is the Node.js-only part of the performance baseline. It does not
+ * launch Electron; it measures the pure projection that the editor and the
+ * export path share. GUI-side timings (first paint, pan/zoom, drag, save)
+ * are captured by scripts/e2e/schematic-editor-perf-baseline.mjs.
+ *
+ * Two modes are measured per size:
+ *   - autoLayout=false: pure projection (routing + net labels), no layout pass
+ *   - autoLayout=true:  full projection including the auto-layout pass
+ * The auto-layout pass on large modules is a known M6 target; if it exceeds
+ * the 30s budget it is recorded as a timeout rather than blocking the run.
+ *
+ * Run:  npx tsx scripts/schematic-perf-baseline.ts
+ */
+import { performance } from 'node:perf_hooks';
+
+import type { CircuitComponent, CircuitModule, CircuitPort } from '../renderer/src/types';
+import { createSchematicDocument } from '../renderer/src/schematic/schematicDocument';
+
+const defaultPorts: CircuitPort[] = [
+  { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+  { id: 'vdd', name: 'VDD', direction: 'input', signal_type: 'power', net: 'vdd' },
+  { id: 'output', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+  { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+];
+
+function generateLargeModule(componentCount: number): CircuitModule {
+  const components: CircuitComponent[] = [];
+  const cols = Math.ceil(Math.sqrt(componentCount));
+  for (let i = 0; i < componentCount; i += 1) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    components.push({
+      id: `r${i}`,
+      type: 'R',
+      name: `R${i}`,
+      value: '1k',
+      position: { x: 60 + col * 80, y: 60 + row * 80 },
+      rotation: 0,
+      pins: [
+        { id: 'a', name: '1', net: `n${i}` },
+        { id: 'b', name: '2', net: `n${i + 1}` },
+      ],
+    });
+  }
+  return {
+    schema: 'actoviq.module.v2',
+    module_id: `perf_${componentCount}`,
+    name: `Perf ${componentCount}`,
+    revision: 0,
+    ports: defaultPorts,
+    components,
+    wires: [],
+    annotations: [],
+  };
+}
+
+interface ProjectionResult {
+  timings: number[];
+  medianMs: number;
+  wireCount: number;
+  netLabelCount: number;
+  heapUsedMb: number;
+}
+
+function measureProjection(module: CircuitModule, autoLayout: boolean, runs = 3): ProjectionResult {
+  // Warm-up run (JIT, caches).
+  createSchematicDocument(module, { autoLayout });
+  const timings: number[] = [];
+  for (let i = 0; i < runs; i += 1) {
+    const start = performance.now();
+    const doc = createSchematicDocument(module, { autoLayout });
+    timings.push(performance.now() - start);
+    if (i === runs - 1) {
+      const heap = process.memoryUsage();
+      return {
+        timings,
+        medianMs: timings.slice().sort((a, b) => a - b)[Math.floor(runs / 2)],
+        wireCount: doc.wires.length,
+        netLabelCount: doc.netLabels.length,
+        heapUsedMb: Math.round((heap.heapUsed / 1024 / 1024) * 10) / 10,
+      };
+    }
+  }
+  throw new Error('unreachable');
+}
+
+const sizes = [100, 500];
+const results: Array<Record<string, unknown>> = [];
+for (const size of sizes) {
+  const module = generateLargeModule(size);
+  const noLayout = measureProjection(module, false);
+  console.log(`[perf] ${size} components (autoLayout=false): median=${noLayout.medianMs.toFixed(1)}ms, wires=${noLayout.wireCount}, heapUsed=${noLayout.heapUsedMb}MB`);
+  const entry: Record<string, unknown> = {
+    componentCount: size,
+    noLayoutMedianMs: noLayout.medianMs,
+    noLayoutWireCount: noLayout.wireCount,
+    noLayoutHeapMb: noLayout.heapUsedMb,
+  };
+  // autoLayout=true on 500 components blocks the event loop well past any
+  // reasonable budget (the 30s setTimeout cannot fire while the synchronous
+  // layout pass holds the thread). Measure it only for 100; for 500 we
+  // record the known gap honestly.
+  if (size <= 100) {
+    const withLayout = measureProjection(module, true);
+    entry.withLayoutMedianMs = withLayout.medianMs;
+    entry.withLayoutWireCount = withLayout.wireCount;
+    entry.withLayoutHeapMb = withLayout.heapUsedMb;
+    console.log(`[perf] ${size} components (autoLayout=true): median=${withLayout.medianMs.toFixed(1)}ms, wires=${withLayout.wireCount}, heapUsed=${withLayout.heapUsedMb}MB`);
+  } else {
+    entry.withLayoutMedianMs = 'skipped (synchronous layout blocks event loop; M6 target)';
+    console.log(`[perf] ${size} components (autoLayout=true): SKIPPED - synchronous layout would block; M6 incremental projection needed`);
+  }
+  results.push(entry);
+}
+
+console.log(JSON.stringify({ ok: true, baseline: 'M0-03 projection', results }, null, 2));
