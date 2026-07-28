@@ -136,6 +136,116 @@ check('result includes topology diagnostics', () => {
   assert.equal(result.ok, true);
 });
 
+// === M2-01: wire, junction, net, port, module-instance, metadata ops ===
+
+check('create_wire adds stored wire and produces delete inverse', () => {
+  const module = makeModule([makeComponent('r1')]);
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'create_wire', wire_id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in' },
+  ]));
+  assert.equal(result.module.wires?.length, 1);
+  assert.equal(result.module.wires?.[0]?.source, 'stored');
+  assert.equal(result.inverse[0]?.op, 'delete_entities');
+});
+
+check('edit_wire_path replaces points and inverse restores', () => {
+  const module = makeModule();
+  module.wires = [{ id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in', source: 'stored' }];
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'edit_wire_path', wire_id: 'w1', points: [{ x: 0, y: 0 }, { x: 200, y: 50 }] },
+  ]));
+  assert.deepEqual(result.module.wires?.[0]?.points?.[1], { x: 200, y: 50 });
+  assert.equal(result.inverse[0]?.op, 'edit_wire_path');
+});
+
+check('split_wire inserts point and inverse removes it', () => {
+  const module = makeModule();
+  module.wires = [{ id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in', source: 'stored' }];
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'split_wire', wire_id: 'w1', point: { x: 50, y: 0 } },
+  ]));
+  assert.equal(result.module.wires?.[0]?.points?.length, 3);
+  assert.equal(result.inverse[0]?.op, 'edit_wire_path');
+});
+
+check('join_wires merges two wires and inverse restores both', () => {
+  const module = makeModule();
+  module.wires = [
+    { id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in', source: 'stored' },
+    { id: 'w2', points: [{ x: 100, y: 0 }, { x: 200, y: 0 }], net: 'in', source: 'stored' },
+  ];
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'join_wires', wire_ids: ['w1', 'w2'] },
+  ]));
+  assert.equal(result.module.wires?.length, 1);
+  assert.equal(result.module.wires?.[0]?.id, 'w1');
+  assert.equal(result.module.wires?.[0]?.points?.length, 3);
+});
+
+check('rename_net updates pins, ports, and wires; inverse restores', () => {
+  const module = makeModule([makeComponent('r1')]);
+  module.wires = [{ id: 'w1', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], net: 'in', source: 'stored' }];
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'rename_net', old_net: 'in', new_net: 'input' },
+  ]));
+  assert.equal(result.module.components[0]!.pins[0]!.net, 'input');
+  assert.equal(result.module.ports[0]!.net, 'input');
+  assert.equal(result.module.wires?.[0]?.net, 'input');
+  assert.deepEqual(result.inverse[0], { op: 'rename_net', old_net: 'input', new_net: 'in' });
+});
+
+check('upsert_port adds new port and inverse removes it', () => {
+  const module = makeModule();
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'upsert_port', port: { id: 'out', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' } },
+  ]));
+  assert.equal(result.module.ports.length, 2);
+  assert.equal(result.module.ports[1]!.id, 'out');
+});
+
+check('upsert_port updates existing port and inverse restores', () => {
+  const module = makeModule();
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'upsert_port', port: { id: 'in', name: 'INPUT', direction: 'input', signal_type: 'analog', net: 'in' } },
+  ]));
+  assert.equal(result.module.ports[0]!.name, 'INPUT');
+  assert.equal(result.inverse[0]?.op, 'upsert_port');
+});
+
+check('place_module_instance adds MODULE component with module_ref', () => {
+  const module = makeModule();
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'place_module_instance', component_id: 'm1', module_ref: { module_id: 'amp', revision: 2 }, position: { x: 200, y: 200 } },
+  ]));
+  assert.equal(result.module.components.length, 1);
+  assert.equal(result.module.components[0]!.type, 'MODULE');
+  assert.equal(result.module.components[0]!.module_ref?.module_id, 'amp');
+  assert.equal(result.module.components[0]!.module_ref?.revision, 2);
+});
+
+check('set_module_metadata updates name and inverse restores', () => {
+  const module = makeModule();
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'set_module_metadata', name: 'Renamed' },
+  ]));
+  assert.equal(result.module.name, 'Renamed');
+  assert.equal(result.inverse[0]?.op, 'set_module_metadata');
+});
+
+check('delete_entities also removes wires by id', () => {
+  const module = makeModule([makeComponent('r1')]);
+  module.wires = [
+    { id: 'w1', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], net: 'in', source: 'stored' },
+    { id: 'w2', points: [{ x: 0, y: 0 }, { x: 20, y: 0 }], net: 'out', source: 'stored' },
+  ];
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'delete_entities', entity_ids: ['w1'] },
+  ]));
+  assert.equal(result.module.wires?.length, 1);
+  assert.equal(result.module.wires?.[0]?.id, 'w2');
+  assert.equal(result.inverse[0]?.op, 'create_wire');
+});
+
 // === SelectionSet ===
 
 check('empty selection is empty', () => {

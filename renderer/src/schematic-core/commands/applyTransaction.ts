@@ -97,10 +97,122 @@ function applyOperation(module: CircuitModule, operation: TransactionOperation):
         if (operation.entity_ids.includes(c.id)) { deleted.push(c); return false; }
         return true;
       });
-      return { module: next, inverse: deleted.map((c) => ({ op: 'place_component', component: clone(c) })), affected: deleted.map((c) => c.id) };
+      const deletedWires = (next.wires ?? []).filter((w) => operation.entity_ids.includes(w.id));
+      next.wires = (next.wires ?? []).filter((w) => !operation.entity_ids.includes(w.id));
+      const inverse: TransactionOperation[] = [
+        ...deleted.map((c) => ({ op: 'place_component' as const, component: clone(c) })),
+        ...deletedWires.map((w) => ({ op: 'create_wire' as const, wire_id: w.id, points: clone(w.points), net: w.net ?? '0', from: w.from, to: w.to })),
+      ];
+      return { module: next, inverse, affected: operation.entity_ids };
+    }
+    case 'create_wire': {
+      const next = clone(module);
+      const wire = { id: operation.wire_id, points: clone(operation.points), from: undefined, to: undefined, net: operation.net, source: 'stored' as const };
+      next.wires = [...(next.wires ?? []), wire];
+      return { module: next, inverse: [{ op: 'delete_entities', entity_ids: [operation.wire_id] }], affected: [operation.wire_id] };
+    }
+    case 'edit_wire_path': {
+      const next = clone(module);
+      const wire = (next.wires ?? []).find((w) => w.id === operation.wire_id);
+      if (!wire) throw new Error(`edit_wire_path: wire ${operation.wire_id} not found`);
+      const beforePoints = clone(wire.points);
+      wire.points = clone(operation.points);
+      return { module: next, inverse: [{ op: 'edit_wire_path', wire_id: operation.wire_id, points: beforePoints }], affected: [operation.wire_id] };
+    }
+    case 'split_wire': {
+      const next = clone(module);
+      const wire = (next.wires ?? []).find((w) => w.id === operation.wire_id);
+      if (!wire) throw new Error(`split_wire: wire ${operation.wire_id} not found`);
+      const points = wire.points;
+      // Find the segment whose bounding box contains the split point, then
+      // insert the point at that position. M3 will add junction-aware splitting.
+      let splitIdx = -1;
+      for (let i = 1; i < points.length; i += 1) {
+        const a = points[i - 1]!;
+        const b = points[i]!;
+        const withinX = operation.point.x >= Math.min(a.x, b.x) - 0.001 && operation.point.x <= Math.max(a.x, b.x) + 0.001;
+        const withinY = operation.point.y >= Math.min(a.y, b.y) - 0.001 && operation.point.y <= Math.max(a.y, b.y) + 0.001;
+        if (withinX && withinY) { splitIdx = i; break; }
+      }
+      if (splitIdx < 0) throw new Error(`split_wire: point not on wire ${operation.wire_id}`);
+      const beforePoints = clone(points);
+      points.splice(splitIdx, 0, clone(operation.point));
+      return { module: next, inverse: [{ op: 'edit_wire_path', wire_id: operation.wire_id, points: beforePoints }], affected: [operation.wire_id] };
+    }
+    case 'join_wires': {
+      const next = clone(module);
+      const firstId = operation.wire_ids[0];
+      const secondId = operation.wire_ids[1];
+      if (!firstId || !secondId) throw new Error('join_wires: requires at least two wire ids');
+      const first = (next.wires ?? []).find((w) => w.id === firstId);
+      const second = (next.wires ?? []).find((w) => w.id === secondId);
+      if (!first || !second) throw new Error(`join_wires: wire not found`);
+      const restIds = operation.wire_ids.slice(2);
+      const beforeFirst = clone(first.points);
+      const beforeSecond = clone(second.points);
+      first.points = [...first.points, ...second.points.slice(1)];
+      next.wires = (next.wires ?? []).filter((w) => w.id !== secondId && !restIds.includes(w.id));
+      return { module: next, inverse: [
+        { op: 'edit_wire_path', wire_id: firstId, points: beforeFirst },
+        { op: 'create_wire', wire_id: secondId, points: beforeSecond, net: second.net ?? '0' },
+      ], affected: [firstId, secondId] };
+    }
+    case 'upsert_junction': {
+      // Junctions are represented as wire endpoints with junction_id; M3 will
+      // add first-class junction entities. For now this is a no-op marker.
+      return { module: clone(module), inverse: [{ op: 'upsert_junction', junction_id: operation.junction_id, point: operation.point, net: operation.net }], affected: [operation.junction_id] };
+    }
+    case 'rename_net': {
+      const next = clone(module);
+      const affected: string[] = [];
+      for (const component of next.components) {
+        for (const pin of component.pins) {
+          if (pin.net === operation.old_net) { pin.net = operation.new_net; affected.push(`${component.id}.${pin.id}`); }
+        }
+      }
+      for (const port of next.ports) {
+        if (port.net === operation.old_net) { port.net = operation.new_net; affected.push(`port:${port.id}`); }
+      }
+      for (const wire of (next.wires ?? [])) {
+        if (wire.net === operation.old_net) { wire.net = operation.new_net; affected.push(wire.id); }
+      }
+      return { module: next, inverse: [{ op: 'rename_net', old_net: operation.new_net, new_net: operation.old_net }], affected };
+    }
+    case 'upsert_port': {
+      const next = clone(module);
+      const index = next.ports.findIndex((p) => p.id === operation.port.id);
+      if (index >= 0) {
+        const before = clone(next.ports[index]!);
+        next.ports[index] = { ...operation.port };
+        return { module: next, inverse: [{ op: 'upsert_port', port: before }], affected: [operation.port.id] };
+      }
+      next.ports = [...next.ports, { ...operation.port }];
+      return { module: next, inverse: [{ op: 'delete_entities', entity_ids: [`port:${operation.port.id}`] }], affected: [operation.port.id] };
+    }
+    case 'place_module_instance': {
+      const next = clone(module);
+      const component: CircuitComponent = {
+        id: operation.component_id,
+        type: 'MODULE',
+        name: operation.component_id.toUpperCase(),
+        value: operation.module_ref.module_id,
+        position: clone(operation.position),
+        rotation: operation.rotation ?? 0,
+        pins: [],
+        module_ref: { module_id: operation.module_ref.module_id, revision: operation.module_ref.revision },
+      };
+      next.components = [...next.components, component];
+      return { module: next, inverse: [{ op: 'delete_entities', entity_ids: [operation.component_id] }], affected: [operation.component_id] };
+    }
+    case 'set_module_metadata': {
+      const next = clone(module);
+      const inverse: TransactionOperation = { op: 'set_module_metadata' };
+      if (operation.name !== undefined) { inverse.name = next.name; next.name = operation.name; }
+      if (operation.domain !== undefined) { inverse.domain = next.domain; next.domain = operation.domain; }
+      return { module: next, inverse: [inverse], affected: [] };
     }
     default:
-      throw new Error(`applyOperation: op '${operation.op}' not implemented in M1-03; deferred to M2`);
+      throw new Error(`applyOperation: op '${(operation as { op: string }).op}' not implemented`);
   }
 }
 
