@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/schematic-document.schema.json",
+  "title": "Actoviq Schematic Document Projection",
+  "description": "Serializable form of actoviq.schematic-document.v1, the projection boundary between actoviq.module.v2 (truth) and every renderer (interactive SVG, netlistsvg export). See ADR-0002. Map<string, Position> and Set<string> from the TypeScript SchematicDocument are serialized as object and array respectively.",
+  "type": "object",
+  "required": [
+    "schema",
+    "moduleId",
+    "moduleName",
+    "module",
+    "portPositions",
+    "connectedPortIds",
+    "netLabels",
+    "wires",
+    "bounds",
+    "viewBox"
+  ],
+  "properties": {
+    "schema": { "const": "actoviq.schematic-document.v1" },
+    "moduleId": { "type": "string", "minLength": 1 },
+    "moduleName": { "type": "string", "minLength": 1 },
+    "module": { "$ref": "module.schema.json" },
+    "portPositions": {
+      "type": "object",
+      "description": "Map<portId, Position> serialized as an object. Keys are port ids; values are world-space pin anchor positions projected by the layout.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["x", "y"],
+        "properties": {
+          "x": { "type": "number" },
+          "y": { "type": "number" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "connectedPortIds": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Set<portId> serialized as an array. Ports whose id appears here have at least one attached wire."
+    },
+    "netLabels": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/netLabel" }
+    },
+    "wires": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/wire" }
+    },
+    "bounds": { "$ref": "#/$defs/bounds" },
+    "viewBox": { "$ref": "#/$defs/bounds" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "bounds": {
+      "type": "object",
+      "required": ["minX", "minY", "maxX", "maxY"],
+      "properties": {
+        "minX": { "type": "number" },
+        "minY": { "type": "number" },
+        "maxX": { "type": "number" },
+        "maxY": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "position": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "wireEndpoint": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "component_id": { "type": "string", "minLength": 1 },
+        "pin_id": { "type": "string", "minLength": 1 },
+        "port_id": { "type": "string", "minLength": 1 },
+        "junction_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "wire": {
+      "type": "object",
+      "required": ["id", "points", "net"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/position" }
+        },
+        "from": { "$ref": "#/$defs/wireEndpoint" },
+        "to": { "$ref": "#/$defs/wireEndpoint" },
+        "net": { "type": "string", "minLength": 1 },
+        "net_id": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["stored", "net"] }
+      },
+      "additionalProperties": false
+    },
+    "netLabel": {
+      "type": "object",
+      "required": ["id", "kind", "net", "name", "position", "endpoint"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["power", "ground", "signal"] },
+        "net": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "position": { "$ref": "#/$defs/position" },
+        "endpoint": { "$ref": "#/$defs/wireEndpoint" },
+        "side": { "enum": ["left", "right", "top", "bottom"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

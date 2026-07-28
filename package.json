@@ -44,6 +44,7 @@
     "test:unit": "tsx src/tests/runTests.ts",
     "test:schematic-document": "tsx scripts/schematic-document-regression.ts",
     "test:schematic-golden": "tsx scripts/schematic-document-golden.ts",
+    "test:schematic-schema": "tsx scripts/schematic-document-serialize.ts | python scripts/schematic-document-schema-validate.py",
     "test:schematic-perf": "tsx scripts/schematic-perf-baseline.ts",
     "test:e2e:electron": "npm run build:src && npm run build:electron && node scripts/playwright-electron-smoke.mjs",
     "test:e2e:agent-flow": "npm run build:src && npm run build:electron && node scripts/playwright-agent-flow.mjs",

@@ -87,6 +87,47 @@ export interface SchematicDocumentOptions {
   autoLayout?: boolean;
 }
 
+/**
+ * Serializable projection conforming to
+ * `skills/circuit-design-ngspice/schemas/schematic-document.schema.json`.
+ *
+ * The TypeScript `SchematicDocument` uses `Map` and `Set` for efficient
+ * lookup during interaction; this serializer turns them into plain JSON
+ * structures so the projection can be validated against the schema and
+ * shared with the Python/netlistsvg adapter. See ADR-0002.
+ */
+export interface SerializableSchematicDocument {
+  schema: 'actoviq.schematic-document.v1';
+  moduleId: string;
+  moduleName: string;
+  module: CircuitModule;
+  portPositions: Record<string, CircuitPosition>;
+  connectedPortIds: string[];
+  netLabels: SchematicNetLabel[];
+  wires: CircuitWire[];
+  bounds: SchematicBounds;
+  viewBox: SchematicBounds;
+}
+
+export function serializeSchematicDocument(document: SchematicDocument): SerializableSchematicDocument {
+  const portPositions: Record<string, CircuitPosition> = {};
+  for (const [id, position] of document.portPositions) {
+    portPositions[id] = position;
+  }
+  return {
+    schema: 'actoviq.schematic-document.v1',
+    moduleId: document.moduleId,
+    moduleName: document.moduleName,
+    module: document.module,
+    portPositions,
+    connectedPortIds: [...document.connectedPortIds],
+    netLabels: document.netLabels,
+    wires: document.wires,
+    bounds: document.bounds,
+    viewBox: document.viewBox,
+  };
+}
+
 export interface WireTopologyIssue {
   code:
     | 'invalid_wire'
