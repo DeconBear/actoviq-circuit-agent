@@ -80,11 +80,13 @@ export function parseComponentValue(
       for (const token of tokens.slice(first && !first.includes('=') ? 1 : 0)) {
         const match = KV_RE.exec(token);
         if (!match) continue;
-        const key = match[1].toLowerCase();
-        if (key === 'w') next.w = match[2];
-        else if (key === 'l') next.l = match[2];
-        else if (key === 'm') next.m = match[2];
-        else if (key === 'nf') next.nf = match[2];
+        const key = (match[1] ?? '').toLowerCase();
+        const raw = match[2];
+        if (!key || raw === undefined) continue;
+        if (key === 'w') next.w = raw;
+        else if (key === 'l') next.l = raw;
+        else if (key === 'm') next.m = raw;
+        else if (key === 'nf') next.nf = raw;
       }
       if (!next.model) next.model = 'NMOS';
       return next;
@@ -93,7 +95,7 @@ export function parseComponentValue(
     case 'I': {
       const pulse = /^PULSE\s*\((.*)\)\s*$/i.exec(text);
       if (pulse) {
-        const args = pulse[1].trim().split(/\s+/).filter(Boolean);
+        const args = (pulse[1] ?? '').trim().split(/\s+/).filter(Boolean);
         return {
           pulse_v1: args[0] || '0',
           pulse_v2: args[1] || '1',
@@ -105,7 +107,7 @@ export function parseComponentValue(
         };
       }
       const dc = /^DC\s+(.+)$/i.exec(text);
-      if (dc) return { dc: dc[1].trim() };
+      if (dc) return { dc: (dc[1] ?? '').trim() };
       return { dc: text };
     }
     default:

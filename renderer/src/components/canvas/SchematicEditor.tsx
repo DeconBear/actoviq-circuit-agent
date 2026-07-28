@@ -2046,8 +2046,8 @@ export function SchematicEditor({
                   component={selectedComponent}
                   busy={busy}
                   pdkCatalog={pdkDeviceCatalog}
-                  fieldLabelStyle={styles.fieldLabel}
-                  inputStyle={styles.input}
+                  fieldLabelStyle={styles.fieldLabel ?? {}}
+                  inputStyle={styles.input ?? {}}
                   hintStyle={styles.paramHint}
                   onPatch={updateSelectedComponent}
                 />
