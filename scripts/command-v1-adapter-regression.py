@@ -77,6 +77,16 @@ def main() -> int:
         summary = run_skill(["summary", "--project-root", project_root])
         assert summary["project"]["revision"] > base_revision, "v1 op did not advance revision"
 
+        # M2-05: revision metadata must include operation_summary and affected_entities.
+        revision_root = Path(project_root) / "revisions" / f"{summary['project']['revision']:06d}"
+        metadata = json.loads((revision_root / "metadata.json").read_text(encoding="utf-8"))
+        assert "operation_summary" in metadata, "revision metadata missing operation_summary"
+        assert "affected_entities" in metadata, "revision metadata missing affected_entities"
+        assert metadata["operation_summary"].get("set_module_schematic") == 1, \
+            f"operation_summary missing set_module_schematic: {metadata['operation_summary']}"
+        assert "filter" in metadata["affected_entities"], \
+            f"filter not in affected_entities: {metadata['affected_entities']}"
+
         # The v2 schema must reject this command (no v2 op named set_module_schematic).
         import jsonschema
         v2_schema_path = ROOT / "skills" / "circuit-design-ngspice" / "schemas" / "command.v2.schema.json"

@@ -939,6 +939,26 @@ def snapshot_revision(root: Path, project: dict[str, Any], modules: dict[str, di
                 read_json(overrides_path),
             )
     atomic_write_json(revision_root / "command.json", command)
+    # M2-05: derive an operation summary and affected-entity list from the
+    # command so revision history can show what each revision changed without
+    # callers parsing the full command. Works for both v1 and v2 commands.
+    operations = command.get("operations", [])
+    operation_summary: dict[str, int] = {}
+    affected_entities: list[str] = []
+    for op in operations:
+        op_name = op.get("op", "unknown")
+        operation_summary[op_name] = operation_summary.get(op_name, 0) + 1
+        for key in ("component_id", "wire_id", "module_id", "junction_id"):
+            value = op.get(key)
+            if isinstance(value, str):
+                affected_entities.append(value)
+        for key in ("entity_ids", "wire_ids"):
+            for value in op.get(key, []) or []:
+                if isinstance(value, str):
+                    affected_entities.append(value)
+        component = op.get("component")
+        if isinstance(component, dict) and isinstance(component.get("id"), str):
+            affected_entities.append(component["id"])
     atomic_write_json(revision_root / "metadata.json", {
         "schema": "actoviq.revision.v1",
         "revision": next_revision,
@@ -946,6 +966,9 @@ def snapshot_revision(root: Path, project: dict[str, Any], modules: dict[str, di
         "actor": command.get("actor", "unknown"),
         "message": command.get("message", ""),
         "created_at": utc_now(),
+        "operation_summary": operation_summary,
+        "affected_entities": sorted(set(affected_entities)),
+        "command_schema": command.get("schema", "actoviq.command.v1"),
     })
     return revision_root
 
