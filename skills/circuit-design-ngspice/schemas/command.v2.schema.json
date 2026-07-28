@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/command.v2.schema.json",
+  "title": "Actoviq Circuit Command v2",
+  "description": "Discriminated transaction schema for actoviq.command.v2. Each operation is a oneOf branch with its own required fields, so schema validation rejects missing or extraneous fields per operation type. v1 remains readable via the adapter at command.schema.json; project history is not migrated in bulk. See ADR-0003.",
+  "type": "object",
+  "required": ["schema", "command_id", "actor", "project_id", "module_id", "base_revision", "operations"],
+  "properties": {
+    "schema": { "const": "actoviq.command.v2" },
+    "command_id": { "type": "string", "minLength": 1 },
+    "actor": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "module_id": { "type": "string", "minLength": 1 },
+    "base_revision": { "type": "integer", "minimum": 0 },
+    "expected_module_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Module revision precondition; a stale value must be rejected by the reducer."
+    },
+    "message": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "string",
+      "description": "Origin of the command, e.g. 'gui', 'agent', 'xschem-bridge'."
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/operation" }
+    },
+    "inverse": {
+      "type": "array",
+      "description": "Computed inverse operations; populated by the reducer so undo works across save boundaries (ADR-0004).",
+      "items": { "$ref": "#/$defs/operation" }
+    },
+    "affected_entities": {
+      "type": "array",
+      "description": "Entity ids touched by this transaction, used to scope rebuilds.",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "operation": {
+      "oneOf": [
+        { "$ref": "#/$defs/place_component" },
+        { "$ref": "#/$defs/update_component" },
+        { "$ref": "#/$defs/move_entities" },
+        { "$ref": "#/$defs/delete_entities" },
+        { "$ref": "#/$defs/create_wire" },
+        { "$ref": "#/$defs/edit_wire_path" },
+        { "$ref": "#/$defs/split_wire" },
+        { "$ref": "#/$defs/join_wires" },
+        { "$ref": "#/$defs/upsert_junction" },
+        { "$ref": "#/$defs/rename_net" },
+        { "$ref": "#/$defs/upsert_port" },
+        { "$ref": "#/$defs/place_module_instance" },
+        { "$ref": "#/$defs/set_module_metadata" }
+      ]
+    },
+    "position": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": { "x": { "type": "number" }, "y": { "type": "number" } },
+      "additionalProperties": false
+    },
+    "place_component": {
+      "type": "object",
+      "required": ["op", "component"],
+      "properties": {
+        "op": { "const": "place_component" },
+        "component": {
+          "type": "object",
+          "required": ["id", "type", "name", "value", "position", "rotation", "pins"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "type": "string", "minLength": 1 },
+            "name": { "type": "string", "minLength": 1 },
+            "value": { "type": "string", "minLength": 1 },
+            "position": { "$ref": "#/$defs/position" },
+            "rotation": { "type": "number" },
+            "pins": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+            "block": { "type": "object" },
+            "module_ref": { "type": "object" },
+            "parameters": { "type": "object" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "update_component": {
+      "type": "object",
+      "required": ["op", "component_id"],
+      "properties": {
+        "op": { "const": "update_component" },
+        "component_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "value": { "type": "string" },
+        "position": { "$ref": "#/$defs/position" },
+        "rotation": { "type": "number" },
+        "parameters": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "move_entities": {
+      "type": "object",
+      "required": ["op", "entity_ids", "delta", "mode"],
+      "properties": {
+        "op": { "const": "move_entities" },
+        "entity_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "delta": { "$ref": "#/$defs/position" },
+        "mode": { "enum": ["free", "stretch"] }
+      },
+      "additionalProperties": false
+    },
+    "delete_entities": {
+      "type": "object",
+      "required": ["op", "entity_ids"],
+      "properties": {
+        "op": { "const": "delete_entities" },
+        "entity_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "wire_endpoint": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "component_id": { "type": "string", "minLength": 1 },
+        "pin_id": { "type": "string", "minLength": 1 },
+        "port_id": { "type": "string", "minLength": 1 },
+        "junction_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "create_wire": {
+      "type": "object",
+      "required": ["op", "wire_id", "points", "net"],
+      "properties": {
+        "op": { "const": "create_wire" },
+        "wire_id": { "type": "string", "minLength": 1 },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/position" }
+        },
+        "from": { "$ref": "#/$defs/wire_endpoint" },
+        "to": { "$ref": "#/$defs/wire_endpoint" },
+        "net": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "edit_wire_path": {
+      "type": "object",
+      "required": ["op", "wire_id", "points"],
+      "properties": {
+        "op": { "const": "edit_wire_path" },
+        "wire_id": { "type": "string", "minLength": 1 },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/position" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "split_wire": {
+      "type": "object",
+      "required": ["op", "wire_id", "point"],
+      "properties": {
+        "op": { "const": "split_wire" },
+        "wire_id": { "type": "string", "minLength": 1 },
+        "point": { "$ref": "#/$defs/position" },
+        "junction_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "join_wires": {
+      "type": "object",
+      "required": ["op", "wire_ids"],
+      "properties": {
+        "op": { "const": "join_wires" },
+        "wire_ids": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "upsert_junction": {
+      "type": "object",
+      "required": ["op", "junction_id", "point", "net"],
+      "properties": {
+        "op": { "const": "upsert_junction" },
+        "junction_id": { "type": "string", "minLength": 1 },
+        "point": { "$ref": "#/$defs/position" },
+        "net": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "rename_net": {
+      "type": "object",
+      "required": ["op", "old_net", "new_net"],
+      "properties": {
+        "op": { "const": "rename_net" },
+        "old_net": { "type": "string", "minLength": 1 },
+        "new_net": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "upsert_port": {
+      "type": "object",
+      "required": ["op", "port"],
+      "properties": {
+        "op": { "const": "upsert_port" },
+        "port": {
+          "type": "object",
+          "required": ["id", "name", "direction", "signal_type", "net"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "name": { "type": "string", "minLength": 1 },
+            "direction": { "enum": ["input", "output", "bidirectional"] },
+            "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
+            "net": { "type": "string", "minLength": 1 },
+            "position": { "$ref": "#/$defs/position" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "place_module_instance": {
+      "type": "object",
+      "required": ["op", "component_id", "module_ref", "position"],
+      "properties": {
+        "op": { "const": "place_module_instance" },
+        "component_id": { "type": "string", "minLength": 1 },
+        "module_ref": {
+          "type": "object",
+          "required": ["module_id"],
+          "properties": {
+            "module_id": { "type": "string", "minLength": 1 },
+            "revision": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "position": { "$ref": "#/$defs/position" },
+        "rotation": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "set_module_metadata": {
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": { "const": "set_module_metadata" },
+        "name": { "type": "string" },
+        "domain": { "enum": ["analog", "digital", "mixed_boundary", "testbench"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}
