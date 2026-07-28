@@ -81,12 +81,19 @@ try {
   await openFilterEditor();
   await focusEditorByClickingCanvas(page);
   await placeResistor();
+  // Wait for the place commitDraft to push history (React state update is async).
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor-undo"]')?.getAttribute('aria-disabled') === 'false' ||
+    !document.querySelector('[data-testid="schematic-editor-undo"]')?.hasAttribute('disabled')
+  ), { timeout: 10_000 }).catch(() => {});
   assert.equal(await page.getByTestId('schematic-editor-undo').isDisabled(), false,
     'undo should be enabled after placing a component (precondition)');
   await page.getByTestId('schematic-editor-save').click();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
   ));
+  // After save the module reloads; let the preserve-history effect settle.
+  await page.waitForTimeout(500);
   const undoDisabledAfterSave = await page.getByTestId('schematic-editor-undo').isDisabled();
   record('undo-after-save', {
     pass: !undoDisabledAfterSave,

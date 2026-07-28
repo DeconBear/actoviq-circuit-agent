@@ -1834,19 +1834,19 @@ export function SchematicEditor({
     try {
       const normalized = normalizeConnectivity(draft);
       // M2-04: set the preserve flag BEFORE onSave so the revision bump that
-      // happens during onSave (applyOperations -> onReloadProject) does not
-      // trigger the module-switch effect that would clear undo/redo history.
+      // happens during onSave (applyOperations -> onReloadProject, plus
+      // buildModulePreview -> onReloadProject) does not clear undo/redo.
       preserveHistoryOnRevisionChangeRef.current = true;
       const saved = await onSave(normalized);
       if (saved === false) throw new Error('Apply command was rejected');
+      // Re-arm in case buildModulePreview triggers a second revision bump
+      // after the first useEffect consumed the flag.
+      preserveHistoryOnRevisionChangeRef.current = true;
       setSaveError(null);
       setDirty(false);
-      // M2-04: keep undo/redo history across save so Ctrl+Z works after Apply.
-      // Previously save cleared history/future, which broke the undo loop and
-      // made "place -> move -> save -> undo" impossible (ADR-0004). The draft
-      // already matches the saved module, so the history cursor stays valid.
-      // If onSave did not end up bumping revision (e.g. rejected), the flag
-      // stays set harmlessly until the next genuine revision change clears it.
+      // M2-04: keep undo/redo history across save so Ctrl+Z works after Apply
+      // (ADR-0004). Previously save cleared history/future, which broke the
+      // undo loop and made "place -> move -> save -> undo" impossible.
     } catch (error) {
       // Keep the draft dirty and surface the failure — previously a topology
       // validation throw or a rejected apply left no trace (silent data loss).
