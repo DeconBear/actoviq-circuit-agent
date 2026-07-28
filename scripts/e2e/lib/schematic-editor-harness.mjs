@@ -10,7 +10,9 @@ const { _electron: electron } = await import('playwright');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 export async function createHarness({ tag = '' } = {}) {
-  const outputRoot = path.resolve(root, 'output', 'playwright');
+  const outputRoot = tag
+    ? path.resolve(root, 'output', 'playwright', 'scenes', tag)
+    : path.resolve(root, 'output', 'playwright');
   const runId = Date.now().toString(36);
   const e2eRunRoot = path.resolve(outputRoot, '.workspace', `schematic-${process.pid}-${runId}${tag ? '-' + tag : ''}`);
   const workspaceRoot = path.resolve(e2eRunRoot, 'workspaces', 'default');

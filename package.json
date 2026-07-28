@@ -47,6 +47,7 @@
     "test:e2e:electron": "npm run build:src && npm run build:electron && node scripts/playwright-electron-smoke.mjs",
     "test:e2e:agent-flow": "npm run build:src && npm run build:electron && node scripts/playwright-agent-flow.mjs",
     "test:e2e:schematic-editor": "npm run build:src && npm run build:electron && node scripts/playwright-schematic-editor-smoke.mjs",
+    "test:e2e:schematic-editor:scene": "npm run build:src && npm run build:electron && node scripts/e2e/run-schematic-editor.mjs",
     "test:schematic-quality": "node scripts/schematic-quality-regression.mjs",
     "test:eda-export": "python scripts/eda-export-regression.py",
     "test:simulation-regression": "python scripts/simulation-regression.py",
