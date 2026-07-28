@@ -63,6 +63,25 @@ export function SettingsDialog({ onClose }: Props) {
   const [pdkAdapter, setPdkAdapter] = useState<'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial'>('ihp-sg13g2');
   const [pdkLicenseAccepted, setPdkLicenseAccepted] = useState(false);
   const [pdkImportStatus, setPdkImportStatus] = useState('');
+  const [pdkDefaultRoot, setPdkDefaultRoot] = useState('');
+  const [openPdkCatalog, setOpenPdkCatalog] = useState<Array<{
+    adapter_id: string;
+    name: string;
+    vendor: string;
+    process: string;
+    license: string;
+    support_status: string;
+    source_url: string;
+    homepage_url: string;
+    notes: string;
+  }>>([]);
+  const [openPdkLocalStatus, setOpenPdkLocalStatus] = useState<Record<string, {
+    present: boolean;
+    registered: boolean;
+    destination: string;
+    root: string;
+  }>>({});
+  const [installingOpenPdkId, setInstallingOpenPdkId] = useState('');
   const [pendingPdk, setPendingPdk] = useState<{
     input: {
       root: string;
@@ -84,12 +103,33 @@ export function SettingsDialog({ onClose }: Props) {
       setLoading(false);
       return;
     }
+    const safeInvoke = <T,>(fn: (() => Promise<T>) | undefined, fallback: T): Promise<T> => (
+      typeof fn === 'function' ? fn().catch(() => fallback) : Promise.resolve(fallback)
+    );
+    const refreshOpenPdkLocalStatus = async () => {
+      if (typeof window.electronAPI.getOpenPdkLocalStatus !== 'function') return;
+      const status = await window.electronAPI.getOpenPdkLocalStatus().catch(() => null);
+      if (!status || !Array.isArray(status.items)) return;
+      const next: typeof openPdkLocalStatus = {};
+      for (const item of status.items) {
+        next[item.adapter_id] = {
+          present: Boolean(item.present),
+          registered: Boolean(item.registered),
+          destination: String(item.destination || ''),
+          root: String(item.root || ''),
+        };
+      }
+      setOpenPdkLocalStatus(next);
+      if (status.defaultRoot) setPdkDefaultRoot(status.defaultRoot);
+    };
     Promise.all([
       window.electronAPI.getSettings(),
-      window.electronAPI.getCircuitSkillStatus().catch(() => null),
-      window.electronAPI.listExecutionProfiles().catch(() => null),
+      safeInvoke(window.electronAPI.getCircuitSkillStatus?.bind(window.electronAPI), null),
+      safeInvoke(window.electronAPI.listExecutionProfiles?.bind(window.electronAPI), null),
+      safeInvoke(window.electronAPI.listOpenPdkCatalog?.bind(window.electronAPI), null),
+      safeInvoke(window.electronAPI.getDefaultPdkRoot?.bind(window.electronAPI), ''),
     ])
-      .then(async ([s, nextSkillStatus, profileRegistry]) => {
+      .then(async ([s, nextSkillStatus, profileRegistry, catalog, defaultPdkRoot]) => {
         let next = s;
         if (s.hasActoviqAuthToken && !s.actoviqAuthToken && window.electronAPI.revealActoviqAuthToken) {
           try {
@@ -99,15 +139,41 @@ export function SettingsDialog({ onClose }: Props) {
             // Keep the masked placeholder if reveal fails.
           }
         }
-        setSettings(next);
+        setSettings({
+          ...next,
+          pdkInstallRoot: typeof next.pdkInstallRoot === 'string' ? next.pdkInstallRoot : '',
+        });
         setSkillStatus(nextSkillStatus);
         setExecutionProfiles(profileRegistry);
+        const catalogPdks = catalog && typeof catalog === 'object' && Array.isArray((catalog as { pdks?: unknown }).pdks)
+          ? (catalog as { pdks: typeof openPdkCatalog }).pdks
+          : [];
+        setOpenPdkCatalog(catalogPdks);
+        setPdkDefaultRoot(typeof defaultPdkRoot === 'string' ? defaultPdkRoot : '');
+        await refreshOpenPdkLocalStatus();
         setLoading(false);
       })
       .catch((err) => {
         setError(`Failed to load settings: ${err?.message ?? String(err)}`);
         setLoading(false);
       });
+  }, []);
+
+  const refreshOpenPdkLocalStatus = useCallback(async () => {
+    if (typeof window.electronAPI?.getOpenPdkLocalStatus !== 'function') return;
+    const status = await window.electronAPI.getOpenPdkLocalStatus().catch(() => null);
+    if (!status || !Array.isArray(status.items)) return;
+    const next: typeof openPdkLocalStatus = {};
+    for (const item of status.items) {
+      next[item.adapter_id] = {
+        present: Boolean(item.present),
+        registered: Boolean(item.registered),
+        destination: String(item.destination || ''),
+        root: String(item.root || ''),
+      };
+    }
+    setOpenPdkLocalStatus(next);
+    if (status.defaultRoot) setPdkDefaultRoot(status.defaultRoot);
   }, []);
 
   const syncSkill = useCallback(async () => {
@@ -308,6 +374,9 @@ export function SettingsDialog({ onClose }: Props) {
         ...nextSettings,
         actoviqAuthToken: draftToken || nextSettings.actoviqAuthToken,
       });
+      const resolvedPdkRoot = await window.electronAPI.getDefaultPdkRoot().catch(() => '');
+      setPdkDefaultRoot(typeof resolvedPdkRoot === 'string' ? resolvedPdkRoot : '');
+      await refreshOpenPdkLocalStatus();
       setSaved(true);
       setDirty(false);
       setTimeout(() => setSaved(false), 2000);
@@ -317,7 +386,7 @@ export function SettingsDialog({ onClose }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [settings]);
+  }, [settings, refreshOpenPdkLocalStatus]);
 
   const handleIcDiagnostics = useCallback(async () => {
     setTestingIcTools(true);
@@ -395,6 +464,37 @@ export function SettingsDialog({ onClose }: Props) {
     }
   }, [pdkAdapter, pdkLicenseAccepted]);
 
+  const handleOneClickOpenPdkInstall = useCallback(async (adapterId: 'ihp-sg13g2' | 'sky130' | 'gf180mcu') => {
+    if (!pdkLicenseAccepted) {
+      setPdkImportStatus('Review and accept the open PDK license before one-click download/install.');
+      return;
+    }
+    setInstallingOpenPdkId(adapterId);
+    setPdkAdapter(adapterId);
+    setPendingPdk(null);
+    setPdkImportStatus(
+      `Downloading ${adapterId} into the Actoviq app PDK folder. Large clones (especially SKY130/GF180) can take a long time...`,
+    );
+    try {
+      const result = await window.electronAPI.installOpenPdkDefault({
+        adapter: adapterId,
+        licenseAccepted: true,
+        register: true,
+      });
+      setPendingPdk(null);
+      setPdkImportStatus(
+        `Installed and registered ${adapterId} at ${result.destination}. `
+        + `App PDK root: ${result.defaultRoot}`,
+      );
+      await refreshOpenPdkLocalStatus();
+      await handleIcDiagnostics();
+    } catch (err: unknown) {
+      setPdkImportStatus(`One-click install failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setInstallingOpenPdkId('');
+    }
+  }, [handleIcDiagnostics, pdkLicenseAccepted, refreshOpenPdkLocalStatus]);
+
   const confirmPdkImport = useCallback(async () => {
     if (!pendingPdk || !pdkLicenseAccepted) return;
     try {
@@ -409,11 +509,12 @@ export function SettingsDialog({ onClose }: Props) {
       )}`);
       setPendingPdk(null);
       setPdkLicenseAccepted(false);
+      await refreshOpenPdkLocalStatus();
       await handleIcDiagnostics();
     } catch (err: unknown) {
       setPdkImportStatus(`Registration failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [handleIcDiagnostics, pdkAdapter, pdkLicenseAccepted, pendingPdk]);
+  }, [handleIcDiagnostics, pdkAdapter, pdkLicenseAccepted, pendingPdk, refreshOpenPdkLocalStatus]);
 
   const updateExecutionDraft = useCallback(<K extends keyof StoredExecutionProfile>(
     key: K,
@@ -666,7 +767,7 @@ export function SettingsDialog({ onClose }: Props) {
 
               <section className="av-form-section">
                 <h3 className="av-form-section__title">Tool paths</h3>
-                <Field label="ngspice binary" value={settings.ngspiceBin} onChange={(v) => update('ngspiceBin', v)} placeholder="e.g. E:/Program/ngspice/bin/ngspice.exe" />
+                <Field label="ngspice binary" value={settings.ngspiceBin} onChange={(v) => update('ngspiceBin', v)} placeholder="e.g. E:/Program/ngspice/bin/ngspice_con.exe (prefer console, not GUI)" />
               </section>
 
               <section className="av-form-section" data-testid="ic-tool-diagnostics">
@@ -711,6 +812,163 @@ export function SettingsDialog({ onClose }: Props) {
                     </p>
                   </div>
                 )}
+                {pdkDefaultRoot ? (
+                  <p className="av-form-hint" data-testid="pdk-default-root">
+                    Effective one-click install root: {pdkDefaultRoot}
+                  </p>
+                ) : null}
+                <div className="av-form-field" data-testid="pdk-install-root-field">
+                  <span>PDK install root</span>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      className="av-settings-input"
+                      value={settings.pdkInstallRoot}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        update('pdkInstallRoot', next);
+                        if (next.trim()) setPdkDefaultRoot(next.trim());
+                      }}
+                      placeholder="Leave blank for app data folder (userData/pdks)"
+                      data-testid="pdk-install-root-input"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="av-btn av-btn--secondary"
+                      onClick={() => {
+                        void (async () => {
+                          if (typeof window.electronAPI.choosePdkInstallRoot !== 'function') {
+                            setError('PDK install-root picker requires a rebuilt Electron preload. Restart electron:dev.');
+                            return;
+                          }
+                          const picked = await window.electronAPI.choosePdkInstallRoot();
+                          if (picked) {
+                            update('pdkInstallRoot', picked);
+                            setPdkDefaultRoot(picked);
+                          }
+                        })();
+                      }}
+                      data-testid="pdk-install-root-browse"
+                    >
+                      Browse…
+                    </button>
+                    <button
+                      type="button"
+                      className="av-btn av-btn--secondary"
+                      onClick={() => {
+                        update('pdkInstallRoot', '');
+                        setPdkDefaultRoot('(app userData/pdks after save)');
+                      }}
+                      title="Clear to use the Actoviq app data folder"
+                      data-testid="pdk-install-root-reset"
+                    >
+                      App default
+                    </button>
+                  </div>
+                  <p className="av-form-hint" style={{ margin: '6px 0 0' }}>
+                    Per-user setting. Save settings to apply. Other machines keep their own path (or blank = userData/pdks).
+                  </p>
+                </div>
+                <div className="av-form-field" data-testid="open-pdk-catalog">
+                  <span>Built-in open PDKs</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {(openPdkCatalog.length > 0 ? openPdkCatalog : [
+                      {
+                        adapter_id: 'ihp-sg13g2',
+                        name: 'IHP SG13G2',
+                        vendor: 'IHP',
+                        process: 'SG13G2',
+                        license: 'Apache-2.0',
+                        support_status: 'supported',
+                        source_url: 'https://github.com/IHP-GmbH/IHP-Open-PDK.git',
+                        homepage_url: 'https://github.com/IHP-GmbH/IHP-Open-PDK',
+                        notes: 'Open-source PDK; clone may take several minutes and requires git.',
+                      },
+                      {
+                        adapter_id: 'sky130',
+                        name: 'SKY130',
+                        vendor: 'SkyWater / Google',
+                        process: 'SKY130',
+                        license: 'Apache-2.0',
+                        support_status: 'supported',
+                        source_url: 'https://github.com/google/skywater-pdk.git',
+                        homepage_url: 'https://github.com/google/skywater-pdk',
+                        notes: 'Open-source PDK; clone may take several minutes and requires git.',
+                      },
+                      {
+                        adapter_id: 'gf180mcu',
+                        name: 'GF180MCU',
+                        vendor: 'GlobalFoundries / Google',
+                        process: 'GF180MCU',
+                        license: 'Apache-2.0',
+                        support_status: 'experimental',
+                        source_url: 'https://github.com/google/gf180mcu-pdk.git',
+                        homepage_url: 'https://github.com/google/gf180mcu-pdk',
+                        notes: 'Experimental / large clone with recursive submodules.',
+                      },
+                    ]).map((entry) => {
+                      const local = openPdkLocalStatus[entry.adapter_id];
+                      const installed = Boolean(local?.present || local?.registered);
+                      const statusLabel = local?.registered
+                        ? 'Installed & registered'
+                        : local?.present
+                          ? 'Present locally (not registered)'
+                          : null;
+                      const location = local?.root || local?.destination || '';
+                      return (
+                      <div
+                        key={entry.adapter_id}
+                        className="av-form-status"
+                        data-testid={`open-pdk-card-${entry.adapter_id}`}
+                        style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                      >
+                        <div className="av-form-meta">
+                          <span>{entry.name}</span>
+                          <strong>
+                            {installed && statusLabel
+                              ? statusLabel
+                              : `${entry.license} · ${entry.support_status}`}
+                          </strong>
+                        </div>
+                        <p className="av-form-hint" style={{ margin: 0 }}>{entry.notes}</p>
+                        {installed && location ? (
+                          <p className="av-form-hint" style={{ margin: 0 }} data-testid={`open-pdk-installed-${entry.adapter_id}`}>
+                            {location}
+                          </p>
+                        ) : null}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          <button
+                            type="button"
+                            className="av-btn av-btn--secondary"
+                            onClick={() => { void window.electronAPI.openPdkExternalUrl(entry.homepage_url); }}
+                            data-testid={`open-pdk-link-${entry.adapter_id}`}
+                          >
+                            Open official page
+                          </button>
+                          {installed ? null : (
+                            <button
+                              type="button"
+                              className="av-btn av-btn--primary"
+                              onClick={() => {
+                                void handleOneClickOpenPdkInstall(
+                                  entry.adapter_id as 'ihp-sg13g2' | 'sky130' | 'gf180mcu',
+                                );
+                              }}
+                              disabled={!pdkLicenseAccepted || Boolean(installingOpenPdkId)}
+                              data-testid={`install-open-pdk-default-${entry.adapter_id}`}
+                            >
+                              {installingOpenPdkId === entry.adapter_id
+                                ? 'Downloading…'
+                                : 'Download & install'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
+                </div>
                 <div className="av-form-meta" style={{ alignItems: 'center', gap: 8 }}>
                   <select
                     value={pdkAdapter}
@@ -736,13 +994,13 @@ export function SettingsDialog({ onClose }: Props) {
                     type="button"
                     className="av-btn av-btn--secondary"
                     onClick={() => { void handleOpenPdkInstall(); }}
-                    disabled={pdkAdapter === 'commercial' || !pdkLicenseAccepted}
+                    disabled={pdkAdapter === 'commercial' || !pdkLicenseAccepted || Boolean(installingOpenPdkId)}
                     title={pdkAdapter === 'commercial'
                       ? 'Commercial PDK files must remain in the user-provided installation.'
-                      : 'Clone the official open-PDK source into an empty local folder.'}
+                      : 'Clone the official open-PDK source into a folder you choose.'}
                     data-testid="install-open-pdk"
                   >
-                    Acquire open PDK
+                    Acquire to custom folder
                   </button>
                 </div>
                 {pendingPdk ? (

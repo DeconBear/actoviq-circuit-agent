@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   BookmarkPlus,
+  FileInput,
   FileOutput,
   FolderOpen,
   History,
@@ -29,6 +30,7 @@ interface WorkbenchToolbarProps {
   busy: boolean;
   previewBusy: boolean;
   erc: WorkbenchErcSummary | null;
+  showSchematicIo?: boolean;
   onBackToBoard: () => void;
   onArrangeModules: () => void;
   onZoomOut: () => void;
@@ -37,6 +39,7 @@ interface WorkbenchToolbarProps {
   onSimulate: () => void;
   onSaveTemplate: () => void;
   onSaveFlow: () => void;
+  onOpenEdaImport: () => void;
   onOpenEdaExport: () => void;
   onOpenErc: () => void;
   onOpenHistory: () => void;
@@ -49,6 +52,7 @@ export function WorkbenchToolbar({
   busy,
   previewBusy,
   erc,
+  showSchematicIo = false,
   onBackToBoard,
   onArrangeModules,
   onZoomOut,
@@ -57,6 +61,7 @@ export function WorkbenchToolbar({
   onSimulate,
   onSaveTemplate,
   onSaveFlow,
+  onOpenEdaImport,
   onOpenEdaExport,
   onOpenErc,
   onOpenHistory,
@@ -162,14 +167,26 @@ export function WorkbenchToolbar({
           disabled={commandDisabled}
           data-testid="save-design-flow"
         />
-        <IconButton
-          label="Export EDA"
-          icon={<FileOutput size={16} />}
-          size="sm"
-          onClick={onOpenEdaExport}
-          disabled={busy}
-          data-testid="open-eda-export"
-        />
+        {showSchematicIo ? (
+          <>
+            <IconButton
+              label="Import schematic"
+              icon={<FileInput size={16} />}
+              size="sm"
+              onClick={onOpenEdaImport}
+              disabled={busy}
+              data-testid="open-eda-import"
+            />
+            <IconButton
+              label="Export schematic"
+              icon={<FileOutput size={16} />}
+              size="sm"
+              onClick={onOpenEdaExport}
+              disabled={busy}
+              data-testid="open-eda-export"
+            />
+          </>
+        ) : null}
         <IconButton
           label="Project history"
           icon={<History size={16} />}

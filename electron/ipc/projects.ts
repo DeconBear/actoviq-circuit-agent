@@ -1,11 +1,11 @@
-import { app, BrowserWindow, dialog, nativeImage, type IpcMain, shell } from 'electron';
+﻿import { app, BrowserWindow, dialog, nativeImage, type IpcMain, shell } from 'electron';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { access, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { layoutVisionModelFingerprint, loadSettings, loadSettingsWithSecrets } from './settings.js';
+import { layoutVisionModelFingerprint, loadSettings, loadSettingsWithSecrets, resolveNgspiceExecutable } from './settings.js';
 import { getActiveWorkspace } from '../workspaceState.js';
 import { generateDesktopTechnicalReport } from '../agent/desktopAgentService.js';
 import { runProjectTool } from '../agent/circuitProjectCli.js';
@@ -247,6 +247,17 @@ function assertModuleId(moduleId: string): string {
 async function projectsRoot(): Promise<string> {
   const workspace = await getActiveWorkspace();
   const root = path.resolve(workspace.root, 'projects');
+  await mkdir(root, { recursive: true });
+  return root;
+}
+
+/** User-configurable one-click PDK root; blank falls back to app userData/pdks. */
+async function resolveConfiguredPdkInstallRoot(): Promise<string> {
+  const settings = await loadSettingsWithSecrets();
+  const configured = typeof settings.pdkInstallRoot === 'string' ? settings.pdkInstallRoot.trim() : '';
+  const root = configured
+    ? path.resolve(configured)
+    : path.join(app.getPath('userData'), 'pdks');
   await mkdir(root, { recursive: true });
   return root;
 }
@@ -2125,6 +2136,117 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     return runProjectTool(args);
   });
 
+  ipcMain.handle(
+    'project:schematic-export',
+    async (
+      _event,
+      projectId: string,
+      input: { format: string; outputPath: string; moduleId?: string; sourceRevision: number },
+    ) => {
+      const root = await resolveProjectRoot(projectId);
+      const format = String(input?.format || '').trim();
+      const outputPath = String(input?.outputPath || '').trim();
+      if (!format) throw new Error('Export format is required.');
+      if (!outputPath) throw new Error('Export output path is required.');
+      if (!Number.isInteger(input.sourceRevision) || input.sourceRevision < 0) {
+        throw new Error(`Invalid source revision: ${input.sourceRevision}`);
+      }
+      const args = [
+        'schematic-export',
+        '--project-root', root,
+        '--format', format,
+        '--output-path', path.resolve(outputPath),
+        '--source-revision', String(input.sourceRevision),
+      ];
+      if (input.moduleId?.trim()) {
+        assertModuleId(input.moduleId);
+        args.push('--module-id', input.moduleId.trim());
+      }
+      return withProjectWatchPaused(async () => runProjectTool(args));
+    },
+  );
+
+  ipcMain.handle(
+    'project:schematic-import',
+    async (
+      _event,
+      projectId: string,
+      input: { format: string; sourcePath: string; moduleId: string },
+    ) => {
+      const root = await resolveProjectRoot(projectId);
+      const format = String(input?.format || '').trim();
+      const sourcePath = String(input?.sourcePath || '').trim();
+      const moduleId = String(input?.moduleId || '').trim();
+      if (!format) throw new Error('Import format is required.');
+      if (!sourcePath) throw new Error('Import source path is required.');
+      assertModuleId(moduleId);
+      return withProjectWatchPaused(async () => runProjectTool([
+        'schematic-import',
+        '--project-root', root,
+        '--format', format,
+        '--source-path', path.resolve(sourcePath),
+        '--module-id', moduleId,
+      ]));
+    },
+  );
+
+  ipcMain.handle(
+    'project:choose-schematic-import-source',
+    async (_event, format: string) => {
+      const fmt = String(format || '').trim().toLowerCase();
+      if (fmt === 'kicad' || fmt === 'jlceda') {
+        const result = await dialog.showOpenDialog({
+          title: fmt === 'kicad' ? 'Select KiCad schematic or project folder' : 'Select 鍢夌珛鍒?JSON or folder',
+          properties: ['openFile', 'openDirectory'],
+          filters: fmt === 'kicad'
+            ? [{ name: 'KiCad schematic', extensions: ['kicad_sch'] }]
+            : [{ name: '鍢夌珛鍒?JSON', extensions: ['json'] }],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      }
+      if (fmt === 'xschem') {
+        const result = await dialog.showOpenDialog({
+          title: 'Select Xschem schematic',
+          properties: ['openFile'],
+          filters: [{ name: 'Xschem schematic', extensions: ['sch'] }],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      }
+      if (fmt === 'virtuoso') {
+        const result = await dialog.showOpenDialog({
+          title: 'Select Virtuoso SPICE/CDL netlist',
+          properties: ['openFile'],
+          filters: [{ name: 'SPICE/CDL', extensions: ['cir', 'sp', 'spice', 'cdl', 'scs'] }],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      }
+      const result = await dialog.showOpenDialog({
+        title: 'Select schematic file',
+        properties: ['openFile'],
+      });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+  );
+
+  ipcMain.handle(
+    'project:choose-schematic-export-path',
+    async (_event, format: string) => {
+      const fmt = String(format || '').trim().toLowerCase();
+      if (fmt === 'xschem') {
+        const result = await dialog.showSaveDialog({
+          title: 'Export Xschem schematic',
+          filters: [{ name: 'Xschem schematic', extensions: ['sch'] }],
+        });
+        return result.canceled ? null : result.filePath ?? null;
+      }
+      const result = await dialog.showOpenDialog({
+        title: 'Select export folder',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+  );
+
   ipcMain.handle('project:choose-eda-mapping', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Select Actoviq EDA symbol mapping',
@@ -2281,6 +2403,62 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
   };
 
   ipcMain.handle('pdk:list', async () => runProjectTool(['pdk-list']));
+  ipcMain.handle('pdk:open-catalog', async () => runProjectTool(['pdk-open-catalog']));
+  ipcMain.handle('pdk:local-status', async () => {
+    const root = await resolveConfiguredPdkInstallRoot();
+    const listed = await runProjectTool(['pdk-list']).catch(() => ({ installations: [] })) as {
+      installations?: Array<Record<string, unknown>>;
+    };
+    const installations = Array.isArray(listed.installations) ? listed.installations : [];
+    const adapters = ['ihp-sg13g2', 'sky130', 'gf180mcu'] as const;
+    const items = await Promise.all(adapters.map(async (adapterId) => {
+      const destination = path.join(root, adapterId);
+      let present = false;
+      try {
+        const entries = await readdir(destination);
+        present = entries.length > 0;
+      } catch {
+        present = false;
+      }
+      const registered = installations.filter((entry) => String(entry.logical_id ?? '') === adapterId);
+      const registeredRoot = registered.length > 0
+        ? String(registered[0]?.root ?? '')
+        : '';
+      return {
+        adapter_id: adapterId,
+        present,
+        registered: registered.length > 0,
+        destination: present ? destination : '',
+        root: registeredRoot || (present ? destination : ''),
+        installation_ids: registered.map((entry) => String(entry.installation_id ?? '')).filter(Boolean),
+      };
+    }));
+    return { ok: true, defaultRoot: root, items };
+  });
+  ipcMain.handle('pdk:default-root', async () => resolveConfiguredPdkInstallRoot());
+  ipcMain.handle('pdk:choose-install-root', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select PDK install root',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  ipcMain.handle('pdk:open-external', async (_event, url: string) => {
+    const trimmed = String(url || '').trim();
+    const allowed = new Set([
+      'https://github.com/IHP-GmbH/IHP-Open-PDK',
+      'https://github.com/IHP-GmbH/IHP-Open-PDK.git',
+      'https://github.com/google/skywater-pdk',
+      'https://github.com/google/skywater-pdk.git',
+      'https://github.com/google/gf180mcu-pdk',
+      'https://github.com/google/gf180mcu-pdk.git',
+    ]);
+    if (!allowed.has(trimmed)) {
+      throw new Error('Refusing to open an unlisted PDK URL.');
+    }
+    await shell.openExternal(trimmed);
+    return { ok: true, url: trimmed };
+  });
   ipcMain.handle('pdk:install-open', async (_event, input) => {
     if (!input?.licenseAccepted) throw new Error('Open PDK installation requires license acceptance.');
     if (input.adapter === 'commercial') throw new Error('Commercial PDKs must be imported in place.');
@@ -2292,6 +2470,61 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     ];
     if (input.revision) args.push('--revision', String(input.revision));
     return runProjectTool(args, { timeoutMs: 3_700_000 });
+  });
+  ipcMain.handle('pdk:install-open-default', async (_event, input) => {
+    if (!input?.licenseAccepted) throw new Error('Open PDK installation requires license acceptance.');
+    const adapter = String(input.adapter || '').trim();
+    if (!['ihp-sg13g2', 'sky130', 'gf180mcu'].includes(adapter)) {
+      throw new Error(`Unsupported open PDK adapter: ${adapter}`);
+    }
+    const root = await resolveConfiguredPdkInstallRoot();
+    const destination = path.join(root, adapter);
+    const alreadyPresent = await access(destination).then(() => true).catch(() => false);
+    let receipt: Record<string, unknown> | null = null;
+    if (alreadyPresent) {
+      const entries = await readdir(destination).catch(() => []);
+      if (entries.length > 0) {
+        // Reuse an existing clone under the Actoviq app data directory.
+        receipt = {
+          destination,
+          reused: true,
+          adapter_id: adapter,
+        };
+      }
+    }
+    if (!receipt) {
+      await mkdir(path.dirname(destination), { recursive: true });
+      const installed = await runProjectTool([
+        'pdk-install-open',
+        '--adapter', adapter,
+        '--destination', destination,
+        '--license-accepted',
+      ], { timeoutMs: 3_700_000 }) as { receipt?: Record<string, unknown> };
+      receipt = installed.receipt ?? { destination, adapter_id: adapter };
+    }
+    const revision = String(receipt.resolved_revision ?? '');
+    const scanned = await runProjectTool(pdkArgs('pdk-scan', {
+      root: destination,
+      adapter,
+      revision: revision || undefined,
+    }));
+    let registered: Record<string, unknown> | null = null;
+    if (input.register) {
+      registered = await runProjectTool(pdkArgs('pdk-register', {
+        root: destination,
+        adapter,
+        revision: revision || undefined,
+        licenseAccepted: true,
+      })) as Record<string, unknown>;
+    }
+    return {
+      ok: true,
+      destination,
+      defaultRoot: root,
+      receipt,
+      scan: scanned,
+      registration: registered,
+    };
   });
   ipcMain.handle('pdk:scan', async (_event, input) => runProjectTool(pdkArgs('pdk-scan', input)));
   ipcMain.handle('pdk:register', async (_event, input) => {
@@ -2352,7 +2585,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle('project:choose-bridge-peer-root', async () => {
     const result = await dialog.showOpenDialog({
-      title: 'Select KiCad / 嘉立创 EDA project folder',
+      title: 'Select KiCad / 鍢夌珛鍒?EDA project folder',
       properties: ['openDirectory'],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
@@ -2501,7 +2734,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       runProjectTool([
         'simulate',
         '--project-root', await resolveProjectRoot(projectId),
-        '--ngspice-bin', settings.ngspiceBin,
+        '--ngspice-bin', resolveNgspiceExecutable(settings.ngspiceBin),
       ])
     ));
   });
@@ -2566,7 +2799,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
         'simulate-module',
         '--project-root', await resolveProjectRoot(projectId),
         '--module-id', moduleId,
-        '--ngspice-bin', settings.ngspiceBin,
+        '--ngspice-bin', resolveNgspiceExecutable(settings.ngspiceBin),
       ])
     ));
   });
@@ -2580,7 +2813,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       '--right-profile', String(input.rightProfileId),
       '--relative-tolerance', String(input.relativeTolerance),
       '--absolute-tolerance', String(input.absoluteTolerance),
-      '--ngspice-bin', settings.ngspiceBin,
+      '--ngspice-bin', resolveNgspiceExecutable(settings.ngspiceBin),
     ], { timeoutMs: 600_000 });
   });
 
@@ -2636,7 +2869,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
         '--layout', String(input.layout),
         '--schematic', String(input.schematic),
         '--lvs-run', String(input.lvsRun),
-        '--ngspice-bin', settings.ngspiceBin,
+        '--ngspice-bin', resolveNgspiceExecutable(settings.ngspiceBin),
       ], { timeoutMs: 600_000 });
     }
     throw new Error(`Unsupported physical verification operation: ${operation}`);
@@ -2857,7 +3090,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
         assetKind: asset.kind,
         trust: asset.trust,
         useAs: asset.use_as,
-        summary: `${asset.kind} · ${asset.name} (${asset.id})`,
+        summary: `${asset.kind} 路 ${asset.name} (${asset.id})`,
       },
     };
   });

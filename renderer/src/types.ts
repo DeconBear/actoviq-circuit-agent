@@ -884,6 +884,8 @@ export interface AppSettings {
   haikuModel: string;
   ngspiceBin: string;
   workspaceRoot: string;
+  /** Empty = app data `userData/pdks`. Users configure their own path. */
+  pdkInstallRoot: string;
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;

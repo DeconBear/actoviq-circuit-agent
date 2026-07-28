@@ -28,5 +28,7 @@ skills/circuit-design-ngspice/references/parts-cache/
 /AGENTS.md
 USAGE.md
 WIKI.md
+/pdks/*
+!/pdks/README.md
 repo-wiki/
 plan/

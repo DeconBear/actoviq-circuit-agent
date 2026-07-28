@@ -1,4 +1,5 @@
 import { IpcMain, safeStorage } from 'electron';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +61,11 @@ export interface AppSettings {
   haikuModel: string;
   ngspiceBin: string;
   workspaceRoot: string;
+  /**
+   * One-click open-PDK install root. Empty = Actoviq app data `userData/pdks`.
+   * Users set this themselves; never ship a machine-specific path as the product default.
+   */
+  pdkInstallRoot: string;
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;
@@ -125,6 +131,7 @@ const defaultSettings: PersistedAppSettings = {
   haikuModel: 'claude-haiku-4-5-20251001',
   ngspiceBin: '',
   workspaceRoot: '',
+  pdkInstallRoot: '',
   yunzhishengOcrBaseUrl: '',
   yunzhishengOcrApiKey: '',
   yunzhishengOcrModel: '',
@@ -165,6 +172,27 @@ const IC_TOOL_SPECS = [
   ['vcs', 'Synopsys VCS AMS', 'commercial', 'vcs', ['-ID']],
   ['vsim', 'Siemens Questa AMS', 'commercial', 'vsim', ['-version']],
 ] as const;
+
+/**
+ * Windows ships both ngspice.exe (GUI) and ngspice_con.exe (console).
+ * GUI --version pops an "Ngspice Info" dialog; prefer the console binary for probes/batch.
+ */
+export function resolveNgspiceExecutable(configured: string): string {
+  const trimmed = configured.trim();
+  if (!trimmed) return 'ngspice';
+  const resolved = path.resolve(trimmed);
+  const base = path.basename(resolved).toLowerCase();
+  if (process.platform === 'win32' && base === 'ngspice.exe') {
+    const consoleSibling = path.join(path.dirname(resolved), 'ngspice_con.exe');
+    try {
+      // existsSync is sync and cheap; avoid async in hot settings paths.
+      if (existsSync(consoleSibling)) return consoleSibling;
+    } catch {
+      // fall through
+    }
+  }
+  return resolved;
+}
 
 function probeIcTool(
   id: string,
@@ -220,7 +248,9 @@ async function collectIcDiagnostics(settings: PersistedAppSettings) {
       id,
       label,
       domain,
-      id === 'ngspice' && settings.ngspiceBin.trim() ? settings.ngspiceBin.trim() : fallback,
+      id === 'ngspice'
+        ? resolveNgspiceExecutable(settings.ngspiceBin.trim() || fallback)
+        : fallback,
       args,
     )
   )));
@@ -377,6 +407,7 @@ function normalizeStoredSettings(raw: StoredSettings, authToken: string, storage
     haikuModel: basicModel,
     ngspiceBin: typeof raw.ngspiceBin === 'string' ? raw.ngspiceBin : '',
     workspaceRoot: typeof raw.workspaceRoot === 'string' ? raw.workspaceRoot : '',
+    pdkInstallRoot: typeof raw.pdkInstallRoot === 'string' ? raw.pdkInstallRoot.trim() : '',
     yunzhishengOcrBaseUrl: typeof raw.yunzhishengOcrBaseUrl === 'string' ? raw.yunzhishengOcrBaseUrl : '',
     yunzhishengOcrApiKey: typeof raw.yunzhishengOcrApiKey === 'string' ? raw.yunzhishengOcrApiKey : '',
     yunzhishengOcrModel: typeof raw.yunzhishengOcrModel === 'string' ? raw.yunzhishengOcrModel : '',
@@ -540,7 +571,7 @@ export function applySettingsToEnvironment(settings: PersistedAppSettings): void
       ? settings.layoutVisionVerification.fingerprint
       : '',
   );
-  setOrDelete('NGSPICE_BIN', settings.ngspiceBin);
+  setOrDelete('NGSPICE_BIN', resolveNgspiceExecutable(settings.ngspiceBin));
   setOrDelete('ACTOVIQ_LCSC_API_KEY', settings.lcscApiKey);
   setOrDelete('ACTOVIQ_LCSC_API_SECRET', settings.lcscApiSecret);
 }
@@ -756,7 +787,9 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
       toolId,
       label,
       domain,
-      profile.executable || fallback,
+      toolId === 'ngspice'
+        ? resolveNgspiceExecutable(profile.executable || fallback)
+        : (profile.executable || fallback),
       args,
     );
     return {

@@ -136,6 +136,25 @@ def test_format_and_hash() -> None:
     emitted = emit_leaf_component_line(mos, device_catalog=catalog)
     assert emitted == "M1 out in 0 0 sg13_lv_nmos w=2u l=0.13u"
 
+    nmos_catalog = {
+        "devices": [{
+            "device_id": "nmos",
+            "spice": {
+                "primitive": "M",
+                "model": "sg13_lv_nmos",
+                "pin_order": ["D", "G", "S", "B"],
+                "format": "{name} {D} {G} {S} {B} {model} w={w} l={l}",
+            },
+        }]
+    }
+    mos_by_device_id = {
+        **mos,
+        "value": "NMOS W=3u L=0.15u",
+        "parameters": {"device_id": "nmos", "model": "sg13_lv_nmos", "w": "3u", "l": "0.15u"},
+    }
+    emitted_by_id = emit_leaf_component_line(mos_by_device_id, device_catalog=nmos_catalog)
+    assert emitted_by_id == "M1 out in 0 0 sg13_lv_nmos w=3u l=0.15u"
+
     module_a = {
         "module_id": "core",
         "ports": [{"id": "in", "net": "in", "net_id": "n-in"}],

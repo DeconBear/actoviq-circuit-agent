@@ -26,6 +26,11 @@ OPEN_PDK_SOURCES = {
     "sky130": "https://github.com/google/skywater-pdk.git",
     "gf180mcu": "https://github.com/google/gf180mcu-pdk.git",
 }
+OPEN_PDK_HOMEPAGES = {
+    "ihp-sg13g2": "https://github.com/IHP-GmbH/IHP-Open-PDK",
+    "sky130": "https://github.com/google/skywater-pdk",
+    "gf180mcu": "https://github.com/google/gf180mcu-pdk",
+}
 ADAPTERS: dict[str, dict[str, Any]] = {
     "ihp-sg13g2": {
         "name": "IHP SG13G2",
@@ -265,6 +270,32 @@ def load_mapping_pack(path: str | Path) -> dict[str, Any]:
         if not isinstance(device.get("spice"), dict) or not isinstance(device.get("views", {}), dict):
             raise ValueError("mapping-pack device spice and views must be objects")
     return value
+
+
+def open_pdk_catalog() -> list[dict[str, Any]]:
+    """Public metadata for Settings: official links + one-click install targets."""
+    catalog: list[dict[str, Any]] = []
+    for adapter_id, source_url in OPEN_PDK_SOURCES.items():
+        spec = ADAPTERS[adapter_id]
+        homepage = OPEN_PDK_HOMEPAGES.get(adapter_id)
+        if not homepage:
+            homepage = source_url[:-4] if source_url.endswith(".git") else source_url
+        catalog.append({
+            "adapter_id": adapter_id,
+            "name": spec["name"],
+            "vendor": spec["vendor"],
+            "process": spec["process"],
+            "license": spec["license"],
+            "support_status": spec["status"],
+            "source_url": source_url,
+            "homepage_url": homepage,
+            "notes": (
+                "Experimental / large clone with recursive submodules."
+                if adapter_id == "gf180mcu"
+                else "Open-source PDK; clone may take several minutes and requires git."
+            ),
+        })
+    return catalog
 
 
 def install_open_pdk(

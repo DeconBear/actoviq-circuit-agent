@@ -447,6 +447,7 @@ const fixtures: CircuitModule[] = [
 assertJunctionNetIsolation();
 assertManualWireTopology();
 assertGroundPseudoComponent();
+assertPlacedComponentDefaults();
 assertRouteEgressAvoidsOwnerBody();
 assertLegacyPortNormalization();
 
@@ -498,6 +499,20 @@ function assertLegacyPortNormalization() {
     ['VOUT', 'VIN'],
     'named explicit interfaces beat generic IN/OUT even when generic ports are listed first',
   );
+}
+
+function assertPlacedComponentDefaults() {
+  const module = moduleFixture('placed_defaults', [], [
+    { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+  ]);
+  const resistor = makePlacedComponent(module, 'R', { x: 100, y: 100 });
+  assert.equal(resistor.value, '1k');
+  assert.equal(resistor.parameters?.magnitude, '1k');
+  const mos = makePlacedComponent(module, 'M', { x: 160, y: 100 }, { projectKind: 'analog_ic' });
+  assert.equal(mos.parameters?.device_id, 'nmos');
+  assert.match(mos.value, /NMOS.*W=1u.*L=180n/);
+  const pcbR = makePlacedComponent(module, 'R', { x: 220, y: 100 }, { projectKind: 'pcb_schematic' });
+  assert.equal(pcbR.eda?.footprint_hint, 'R_0603');
 }
 
 function assertRouteEgressAvoidsOwnerBody() {

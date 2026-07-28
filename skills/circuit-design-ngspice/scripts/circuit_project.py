@@ -73,6 +73,7 @@ from analog_ic import (
 from pdk_registry import (
     install_open_pdk,
     load_registry as load_pdk_registry,
+    open_pdk_catalog,
     register_installation as register_pdk_installation,
     scan_installation as scan_pdk_installation,
 )
@@ -1113,19 +1114,33 @@ def emit_leaf_component_line(
         str(device.get("device_id") or "").casefold(): device
         for device in (device_catalog or {}).get("devices", []) or []
     }
-    device = catalog_devices.get(component_type.casefold())
+    parameters = component.get("parameters") if isinstance(component.get("parameters"), dict) else {}
+    device_key = str(parameters.get("device_id") or "").strip() or component_type
+    device = catalog_devices.get(device_key.casefold())
+    if device is None and device_key.casefold() != component_type.casefold():
+        device = catalog_devices.get(component_type.casefold())
     spice_meta = (device or {}).get("spice") if isinstance(device, dict) else None
     if isinstance(spice_meta, dict) and spice_meta.get("format") and spice_meta.get("pin_order"):
         values: dict[str, str] = {
             "name": name,
-            "model": str(spice_meta.get("model") or (value.split()[0] if value else component_type)),
+            "model": str(
+                parameters.get("model")
+                or spice_meta.get("model")
+                or (value.split()[0] if value else component_type)
+            ),
         }
-        # Parse simple key=value tokens from the component value for w/l/m/nf.
+        # Prefer structured parameters, then parse key=value tokens from value.
+        for key in ("w", "l", "m", "nf"):
+            if parameters.get(key):
+                values[key] = str(parameters[key]).strip()
+                values[key.upper()] = values[key]
         for token in value.replace(",", " ").split():
             if "=" in token:
                 key, raw_value = token.split("=", 1)
-                values[key.strip().casefold()] = raw_value.strip()
-                values[key.strip()] = raw_value.strip()
+                folded = key.strip().casefold()
+                if folded not in values:
+                    values[folded] = raw_value.strip()
+                    values[key.strip()] = raw_value.strip()
         for pin_name in spice_meta.get("pin_order", []):
             key = str(pin_name)
             net = pin_lookup.get(key) or pin_lookup.get(key.casefold()) or "0"
@@ -1972,6 +1987,7 @@ NESTED_OPERATION_NAMES = frozenset({
     "set_module_note",
     "set_module_preview",
     "set_module_metadata",
+    "set_project_kind",
     "set_analog_ic_profile",
     "set_schematic_peer",
     "set_component_value",
@@ -2242,6 +2258,23 @@ def apply_operation(
             module_ref["parameters"] = {
                 str(key): str(value) for key, value in parameters.items()
             }
+        return
+    if op == "set_project_kind":
+        next_kind = normalize_project_kind(operation.get("project_kind"))
+        previous_kind = ensure_project_kind(project)
+        if next_kind == previous_kind:
+            return
+        for module_id, module in modules.items():
+            try:
+                validate_module(module, next_kind)
+            except ValueError as error:
+                raise ValueError(
+                    f"cannot change project_kind to {next_kind}: module {module_id}: {error}"
+                ) from error
+        project["project_kind"] = next_kind
+        if not supports_analog_ic_profile(next_kind) and project.get("analog_ic_profile") is not None:
+            project.pop("analog_ic_profile", None)
+        validate_project(project)
         return
     if op == "set_analog_ic_profile":
         if not supports_analog_ic_profile(project.get("project_kind")):
@@ -6866,6 +6899,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pdk_list_parser.add_argument("--registry-path", default="")
 
+    pdk_catalog_parser = subparsers.add_parser(
+        "pdk-open-catalog",
+        help="List built-in open PDK sources and official homepage URLs.",
+    )
+    pdk_catalog_parser.set_defaults()
+
     pdk_install_parser = subparsers.add_parser(
         "pdk-install-open",
         help="Acquire an open PDK source tree after explicit user license acceptance.",
@@ -6920,6 +6959,25 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional parent directory for the export. Defaults to <project>/build/exports.",
     )
+
+    schematic_export = subparsers.add_parser(
+        "schematic-export",
+        help="Simple desktop Export: one format + output path, gated by project_kind.",
+    )
+    schematic_export.add_argument("--project-root", required=True)
+    schematic_export.add_argument("--format", required=True)
+    schematic_export.add_argument("--output-path", required=True)
+    schematic_export.add_argument("--module-id", default="")
+    schematic_export.add_argument("--source-revision", type=int, required=True)
+
+    schematic_import = subparsers.add_parser(
+        "schematic-import",
+        help="Simple desktop Import: one external schematic into a module, gated by project_kind.",
+    )
+    schematic_import.add_argument("--project-root", required=True)
+    schematic_import.add_argument("--format", required=True)
+    schematic_import.add_argument("--source-path", required=True)
+    schematic_import.add_argument("--module-id", required=True)
 
     prepare_layout_parser = subparsers.add_parser(
         "prepare-layout-review",
@@ -7121,6 +7179,8 @@ def main() -> int:
         elif args.command == "pdk-list":
             registry = load_pdk_registry(args.registry_path or None)
             result = {"ok": True, **registry}
+        elif args.command == "pdk-open-catalog":
+            result = {"ok": True, "pdks": open_pdk_catalog()}
         elif args.command == "pdk-install-open":
             result = {
                 "ok": True,
@@ -7440,6 +7500,68 @@ def main() -> int:
                 source_revision=args.source_revision,
                 output_dir=args.output_dir or None,
             )
+        elif args.command == "schematic-export":
+            from schematic_handoff import export_schematic
+
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            erc = evaluate_erc(project, modules)
+            result = export_schematic(
+                root,
+                project,
+                modules,
+                erc,
+                project_document_hash(project, modules),
+                fmt=args.format,
+                output_path=args.output_path,
+                module_id=args.module_id or None,
+                source_revision=args.source_revision,
+            )
+        elif args.command == "schematic-import":
+            from schematic_handoff import import_schematic as build_schematic_import
+
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            preview = build_schematic_import(
+                root,
+                project,
+                modules,
+                fmt=args.format,
+                source_path=args.source_path,
+                module_id=args.module_id,
+                persist=False,
+            )
+            updated_module = preview["module"]
+            applied = apply_command(root, {
+                "schema": COMMAND_SCHEMA,
+                "command_id": f"schematic-import-{args.module_id}-{project['revision'] + 1}",
+                "actor": "user",
+                "project_id": project["project_id"],
+                "base_revision": project["revision"],
+                "message": f"Import {args.format} schematic into {args.module_id}",
+                "operations": [{
+                    "op": "set_module_schematic",
+                    "module_id": args.module_id,
+                    "components": updated_module.get("components", []),
+                    "ports": updated_module.get("ports", []),
+                    "wires": updated_module.get("wires", []),
+                    "nets": updated_module.get("nets", []),
+                    "annotations": updated_module.get("annotations", []),
+                    "source": "schematic-import",
+                }],
+            })
+            result = {
+                "ok": True,
+                "format": args.format,
+                "module_id": args.module_id,
+                "project_id": project["project_id"],
+                "revision": applied["revision"],
+                "created": preview.get("created", 0),
+                "source": preview.get("source"),
+                "fidelity": preview.get("fidelity"),
+                "note": preview.get("note"),
+                "files": preview.get("files"),
+            }
         elif args.command == "prepare-layout-review":
             root = Path(args.project_root).resolve()
             project, modules = load_project(root)

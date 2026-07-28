@@ -581,6 +581,13 @@ try {
   assert.equal(await sidebarDemoProject.getAttribute('aria-current'), 'true');
   assert.equal(await page.getByTestId('project-title').textContent(), sidebarDemoProjectName);
   assert.equal(sidebarDemoProjectManifest.project.modules.length, 0);
+  page.once('dialog', async (dialog) => {
+    await dialog.accept();
+  });
+  await page.getByTestId('circuit-workbench').getByTestId('project-kind-select').selectOption('analog_ic');
+  await page.getByTestId('project-pdk-select').waitFor({ timeout: 30_000 });
+  assert.equal(await page.getByTestId('project-pdk-select').inputValue(), '');
+  assert.ok(await page.getByTestId('project-pdk-binding').isVisible());
   await page.getByTestId('topbar-tab-hdl').click();
   await page.getByTestId('hdl-workspace-empty').waitFor();
   await page.getByTestId('initialize-hdl-workspace').click();
@@ -637,39 +644,60 @@ try {
   await clickEnabledTestId(page, 'open-project-folder');
   await page.getByText(/^Opened project folder: /).waitFor({ timeout: 20_000 });
 
-  await clickEnabledTestId(page, 'open-eda-export');
-  await page.getByTestId('eda-export-dialog').waitFor();
-  await page.getByTestId('eda-export-native-convert').selectOption('never');
-  await clickEnabledTestId(page, 'run-eda-export');
-  await page.getByTestId('eda-export-result').waitFor({ timeout: 60_000 });
-  const expectedExportStatuses = {
-    kicad: 'import_ready',
-    altium: 'import_ready',
-    orcad: 'import_ready',
-    virtuoso: 'import_ready',
-  };
+  // Simulation projects hide schematic import/export toolbar actions.
+  assert.equal(await page.getByTestId('open-eda-export').count(), 0);
+  assert.equal(await page.getByTestId('open-eda-import').count(), 0);
+
+  const exportResult = runSkill([
+    'export-eda',
+    '--project-root', projectRoot,
+    '--scope', 'project',
+    '--targets', 'kicad,altium,orcad,virtuoso',
+    '--view', 'design',
+    '--native-convert', 'never',
+    '--source-revision', String(JSON.parse(await readFile(path.resolve(projectRoot, 'project.circuit.json'), 'utf8')).revision),
+  ]);
+  assert.equal(exportResult.ok, true);
+  const exportId = exportResult.export_id;
+  assert.match(exportId, /^\d{8}T\d{6}Z-[0-9a-f]{8}$/);
+  const exportManifest = JSON.parse(await readFile(path.resolve(projectRoot, 'build', 'exports', exportId, 'manifest.json'), 'utf8'));
+  assert.equal(exportManifest.schema, 'actoviq.eda-export-manifest.v1');
+  assert.equal(new Set(Object.values(exportManifest.targets).map((target) => target.connectivity_hash)).size, 1);
   const expectedStructuralStatuses = {
     kicad: 'syntax_validated',
     altium: 'kicad_import_source',
     orcad: 'syntax_validated',
     virtuoso: 'generated_unverified',
   };
-  for (const [target, status] of Object.entries(expectedExportStatuses)) {
-    await page.getByTestId(`eda-export-status-${target}`).getByText(status, { exact: true }).waitFor();
-  }
-  const exportNotice = await page.locator('[role="status"]').textContent();
-  const exportId = exportNotice?.match(/EDA export (\S+) complete/)?.[1] ?? '';
-  assert.match(exportId, /^\d{8}T\d{6}Z-[0-9a-f]{8}$/);
-  const exportManifest = JSON.parse(await readFile(path.resolve(projectRoot, 'build', 'exports', exportId, 'manifest.json'), 'utf8'));
-  assert.equal(exportManifest.schema, 'actoviq.eda-export-manifest.v1');
-  assert.equal(new Set(Object.values(exportManifest.targets).map((target) => target.connectivity_hash)).size, 1);
   for (const [target, structuralStatus] of Object.entries(expectedStructuralStatuses)) {
     assert.equal(exportManifest.targets[target].status, 'import_ready');
     assert.equal(exportManifest.targets[target].detail.structural_status, structuralStatus);
   }
-  await clickEnabledTestId(page, 'open-eda-export-folder');
+
+  const pcbCreated = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `Playwright PCB IO ${Date.now()}`,
+    '--project-kind', 'pcb_schematic',
+  ]);
+  await page.getByTestId(`sidebar-project-${pcbCreated.project.project_id}`).click();
+  await waitForWorkbenchProject(page, pcbCreated.project.project_id);
+  await clickEnabledTestId(page, 'open-eda-export');
+  await page.getByTestId('eda-export-dialog').waitFor();
+  await page.getByTestId('eda-export-format-kicad').waitFor();
+  await page.getByTestId('eda-export-format-jlceda').waitFor();
+  await page.getByTestId('eda-export-format-altium').waitFor();
+  await page.getByTestId('eda-export-format-allegro').waitFor();
   await page.getByTestId('close-eda-export').click();
   await page.getByTestId('eda-export-dialog').waitFor({ state: 'detached' });
+  await clickEnabledTestId(page, 'open-eda-import');
+  await page.getByTestId('eda-import-dialog').waitFor();
+  await page.getByTestId('eda-import-format-kicad').waitFor();
+  await page.getByTestId('close-eda-import').click();
+  await page.getByTestId('eda-import-dialog').waitFor({ state: 'detached' });
+
+  await page.getByTestId(`sidebar-project-${projectId}`).click();
+  await waitForWorkbenchProject(page, projectId);
 
   assert.equal(await page.getByTestId('system-canvas').count(), 1);
   assert.equal(await page.locator('[data-testid^="module-card-"]').count(), 3);
@@ -1013,10 +1041,6 @@ try {
 
   await page.getByTestId('module-card-filter').dblclick();
   await page.getByTestId('module-canvas').waitFor();
-  await page.getByTestId('xschem-peer-panel').waitFor();
-  await page.getByTestId('xschem-mode').getByText('Mode: native', { exact: true }).waitFor();
-  await page.getByTestId('xschem-mode-bridge').waitFor();
-  await page.getByTestId('xschem-mode-external').waitFor();
   await page.getByTestId('schematic-editor').waitFor();
   assert.equal(await page.getByTestId('schematic-editor').getAttribute('data-schematic-source'), 'document');
   assert.equal(await page.getByTestId('schematic-editor-svg').getAttribute('data-schematic-source'), 'document');

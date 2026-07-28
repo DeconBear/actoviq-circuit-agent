@@ -165,6 +165,34 @@ declare global {
         name?: string;
         projectKind?: ProjectKind;
       }): Promise<EdaColdStartImportResult>;
+      exportSchematicHandoff(projectId: string, input: {
+        format: string;
+        outputPath: string;
+        moduleId?: string;
+        sourceRevision: number;
+      }): Promise<{
+        ok: true;
+        format: string;
+        output_path: string;
+        files?: string[];
+        module_id?: string;
+        export_id?: string;
+      }>;
+      importSchematicHandoff(projectId: string, input: {
+        format: string;
+        sourcePath: string;
+        moduleId: string;
+      }): Promise<{
+        ok: true;
+        format: string;
+        module_id: string;
+        revision: number;
+        created: number;
+        fidelity?: string;
+        note?: string;
+      }>;
+      chooseSchematicImportSource(format: string): Promise<string | null>;
+      chooseSchematicExportPath(format: string): Promise<string | null>;
       searchLcscParts(query: string, opts?: { limit?: number; useFallback?: boolean }): Promise<LcscSearchResult>;
       getLcscPart(lcscId: string, opts?: { useFallback?: boolean }): Promise<LcscPartResult>;
       bindLcscPart(
@@ -259,12 +287,50 @@ declare global {
       choosePdkMappingPack(): Promise<string | null>;
       choosePdkInstallDestination(): Promise<string | null>;
       listPdkInstallations(): Promise<Record<string, unknown>>;
+      listOpenPdkCatalog(): Promise<{ ok: true; pdks: Array<{
+        adapter_id: string;
+        name: string;
+        vendor: string;
+        process: string;
+        license: string;
+        support_status: string;
+        source_url: string;
+        homepage_url: string;
+        notes: string;
+      }> }>;
+      getOpenPdkLocalStatus(): Promise<{
+        ok: true;
+        defaultRoot: string;
+        items: Array<{
+          adapter_id: string;
+          present: boolean;
+          registered: boolean;
+          destination: string;
+          root: string;
+          installation_ids: string[];
+        }>;
+      }>;
+      getDefaultPdkRoot(): Promise<string>;
+      choosePdkInstallRoot(): Promise<string | null>;
+      openPdkExternalUrl(url: string): Promise<{ ok: true; url: string }>;
       installOpenPdk(input: {
         adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu';
         destination: string;
         revision?: string;
         licenseAccepted: boolean;
       }): Promise<{ ok: true; receipt?: Record<string, unknown> }>;
+      installOpenPdkDefault(input: {
+        adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu';
+        licenseAccepted: boolean;
+        register?: boolean;
+      }): Promise<{
+        ok: true;
+        destination: string;
+        defaultRoot: string;
+        receipt?: Record<string, unknown>;
+        scan?: { installation?: Record<string, unknown> };
+        registration?: { installation?: Record<string, unknown> } | null;
+      }>;
       scanPdkInstallation(input: {
         root: string;
         adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu' | 'commercial';

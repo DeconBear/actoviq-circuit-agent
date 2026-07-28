@@ -129,6 +129,8 @@ export interface AppSettings {
   haikuModel: string;
   ngspiceBin: string;
   workspaceRoot: string;
+  /** Empty = app data `userData/pdks`. */
+  pdkInstallRoot: string;
   yunzhishengOcrBaseUrl: string;
   yunzhishengOcrApiKey: string;
   yunzhishengOcrModel: string;
@@ -422,6 +424,26 @@ const electronAPI = {
     return ipcRenderer.invoke('pdk:list');
   },
 
+  listOpenPdkCatalog(): Promise<unknown> {
+    return ipcRenderer.invoke('pdk:open-catalog');
+  },
+
+  getOpenPdkLocalStatus(): Promise<unknown> {
+    return ipcRenderer.invoke('pdk:local-status');
+  },
+
+  getDefaultPdkRoot(): Promise<string> {
+    return ipcRenderer.invoke('pdk:default-root');
+  },
+
+  choosePdkInstallRoot(): Promise<string | null> {
+    return ipcRenderer.invoke('pdk:choose-install-root');
+  },
+
+  openPdkExternalUrl(url: string): Promise<unknown> {
+    return ipcRenderer.invoke('pdk:open-external', url);
+  },
+
   installOpenPdk(input: {
     adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu';
     destination: string;
@@ -429,6 +451,14 @@ const electronAPI = {
     licenseAccepted: boolean;
   }): Promise<unknown> {
     return ipcRenderer.invoke('pdk:install-open', input);
+  },
+
+  installOpenPdkDefault(input: {
+    adapter: 'ihp-sg13g2' | 'sky130' | 'gf180mcu';
+    licenseAccepted: boolean;
+    register?: boolean;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('pdk:install-open-default', input);
   },
 
   scanPdkInstallation(input: {
@@ -519,6 +549,31 @@ const electronAPI = {
     projectKind?: string;
   }): Promise<unknown> {
     return ipcRenderer.invoke('project:bridge-import-cold', input);
+  },
+
+  exportSchematicHandoff(projectId: string, input: {
+    format: string;
+    outputPath: string;
+    moduleId?: string;
+    sourceRevision: number;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:schematic-export', projectId, input);
+  },
+
+  importSchematicHandoff(projectId: string, input: {
+    format: string;
+    sourcePath: string;
+    moduleId: string;
+  }): Promise<unknown> {
+    return ipcRenderer.invoke('project:schematic-import', projectId, input);
+  },
+
+  chooseSchematicImportSource(format: string): Promise<string | null> {
+    return ipcRenderer.invoke('project:choose-schematic-import-source', format);
+  },
+
+  chooseSchematicExportPath(format: string): Promise<string | null> {
+    return ipcRenderer.invoke('project:choose-schematic-export-path', format);
   },
 
   searchLcscParts(query: string, opts?: { limit?: number; useFallback?: boolean }): Promise<unknown> {

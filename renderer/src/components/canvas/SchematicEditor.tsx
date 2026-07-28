@@ -9,8 +9,9 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import type { CircuitComponent, CircuitModule, CircuitPin, CircuitPort, CircuitPosition, CircuitWire } from '../../types';
+import type { CircuitComponent, CircuitModule, CircuitPin, CircuitPort, CircuitPosition, CircuitWire, ProjectKind } from '../../types';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
+import { ComponentParamForm, type PdkDeviceCatalog } from './componentParams';
 import { EditorCommandToolbar, FloatingComponentPalette } from './toolbars/SchematicToolbars';
 import {
   addWire,
@@ -98,6 +99,8 @@ interface Props {
   busy: boolean;
   buildBusy?: boolean;
   projectModules?: ProjectModuleLibraryItem[];
+  projectKind?: ProjectKind;
+  pdkDeviceCatalog?: PdkDeviceCatalog | null;
   onSave: (module: CircuitModule) => Promise<boolean | void>;
   onBuild: () => void;
   onProbe?: (probe: SchematicProbeSelection) => void;
@@ -210,6 +213,8 @@ export function SchematicEditor({
   busy,
   buildBusy = false,
   projectModules = [],
+  projectKind = 'simulation',
+  pdkDeviceCatalog = null,
   onSave,
   onBuild,
   onProbe,
@@ -321,10 +326,10 @@ export function SchematicEditor({
       });
     }
     if (tool !== 'place' || !hoverWorld) return null;
-    const ghost = makePlacedComponent(cloneModule(draft), placeType, snapPoint(hoverWorld));
+    const ghost = makePlacedComponent(cloneModule(draft), placeType, snapPoint(hoverWorld), { projectKind });
     ghost.rotation = normalizeRotation(ghost.rotation + placeRotation);
     return ghost;
-  }, [busy, contextMenu, tool, pendingBlock, pendingModule, hoverWorld, draft, placeType, placeRotation]);
+  }, [busy, contextMenu, tool, pendingBlock, pendingModule, hoverWorld, draft, placeType, placeRotation, projectKind]);
   const editorCursor: EditorCursor = (() => {
     if (interactionCursor === 'grabbing') return 'grabbing';
     if (spacePanActive) return 'grab';
@@ -644,7 +649,7 @@ export function SchematicEditor({
 
     if (tool === 'place') {
       const next = cloneModule(draft);
-      const component = makePlacedComponent(next, placeType, snapPoint(world));
+      const component = makePlacedComponent(next, placeType, snapPoint(world), { projectKind });
       component.rotation = normalizeRotation((component.rotation ?? 0) + placeRotation);
       next.components.push(component);
       commitDraft(next);
@@ -1203,11 +1208,14 @@ export function SchematicEditor({
       return;
     }
     // qucs parity: double-click edits the component. The property editor lives in
-    // the side panel, so focus the value field and select its current text.
+    // the side panel, so focus the primary param field and select its current text.
     window.requestAnimationFrame(() => {
-      const input = editorShellRef.current?.querySelector<HTMLInputElement>(
+      const input = editorShellRef.current?.querySelector<HTMLInputElement>([
+        '[data-testid="schematic-param-magnitude"]',
+        '[data-testid="schematic-param-dc"]',
+        '[data-testid="schematic-param-w"]',
         '[data-testid="schematic-editor-component-value"]',
-      );
+      ].join(', '));
       input?.focus();
       input?.select();
     });
@@ -2017,16 +2025,33 @@ export function SchematicEditor({
                   data-testid="schematic-editor-component-name"
                 />
               </label>
-              <label style={styles.fieldLabel}>
-                Value
-                <input
-                  style={styles.input}
-                  value={selectedComponent.value}
-                  onChange={(event) => updateSelectedComponent({ value: event.target.value })}
-                  disabled={busy}
-                  data-testid="schematic-editor-component-value"
+              <div style={styles.typeBadge} data-testid="schematic-editor-component-type">
+                {selectedComponent.type}
+                <span style={styles.typeBadgeKind}>{projectKind}</span>
+              </div>
+              {selectedComponent.type === 'MODULE' || selectedComponent.type === 'BLOCK' || selectedComponent.type === 'GND' ? (
+                <label style={styles.fieldLabel}>
+                  Value
+                  <input
+                    style={styles.input}
+                    value={selectedComponent.value}
+                    onChange={(event) => updateSelectedComponent({ value: event.target.value })}
+                    disabled={busy}
+                    data-testid="schematic-editor-component-value"
+                  />
+                </label>
+              ) : (
+                <ComponentParamForm
+                  projectKind={projectKind}
+                  component={selectedComponent}
+                  busy={busy}
+                  pdkCatalog={pdkDeviceCatalog}
+                  fieldLabelStyle={styles.fieldLabel}
+                  inputStyle={styles.input}
+                  hintStyle={styles.paramHint}
+                  onPatch={updateSelectedComponent}
                 />
-              </label>
+              )}
               <label style={styles.fieldLabel}>
                 Rotation
                 <select
@@ -3666,6 +3691,24 @@ const styles: Record<string, CSSProperties> = {
   },
   fieldLabel: { display: 'grid', gap: 5, fontSize: 12, color: '#536172', marginBottom: 10, fontWeight: 650 },
   fieldGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 10px' },
+  typeBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 10,
+    fontSize: 12,
+    fontWeight: 750,
+    color: '#243247',
+  },
+  typeBadgeKind: {
+    fontSize: 10,
+    fontWeight: 700,
+    color: '#697386',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  paramHint: { fontSize: 11, color: '#7a818b', margin: '0 0 10px' },
   input: {
     width: '100%',
     boxSizing: 'border-box',

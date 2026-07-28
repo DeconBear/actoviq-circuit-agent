@@ -13,8 +13,6 @@ import {
 } from 'react';
 import { useAppStore } from '../../store/appStore';
 import type {
-  BridgeConflict,
-  BridgeManifest,
   CircuitCommand,
   CircuitConnection,
   CircuitHistoryEntry,
@@ -22,22 +20,30 @@ import type {
   CircuitModule,
   CircuitModuleRef,
   CircuitPort,
-  EdaBridgePeerKind,
-  EdaExportResult,
-  EdaExportTarget,
   HdlVerificationRun,
   LayoutOptimizationResult,
-  LcscPart,
   ProjectKind,
   SchematicOverrides,
   SimulationRun,
   StoredExecutionProfile,
-  XschemSyncConflict,
 } from '../../types';
 import { SchematicEditor, type SchematicProbeSelection } from './SchematicEditor';
 import { WorkbenchToolbar } from './WorkbenchToolbar';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import { createSchematicDocument } from '../../schematic/schematicDocument';
+import type { PdkDeviceCatalog } from './componentParams';
+
+interface RegisteredPdkInstallation {
+  installation_id: string;
+  logical_id: string;
+  name: string;
+  process?: string;
+  version?: string;
+  fingerprint?: string;
+  root?: string;
+  support_status?: string;
+  device_catalog?: PdkDeviceCatalog | null;
+}
 
 interface Props {
   onCreateProject: (demo: boolean, name: string, projectKind?: ProjectKind) => Promise<void>;
@@ -62,27 +68,11 @@ interface EmptyProjectFormState {
   projectKind: ProjectKind;
 }
 
-interface EdaExportFormState {
-  scope: 'project' | 'module';
-  targets: EdaExportTarget[];
-  view: 'design' | 'simulation';
-  mappingFile: string;
-  outputDir: string;
-  nativeConvert: 'auto' | 'never' | 'required';
-  strictLayout: boolean;
-}
+type SchematicIoFormat = 'kicad' | 'jlceda' | 'altium' | 'allegro' | 'virtuoso' | 'xschem';
 
-interface XschemValidationResult {
-  status?: 'passed' | 'failed' | 'cancelled';
-  diagnostics?: string[];
-  metadata?: {
-    connectivity_comparison?: {
-      ok?: boolean;
-      compared_instance_count?: number;
-      expected_instance_count?: number;
-      diagnostics?: string[];
-    } | null;
-  };
+interface SchematicIoFormState {
+  format: SchematicIoFormat;
+  path: string;
 }
 
 interface PhysicalVerificationForm {
@@ -109,12 +99,32 @@ const PROJECT_KIND_OPTIONS: Array<{ value: ProjectKind; label: string }> = [
   { value: 'mixed_signal_ic', label: 'Mixed-Signal IC' },
 ];
 
-function supportsEdaBridge(projectKind?: ProjectKind): boolean {
-  return projectKind === 'pcb_schematic';
+function supportsSchematicIo(projectKind?: ProjectKind): boolean {
+  return projectKind === 'pcb_schematic'
+    || projectKind === 'analog_ic'
+    || projectKind === 'mixed_signal_ic';
 }
 
-function bridgePeerLabel(peerKind: EdaBridgePeerKind): string {
-  return peerKind === 'kicad' ? 'KiCad' : '嘉立创 EDA';
+function schematicIoFormats(projectKind?: ProjectKind): Array<{ value: SchematicIoFormat; label: string }> {
+  if (projectKind === 'pcb_schematic') {
+    return [
+      { value: 'kicad', label: 'KiCad' },
+      { value: 'jlceda', label: '嘉立创 EDA' },
+      { value: 'altium', label: 'Altium Designer' },
+      { value: 'allegro', label: 'Allegro / OrCAD' },
+    ];
+  }
+  if (projectKind === 'analog_ic' || projectKind === 'mixed_signal_ic') {
+    return [
+      { value: 'virtuoso', label: 'Virtuoso (SPICE/CDL)' },
+      { value: 'xschem', label: 'Xschem' },
+    ];
+  }
+  return [];
+}
+
+function defaultSchematicIoFormat(projectKind?: ProjectKind): SchematicIoFormat {
+  return schematicIoFormats(projectKind)[0]?.value ?? 'kicad';
 }
 
 function currentVectorCandidates(instance: string, type?: CircuitModule['components'][number]['type']): string[] {
@@ -458,27 +468,19 @@ export function CircuitWorkbench({
   const [historyLoading, setHistoryLoading] = useState(false);
   const [history, setHistory] = useState<CircuitHistoryEntry[]>([]);
   const [edaExportOpen, setEdaExportOpen] = useState(false);
-  const [edaExportResult, setEdaExportResult] = useState<EdaExportResult | null>(null);
-  const [edaExportForm, setEdaExportForm] = useState<EdaExportFormState>({
-    scope: 'project',
-    targets: ['kicad', 'altium', 'orcad', 'virtuoso'],
-    view: 'design',
-    mappingFile: '',
-    outputDir: '',
-    nativeConvert: 'auto',
-    strictLayout: false,
+  const [edaImportOpen, setEdaImportOpen] = useState(false);
+  const [edaExportNotice, setEdaExportNotice] = useState('');
+  const [edaImportNotice, setEdaImportNotice] = useState('');
+  const [edaExportForm, setEdaExportForm] = useState<SchematicIoFormState>({
+    format: 'kicad',
+    path: '',
   });
-  const [bridgeManifests, setBridgeManifests] = useState<BridgeManifest[]>([]);
-  const [bridgeConflicts, setBridgeConflicts] = useState<BridgeConflict[]>([]);
-  const [bridgeLoading, setBridgeLoading] = useState(false);
-  const [lcscQuery, setLcscQuery] = useState('');
-  const [lcscResults, setLcscResults] = useState<LcscPart[]>([]);
-  const [lcscSelectedId, setLcscSelectedId] = useState('');
-  const [lcscBindComponentId, setLcscBindComponentId] = useState('');
-  const [lcscSearching, setLcscSearching] = useState(false);
-  const [xschemConflicts, setXschemConflicts] = useState<XschemSyncConflict[]>([]);
-  const [xschemValidation, setXschemValidation] = useState<XschemValidationResult | null>(null);
+  const [edaImportForm, setEdaImportForm] = useState<SchematicIoFormState>({
+    format: 'kicad',
+    path: '',
+  });
   const [simulationProfiles, setSimulationProfiles] = useState<StoredExecutionProfile[]>([]);
+  const [registeredPdks, setRegisteredPdks] = useState<RegisteredPdkInstallation[]>([]);
   const [physicalOpen, setPhysicalOpen] = useState(false);
   const [physicalResult, setPhysicalResult] = useState<HdlVerificationRun | SimulationRun | null>(null);
   const [physicalForm, setPhysicalForm] = useState<PhysicalVerificationForm>({
@@ -501,7 +503,16 @@ export function CircuitWorkbench({
   const projectSimulationProfileId = project?.analog_ic_profile?.schema === 'actoviq.analog-ic-profile.v2'
     ? project.analog_ic_profile.simulation_profile_id
     : '';
-  const edaBridgeEnabled = supportsEdaBridge(projectKind);
+  const projectPdkRef = project?.analog_ic_profile?.schema === 'actoviq.analog-ic-profile.v2'
+    ? project.analog_ic_profile.pdk_binding.pdk_ref
+    : '';
+  const pdkDeviceCatalog = useMemo(() => {
+    if (!projectPdkRef) return null;
+    const installation = registeredPdks.find((entry) => entry.logical_id === projectPdkRef);
+    return installation?.device_catalog ?? null;
+  }, [projectPdkRef, registeredPdks]);
+  const schematicIoEnabled = supportsSchematicIo(projectKind);
+  const schematicFormats = schematicIoFormats(projectKind);
   const erc = bundle?.erc ?? build?.erc ?? null;
   const currentProjectId = project?.project_id ?? activeProjectId;
   const systemNetworks = useMemo(
@@ -567,7 +578,6 @@ export function CircuitWorkbench({
   useEffect(() => {
     setNoteDraft(selectedRef?.notes ?? '');
     setModuleSimulation(null);
-    setXschemValidation(null);
   }, [selectedRef?.id, selectedRef?.notes]);
 
   useEffect(() => {
@@ -579,14 +589,11 @@ export function CircuitWorkbench({
     setModulePreviewSizes({});
     setModulePreviewBusy({});
     setEdaExportOpen(false);
-    setEdaExportResult(null);
-    setBridgeManifests([]);
-    setBridgeConflicts([]);
-    setLcscQuery('');
-    setLcscResults([]);
-    setLcscSelectedId('');
-    setLcscBindComponentId('');
-    setXschemConflicts([]);
+    setEdaImportOpen(false);
+    setEdaExportNotice('');
+    setEdaImportNotice('');
+    setEdaExportForm({ format: defaultSchematicIoFormat(projectKind), path: '' });
+    setEdaImportForm({ format: defaultSchematicIoFormat(projectKind), path: '' });
     modulePreviewBusyRef.current = new Set();
   }, [activeProjectId]);
 
@@ -644,6 +651,46 @@ export function CircuitWorkbench({
       cancelled = true;
     };
   }, [activeProjectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRegisteredPdks = async () => {
+      if (typeof window.electronAPI.listPdkInstallations !== 'function') {
+        if (!cancelled) setRegisteredPdks([]);
+        return;
+      }
+      try {
+        const listed = await window.electronAPI.listPdkInstallations() as {
+          installations?: Array<Record<string, unknown>>;
+        };
+        if (cancelled) return;
+        const installations = Array.isArray(listed?.installations) ? listed.installations : [];
+        setRegisteredPdks(installations.map((entry) => {
+          const catalog = entry.device_catalog;
+          const devices = catalog && typeof catalog === 'object' && Array.isArray((catalog as { devices?: unknown }).devices)
+            ? (catalog as PdkDeviceCatalog)
+            : null;
+          return {
+            installation_id: String(entry.installation_id ?? ''),
+            logical_id: String(entry.logical_id ?? ''),
+            name: String(entry.name ?? entry.logical_id ?? 'PDK'),
+            process: typeof entry.process === 'string' ? entry.process : undefined,
+            version: typeof entry.version === 'string' ? entry.version : undefined,
+            fingerprint: typeof entry.fingerprint === 'string' ? entry.fingerprint : undefined,
+            root: typeof entry.root === 'string' ? entry.root : undefined,
+            support_status: typeof entry.support_status === 'string' ? entry.support_status : undefined,
+            device_catalog: devices,
+          };
+        }).filter((entry) => entry.logical_id));
+      } catch {
+        if (!cancelled) setRegisteredPdks([]);
+      }
+    };
+    void loadRegisteredPdks();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, projectKind]);
 
   const refreshHistory = useCallback(async () => {
     if (!currentProjectId) {
@@ -998,38 +1045,51 @@ export function CircuitWorkbench({
     }
   }
 
-  async function chooseEdaMapping(): Promise<void> {
-    const selected = await window.electronAPI.chooseCircuitEdaMapping();
-    if (selected) setEdaExportForm((current) => ({ ...current, mappingFile: selected }));
+  useEffect(() => {
+    const format = defaultSchematicIoFormat(projectKind);
+    setEdaExportForm((current) => (
+      schematicIoFormats(projectKind).some((entry) => entry.value === current.format)
+        ? current
+        : { format, path: '' }
+    ));
+    setEdaImportForm((current) => (
+      schematicIoFormats(projectKind).some((entry) => entry.value === current.format)
+        ? current
+        : { format, path: '' }
+    ));
+  }, [projectKind]);
+
+  async function chooseSchematicExportPath(): Promise<void> {
+    const selected = await window.electronAPI.chooseSchematicExportPath(edaExportForm.format);
+    if (selected) setEdaExportForm((current) => ({ ...current, path: selected }));
   }
 
-  async function chooseEdaOutputDir(): Promise<void> {
-    const selected = await window.electronAPI.chooseCircuitEdaOutputDir();
-    if (selected) setEdaExportForm((current) => ({ ...current, outputDir: selected }));
+  async function chooseSchematicImportSource(): Promise<void> {
+    const selected = await window.electronAPI.chooseSchematicImportSource(edaImportForm.format);
+    if (selected) setEdaImportForm((current) => ({ ...current, path: selected }));
   }
 
-  async function runEdaExport(): Promise<void> {
-    if (!currentProjectId || !project || edaExportForm.targets.length === 0) return;
+  async function runSchematicExport(): Promise<void> {
+    if (!currentProjectId || !project || !schematicIoEnabled || !edaExportForm.path.trim()) return;
+    if ((edaExportForm.format === 'xschem' || edaExportForm.format === 'virtuoso') && !activeModuleId) {
+      setError('Open a module before exporting for Analog IC projects.');
+      return;
+    }
     const operationProjectId = currentProjectId;
     setBusy(true);
     setError('');
-    setEdaExportResult(null);
-    setNotice('Exporting editable EDA packages...');
+    setEdaExportNotice('');
+    setNotice(`Exporting ${edaExportForm.format} schematic...`);
     try {
-      const result = await window.electronAPI.exportCircuitEda(operationProjectId, {
-        scope: edaExportForm.scope,
-        moduleId: edaExportForm.scope === 'module' ? activeModuleId ?? undefined : undefined,
-        targets: edaExportForm.targets,
-        view: edaExportForm.view,
-        mappingFile: edaExportForm.mappingFile || undefined,
-        nativeConvert: edaExportForm.nativeConvert,
-        strictLayout: edaExportForm.strictLayout,
+      const result = await window.electronAPI.exportSchematicHandoff(operationProjectId, {
+        format: edaExportForm.format,
+        outputPath: edaExportForm.path.trim(),
+        moduleId: activeModuleId ?? undefined,
         sourceRevision: project.revision,
-        outputDir: edaExportForm.outputDir || undefined,
       });
       if (isActiveProject(operationProjectId)) {
-        setEdaExportResult(result);
-        setNotice(`EDA export ${result.export_id} complete`);
+        setEdaExportNotice(result.output_path);
+        setNotice(`Exported ${edaExportForm.format} to ${result.output_path}`);
       }
     } catch (exportError) {
       if (isActiveProject(operationProjectId)) {
@@ -1041,145 +1101,35 @@ export function CircuitWorkbench({
     }
   }
 
-  async function openEdaExportFolder(): Promise<void> {
-    if (!currentProjectId || !edaExportResult) return;
-    try {
-      await window.electronAPI.openCircuitEdaExportFolder(
-        currentProjectId,
-        edaExportResult.export_id,
-        edaExportResult.export_root,
-      );
-    } catch (openError) {
-      setError(openError instanceof Error ? openError.message : String(openError));
-    }
-  }
-
-  const refreshBridgeStatus = useCallback(async () => {
-    if (!currentProjectId || !edaBridgeEnabled) return;
-    setBridgeLoading(true);
-    try {
-      const result = await window.electronAPI.listEdaBridges(currentProjectId);
-      setBridgeManifests(Array.isArray(result.bridges) ? result.bridges : []);
-    } catch (bridgeError) {
-      setError(bridgeError instanceof Error ? bridgeError.message : String(bridgeError));
-    } finally {
-      setBridgeLoading(false);
-    }
-  }, [currentProjectId, edaBridgeEnabled]);
-
-  useEffect(() => {
-    if (!edaExportOpen || !edaBridgeEnabled || !currentProjectId) return;
-    void refreshBridgeStatus();
-  }, [currentProjectId, edaBridgeEnabled, edaExportOpen, refreshBridgeStatus]);
-
-  async function linkBridgePeer(peerKind: EdaBridgePeerKind): Promise<void> {
-    if (!currentProjectId) return;
-    const peerRoot = await window.electronAPI.chooseEdaBridgePeerRoot();
-    if (!peerRoot) return;
-    setBusy(true);
-    setError('');
-    setBridgeConflicts([]);
-    try {
-      await window.electronAPI.linkEdaBridge(currentProjectId, { peerKind, peerRoot });
-      setNotice(`Linked ${bridgePeerLabel(peerKind)} bridge`);
-      await refreshBridgeStatus();
-    } catch (linkError) {
-      setError(linkError instanceof Error ? linkError.message : String(linkError));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function unlinkBridgePeer(peerKind: EdaBridgePeerKind): Promise<void> {
-    if (!currentProjectId) return;
-    setBusy(true);
-    setError('');
-    try {
-      await window.electronAPI.unlinkEdaBridge(currentProjectId, peerKind);
-      setNotice(`Unlinked ${bridgePeerLabel(peerKind)} bridge`);
-      await refreshBridgeStatus();
-    } catch (unlinkError) {
-      setError(unlinkError instanceof Error ? unlinkError.message : String(unlinkError));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function pushBridgePeer(peerKind: EdaBridgePeerKind): Promise<void> {
-    if (!currentProjectId) return;
-    setBusy(true);
-    setError('');
-    setBridgeConflicts([]);
-    try {
-      await window.electronAPI.pushEdaBridge(currentProjectId, peerKind);
-      setNotice(`Pushed revision to ${bridgePeerLabel(peerKind)}`);
-      await refreshBridgeStatus();
-    } catch (pushError) {
-      setError(pushError instanceof Error ? pushError.message : String(pushError));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function pullBridgePeer(peerKind: EdaBridgePeerKind): Promise<void> {
-    if (!currentProjectId) return;
-    setBusy(true);
-    setError('');
-    setBridgeConflicts([]);
-    try {
-      const result = await window.electronAPI.pullEdaBridge(currentProjectId, peerKind);
-      setBridgeConflicts(Array.isArray(result.conflicts) ? result.conflicts : []);
-      setNotice(result.conflicts?.length
-        ? `Pulled from ${bridgePeerLabel(peerKind)} with ${result.conflicts.length} conflict(s)`
-        : `Pulled from ${bridgePeerLabel(peerKind)}`);
-      await refreshBridgeStatus();
-      if (currentProjectId) await onReloadProject(currentProjectId);
-    } catch (pullError) {
-      setError(pullError instanceof Error ? pullError.message : String(pullError));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function searchLcscParts(): Promise<void> {
-    const query = lcscQuery.trim();
-    if (!query) return;
-    setLcscSearching(true);
-    setError('');
-    try {
-      const result = await window.electronAPI.searchLcscParts(query, { limit: 20 });
-      const parts = Array.isArray(result.parts) ? result.parts : [];
-      setLcscResults(parts);
-      setLcscSelectedId(parts[0]?.lcsc_id ?? '');
-    } catch (searchError) {
-      setError(searchError instanceof Error ? searchError.message : String(searchError));
-    } finally {
-      setLcscSearching(false);
-    }
-  }
-
-  async function bindSelectedLcscPart(): Promise<void> {
-    if (!currentProjectId || !activeModuleId || !lcscSelectedId) return;
-    const componentId = lcscBindComponentId.trim();
-    if (!componentId) {
-      setError('Enter a schematic component id to bind the LCSC part.');
+  async function runSchematicImport(): Promise<void> {
+    if (!currentProjectId || !schematicIoEnabled || !edaImportForm.path.trim()) return;
+    if (!activeModuleId) {
+      setError('Open a module before importing a schematic.');
       return;
     }
+    const operationProjectId = currentProjectId;
     setBusy(true);
     setError('');
+    setEdaImportNotice('');
+    setNotice(`Importing ${edaImportForm.format} schematic...`);
     try {
-      await window.electronAPI.bindLcscPart(
-        currentProjectId,
-        activeModuleId,
-        componentId,
-        lcscSelectedId,
-      );
-      setNotice(`Bound LCSC ${lcscSelectedId} to ${activeModuleId}/${componentId}`);
-      await onReloadProject(currentProjectId);
-    } catch (bindError) {
-      setError(bindError instanceof Error ? bindError.message : String(bindError));
+      const result = await window.electronAPI.importSchematicHandoff(operationProjectId, {
+        format: edaImportForm.format,
+        sourcePath: edaImportForm.path.trim(),
+        moduleId: activeModuleId,
+      });
+      await onReloadProject(operationProjectId);
+      if (isActiveProject(operationProjectId)) {
+        setEdaImportNotice(`Imported ${result.created} component(s) (${result.fidelity ?? 'best-effort'})`);
+        setNotice(`Imported ${result.created} component(s) from ${edaImportForm.format}`);
+      }
+    } catch (importError) {
+      if (isActiveProject(operationProjectId)) {
+        setError(importError instanceof Error ? importError.message : String(importError));
+        setNotice('');
+      }
     } finally {
-      setBusy(false);
+      if (isActiveProject(operationProjectId)) setBusy(false);
     }
   }
 
@@ -1227,6 +1177,109 @@ export function CircuitWorkbench({
     }]);
   }
 
+  async function setPdkBinding(logicalId: string): Promise<void> {
+    if (!project || busy) return;
+    const trimmed = logicalId.trim();
+    if (!trimmed) return;
+    const installation = registeredPdks.find((entry) => entry.logical_id === trimmed);
+    if (!installation) {
+      setError(`Registered PDK not found: ${trimmed}. Open Settings → IC tools and PDKs to register one.`);
+      return;
+    }
+    const existing = project.analog_ic_profile;
+    let simulationProfileId = existing?.schema === 'actoviq.analog-ic-profile.v2'
+      ? existing.simulation_profile_id
+      : (simulationProfiles[0]?.id ?? '');
+    let nextProfiles = simulationProfiles;
+    if (!simulationProfileId.trim()) {
+      try {
+        const settings = await window.electronAPI.getSettings();
+        const workspaceRoot = useAppStore.getState().activeWorkspace?.root?.trim() || '';
+        const defaultPdkRoot = typeof window.electronAPI.getDefaultPdkRoot === 'function'
+          ? await window.electronAPI.getDefaultPdkRoot().catch(() => '')
+          : '';
+        const isAbsoluteRoot = (value: string) => (
+          /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('/')
+        );
+        const allowedRoots = [...new Set([
+          workspaceRoot,
+          installation.root?.trim() || '',
+          settings.workspaceRoot?.trim() || '',
+          settings.pdkInstallRoot?.trim() || '',
+          typeof defaultPdkRoot === 'string' ? defaultPdkRoot.trim() : '',
+        ].filter((root) => root && isAbsoluteRoot(root)))];
+        if (!allowedRoots.length) {
+          setError('Could not determine an allowed workspace/PDK root for the default ngspice profile. Set Workspace root or PDK install root in Settings, then retry.');
+          return;
+        }
+        const defaultProfile: StoredExecutionProfile = {
+          schema: 'actoviq.execution-profile.v1',
+          id: 'ngspice-local',
+          providerId: 'ngspice',
+          target: navigator.platform.toLowerCase().includes('win') ? 'local_windows' : 'local_linux',
+          executable: settings.ngspiceBin?.trim() || undefined,
+          allowedRoots,
+          environmentKeys: [],
+          qualification: 'configured',
+        };
+        const registry = await window.electronAPI.saveExecutionProfile(defaultProfile);
+        nextProfiles = registry.profiles.filter(
+          (profile) => profile.providerId === 'ngspice' || profile.providerId === 'xyce',
+        );
+        setSimulationProfiles(nextProfiles);
+        simulationProfileId = nextProfiles.find((profile) => profile.id === 'ngspice-local')?.id
+          ?? nextProfiles[0]?.id
+          ?? '';
+      } catch (profileError) {
+        setError(profileError instanceof Error
+          ? profileError.message
+          : 'Could not create a default ngspice execution profile. Add one in Settings first.');
+        return;
+      }
+    }
+    if (!simulationProfileId.trim()) {
+      setError('Create an ngspice/Xyce execution profile in Settings before binding a PDK.');
+      return;
+    }
+    const sizing = existing && typeof existing === 'object' && 'sizing' in existing && existing.sizing
+      ? existing.sizing
+      : { require_explicit_w_l: true as const, require_scale_suffix: true as const };
+    await applyOperations(`Bind PDK ${installation.name}`, [{
+      op: 'set_analog_ic_profile',
+      profile: {
+        schema: 'actoviq.analog-ic-profile.v2',
+        simulation_profile_id: simulationProfileId,
+        pdk_binding: {
+          schema: 'actoviq.pdk-binding.v1',
+          pdk_ref: installation.logical_id,
+          ...(installation.fingerprint ? { fingerprint: installation.fingerprint } : {}),
+          ...(installation.version ? { version: installation.version } : {}),
+        },
+        sizing,
+      },
+    }]);
+  }
+
+  async function setProjectKind(nextKind: ProjectKind): Promise<void> {
+    if (!project || nextKind === projectKind || busy) return;
+    const previousLabel = PROJECT_KIND_OPTIONS.find((entry) => entry.value === projectKind)?.label ?? projectKind;
+    const nextLabel = PROJECT_KIND_OPTIONS.find((entry) => entry.value === nextKind)?.label ?? nextKind;
+    const leavingIc = (projectKind === 'analog_ic' || projectKind === 'mixed_signal_ic')
+      && nextKind !== 'analog_ic'
+      && nextKind !== 'mixed_signal_ic'
+      && Boolean(project.analog_ic_profile);
+    const confirmed = window.confirm(
+      leavingIc
+        ? `Change project type from ${previousLabel} to ${nextLabel}?\n\nThe Analog IC profile will be cleared. Modules must remain valid for the new type.`
+        : `Change project type from ${previousLabel} to ${nextLabel}?\n\nModules must remain valid for the new type.`,
+    );
+    if (!confirmed) return;
+    await applyOperations(`Set project kind to ${nextKind}`, [{
+      op: 'set_project_kind',
+      project_kind: nextKind,
+    }]);
+  }
+
   async function choosePhysicalPath(
     key: keyof Pick<PhysicalVerificationForm, 'layout' | 'schematic' | 'ruleDeck' | 'techFile' | 'extracted' | 'setupFile' | 'deck' | 'lvsRun'>,
     label: string,
@@ -1247,108 +1300,6 @@ export function CircuitWorkbench({
       setNotice(`Physical verification ${'status' in result ? result.status : result.execution_status}.`);
     } catch (physicalError) {
       setError(physicalError instanceof Error ? physicalError.message : String(physicalError));
-      setNotice('');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function linkXschemMode(mode: 'native' | 'bridge' | 'external'): Promise<void> {
-    if (!currentProjectId || !activeModuleId || busy) return;
-    if (mode === 'native' && selectedModule?.schematic_peer?.mode === 'external') {
-      setNotice('Pull and take ownership explicitly before switching an external Xschem module to native mode.');
-      return;
-    }
-    if (mode === 'native' && selectedModule?.schematic_peer?.mode === 'bridge'
-      && !window.confirm('Disconnect the Xschem bridge and keep the current Actoviq schematic as authoritative?')) {
-      return;
-    }
-    let peerFile: string | undefined;
-    if (mode !== 'native') {
-      const selected = await window.electronAPI.chooseXschemPeerFile(mode);
-      if (!selected) return;
-      peerFile = selected;
-    }
-    const operationProjectId = currentProjectId;
-    const operationModuleId = activeModuleId;
-    setBusy(true);
-    setError('');
-    setXschemConflicts([]);
-    setNotice(mode === 'bridge' ? 'Creating controlled Xschem bridge...' : mode === 'external'
-      ? 'Linking authoritative Xschem schematic...' : 'Switching to Actoviq native mode...');
-    try {
-      await window.electronAPI.linkXschemPeer(operationProjectId, {
-        moduleId: operationModuleId,
-        mode,
-        peerFile,
-      });
-      await onReloadProject(operationProjectId);
-      if (isActiveProject(operationProjectId)) setNotice(`Xschem mode is now ${mode}.`);
-    } catch (operationError) {
-      if (isActiveProject(operationProjectId)) {
-        setError(operationError instanceof Error ? operationError.message : String(operationError));
-        setNotice('');
-      }
-    } finally {
-      if (isActiveProject(operationProjectId)) setBusy(false);
-    }
-  }
-
-  async function syncXschem(action: 'push' | 'pull' | 'take-ownership'): Promise<void> {
-    if (!currentProjectId || !activeModuleId || busy) return;
-    const operationProjectId = currentProjectId;
-    const operationModuleId = activeModuleId;
-    setBusy(true);
-    setError('');
-    setXschemConflicts([]);
-    setNotice(action === 'push' ? 'Pushing safe Actoviq projection to Xschem...'
-      : action === 'pull' ? 'Reviewing Xschem changes...' : 'Pulling Xschem changes before taking ownership...');
-    try {
-      const result = action === 'push'
-        ? await window.electronAPI.pushXschemPeer(operationProjectId, operationModuleId)
-        : action === 'pull'
-          ? await window.electronAPI.pullXschemPeer(operationProjectId, operationModuleId)
-          : await window.electronAPI.takeXschemOwnership(operationProjectId, operationModuleId);
-      if (result.requires_review) {
-        setXschemConflicts(result.conflicts ?? []);
-        setNotice('Xschem changes require review; no topology or conflicting edits were applied.');
-      } else {
-        await onReloadProject(operationProjectId);
-        if (isActiveProject(operationProjectId)) {
-          setNotice(action === 'take-ownership'
-            ? 'Xschem changes pulled; Actoviq is now authoritative.'
-            : `Xschem ${action} completed.`);
-        }
-      }
-    } catch (operationError) {
-      if (isActiveProject(operationProjectId)) {
-        setError(operationError instanceof Error ? operationError.message : String(operationError));
-        setNotice('');
-      }
-    } finally {
-      if (isActiveProject(operationProjectId)) setBusy(false);
-    }
-  }
-
-  async function validateXschem(): Promise<void> {
-    const peerFile = selectedModule?.schematic_peer?.peer_file;
-    if (!currentProjectId || !activeModuleId || !peerFile || busy) return;
-    setBusy(true);
-    setError('');
-    setXschemValidation(null);
-    setNotice('Generating Xschem reference netlist and comparing connectivity...');
-    try {
-      const result = await window.electronAPI.validateXschemPeer(
-        currentProjectId,
-        activeModuleId,
-        peerFile,
-      ) as XschemValidationResult;
-      setXschemValidation(result);
-      setNotice(result.status === 'passed'
-        ? 'Xschem reference connectivity matches the Actoviq module.'
-        : 'Xschem reference connectivity differs; review diagnostics below.');
-    } catch (validationError) {
-      setError(validationError instanceof Error ? validationError.message : String(validationError));
       setNotice('');
     } finally {
       setBusy(false);
@@ -1854,11 +1805,57 @@ export function CircuitWorkbench({
           </div>
           <div style={styles.projectMeta} data-testid="project-meta">
             revision {project.revision} | {project.modules.length} modules
-            {projectKind ? ` | ${PROJECT_KIND_OPTIONS.find((entry) => entry.value === projectKind)?.label ?? projectKind}` : ''}
             {build ? ` | ${build.manifest.status}` : ''}
             {build && (build.manifest.source_revision ?? build.manifest.revision) !== project.revision ? ' | build stale' : ''}
             {erc ? ` | ERC ${erc.status}` : ''}
           </div>
+          <label style={styles.projectKindField} data-testid="project-kind-editor">
+            <span>Type</span>
+            <select
+              value={projectKind}
+              onChange={(event) => { void setProjectKind(event.target.value as ProjectKind); }}
+              disabled={busy}
+              aria-label="Project type"
+              data-testid="project-kind-select"
+            >
+              {PROJECT_KIND_OPTIONS.map((entry) => (
+                <option key={entry.value} value={entry.value}>{entry.label}</option>
+              ))}
+            </select>
+          </label>
+          {projectKind === 'analog_ic' || projectKind === 'mixed_signal_ic' ? (
+            <label style={styles.simulationProfile} data-testid="project-pdk-binding">
+              <span>PDK</span>
+              <select
+                value={projectPdkRef}
+                onChange={(event) => { void setPdkBinding(event.target.value); }}
+                disabled={busy || registeredPdks.length === 0}
+                aria-label="Bind registered PDK"
+                data-testid="project-pdk-select"
+              >
+                <option value="">
+                  {registeredPdks.length === 0
+                    ? 'No registered PDK (open Settings)'
+                    : project?.analog_ic_profile?.schema === 'actoviq.analog-ic-profile.v1'
+                      ? 'Legacy profile — select PDK to migrate'
+                      : 'Bind registered PDK...'}
+                </option>
+                {projectPdkRef
+                  && !registeredPdks.some((entry) => entry.logical_id === projectPdkRef) ? (
+                    <option value={projectPdkRef}>
+                      {projectPdkRef} · not in registry
+                    </option>
+                  ) : null}
+                {registeredPdks.map((entry) => (
+                  <option key={entry.installation_id || entry.logical_id} value={entry.logical_id}>
+                    {entry.name}
+                    {entry.process ? ` · ${entry.process}` : ''}
+                    {entry.version ? ` · ${entry.version}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {projectKind === 'analog_ic' || projectKind === 'mixed_signal_ic' ? (
             <label style={styles.simulationProfile} data-testid="project-simulation-profile">
               <span>Simulation</span>
@@ -1871,7 +1868,9 @@ export function CircuitWorkbench({
                 <option value="">
                   {project.analog_ic_profile?.schema === 'actoviq.analog-ic-profile.v1'
                     ? 'Legacy ngspice profile (explicit migration required)'
-                    : 'Configure PDK binding first'}
+                    : projectPdkRef
+                      ? 'Select execution profile...'
+                      : 'Configure PDK binding first'}
                 </option>
                 {projectSimulationProfileId
                   && !simulationProfiles.some((profile) => profile.id === projectSimulationProfileId) ? (
@@ -1908,6 +1907,7 @@ export function CircuitWorkbench({
             errors: erc.summary.errors,
             warnings: erc.summary.warnings,
           } : null}
+          showSchematicIo={schematicIoEnabled}
           onBackToBoard={() => setView('board')}
           onArrangeModules={arrangeModules}
           onZoomOut={() => zoomCanvasAtPanelCenter(zoom - 10)}
@@ -1916,8 +1916,12 @@ export function CircuitWorkbench({
           onSimulate={() => { void runBuild(true); }}
           onSaveTemplate={() => { void saveDesignMemory('template'); }}
           onSaveFlow={() => { void saveDesignMemory('flow'); }}
+          onOpenEdaImport={() => {
+            setEdaImportNotice('');
+            setEdaImportOpen(true);
+          }}
           onOpenEdaExport={() => {
-            setEdaExportResult(null);
+            setEdaExportNotice('');
             setEdaExportOpen(true);
           }}
           onOpenErc={() => {
@@ -2060,13 +2064,102 @@ export function CircuitWorkbench({
         </div>
       ) : null}
 
-      {edaExportOpen ? (
-        <div style={styles.historyOverlay} data-testid="eda-export-dialog">
-          <section className="av-sheet" aria-label="Export EDA schematic packages">
+      {edaImportOpen ? (
+        <div style={styles.historyOverlay} data-testid="eda-import-dialog">
+          <section className="av-sheet" aria-label="Import external schematic">
             <div className="av-sheet__header">
               <div>
-                <div className="av-sheet__title">Export editable EDA packages</div>
-                <div className="av-sheet__subtitle">Revision {project.revision} | connectivity-preserving export</div>
+                <div className="av-sheet__title">Import schematic</div>
+                <div className="av-sheet__subtitle">
+                  Choose the source EDA format, then select a schematic file or folder.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="av-btn av-btn--secondary"
+                onClick={() => setEdaImportOpen(false)}
+                disabled={busy}
+                data-testid="close-eda-import"
+              >
+                Close
+              </button>
+            </div>
+            <div className="av-sheet__body">
+              <div className="av-form-field">
+                <span>Source format</span>
+                <div className="av-form-checks">
+                  {schematicFormats.map((entry) => (
+                    <label key={entry.value} className="av-form-check">
+                      <input
+                        type="radio"
+                        name="eda-import-format"
+                        checked={edaImportForm.format === entry.value}
+                        onChange={() => setEdaImportForm((current) => ({ ...current, format: entry.value, path: '' }))}
+                        disabled={busy}
+                        data-testid={`eda-import-format-${entry.value}`}
+                      />
+                      {entry.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="av-form-field">
+                <span>Source path</span>
+                <div style={styles.edaMappingRow}>
+                  <input
+                    className="av-form-control"
+                    value={edaImportForm.path}
+                    readOnly
+                    placeholder="Select an external schematic"
+                    data-testid="eda-import-source-path"
+                  />
+                  <button
+                    type="button"
+                    className="av-btn av-btn--secondary"
+                    onClick={() => void chooseSchematicImportSource()}
+                    disabled={busy}
+                    data-testid="eda-import-choose-source"
+                  >
+                    Choose...
+                  </button>
+                </div>
+                <p className="av-form-hint">
+                  Imports into the currently open module as Actoviq-native blocks.
+                  {edaImportForm.format === 'altium' || edaImportForm.format === 'allegro'
+                    ? ' Altium/Allegro direct import is not available yet — use KiCad (.kicad_sch).'
+                    : ''}
+                </p>
+              </div>
+              {edaImportNotice ? (
+                <div className="av-form-status av-form-status--ok" data-testid="eda-import-result">
+                  {edaImportNotice}
+                </div>
+              ) : null}
+            </div>
+            <div className="av-sheet__footer">
+              <button
+                type="button"
+                className="av-btn av-btn--primary"
+                onClick={() => void runSchematicImport()}
+                disabled={busy || !edaImportForm.path.trim() || !activeModuleId}
+                data-testid="run-eda-import"
+              >
+                {busy ? 'Importing...' : 'Import'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {edaExportOpen ? (
+        <div style={styles.historyOverlay} data-testid="eda-export-dialog">
+          <section className="av-sheet" aria-label="Export schematic">
+            <div className="av-sheet__header">
+              <div>
+                <div className="av-sheet__title">Export schematic</div>
+                <div className="av-sheet__subtitle">
+                  Choose a target EDA format and output path. Revision {project.revision}.
+                </div>
               </div>
               <button
                 type="button"
@@ -2079,290 +2172,57 @@ export function CircuitWorkbench({
               </button>
             </div>
             <div className="av-sheet__body">
-              <label className="av-form-field">
-                <span>Scope</span>
-                <select
-                  value={edaExportForm.scope}
-                  onChange={(event) => setEdaExportForm((current) => ({ ...current, scope: event.target.value as 'project' | 'module' }))}
-                  disabled={busy || !activeModuleId}
-                  data-testid="eda-export-scope"
-                >
-                  <option value="project">Entire project</option>
-                  <option value="module">Current module{activeModuleId ? ` (${activeModuleId})` : ''}</option>
-                </select>
-              </label>
-              <label className="av-form-field">
-                <span>View</span>
-                <select
-                  value={edaExportForm.view}
-                  onChange={(event) => setEdaExportForm((current) => ({ ...current, view: event.target.value as 'design' | 'simulation' }))}
-                  disabled={busy}
-                  data-testid="eda-export-view"
-                >
-                  <option value="design">Design (exclude testbench)</option>
-                  <option value="simulation">Simulation (include sources)</option>
-                </select>
-                <p className="av-form-hint">
-                  Design omits ideal V/I sources unless they are marked mount_policy design_include. Simulation keeps sources and testbench parts.
-                </p>
-              </label>
               <div className="av-form-field">
-                <span>Targets</span>
+                <span>Target format</span>
                 <div className="av-form-checks">
-                  {(['kicad', 'altium', 'orcad', 'virtuoso'] as EdaExportTarget[]).map((target) => (
-                    <label key={target} className="av-form-check">
+                  {schematicFormats.map((entry) => (
+                    <label key={entry.value} className="av-form-check">
                       <input
-                        type="checkbox"
-                        checked={edaExportForm.targets.includes(target)}
-                        onChange={(event) => setEdaExportForm((current) => ({
-                          ...current,
-                          targets: event.target.checked
-                            ? [...new Set([...current.targets, target])]
-                            : current.targets.filter((entry) => entry !== target),
-                        }))}
+                        type="radio"
+                        name="eda-export-format"
+                        checked={edaExportForm.format === entry.value}
+                        onChange={() => setEdaExportForm((current) => ({ ...current, format: entry.value, path: '' }))}
                         disabled={busy}
-                        data-testid={`eda-export-target-${target}`}
+                        data-testid={`eda-export-format-${entry.value}`}
                       />
-                      {target === 'orcad' ? 'OrCAD' : target === 'kicad' ? 'KiCad' : target.charAt(0).toUpperCase() + target.slice(1)}
+                      {entry.label}
                     </label>
                   ))}
                 </div>
               </div>
-              <label className="av-form-field">
-                <span>Native conversion</span>
-                <select
-                  value={edaExportForm.nativeConvert}
-                  onChange={(event) => setEdaExportForm((current) => ({ ...current, nativeConvert: event.target.value as EdaExportFormState['nativeConvert'] }))}
-                  disabled={busy}
-                  data-testid="eda-export-native-convert"
-                >
-                  <option value="auto">Auto detect</option>
-                  <option value="never">Import-ready only</option>
-                  <option value="required">Require native tool</option>
-                </select>
-              </label>
               <div className="av-form-field">
-                <span>Symbol mapping</span>
+                <span>Output path</span>
                 <div style={styles.edaMappingRow}>
                   <input
                     className="av-form-control"
-                    value={edaExportForm.mappingFile}
+                    value={edaExportForm.path}
                     readOnly
-                    placeholder="Generic symbols (default)"
-                    data-testid="eda-export-mapping"
+                    placeholder={edaExportForm.format === 'xschem' ? 'Select .sch output file' : 'Select output folder'}
+                    data-testid="eda-export-output-path"
                   />
-                  <button type="button" className="av-btn av-btn--secondary" onClick={() => void chooseEdaMapping()} disabled={busy}>Choose...</button>
-                  {edaExportForm.mappingFile ? (
-                    <button type="button" className="av-btn av-btn--secondary" onClick={() => setEdaExportForm((current) => ({ ...current, mappingFile: '' }))} disabled={busy}>Clear</button>
-                  ) : null}
+                  <button
+                    type="button"
+                    className="av-btn av-btn--secondary"
+                    onClick={() => void chooseSchematicExportPath()}
+                    disabled={busy}
+                    data-testid="eda-export-choose-output"
+                  >
+                    Choose...
+                  </button>
                 </div>
               </div>
-              <div className="av-form-field">
-                <span>Output folder</span>
-                <div style={styles.edaMappingRow}>
-                  <input
-                    className="av-form-control"
-                    value={edaExportForm.outputDir}
-                    readOnly
-                    placeholder="Project build/exports (default)"
-                    data-testid="eda-export-output-dir"
-                  />
-                  <button type="button" className="av-btn av-btn--secondary" onClick={() => void chooseEdaOutputDir()} disabled={busy} data-testid="eda-export-choose-output">Choose...</button>
-                  {edaExportForm.outputDir ? (
-                    <button type="button" className="av-btn av-btn--secondary" onClick={() => setEdaExportForm((current) => ({ ...current, outputDir: '' }))} disabled={busy}>Clear</button>
-                  ) : null}
-                </div>
-                <p className="av-form-hint">
-                  Leave blank to use {'<project>/build/exports/<export_id>/'}. A chosen folder receives a new {'<export_id>'} subfolder.
-                </p>
-              </div>
-              <label className="av-form-check">
-                <input
-                  type="checkbox"
-                  checked={edaExportForm.strictLayout}
-                  onChange={(event) => setEdaExportForm((current) => ({ ...current, strictLayout: event.target.checked }))}
-                  disabled={busy}
-                  data-testid="eda-export-strict-layout"
-                />
-                Fail when readability is below 90
-              </label>
-              {edaExportResult ? (
+              {edaExportNotice ? (
                 <div className="av-form-status av-form-status--ok" data-testid="eda-export-result">
-                  <div>Readability: <strong>{edaExportResult.layout_quality.readability_score.toFixed(1)}</strong></div>
-                  <div className="av-form-hint" style={{ marginTop: 6 }} data-testid="eda-export-root">
-                    {edaExportResult.export_root}
-                  </div>
-                  {Object.entries(edaExportResult.targets).map(([target, status]) => (
-                    <div key={target} className="av-form-meta" style={{ marginTop: 6 }} data-testid={`eda-export-status-${target}`}>
-                      <span style={{ textTransform: 'capitalize' }}>{target}</span>
-                      <strong>{status.status}</strong>
-                    </div>
-                  ))}
+                  {edaExportNotice}
                 </div>
               ) : null}
-              <div style={styles.edaIntegrationDivider} />
-              {edaBridgeEnabled ? (
-                <>
-                  <div className="av-form-field" data-testid="eda-bridge-panel">
-                    <span>EDA Bridge</span>
-                    <div style={styles.edaBridgeActions}>
-                      <button
-                        type="button"
-                        className="av-btn av-btn--secondary"
-                        onClick={() => void linkBridgePeer('kicad')}
-                        disabled={busy}
-                        data-testid="eda-bridge-link-kicad"
-                      >
-                        Link KiCad
-                      </button>
-                      <button
-                        type="button"
-                        className="av-btn av-btn--secondary"
-                        onClick={() => void linkBridgePeer('jlceda')}
-                        disabled={busy}
-                        data-testid="eda-bridge-link-jlceda"
-                      >
-                        Link 嘉立创EDA
-                      </button>
-                      <button
-                        type="button"
-                        className="av-btn av-btn--secondary"
-                        onClick={() => void refreshBridgeStatus()}
-                        disabled={busy || bridgeLoading}
-                        data-testid="eda-bridge-refresh"
-                      >
-                        {bridgeLoading ? 'Refreshing…' : 'Refresh status'}
-                      </button>
-                    </div>
-                    {bridgeManifests.length === 0 ? (
-                      <p className="av-form-hint">No linked EDA peers yet.</p>
-                    ) : (
-                      bridgeManifests.map((bridge) => (
-                        <div key={bridge.peer_kind} style={styles.edaBridgeRow} data-testid={`eda-bridge-row-${bridge.peer_kind}`}>
-                          <div>
-                            <strong>{bridgePeerLabel(bridge.peer_kind)}</strong>
-                            <div className="av-form-hint">{bridge.peer_root}</div>
-                          </div>
-                          <div style={styles.edaBridgeRowActions}>
-                            <button
-                              type="button"
-                              className="av-btn av-btn--secondary"
-                              onClick={() => void pushBridgePeer(bridge.peer_kind)}
-                              disabled={busy}
-                              data-testid={`eda-bridge-push-${bridge.peer_kind}`}
-                            >
-                              Push
-                            </button>
-                            <button
-                              type="button"
-                              className="av-btn av-btn--secondary"
-                              onClick={() => void pullBridgePeer(bridge.peer_kind)}
-                              disabled={busy}
-                              data-testid={`eda-bridge-pull-${bridge.peer_kind}`}
-                            >
-                              Pull
-                            </button>
-                            <button
-                              type="button"
-                              className="av-btn av-btn--secondary"
-                              onClick={() => void unlinkBridgePeer(bridge.peer_kind)}
-                              disabled={busy}
-                              data-testid={`eda-bridge-unlink-${bridge.peer_kind}`}
-                            >
-                              Unlink
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                    {bridgeConflicts.length > 0 ? (
-                      <div className="av-form-status av-form-status--error" data-testid="eda-bridge-conflicts">
-                        <div><strong>Pull conflicts</strong></div>
-                        {bridgeConflicts.map((conflict, index) => (
-                          <div key={`${conflict.field ?? 'conflict'}-${index}`} className="av-form-hint" style={{ marginTop: 4 }}>
-                            {conflict.message ?? `${conflict.field ?? 'field'}: local=${String(conflict.local)} remote=${String(conflict.remote)}`}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="av-form-field" data-testid="lcsc-search-panel">
-                    <span>立创搜料</span>
-                    <div style={styles.edaMappingRow}>
-                      <input
-                        className="av-form-control"
-                        value={lcscQuery}
-                        onChange={(event) => setLcscQuery(event.target.value)}
-                        placeholder="Search LCSC by keyword or part number"
-                        disabled={busy || lcscSearching}
-                        data-testid="lcsc-search-input"
-                      />
-                      <button
-                        type="button"
-                        className="av-btn av-btn--secondary"
-                        onClick={() => void searchLcscParts()}
-                        disabled={busy || lcscSearching || !lcscQuery.trim()}
-                        data-testid="lcsc-search-submit"
-                      >
-                        {lcscSearching ? 'Searching…' : 'Search'}
-                      </button>
-                    </div>
-                    {lcscResults.length > 0 ? (
-                      <div style={styles.lcscResults}>
-                        {lcscResults.map((part) => (
-                          <label key={part.lcsc_id} style={styles.lcscResultRow} data-testid={`lcsc-result-${part.lcsc_id}`}>
-                            <input
-                              type="radio"
-                              name="lcsc-part"
-                              checked={lcscSelectedId === part.lcsc_id}
-                              onChange={() => setLcscSelectedId(part.lcsc_id)}
-                            />
-                            <span>
-                              <strong>{part.lcsc_id}</strong>
-                              {part.mpn ? ` | ${part.mpn}` : ''}
-                              {part.manufacturer ? ` | ${part.manufacturer}` : ''}
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    ) : null}
-                    <label className="av-form-field" style={{ marginTop: 8 }}>
-                      <span>Bind to component</span>
-                      <input
-                        className="av-form-control"
-                        value={lcscBindComponentId}
-                        onChange={(event) => setLcscBindComponentId(event.target.value)}
-                        placeholder={activeModuleId ? `Component id in module ${activeModuleId}` : 'Open a module first'}
-                        disabled={busy || !activeModuleId}
-                        data-testid="lcsc-bind-component-id"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="av-btn av-btn--secondary"
-                      onClick={() => void bindSelectedLcscPart()}
-                      disabled={busy || !lcscSelectedId || !activeModuleId || !lcscBindComponentId.trim()}
-                      data-testid="lcsc-bind-submit"
-                    >
-                      Bind LCSC part
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <p className="av-form-hint" data-testid="eda-bridge-simulation-note">
-                  EDA Bridge and LCSC binding apply to PCB Schematic / Analog IC projects; this project is Simulation.
-                </p>
-              )}
             </div>
             <div className="av-sheet__footer">
-              {edaExportResult ? (
-                <button type="button" className="av-btn av-btn--secondary" onClick={() => void openEdaExportFolder()} data-testid="open-eda-export-folder">Open export folder</button>
-              ) : null}
               <button
                 type="button"
                 className="av-btn av-btn--primary"
-                onClick={() => void runEdaExport()}
-                disabled={busy || edaExportForm.targets.length === 0 || (edaExportForm.scope === 'module' && !activeModuleId)}
+                onClick={() => void runSchematicExport()}
+                disabled={busy || !edaExportForm.path.trim()}
                 data-testid="run-eda-export"
               >
                 {busy ? 'Exporting...' : 'Export'}
@@ -2535,6 +2395,8 @@ export function CircuitWorkbench({
               overrides={selectedPreview?.schematicOverrides}
               busy={busy}
               previewBusy={selectedPreviewBusy}
+              projectKind={projectKind}
+              pdkDeviceCatalog={pdkDeviceCatalog}
               projectModules={(project?.modules || []).map((entry) => ({
                 module_id: entry.id,
                 name: entry.name,
@@ -2551,11 +2413,6 @@ export function CircuitWorkbench({
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
               onProbe={(probe) => openSimulationProbe(selectedRef.id, probe)}
               onOpenChildModule={(moduleId) => void openModule(moduleId)}
-              xschemConflicts={xschemConflicts}
-              xschemValidation={xschemValidation}
-              onXschemMode={linkXschemMode}
-              onXschemSync={syncXschem}
-              onXschemValidate={validateXschem}
             />
           ) : null}
         </div>
@@ -3002,6 +2859,8 @@ function ModuleSchematic({
   overrides,
   busy,
   previewBusy,
+  projectKind = 'simulation',
+  pdkDeviceCatalog = null,
   projectModules = [],
   onBuild,
   onOptimize,
@@ -3012,11 +2871,6 @@ function ModuleSchematic({
   onResetLayout,
   onProbe,
   onOpenChildModule,
-  xschemConflicts,
-  xschemValidation,
-  onXschemMode,
-  onXschemSync,
-  onXschemValidate,
 }: {
   module: CircuitModuleRef;
   moduleData?: CircuitModule;
@@ -3024,6 +2878,8 @@ function ModuleSchematic({
   overrides?: SchematicOverrides;
   busy: boolean;
   previewBusy: boolean;
+  projectKind?: ProjectKind;
+  pdkDeviceCatalog?: PdkDeviceCatalog | null;
   projectModules?: Array<{
     module_id: string;
     name: string;
@@ -3040,11 +2896,6 @@ function ModuleSchematic({
   onResetLayout: (itemIds: string[]) => Promise<void>;
   onProbe: (probe: SchematicProbeSelection) => void;
   onOpenChildModule?: (moduleId: string) => void;
-  xschemConflicts: XschemSyncConflict[];
-  xschemValidation: XschemValidationResult | null;
-  onXschemMode: (mode: 'native' | 'bridge' | 'external') => Promise<void>;
-  onXschemSync: (action: 'push' | 'pull' | 'take-ownership') => Promise<void>;
-  onXschemValidate: () => Promise<void>;
 }) {
   const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
   const [editLayout, setEditLayout] = useState(false);
@@ -3403,108 +3254,6 @@ function ModuleSchematic({
           </button>
         </div>
       </div>
-      <div style={styles.xschemPeerPanel} data-testid="xschem-peer-panel">
-        <div style={styles.xschemPeerSummary}>
-          <strong>Xschem peer</strong>
-          <span data-testid="xschem-mode">
-            Mode: {moduleData?.schematic_peer?.mode ?? 'native'}
-          </span>
-          {moduleData?.schematic_peer?.peer_file ? (
-            <span style={styles.xschemPeerPath} title={moduleData.schematic_peer.peer_file}>
-              {moduleData.schematic_peer.peer_file}
-            </span>
-          ) : (
-            <span style={styles.xschemPeerPath}>No external peer linked</span>
-          )}
-        </div>
-        <div style={styles.xschemPeerActions}>
-          <button
-            type="button"
-            style={styles.secondaryButton}
-            onClick={() => void onXschemMode('native')}
-            disabled={busy || !moduleData || moduleData.schematic_peer?.mode === 'external'}
-            data-testid="xschem-mode-native"
-          >
-            Use Actoviq
-          </button>
-          <button
-            type="button"
-            style={styles.secondaryButton}
-            onClick={() => void onXschemMode('bridge')}
-            disabled={busy || !moduleData}
-            data-testid="xschem-mode-bridge"
-          >
-            Create bridge
-          </button>
-          <button
-            type="button"
-            style={styles.secondaryButton}
-            onClick={() => void onXschemMode('external')}
-            disabled={busy || !moduleData}
-            data-testid="xschem-mode-external"
-          >
-            Link external
-          </button>
-          {moduleData?.schematic_peer?.mode === 'bridge' ? (
-            <>
-              <button type="button" style={styles.secondaryButton} onClick={() => void onXschemSync('push')} disabled={busy} data-testid="xschem-push">
-                Push
-              </button>
-              <button type="button" style={styles.secondaryButton} onClick={() => void onXschemSync('pull')} disabled={busy} data-testid="xschem-pull">
-                Pull
-              </button>
-            </>
-          ) : null}
-          {moduleData?.schematic_peer?.mode === 'external' ? (
-            <>
-              <button type="button" style={styles.secondaryButton} onClick={() => void onXschemSync('pull')} disabled={busy} data-testid="xschem-pull">
-                Pull safe fields
-              </button>
-              <button type="button" style={styles.primaryButton} onClick={() => void onXschemSync('take-ownership')} disabled={busy} data-testid="xschem-take-ownership">
-                Pull and take ownership
-              </button>
-            </>
-          ) : null}
-          {moduleData?.schematic_peer?.peer_file ? (
-            <button
-              type="button"
-              style={styles.secondaryButton}
-              onClick={() => void onXschemValidate()}
-              disabled={busy}
-              data-testid="xschem-validate-connectivity"
-            >
-              Validate connectivity
-            </button>
-          ) : null}
-        </div>
-      </div>
-      {xschemValidation ? (
-        <div
-          className={`av-form-status${xschemValidation.status === 'passed' ? '' : ' av-form-status--error'}`}
-          data-testid="xschem-validation-result"
-        >
-          <strong>Reference netlist: {xschemValidation.status ?? 'unknown'}</strong>
-          {xschemValidation.metadata?.connectivity_comparison ? (
-            <div>
-              Compared {xschemValidation.metadata.connectivity_comparison.compared_instance_count ?? 0}
-              /{xschemValidation.metadata.connectivity_comparison.expected_instance_count ?? 0} instances
-            </div>
-          ) : null}
-          {(xschemValidation.diagnostics ?? []).map((diagnostic, index) => (
-            <div key={`${diagnostic}-${index}`}>{diagnostic}</div>
-          ))}
-        </div>
-      ) : null}
-      {xschemConflicts.length > 0 ? (
-        <div className="av-form-status av-form-status--error" data-testid="xschem-conflict-review">
-          <strong>Sync stopped for review</strong>
-          {xschemConflicts.map((conflict, index) => (
-            <div key={`${conflict.kind}-${conflict.field ?? ''}-${index}`}>
-              {conflict.kind}{conflict.field ? ` / ${conflict.field}` : ''}: {conflict.message}
-            </div>
-          ))}
-        </div>
-      ) : null}
       {layoutFeedback ? (
         <div style={styles.layoutFeedback} data-testid="layout-optimization-feedback">
           <strong>Layout quality {Math.round(layoutFeedback.initial_quality.readability_score)} → {Math.round(layoutFeedback.final_quality.readability_score)}</strong>
@@ -3587,6 +3336,8 @@ function ModuleSchematic({
               busy={busy || moduleData.schematic_peer?.mode === 'external'}
               buildBusy={previewBusy}
               projectModules={projectModules}
+              projectKind={projectKind}
+              pdkDeviceCatalog={pdkDeviceCatalog}
               onSave={onSaveSchematic}
               onBuild={onBuild}
               onProbe={onProbe}
@@ -4045,6 +3796,14 @@ const styles: Record<string, CSSProperties> = {
   eyebrow: { fontSize: 10, color: '#7a818b', textTransform: 'uppercase', fontWeight: 750 },
   projectTitle: { fontSize: 18, fontWeight: 760, marginTop: 2 },
   projectMeta: { fontSize: 11, color: '#7a818b', marginTop: 2 },
+  projectKindField: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    fontSize: 11,
+    color: '#7a818b',
+  },
   simulationProfile: {
     display: 'flex',
     alignItems: 'center',

@@ -6,7 +6,12 @@ import type {
   CircuitPosition,
   CircuitWire,
   CircuitWireEndpoint,
+  ProjectKind,
 } from '../types';
+import {
+  defaultParametersForType,
+  projectComponentValue,
+} from '../components/canvas/componentParams/projectToValue';
 
 export const SCHEMATIC_GRID = 20;
 export const PIN_REACH = 12;
@@ -264,6 +269,7 @@ export function makePlacedComponent(
   module: CircuitModule,
   type: ToolComponentType,
   position: CircuitPosition,
+  options?: { projectKind?: ProjectKind },
 ): CircuitComponent {
   const existingIds = new Set(module.components.map((component) => component.id));
   const id = makeId(type.toLowerCase(), existingIds);
@@ -275,16 +281,34 @@ export function makePlacedComponent(
     // fresh floating net; mergeStableNets then grounds anything wired to it.
     net: type === 'GND' ? '0' : `n_${id}_${index + 1}`,
   }));
-  return {
+  const projectKind = options?.projectKind ?? 'simulation';
+  const parameters = type === 'GND' ? undefined : defaultParametersForType(type);
+  const value = type === 'GND'
+    ? DEFAULT_VALUES[type]
+    : projectComponentValue(type, parameters, DEFAULT_VALUES[type]);
+  const component: CircuitComponent = {
     id,
     type,
     name,
-    value: DEFAULT_VALUES[type],
+    value,
     position,
     // Voltage / current sources default upright; resistors stay 0 and layout heuristics rotate.
     rotation: type === 'V' || type === 'I' ? 90 : 0,
     pins,
+    ...(parameters ? { parameters } : {}),
   };
+  if (projectKind === 'pcb_schematic' && type !== 'GND' && (type === 'R' || type === 'C' || type === 'L')) {
+    component.eda = { footprint_hint: `${type}_0603` };
+  }
+  if ((projectKind === 'analog_ic' || projectKind === 'mixed_signal_ic') && type === 'M') {
+    component.parameters = {
+      ...(component.parameters || {}),
+      device_id: 'nmos',
+      model: 'NMOS',
+    };
+    component.value = projectComponentValue(type, component.parameters, value);
+  }
+  return component;
 }
 
 export function makePlacedBlock(

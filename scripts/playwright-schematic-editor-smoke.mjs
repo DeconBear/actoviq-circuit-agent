@@ -26,6 +26,8 @@ const legacyOpampFeedbackPrefix = `${projectPrefix}legacy-opamp-feedback-`;
 const legacyCascodePrefix = `${projectPrefix}legacy-cascode-`;
 const legacyBuckConverterPrefix = `${projectPrefix}legacy-buck-`;
 const junctionInteractionPrefix = `${projectPrefix}junction-interaction-`;
+const pcbParamPrefix = `${projectPrefix}pcb-param-`;
+const analogIcParamPrefix = `${projectPrefix}analog-ic-param-`;
 const vitePort = Number(process.env.ACTOVIQ_E2E_VITE_PORT ?? (await allocatePort()));
 const viteUrl = `http://127.0.0.1:${vitePort}`;
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');
@@ -111,6 +113,117 @@ async function removePrefixedProjects() {
     assert.equal(path.dirname(target), projectsRoot);
     await rm(target, { recursive: true, force: true });
   }
+}
+
+async function createPcbParamProject() {
+  const expectedProjectId = legacyProjectId('pcb');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${pcbParamPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
+    '--project-kind', 'pcb_schematic',
+  ]);
+  assert.equal(created.project.project_id, expectedProjectId);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  const moduleId = project.modules[0]?.id || 'main';
+  const moduleRoot = path.resolve(projectRoot, 'modules', moduleId);
+  await mkdir(moduleRoot, { recursive: true });
+  const module = {
+    schema: 'actoviq.module.v2',
+    module_id: moduleId,
+    name: 'PCB main',
+    revision: 0,
+    ports: [
+      { id: 'in', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+      { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+    ],
+    components: [],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [{
+    id: moduleId,
+    name: module.name,
+    kind: 'leaf',
+    function: 'PCB schematic',
+    position: { x: 120, y: 120 },
+    size: { width: 280, height: 180 },
+    ports: module.ports,
+  }];
+  project.updated_at = new Date().toISOString();
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  return {
+    projectId: project.project_id,
+    projectName: project.name,
+    projectRoot,
+    moduleId,
+  };
+}
+
+async function createAnalogIcParamProject() {
+  const expectedProjectId = legacyProjectId('icp');
+  const created = runSkill([
+    'create',
+    '--projects-root', projectsRoot,
+    '--name', `${analogIcParamPrefix}${Date.now()}`,
+    '--project-id', expectedProjectId,
+    '--project-kind', 'analog_ic',
+  ]);
+  assert.equal(created.project.project_id, expectedProjectId);
+  const projectRoot = created.project_root;
+  const project = created.project;
+  const moduleId = 'core';
+  const moduleRoot = path.resolve(projectRoot, 'modules', moduleId);
+  await mkdir(moduleRoot, { recursive: true });
+  const module = {
+    schema: 'actoviq.module.v2',
+    module_id: moduleId,
+    name: 'Analog IC core',
+    revision: 0,
+    ports: [
+      { id: 'in', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
+      { id: 'out', name: 'OUT', direction: 'output', signal_type: 'analog', net: 'out' },
+      { id: 'gnd', name: 'GND', direction: 'bidirectional', signal_type: 'ground', net: '0' },
+    ],
+    components: [{
+      id: 'm1',
+      type: 'M',
+      name: 'M1',
+      value: 'NMOS W=1u L=180n',
+      position: { x: 240, y: 200 },
+      rotation: 0,
+      pins: [
+        { id: 'd', name: 'D', net: 'out' },
+        { id: 'g', name: 'G', net: 'in' },
+        { id: 's', name: 'S', net: '0' },
+        { id: 'b', name: 'B', net: '0' },
+      ],
+      parameters: { model: 'NMOS', w: '1u', l: '180n', m: '1', nf: '1', device_id: 'nmos' },
+    }],
+    wires: [],
+    annotations: [],
+  };
+  project.modules = [{
+    id: moduleId,
+    name: module.name,
+    kind: 'leaf',
+    function: 'Analog IC MOS param fixture',
+    position: { x: 120, y: 120 },
+    size: { width: 280, height: 180 },
+    ports: module.ports,
+  }];
+  project.updated_at = new Date().toISOString();
+  await writeFile(path.resolve(projectRoot, 'project.circuit.json'), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await writeFile(path.resolve(moduleRoot, 'module.circuit.json'), `${JSON.stringify(module, null, 2)}\n`, 'utf8');
+  return {
+    projectId: project.project_id,
+    projectName: project.name,
+    projectRoot,
+    moduleId,
+  };
 }
 
 async function createLegacyLdoProject() {
@@ -706,7 +819,7 @@ async function createLegacyOpampFeedbackProject() {
     '```',
     '',
   ].join('\n'), 'utf8');
-  return { projectId: project.project_id, projectName: project.name };
+  return { projectId: project.project_id, projectName: project.name, projectRoot };
 }
 
 async function createLegacyCascodeProject() {
@@ -1611,6 +1724,8 @@ const legacyCascodeProject = await createLegacyCascodeProject();
 const legacyBuckConverterProject = await createLegacyBuckConverterProject();
 const junctionInteractionProject = await createJunctionInteractionProject();
 const unconnectedPortProject = await createUnconnectedPortProject();
+const pcbParamProject = await createPcbParamProject();
+const analogIcParamProject = await createAnalogIcParamProject();
 
 const viteProcess = await startViteIfNeeded();
 const pageErrors = [];
@@ -2668,7 +2783,7 @@ try {
   assert.equal(await page.getByTestId('schematic-editor-delete').isDisabled(), false, 'Delete should be enabled for the selected component');
   assert.equal(await page.getByTestId('schematic-editor-save').isDisabled(), false, 'Apply should be enabled after an unsaved component edit');
   await page.getByTestId('schematic-editor-component-name').fill('Rtrim');
-  await page.getByTestId('schematic-editor-component-value').fill('2k');
+  await page.getByTestId('schematic-param-magnitude').fill('2k');
   await page.getByTestId('schematic-editor-component-rotation').selectOption('90');
   await page.waitForFunction(() => {
     const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-rotations') ?? '{}';
@@ -3068,11 +3183,11 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
   ));
-  // qucs parity: double-clicking a component focuses the inspector value editor.
+  // qucs parity: double-clicking a component focuses the inspector param editor.
   await page.mouse.dblclick(r1PlacePoint.x, r1PlacePoint.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1' &&
-    document.activeElement?.getAttribute('data-testid') === 'schematic-editor-component-value'
+    document.activeElement?.getAttribute('data-testid') === 'schematic-param-magnitude'
   ));
   await editor.focus();
   assert.equal(await page.getByTestId('schematic-selected-component-frame').count(), 1, 'component selection frame is missing');
@@ -4109,7 +4224,7 @@ try {
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
   ));
   assert.equal(await page.getByTestId('schematic-editor-component-name').inputValue(), 'Rtrim');
-  assert.equal(await page.getByTestId('schematic-editor-component-value').inputValue(), '2k');
+  assert.equal(await page.getByTestId('schematic-param-magnitude').inputValue(), '2k');
   await page.getByTestId('back-to-board').click();
 
   await page.getByTestId(`sidebar-project-${legacyLdoProject.projectId}`).click();
@@ -5696,6 +5811,100 @@ try {
   );
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-gnd.png') });
   console.log('[e2e] GND placeable/selectable/deletable with no SPICE card verified');
+
+  // Structured param inspector by project kind
+  await selectComponentForDrag(page, 'r1');
+  const typeBadge = (await page.getByTestId('schematic-editor-component-type').innerText()).replace(/\s+/g, '').toLowerCase();
+  assert.ok(typeBadge.includes('r'), 'selection should show component type');
+  assert.ok(typeBadge.includes('simulation'), 'selection should show project kind');
+  assert.equal(await page.getByTestId('schematic-param-magnitude').inputValue(), '2k');
+  await page.getByTestId('schematic-param-magnitude').fill('4.7k');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+  ));
+  await page.getByTestId('schematic-editor-save').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
+  ));
+  const simSavedModule = JSON.parse(await readFile(
+    path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'),
+    'utf8',
+  ));
+  const simR1 = simSavedModule.components.find((component) => component.id === 'r1');
+  assert.equal(simR1?.value, '4.7k');
+  assert.equal(simR1?.parameters?.magnitude, '4.7k');
+  console.log('[e2e] Simulation R magnitude projection verified');
+
+  await page.getByTestId(`sidebar-project-${pcbParamProject.projectId}`).click();
+  await waitForWorkbenchProject(page, pcbParamProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(pcbParamProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await openModuleCard(page, pcbParamProject.moduleId);
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  const pcbCanvas = page.getByTestId('schematic-editor-svg');
+  const pcbBox = await pcbCanvas.boundingBox();
+  assert.ok(pcbBox, 'PCB schematic canvas bounding box missing');
+  const pcbPlace = { x: pcbBox.x + Math.min(280, pcbBox.width * 0.45), y: pcbBox.y + Math.min(180, pcbBox.height * 0.4) };
+  await page.getByTestId('schematic-editor-place-R').click();
+  await page.mouse.click(pcbPlace.x, pcbPlace.y);
+  await page.waitForFunction(() => (
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') ?? '0') >= 1
+  ));
+  const pcbRid = await page.locator('g[data-component-type="R"]').last().getAttribute('data-component-id');
+  assert.ok(pcbRid, 'placed PCB resistor should expose id');
+  await selectComponentForDrag(page, pcbRid);
+  assert.ok(await page.getByTestId('schematic-editor-component-value').count(), 'PCB form should expose BOM value');
+  await page.getByTestId('schematic-param-footprint').fill('R_0603');
+  await page.getByTestId('schematic-param-lcsc').fill('C25804');
+  await page.getByTestId('schematic-param-mpn').fill('RC0603FR-0710KL');
+  await page.getByTestId('schematic-editor-save').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
+  ));
+  const pcbSavedModule = JSON.parse(await readFile(
+    path.resolve(pcbParamProject.projectRoot, 'modules', pcbParamProject.moduleId, 'module.circuit.json'),
+    'utf8',
+  ));
+  const pcbR = pcbSavedModule.components.find((component) => component.id === pcbRid);
+  assert.equal(pcbR?.eda?.footprint_hint, 'R_0603');
+  assert.equal(pcbR?.eda?.lcsc_id, 'C25804');
+  assert.equal(pcbR?.eda?.mpn, 'RC0603FR-0710KL');
+  console.log('[e2e] PCB eda param fields persist');
+
+  await page.getByTestId(`sidebar-project-${analogIcParamProject.projectId}`).click();
+  await waitForWorkbenchProject(page, analogIcParamProject.projectId);
+  await page.getByTestId('circuit-workbench').getByText(analogIcParamProject.projectName, { exact: true }).waitFor();
+  if (await page.getByTestId('back-to-board').count()) {
+    await page.getByTestId('back-to-board').click();
+  }
+  await openModuleCard(page, analogIcParamProject.moduleId);
+  await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') !== undefined &&
+    Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') ?? '0') >= 1
+  ));
+  assert.equal(await page.getByTestId('project-kind-select').inputValue(), 'analog_ic');
+  await selectComponentForDrag(page, 'm1');
+  assert.ok(await page.getByTestId('schematic-param-pdk-unbound').count(), 'Analog IC without PDK should show unbound hint');
+  await page.getByTestId('schematic-param-model').selectOption('PMOS');
+  await page.getByTestId('schematic-param-w').fill('10u');
+  await page.getByTestId('schematic-param-l').fill('1u');
+  await page.getByTestId('schematic-editor-save').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
+  ));
+  const icSavedModule = JSON.parse(await readFile(
+    path.resolve(analogIcParamProject.projectRoot, 'modules', analogIcParamProject.moduleId, 'module.circuit.json'),
+    'utf8',
+  ));
+  const savedMos = icSavedModule.components.find((component) => component.id === 'm1');
+  assert.equal(savedMos?.parameters?.model, 'PMOS');
+  assert.equal(savedMos?.parameters?.w, '10u');
+  assert.equal(savedMos?.parameters?.l, '1u');
+  assert.match(String(savedMos?.value || ''), /PMOS.*W=10u.*L=1u/);
+  console.log('[e2e] Analog IC MOS param projection verified');
 
   await page.screenshot({ path: path.resolve(outputRoot, 'schematic-editor-smoke.png') });
   assert.deepEqual(
