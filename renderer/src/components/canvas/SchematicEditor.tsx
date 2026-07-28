@@ -261,6 +261,10 @@ export function SchematicEditor({
   const pasteSerialRef = useRef(0);
   const draftUpdateFrameRef = useRef<number | null>(null);
   const pendingDraftUpdateRef = useRef<DraftUpdate | null>(null);
+  // M2-04: when true, the next module.revision change (from a successful
+  // save) must not clear undo/redo history. Set before save, cleared by the
+  // revision-change effect so only the save-induced bump is skipped.
+  const preserveHistoryOnRevisionChangeRef = useRef(false);
   const viewportUpdateFrameRef = useRef<number | null>(null);
   const pendingViewportRef = useRef<SchematicBounds | null>(null);
   const dragPreviewFrameRef = useRef<number | null>(null);
@@ -343,6 +347,8 @@ export function SchematicEditor({
   }, [dirty, onDirtyChange]);
 
   useEffect(() => {
+    const preserving = preserveHistoryOnRevisionChangeRef.current;
+    preserveHistoryOnRevisionChangeRef.current = false;
     cancelPendingViewportUpdate();
     cancelPendingDragPreviewUpdate();
     setDraft(createSchematicDocument(module).module);
@@ -368,8 +374,13 @@ export function SchematicEditor({
     componentClipboardRef.current = [];
     pasteSerialRef.current = 0;
     setClipboardComponentCount(0);
-    setHistory([]);
-    setFuture([]);
+    // M2-04: a save bumps module.revision; the draft already matches the
+    // saved content. Keep undo/redo history across save so Ctrl+Z works
+    // after Apply (ADR-0004). A genuine module switch clears history.
+    if (!preserving) {
+      setHistory([]);
+      setFuture([]);
+    }
   }, [module.module_id, module.revision]);
 
   const commitDraft = useCallback((next: CircuitModule, previous = draft) => {
@@ -1822,12 +1833,20 @@ export function SchematicEditor({
   async function saveAndRebuild() {
     try {
       const normalized = normalizeConnectivity(draft);
+      // M2-04: set the preserve flag BEFORE onSave so the revision bump that
+      // happens during onSave (applyOperations -> onReloadProject) does not
+      // trigger the module-switch effect that would clear undo/redo history.
+      preserveHistoryOnRevisionChangeRef.current = true;
       const saved = await onSave(normalized);
       if (saved === false) throw new Error('Apply command was rejected');
       setSaveError(null);
       setDirty(false);
-      setHistory([]);
-      setFuture([]);
+      // M2-04: keep undo/redo history across save so Ctrl+Z works after Apply.
+      // Previously save cleared history/future, which broke the undo loop and
+      // made "place -> move -> save -> undo" impossible (ADR-0004). The draft
+      // already matches the saved module, so the history cursor stays valid.
+      // If onSave did not end up bumping revision (e.g. rejected), the flag
+      // stays set harmlessly until the next genuine revision change clears it.
     } catch (error) {
       // Keep the draft dirty and surface the failure — previously a topology
       // validation throw or a rejected apply left no trace (silent data loss).

@@ -4172,11 +4172,10 @@ try {
     // Structured param inspector by project kind
     await waitForEditorIdle(page);
     await page.waitForFunction(() => {
-      const positions = JSON.parse(
-        document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-positions') ?? '{}',
-      );
-      return positions.r1 !== undefined;
-    }, { timeout: 20_000 });
+      const node = document.querySelector('[data-testid="schematic-editor"]');
+      const positions = JSON.parse(node?.getAttribute('data-component-positions') ?? '{}');
+      return Number(node?.getAttribute('data-component-count') ?? '0') >= 3 && positions.r1 !== undefined;
+    }, { timeout: 30_000 });
     await selectComponentForDrag(page, 'r1');
     const typeBadge = (await page.getByTestId('schematic-editor-component-type').innerText()).replace(/\s+/g, '').toLowerCase();
     assert.ok(typeBadge.includes('r'), 'selection should show component type');
