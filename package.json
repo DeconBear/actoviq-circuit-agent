@@ -46,7 +46,7 @@
     "test:schematic-golden": "tsx scripts/schematic-document-golden.ts",
     "test:schematic-schema": "tsx scripts/schematic-document-serialize.ts | python scripts/schematic-document-schema-validate.py",
     "test:command-v2-schema": "python scripts/command-v2-schema-validate.py",
-    "test:schematic-core": "tsx scripts/schematic-core-invariants-test.ts",
+    "test:schematic-core": "tsx scripts/schematic-core-invariants-test.ts && tsx scripts/schematic-core-test.ts",
     "test:schematic-perf": "tsx scripts/schematic-perf-baseline.ts",
     "test:e2e:electron": "npm run build:src && npm run build:electron && node scripts/playwright-electron-smoke.mjs",
     "test:e2e:agent-flow": "npm run build:src && npm run build:electron && node scripts/playwright-agent-flow.mjs",
