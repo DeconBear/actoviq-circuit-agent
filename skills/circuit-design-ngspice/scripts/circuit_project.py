@@ -2731,6 +2731,79 @@ class ProjectLock:
         self.path.unlink(missing_ok=True)
 
 
+# M2-06: module soft lease. A short-lived UI lock per module so two actors
+# editing the same module get a structured conflict instead of a silent
+# overwrite. File locks guard atomicity; leases guard intent. Expired leases
+# are recoverable: a lease older than LEASE_TTL_SECONDS is treated as gone.
+LEASE_TTL_SECONDS = 300.0
+
+
+def lease_path(root: Path, module_id: str) -> Path:
+    safe = "".join(c for c in module_id if c.isalnum() or c in ("-", "_"))
+    return root / "leases" / f"{safe}.json"
+
+
+def acquire_module_lease(
+    root: Path, module_id: str, actor: str, ttl: float = LEASE_TTL_SECONDS
+) -> dict[str, Any]:
+    """Acquire or renew a soft lease on a module. Returns the lease record.
+
+    If a non-expired lease exists for a different actor, raises ValueError
+    with the holder so the UI can surface a structured conflict. An expired
+    lease is silently taken over.
+    """
+    path = lease_path(root, module_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    if path.exists():
+        existing = read_json(path)
+        if existing.get("actor") != actor and now - existing.get("acquired_at", 0) < ttl:
+            raise ValueError(
+                f"module {module_id} is leased by {existing.get('actor')} since "
+                f"{existing.get('acquired_at')}; retry or ask the holder to release"
+            )
+    lease = {
+        "schema": "actoviq.module-lease.v1",
+        "module_id": module_id,
+        "actor": actor,
+        "acquired_at": now,
+        "expires_at": now + ttl,
+    }
+    atomic_write_json(path, lease)
+    return lease
+
+
+def release_module_lease(root: Path, module_id: str, actor: str) -> dict[str, Any]:
+    """Release a lease; only the holder may release it. Expired leases are gone."""
+    path = lease_path(root, module_id)
+    if not path.exists():
+        return {"released": True, "module_id": module_id, "note": "no lease present"}
+    existing = read_json(path)
+    if existing.get("actor") != actor:
+        now = time.time()
+        if now - existing.get("acquired_at", 0) < LEASE_TTL_SECONDS:
+            raise ValueError(
+                f"cannot release lease held by {existing.get('actor')}"
+            )
+    path.unlink(missing_ok=True)
+    return {"released": True, "module_id": module_id, "actor": actor}
+
+
+def check_module_lease(root: Path, module_id: str, actor: str) -> None:
+    """Raise if a non-expired lease on module_id is held by a different actor."""
+    path = lease_path(root, module_id)
+    if not path.exists():
+        return
+    existing = read_json(path)
+    if existing.get("actor") == actor:
+        return
+    if time.time() - existing.get("acquired_at", 0) >= LEASE_TTL_SECONDS:
+        return
+    raise ValueError(
+        f"module {module_id} is leased by {existing.get('actor')}; edit blocked"
+    )
+
+
 def scan_driven_nodes(netlist: str) -> set[str]:
     """Collect node names already driven by a V/I source in a raw netlist."""
     driven: set[str] = set()
@@ -2750,11 +2823,12 @@ def apply_command(root: Path, command: dict[str, Any]) -> dict[str, Any]:
         with ProjectLock(root):
             return _apply_command_locked(root, command)
     if schema == "actoviq.command.v2":
-        # M2-02: accept v2 transactions by adapting each v2 op to its v1
-        # equivalent. The v2 op set is finer-grained (move_entities mode,
-        # split_wire, join_wires, upsert_junction) but the v1 engine can
-        # apply the common subset; unsupported v2 ops raise so callers know.
+        # M2-06: respect an existing soft lease on the target module. A lease
+        # held by a different actor produces a structured conflict instead of
+        # a silent overwrite. The GUI acquires the lease when the user starts
+        # editing; the Agent does the same before patching.
         with ProjectLock(root):
+            check_module_lease(root, command["module_id"], command.get("actor", "unknown"))
             return _apply_command_locked(root, _adapt_v2_command_to_v1(command))
     raise ValueError(f"unsupported command schema: {schema}")
 
@@ -7226,6 +7300,21 @@ def build_parser() -> argparse.ArgumentParser:
     lcsc_bind_parser.add_argument("--api-key", default=os.environ.get("ACTOVIQ_LCSC_API_KEY", ""))
     lcsc_bind_parser.add_argument("--api-secret", default=os.environ.get("ACTOVIQ_LCSC_API_SECRET", ""))
     lcsc_bind_parser.add_argument("--use-fallback", action="store_true")
+
+    # M2-06: module soft lease commands. UI semantics, not a file lock.
+    lease_acquire = subparsers.add_parser(
+        "module-lease-acquire", help="Acquire or renew a soft lease on a module."
+    )
+    lease_acquire.add_argument("--project-root", required=True)
+    lease_acquire.add_argument("--module-id", required=True)
+    lease_acquire.add_argument("--actor", required=True)
+    lease_acquire.add_argument("--ttl", default="")
+    lease_release = subparsers.add_parser(
+        "module-lease-release", help="Release a soft lease on a module."
+    )
+    lease_release.add_argument("--project-root", required=True)
+    lease_release.add_argument("--module-id", required=True)
+    lease_release.add_argument("--actor", required=True)
     return parser
 
 
@@ -7392,6 +7481,21 @@ def main() -> int:
             result = agent_context(Path(args.project_root).resolve())
         elif args.command == "apply":
             result = apply_command(Path(args.project_root).resolve(), parse_command(args))
+        elif args.command == "module-lease-acquire":
+            result = acquire_module_lease(
+                Path(args.project_root).resolve(),
+                args.module_id,
+                args.actor,
+                ttl=float(args.ttl) if args.ttl else LEASE_TTL_SECONDS,
+            )
+            result = {"ok": True, **result}
+        elif args.command == "module-lease-release":
+            result = release_module_lease(
+                Path(args.project_root).resolve(),
+                args.module_id,
+                args.actor,
+            )
+            result = {"ok": True, **result}
         elif args.command == "compile":
             result = compile_project(Path(args.project_root).resolve())
         elif args.command == "compile-module":
