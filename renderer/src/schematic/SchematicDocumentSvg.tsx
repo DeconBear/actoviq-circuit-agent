@@ -26,6 +26,7 @@ import {
   wireSelectionScope,
   type WireSelectionScope,
 } from '../schematic-core/selection/netSelection';
+import type { LiveErcDiagnostic } from '../schematic-core/diagnostics/liveErc';
 
 const WIRE_COLOR = '#17851f';
 const SYMBOL_COLOR = '#a00012';
@@ -96,6 +97,7 @@ interface Props {
   viewBoxOverride?: SchematicBounds;
   rubberBandWireIds?: Set<string>;
   detachedWireIds?: Set<string>;
+  diagnostics?: LiveErcDiagnostic[];
   placeGhost?: CircuitComponent | null;
   testId?: string;
   onPointerDown?: PointerEventHandler<SVGSVGElement>;
@@ -121,6 +123,7 @@ export function SchematicDocumentSvg({
   viewBoxOverride,
   rubberBandWireIds,
   detachedWireIds,
+  diagnostics = [],
   placeGhost = null,
   testId = 'schematic-document-svg',
   onPointerDown,
@@ -156,6 +159,7 @@ export function SchematicDocumentSvg({
       data-schematic-source="document"
       data-module-id={document.moduleId}
       data-cursor-mode={cursor}
+      data-inline-diagnostic-count={diagnostics.length}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -354,6 +358,7 @@ export function SchematicDocumentSvg({
       </g>
       {placeGhost ? <PlaceGhostSymbol component={placeGhost} /> : null}
       <TopologyEndpointMarkers document={document} />
+      <InlineDiagnosticLayer diagnostics={diagnostics} />
       <g data-layer="junctions" pointerEvents="none">
         {junctions(document).map(({ point, net }) => (
           <circle
@@ -704,6 +709,50 @@ function WirePath({
         pointerEvents="none"
       />
       {selected ? <WirePointHandles wire={wire} /> : null}
+    </g>
+  );
+}
+
+function InlineDiagnosticLayer({ diagnostics }: { diagnostics: LiveErcDiagnostic[] }) {
+  return (
+    <g data-layer="inline-diagnostics" pointerEvents="none">
+      {diagnostics.filter((diagnostic) => diagnostic.point).map((diagnostic) => {
+        const point = diagnostic.point!;
+        const x = point.x + 10;
+        const y = point.y - 10;
+        const error = diagnostic.severity === 'error';
+        return (
+          <g
+            key={diagnostic.id}
+            transform={`translate(${x} ${y})`}
+            data-testid="schematic-inline-diagnostic"
+            data-diagnostic-id={diagnostic.id}
+            data-code={diagnostic.code}
+            data-severity={diagnostic.severity}
+          >
+            <title>{diagnostic.message}</title>
+            <circle
+              cx="0"
+              cy="0"
+              r="7"
+              fill={error ? '#dc2626' : '#f59e0b'}
+              stroke="#ffffff"
+              strokeWidth="1.5"
+            />
+            <text
+              x="0"
+              y="3.8"
+              textAnchor="middle"
+              fontFamily={LABEL_FONT}
+              fontSize="11"
+              fontWeight="800"
+              fill="#ffffff"
+            >
+              {error ? '×' : '!'}
+            </text>
+          </g>
+        );
+      })}
     </g>
   );
 }
@@ -1642,6 +1691,11 @@ export function pinConnectionVisuals(
       .filter((endpoint) => endpoint?.component_id && endpoint.pin_id)
       .map((endpoint) => `${endpoint!.component_id}.${endpoint!.pin_id}`),
   );
+  for (const label of document.netLabels) {
+    if (label.endpoint.component_id && label.endpoint.pin_id) {
+      connectedPins.add(`${label.endpoint.component_id}.${label.endpoint.pin_id}`);
+    }
+  }
   return document.module.components.flatMap((component) => (
     component.pins.flatMap((pin, index) => {
       if (isMosBodyPin(component, pin)) return [];

@@ -26,6 +26,11 @@ import {
   wireSelectionScope,
 } from '../../schematic-core/selection/netSelection';
 import {
+  deriveLiveErc,
+  summarizeLiveErc,
+  type LiveErcDiagnostic,
+} from '../../schematic-core/diagnostics/liveErc';
+import {
   addWire,
   cloneModule,
   COMPONENT_TYPES,
@@ -369,6 +374,8 @@ export function SchematicEditor({
         )
       : baseDocument
   ), [baseDocument, componentMoveMode, dragPreviewPositions, previewDraft]);
+  const liveDiagnostics = useMemo(() => deriveLiveErc(document), [document]);
+  const liveErcSummary = useMemo(() => summarizeLiveErc(liveDiagnostics), [liveDiagnostics]);
   const rubberBandWireIds = useMemo(() => (
     dragPreviewPositions && (dragRef.current?.mode ?? componentMoveMode) === 'stretch'
       ? previewWireIdsForComponents(baseDocument.wires, Object.keys(dragPreviewPositions))
@@ -2018,6 +2025,18 @@ export function SchematicEditor({
     setActionNotice(nextPin.no_connect ? 'Pin marked no-connect' : 'No-connect marker cleared');
   }
 
+  function focusLiveDiagnostic(diagnostic: LiveErcDiagnostic) {
+    if (diagnostic.component_id) {
+      setSelection({ kind: 'component', id: diagnostic.component_id });
+    } else if (diagnostic.port_id) {
+      setSelection({ kind: 'port', id: diagnostic.port_id });
+    } else if (diagnostic.wire_ids.length > 0) {
+      setSelection(selectionForWireIds(diagnostic.wire_ids));
+    }
+    setActionNotice(diagnostic.message);
+    setContextMenu(null);
+  }
+
   function deleteSelection(targetSelection: SchematicSelection = selection) {
     if (!targetSelection || busy) return;
     if (targetSelection.kind === 'port') return;
@@ -2287,6 +2306,9 @@ export function SchematicEditor({
       data-ports={JSON.stringify(draft.ports)}
       data-wire-count={document.wires.length}
       data-net-label-count={document.netLabels.length}
+      data-live-erc-status={liveErcSummary.status}
+      data-live-erc-error-count={liveErcSummary.errors}
+      data-live-erc-warning-count={liveErcSummary.warnings}
       data-drag-preview={dragPreviewPositions ? 'true' : 'false'}
       data-component-positions={JSON.stringify(displayedComponentPositions)}
       data-port-positions={JSON.stringify(Object.fromEntries(document.portPositions))}
@@ -2339,7 +2361,9 @@ export function SchematicEditor({
                   ? `Snap ${hoverEndpoint.label}`
                   : dirty
                     ? 'Unsaved'
-                    : `Saved · conn ${orderedConnectivityFingerprint(draft)}`)}
+                    : liveErcSummary.status !== 'clean'
+                      ? `Live ERC ${liveErcSummary.errors}/${liveErcSummary.warnings}`
+                      : `Saved · conn ${orderedConnectivityFingerprint(draft)}`)}
         zoom={zoom}
         onSelect={() => {
           setTool('select');
@@ -2453,6 +2477,7 @@ export function SchematicEditor({
             viewBoxOverride={activeViewBox}
             rubberBandWireIds={rubberBandWireIds}
             detachedWireIds={detachedWireIds}
+            diagnostics={liveDiagnostics}
             placeGhost={placeGhost}
             testId="schematic-editor-svg"
             onPointerDown={handlePointerDown}
@@ -2466,6 +2491,40 @@ export function SchematicEditor({
           />
         </div>
         <aside style={styles.panel} data-testid="schematic-editor-panel">
+          <div
+            style={{
+              ...styles.liveErcSummary,
+              ...(liveErcSummary.errors > 0
+                ? styles.liveErcSummaryError
+                : liveErcSummary.warnings > 0
+                  ? styles.liveErcSummaryWarning
+                  : styles.liveErcSummaryClean),
+            }}
+            data-testid="schematic-live-erc-summary"
+            data-status={liveErcSummary.status}
+          >
+            <strong>Live ERC</strong>
+            <span>{liveErcSummary.errors} errors · {liveErcSummary.warnings} warnings</span>
+          </div>
+          {liveDiagnostics.length > 0 ? (
+            <div style={styles.liveErcList} data-testid="schematic-live-erc-list">
+              {liveDiagnostics.map((diagnostic) => (
+                <button
+                  key={diagnostic.id}
+                  type="button"
+                  style={styles.liveErcItem}
+                  onClick={() => focusLiveDiagnostic(diagnostic)}
+                  data-testid="schematic-live-erc-item"
+                  data-code={diagnostic.code}
+                  data-severity={diagnostic.severity}
+                  title={diagnostic.message}
+                >
+                  <span>{diagnostic.severity === 'error' ? '×' : '!'}</span>
+                  <span>{diagnostic.message}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div style={styles.panelTitle}>Selection</div>
           {selectedComponent ? (
             <>
@@ -4316,6 +4375,43 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 800,
     textTransform: 'uppercase',
     marginBottom: 10,
+  },
+  liveErcSummary: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: '7px 9px',
+    marginBottom: 7,
+    border: '1px solid',
+    borderRadius: 5,
+    fontSize: 11,
+  },
+  liveErcSummaryError: { color: '#991b1b', borderColor: '#fecaca', background: '#fef2f2' },
+  liveErcSummaryWarning: { color: '#92400e', borderColor: '#fde68a', background: '#fffbeb' },
+  liveErcSummaryClean: { color: '#166534', borderColor: '#bbf7d0', background: '#f0fdf4' },
+  liveErcList: {
+    display: 'grid',
+    gap: 4,
+    marginBottom: 10,
+    maxHeight: 92,
+    overflow: 'auto',
+  },
+  liveErcItem: {
+    display: 'grid',
+    gridTemplateColumns: '16px minmax(0, 1fr)',
+    gap: 5,
+    alignItems: 'start',
+    width: '100%',
+    padding: '3px 6px',
+    border: 0,
+    borderRadius: 3,
+    background: '#ffffff',
+    color: '#596274',
+    textAlign: 'left',
+    fontSize: 10,
+    lineHeight: 1.3,
+    cursor: 'pointer',
   },
   fieldLabel: { display: 'grid', gap: 5, fontSize: 12, color: '#536172', marginBottom: 10, fontWeight: 650 },
   fieldGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 10px' },

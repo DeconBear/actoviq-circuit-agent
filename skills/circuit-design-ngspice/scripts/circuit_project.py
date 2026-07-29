@@ -1526,6 +1526,7 @@ def evaluate_erc(
         local_driven_nets: set[str] = set()
         net_names: dict[str, str] = {}
         critical_candidates: list[tuple[dict[str, Any], dict[str, Any], str, str]] = []
+        no_connect_pins: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for net in module.get("nets", []):
             net_id = str(net.get("id", ""))
             net_name = str(net.get("name", ""))
@@ -1551,6 +1552,9 @@ def evaluate_erc(
             component_id = str(component.get("id", ""))
             component_type = str(component.get("type", "")).upper()
             for index, pin in enumerate(component.get("pins", [])):
+                if pin.get("no_connect"):
+                    no_connect_pins.append((component, pin))
+                    continue
                 net_id = str(pin.get("net_id") or stable_net_token(str(pin.get("net", ""))))
                 net_usage.setdefault(net_id, []).append({
                     "kind": "pin",
@@ -1567,6 +1571,8 @@ def evaluate_erc(
                 "Q": {"b": "error", "c": "warning", "e": "warning"},
             }.get(component_type, {})
             for pin in component.get("pins", []):
+                if pin.get("no_connect"):
+                    continue
                 pin_id = str(pin.get("id", "")).lower()
                 severity = critical_pins.get(pin_id)
                 net_id = str(pin.get("net_id") or stable_net_token(str(pin.get("net", ""))))
@@ -1584,6 +1590,29 @@ def evaluate_erc(
                         module_id=module_id,
                         component_id=component_id,
                     )
+
+        wired_pins = {
+            (str(endpoint.get("component_id", "")), str(endpoint.get("pin_id", "")))
+            for wire in module.get("wires", [])
+            for endpoint in (wire.get("from", {}), wire.get("to", {}))
+            if endpoint.get("component_id") and endpoint.get("pin_id")
+        }
+        for component, pin in no_connect_pins:
+            component_id = str(component.get("id", ""))
+            pin_id = str(pin.get("id", ""))
+            if (component_id, pin_id) in wired_pins:
+                erc_diagnostic(
+                    diagnostics,
+                    "error",
+                    "connected_no_connect",
+                    (
+                        f"{component.get('name', component_id)} pin "
+                        f"{pin.get('name', pin_id)} is marked no-connect but has a wire."
+                    ),
+                    module_id=module_id,
+                    component_id=component_id,
+                    pin_id=pin_id,
+                )
 
         for component, pin, net_id, severity in critical_candidates:
             if len(net_usage.get(net_id, [])) <= 1:
