@@ -11,7 +11,14 @@ import {
 } from 'react';
 import type { CircuitComponent, CircuitModule, CircuitPin, CircuitPort, CircuitPosition, CircuitWire, ProjectKind } from '../../types';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
-import { ComponentParamForm, type PdkDeviceCatalog } from './componentParams';
+import {
+  applyPdkDeviceToComponent,
+  ComponentParamForm,
+  PdkDeviceBrowser,
+  pdkDeviceToolType,
+  type PdkDeviceCatalog,
+  type PdkDeviceCatalogDevice,
+} from './componentParams';
 import { EditorCommandToolbar, FloatingComponentPalette } from './toolbars/SchematicToolbars';
 import {
   collapseWireTopology,
@@ -354,6 +361,11 @@ export function SchematicEditor({
   const [blockDraft, setBlockDraft] = useState<BlockDraft>(() => defaultBlockDraft());
   const [pendingBlock, setPendingBlock] = useState<BlockDefinition | null>(null);
   const [pendingModule, setPendingModule] = useState<ProjectModuleLibraryItem | null>(null);
+  const [pdkBrowserOpen, setPdkBrowserOpen] = useState(false);
+  const [pendingPdkPlacement, setPendingPdkPlacement] = useState<{
+    device: PdkDeviceCatalogDevice;
+    parameters: Record<string, string>;
+  } | null>(null);
   const [selection, setSelection] = useState<SchematicSelection>(() => cloneSelectionValue(initialSession.selection));
   const [wireStart, setWireStart] = useState<EndpointHit | null>(null);
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
@@ -524,10 +536,31 @@ export function SchematicEditor({
       });
     }
     if (tool !== 'place' || !hoverWorld) return null;
-    const ghost = makePlacedComponent(cloneModule(draft), placeType, snapPoint(hoverWorld), { projectKind });
+    const baseGhost = makePlacedComponent(cloneModule(draft), placeType, snapPoint(hoverWorld), { projectKind });
+    const ghost = pendingPdkPlacement && pdkDeviceCatalog
+      ? applyPdkDeviceToComponent(
+          baseGhost,
+          pendingPdkPlacement.device,
+          pdkDeviceCatalog,
+          pendingPdkPlacement.parameters,
+        )
+      : baseGhost;
     ghost.rotation = normalizeRotation(ghost.rotation + placeRotation);
     return ghost;
-  }, [busy, contextMenu, tool, pendingBlock, pendingModule, hoverWorld, draft, placeType, placeRotation, projectKind]);
+  }, [
+    busy,
+    contextMenu,
+    tool,
+    pendingBlock,
+    pendingModule,
+    pendingPdkPlacement,
+    pdkDeviceCatalog,
+    hoverWorld,
+    draft,
+    placeType,
+    placeRotation,
+    projectKind,
+  ]);
   const editorCursor: EditorCursor = (() => {
     if (interactionCursor === 'grabbing') return 'grabbing';
     if (spacePanActive) return 'grab';
@@ -921,7 +954,15 @@ export function SchematicEditor({
 
     if (tool === 'place') {
       const next = cloneModule(draft);
-      const component = makePlacedComponent(next, placeType, snapPoint(world), { projectKind });
+      const baseComponent = makePlacedComponent(next, placeType, snapPoint(world), { projectKind });
+      const component = pendingPdkPlacement && pdkDeviceCatalog
+        ? applyPdkDeviceToComponent(
+            baseComponent,
+            pendingPdkPlacement.device,
+            pdkDeviceCatalog,
+            pendingPdkPlacement.parameters,
+          )
+        : baseComponent;
       component.rotation = normalizeRotation((component.rotation ?? 0) + placeRotation);
       next.components.push(component);
       commitDraft(next);
@@ -1628,8 +1669,10 @@ export function SchematicEditor({
     setMarqueeBounds(null);
     setSpacePanActive(false);
     setBlockDialogOpen(false);
+    setPdkBrowserOpen(false);
     setPendingBlock(null);
     setPendingModule(null);
+    setPendingPdkPlacement(null);
     setPlaceRotation(0);
     setTool('select');
     setInteractionCursor('default');
@@ -1916,6 +1959,7 @@ export function SchematicEditor({
       event.preventDefault();
       setTool('place');
       setPlaceType('GND');
+      setPendingPdkPlacement(null);
       setPlaceRotation(0);
       setWireStart(null);
       setHoverEndpoint(null);
@@ -1928,6 +1972,7 @@ export function SchematicEditor({
       event.preventDefault();
       setTool('place');
       setPlaceType(componentType);
+      setPendingPdkPlacement(null);
       setPlaceRotation(0);
       setWireStart(null);
       setHoverEndpoint(null);
@@ -2572,11 +2617,17 @@ export function SchematicEditor({
           <FloatingComponentPalette
             activeType={tool === 'place' ? placeType : null}
             blockActive={tool === 'place-block' || blockDialogOpen}
+            pdkBrowserActive={pdkBrowserOpen}
+            pdkBrowserAvailable={Boolean(
+              (projectKind === 'analog_ic' || projectKind === 'mixed_signal_ic')
+              && pdkDeviceCatalog?.devices.length,
+            )}
             disabled={busy}
             onSelectType={(type) => {
               setTool('place');
               setPendingBlock(null);
               setPendingModule(null);
+              setPendingPdkPlacement(null);
               setPlaceType(type);
               setPlaceRotation(0);
               setWireStart(null);
@@ -2584,7 +2635,34 @@ export function SchematicEditor({
               setHoverSelection(null);
             }}
             onSelectBlock={openBlockDialog}
+            onOpenPdkBrowser={() => {
+              setPdkBrowserOpen((current) => !current);
+              setTool('select');
+              setPendingPdkPlacement(null);
+              setActionNotice(null);
+            }}
           />
+          {pdkBrowserOpen && pdkDeviceCatalog ? (
+            <PdkDeviceBrowser
+              catalog={pdkDeviceCatalog}
+              busy={busy}
+              onClose={() => setPdkBrowserOpen(false)}
+              onPlace={(device, parameters) => {
+                const nextType = pdkDeviceToolType(device);
+                if (!nextType) return;
+                setPendingPdkPlacement({ device, parameters });
+                setPlaceType(nextType);
+                setPlaceRotation(0);
+                setTool('place');
+                setPdkBrowserOpen(false);
+                setWireStart(null);
+                setHoverEndpoint(null);
+                setHoverSelection(null);
+                setActionNotice(`Place ${device.device_id} from ${pdkDeviceCatalog.pdk_ref}`);
+                editorShellRef.current?.focus();
+              }}
+            />
+          ) : null}
           {projectModules.filter((item) => item.module_id !== draft.module_id).length > 0 ? (
             <div style={styles.moduleLibrary} data-testid="schematic-module-library">
               <div style={styles.moduleLibraryTitle}>Project modules</div>

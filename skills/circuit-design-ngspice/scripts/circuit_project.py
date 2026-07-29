@@ -1090,6 +1090,32 @@ def resolve_project_device_catalog(project: dict[str, Any]) -> dict[str, Any] | 
     return None
 
 
+def _parse_spice_scalar(value: Any) -> float | None:
+    match = re.fullmatch(
+        r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*([a-zA-Z]+)?\s*",
+        str(value if value is not None else ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    scales = {
+        "": 1.0,
+        "f": 1e-15,
+        "p": 1e-12,
+        "n": 1e-9,
+        "u": 1e-6,
+        "m": 1e-3,
+        "k": 1e3,
+        "meg": 1e6,
+        "g": 1e9,
+        "t": 1e12,
+    }
+    suffix = str(match.group(2) or "").casefold()
+    if suffix not in scales:
+        return None
+    return float(match.group(1)) * scales[suffix]
+
+
 def _pin_net_lookup(component: dict[str, Any]) -> dict[str, str]:
     lookup: dict[str, str] = {}
     for pin in component.get("pins", []) or []:
@@ -1483,6 +1509,17 @@ def evaluate_erc(
     has_ground = False
     endpoint_adjacency: dict[str, set[str]] = {}
     port_lookup: dict[str, dict[str, Any]] = {}
+    device_catalog = resolve_project_device_catalog(project)
+    catalog_devices = {
+        str(device.get("device_id") or "").casefold(): device
+        for device in (device_catalog or {}).get("devices", []) or []
+        if isinstance(device, dict)
+    }
+    analog_profile = project.get("analog_ic_profile")
+    analog_profile = analog_profile if isinstance(analog_profile, dict) else {}
+    pdk_binding = analog_profile.get("pdk_binding")
+    pdk_binding = pdk_binding if isinstance(pdk_binding, dict) else {}
+    pdk_ref = str(pdk_binding.get("pdk_ref") or pdk_binding.get("logical_id") or "").strip()
 
     for module_ref in project.get("modules", []):
         module_id = str(module_ref.get("id", ""))
@@ -1578,6 +1615,130 @@ def evaluate_erc(
                 net_id = str(pin.get("net_id") or stable_net_token(str(pin.get("net", ""))))
                 if severity:
                     critical_candidates.append((component, pin, net_id, severity))
+
+            if component_type == "M" and pdk_ref and pdk_ref.casefold() != "unbound":
+                parameters = component.get("parameters")
+                parameters = parameters if isinstance(parameters, dict) else {}
+                device_id = str(parameters.get("device_id") or "").strip()
+                device = catalog_devices.get(device_id.casefold()) if device_id else None
+                if not device_catalog:
+                    erc_diagnostic(
+                        diagnostics,
+                        "error",
+                        "pdk_catalog_unavailable",
+                        f"Bound PDK {pdk_ref} has no available device catalog.",
+                        module_id=module_id,
+                        component_id=component_id,
+                    )
+                elif not device:
+                    erc_diagnostic(
+                        diagnostics,
+                        "error",
+                        "pdk_device_missing",
+                        f"Device {device_id or '(unset)'} is not present in PDK {pdk_ref}.",
+                        module_id=module_id,
+                        component_id=component_id,
+                    )
+                else:
+                    spice_meta = device.get("spice")
+                    spice_meta = spice_meta if isinstance(spice_meta, dict) else {}
+                    if not (spice_meta.get("pin_order") or device.get("pins")):
+                        erc_diagnostic(
+                            diagnostics,
+                            "error",
+                            "pdk_pin_order_missing",
+                            f"Device {device_id} has no verified pin order.",
+                            module_id=module_id,
+                            component_id=component_id,
+                        )
+                    if not str(parameters.get("model") or spice_meta.get("model") or "").strip():
+                        erc_diagnostic(
+                            diagnostics,
+                            "error",
+                            "pdk_model_missing",
+                            f"Device {device_id} has no SPICE model.",
+                            module_id=module_id,
+                            component_id=component_id,
+                        )
+                    if not str(parameters.get("corner") or pdk_binding.get("default_corner") or "").strip():
+                        erc_diagnostic(
+                            diagnostics,
+                            "warning",
+                            "pdk_corner_missing",
+                            f"Device {device_id} has no selected PDK corner.",
+                            module_id=module_id,
+                            component_id=component_id,
+                        )
+                    device_parameters = device.get("parameters")
+                    device_parameters = device_parameters if isinstance(device_parameters, dict) else {}
+                    for field, raw_constraint in device_parameters.items():
+                        definition = raw_constraint if isinstance(raw_constraint, dict) else {}
+                        raw_value = str(parameters.get(field) or "").strip()
+                        if not raw_value:
+                            if definition.get("required"):
+                                erc_diagnostic(
+                                    diagnostics,
+                                    "error",
+                                    "pdk_parameter_required",
+                                    f"{field.upper()} is required by device {device_id}.",
+                                    module_id=module_id,
+                                    component_id=component_id,
+                                )
+                            continue
+                        parsed = _parse_spice_scalar(raw_value)
+                        if parsed is None:
+                            erc_diagnostic(
+                                diagnostics,
+                                "error",
+                                "pdk_parameter_invalid",
+                                f"{field.upper()} is not a valid SPICE number.",
+                                module_id=module_id,
+                                component_id=component_id,
+                            )
+                            continue
+                        if definition.get("integer") and not parsed.is_integer():
+                            erc_diagnostic(
+                                diagnostics,
+                                "error",
+                                "pdk_parameter_integer",
+                                f"{field.upper()} must be an integer.",
+                                module_id=module_id,
+                                component_id=component_id,
+                            )
+                        minimum = _parse_spice_scalar(definition.get("minimum"))
+                        maximum = _parse_spice_scalar(definition.get("maximum"))
+                        if (
+                            minimum is not None
+                            and (
+                                parsed <= minimum
+                                if definition.get("exclusive_minimum")
+                                else parsed < minimum
+                            )
+                        ):
+                            erc_diagnostic(
+                                diagnostics,
+                                "error",
+                                "pdk_parameter_range",
+                                f"{field.upper()} is below the device minimum {definition.get('minimum')}.",
+                                module_id=module_id,
+                                component_id=component_id,
+                            )
+                        if (
+                            maximum is not None
+                            and (
+                                parsed >= maximum
+                                if definition.get("exclusive_maximum")
+                                else parsed > maximum
+                            )
+                        ):
+                            erc_diagnostic(
+                                diagnostics,
+                                "error",
+                                "pdk_parameter_range",
+                                f"{field.upper()} exceeds the device maximum {definition.get('maximum')}.",
+                                module_id=module_id,
+                                component_id=component_id,
+                            )
 
             if component_type == "BLOCK":
                 block_spice = component.get("spice") or {}

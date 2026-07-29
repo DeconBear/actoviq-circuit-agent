@@ -15,6 +15,7 @@ SKILL_SCRIPTS = ROOT / "skills" / "circuit-design-ngspice" / "scripts"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 
 from analog_ic import PROFILE_SCHEMA_V2, audit_project, validate_profile  # noqa: E402
+from circuit_project import evaluate_erc  # noqa: E402
 from pdk_registry import (  # noqa: E402
     BINDING_SCHEMA,
     install_open_pdk,
@@ -104,6 +105,55 @@ def main() -> int:
                 },
             }
             assert audit_project(project_root, project, modules)["ok"]
+            erc_project = {
+                **project,
+                "modules": [{"id": "core", "ports": []}],
+                "connections": [],
+            }
+            erc_module = {
+                "module_id": "core",
+                "revision": 0,
+                "ports": [],
+                "nets": [],
+                "components": [{
+                    "id": "m1",
+                    "type": "M",
+                    "name": "M1",
+                    "value": "sg13_lv_nmos W=1u L=180n M=1 NF=1",
+                    "pins": [
+                        {"id": "d", "name": "D", "net": "out"},
+                        {"id": "g", "name": "G", "net": "in"},
+                        {"id": "s", "name": "S", "net": "0"},
+                        {"id": "b", "name": "B", "net": "0"},
+                    ],
+                    "parameters": {
+                        "device_id": "nmos",
+                        "model": "sg13_lv_nmos",
+                        "corner": "tt",
+                        "w": "1u",
+                        "l": "180n",
+                        "m": "1",
+                        "nf": "1",
+                    },
+                }],
+                "wires": [],
+            }
+            valid_codes = {
+                item["code"]
+                for item in evaluate_erc(erc_project, {"core": erc_module})["diagnostics"]
+                if str(item["code"]).startswith("pdk_")
+            }
+            assert valid_codes == set()
+            invalid_module = json.loads(json.dumps(erc_module))
+            invalid_module["components"][0]["parameters"]["device_id"] = "missing"
+            invalid_codes = {
+                item["code"]
+                for item in evaluate_erc(
+                    erc_project,
+                    {"core": invalid_module},
+                )["diagnostics"]
+            }
+            assert "pdk_device_missing" in invalid_codes
         finally:
             if previous is None:
                 os.environ.pop("ACTOVIQ_PDK_REGISTRY", None)

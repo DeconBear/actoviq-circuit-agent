@@ -4,6 +4,7 @@ import {
   ChevronRight,
   GripVertical,
   Hammer,
+  Library,
   Maximize2,
   Move,
   MousePointer2,
@@ -233,9 +234,12 @@ export function EditorCommandToolbar({
 interface FloatingComponentPaletteProps {
   activeType: ToolComponentType | null;
   blockActive: boolean;
+  pdkBrowserActive?: boolean;
+  pdkBrowserAvailable?: boolean;
   disabled: boolean;
   onSelectType: (type: ToolComponentType) => void;
   onSelectBlock: () => void;
+  onOpenPdkBrowser?: () => void;
 }
 
 interface PalettePosition {
@@ -253,9 +257,12 @@ interface PaletteDrag {
 export function FloatingComponentPalette({
   activeType,
   blockActive,
+  pdkBrowserActive = false,
+  pdkBrowserAvailable = false,
   disabled,
   onSelectType,
   onSelectBlock,
+  onOpenPdkBrowser,
 }: FloatingComponentPaletteProps) {
   const paletteRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<PaletteDrag | null>(null);
@@ -373,6 +380,18 @@ export function FloatingComponentPalette({
             tooltipSide="bottom"
             data-testid="schematic-editor-place-block"
           />
+          {pdkBrowserAvailable && onOpenPdkBrowser ? (
+            <IconButton
+              size="sm"
+              label="Browse bound PDK devices"
+              icon={<Library size={18} />}
+              selected={pdkBrowserActive}
+              onClick={onOpenPdkBrowser}
+              disabled={disabled}
+              tooltipSide="bottom"
+              data-testid="schematic-editor-open-pdk-browser"
+            />
+          ) : null}
         </div>
       ) : null}
 

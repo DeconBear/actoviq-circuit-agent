@@ -45,6 +45,9 @@ interface RegisteredPdkInstallation {
   fingerprint?: string;
   root?: string;
   support_status?: string;
+  capabilities?: Record<string, boolean>;
+  views?: Record<string, string[]>;
+  diagnostics?: string[];
   device_catalog?: PdkDeviceCatalog | null;
 }
 
@@ -525,11 +528,24 @@ export function CircuitWorkbench({
   const projectPdkRef = project?.analog_ic_profile?.schema === 'actoviq.analog-ic-profile.v2'
     ? project.analog_ic_profile.pdk_binding.pdk_ref
     : '';
+  const projectPdkBinding = project?.analog_ic_profile?.schema === 'actoviq.analog-ic-profile.v2'
+    ? project.analog_ic_profile.pdk_binding
+    : null;
   const pdkDeviceCatalog = useMemo(() => {
     if (!projectPdkRef) return null;
     const installation = registeredPdks.find((entry) => entry.logical_id === projectPdkRef);
-    return installation?.device_catalog ?? null;
-  }, [projectPdkRef, registeredPdks]);
+    if (!installation?.device_catalog) return null;
+    return {
+      ...installation.device_catalog,
+      binding: {
+        default_corner: projectPdkBinding?.default_corner,
+        corner_sweep: projectPdkBinding?.corner_sweep,
+        model_library_available: Boolean(installation.capabilities?.model_library),
+        installation_version: installation.version,
+        installation_fingerprint: installation.fingerprint,
+      },
+    };
+  }, [projectPdkBinding, projectPdkRef, registeredPdks]);
   const schematicIoEnabled = supportsSchematicIo(projectKind);
   const schematicFormats = schematicIoFormats(projectKind);
   const erc = bundle?.erc ?? build?.erc ?? null;
@@ -701,6 +717,13 @@ export function CircuitWorkbench({
             fingerprint: typeof entry.fingerprint === 'string' ? entry.fingerprint : undefined,
             root: typeof entry.root === 'string' ? entry.root : undefined,
             support_status: typeof entry.support_status === 'string' ? entry.support_status : undefined,
+            capabilities: entry.capabilities && typeof entry.capabilities === 'object'
+              ? entry.capabilities as Record<string, boolean>
+              : undefined,
+            views: entry.views && typeof entry.views === 'object'
+              ? entry.views as Record<string, string[]>
+              : undefined,
+            diagnostics: Array.isArray(entry.diagnostics) ? entry.diagnostics.map(String) : undefined,
             device_catalog: devices,
           };
         }).filter((entry) => entry.logical_id));

@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import type { ComponentParamFormProps } from './types';
 import { mergeParameters, parseComponentValue, patchElectricalParameters } from './projectToValue';
+import { pdkDeviceDefaults, validatePdkDeviceParameters } from './pdkDevice';
 import { SimulationParamForm } from './SimulationParamForm';
 
 function Field({
@@ -40,6 +41,14 @@ export function AnalogIcParamForm(props: ComponentParamFormProps) {
   const selectedDeviceId = params.device_id
     || devices.find((device) => String(device.spice?.model || '') === params.model)?.device_id
     || '';
+  const selectedDevice = devices.find((device) => device.device_id === selectedDeviceId);
+  const diagnostics = selectedDevice && pdkCatalog
+    ? validatePdkDeviceParameters(selectedDevice, pdkCatalog, params)
+    : selectedDeviceId ? [{
+        code: 'device_missing',
+        severity: 'error' as const,
+        message: `Device ${selectedDeviceId} is not present in the bound PDK catalog.`,
+      }] : [];
 
   if (!pdkCatalog || devices.length === 0) {
     return (
@@ -71,12 +80,9 @@ export function AnalogIcParamForm(props: ComponentParamFormProps) {
             const device = devices.find((entry) => entry.device_id === event.target.value);
             if (!device) return;
             setMos({
+              ...pdkDeviceDefaults(device, pdkCatalog),
+              ...params,
               device_id: device.device_id,
-              model: String(device.spice?.model || device.device_id),
-              w: params.w || '1u',
-              l: params.l || '180n',
-              m: params.m || '1',
-              nf: params.nf || '1',
             });
           }}
         >
@@ -97,6 +103,19 @@ export function AnalogIcParamForm(props: ComponentParamFormProps) {
           data-testid="schematic-param-model"
           onChange={(event) => setMos({ model: event.target.value })}
         />
+      </Field>
+      <Field label="Corner" style={fieldLabelStyle}>
+        <input
+          style={inputStyle}
+          value={params.corner || ''}
+          disabled={busy}
+          list="schematic-param-pdk-corners"
+          data-testid="schematic-param-corner"
+          onChange={(event) => setMos({ corner: event.target.value })}
+        />
+        <datalist id="schematic-param-pdk-corners">
+          {(pdkCatalog.binding?.corner_sweep || []).map((value) => <option key={value} value={value} />)}
+        </datalist>
       </Field>
       <Field label="W" style={fieldLabelStyle}>
         <input
@@ -134,6 +153,25 @@ export function AnalogIcParamForm(props: ComponentParamFormProps) {
           onChange={(event) => setMos({ nf: event.target.value })}
         />
       </Field>
+      {diagnostics.length > 0 ? (
+        <div data-testid="schematic-param-pdk-diagnostics" style={{ display: 'grid', gap: 4, marginBottom: 8 }}>
+          {diagnostics.map((diagnostic, index) => (
+            <div
+              key={`${diagnostic.code}-${index}`}
+              data-code={diagnostic.code}
+              style={{
+                padding: '5px 7px',
+                borderRadius: 4,
+                fontSize: 10,
+                color: diagnostic.severity === 'error' ? '#b91c1c' : '#9a3412',
+                background: diagnostic.severity === 'error' ? '#fef2f2' : '#fff7ed',
+              }}
+            >
+              {diagnostic.message}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <details style={{ marginTop: 4 }} data-testid="schematic-param-raw-value">
         <summary style={{ cursor: 'pointer', fontSize: 12, color: '#536172', marginBottom: 6 }}>
           Raw value / SPICE tail

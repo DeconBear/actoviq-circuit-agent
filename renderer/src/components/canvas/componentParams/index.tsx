@@ -10,6 +10,14 @@ export {
   projectComponentValue,
   patchElectricalParameters,
 } from './projectToValue';
+export {
+  applyPdkDeviceToComponent,
+  pdkDeviceCategory,
+  pdkDeviceDefaults,
+  pdkDeviceToolType,
+  validatePdkDeviceParameters,
+} from './pdkDevice';
+export { PdkDeviceBrowser } from './PdkDeviceBrowser';
 
 export function ComponentParamForm(props: ComponentParamFormProps) {
   const { projectKind, component } = props;
