@@ -699,6 +699,12 @@ try {
 
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await waitForWorkbenchProject(page, projectId);
+  await page.waitForFunction(() => (
+    ['power', 'filter'].every((moduleId) => (
+      document.querySelector(`[data-testid="module-card-${moduleId}"]`)
+        ?.getAttribute('data-projection-ready') === 'true'
+    ))
+  ), { timeout: 30_000 });
 
   assert.equal(await page.getByTestId('system-canvas').count(), 1);
   assert.equal(await page.locator('[data-testid^="module-card-"]').count(), 3);
