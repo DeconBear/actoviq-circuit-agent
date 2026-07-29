@@ -137,6 +137,61 @@ function uniqueSplitWireId(wires: CircuitWire[], wireId: string, junctionId: str
   return candidate;
 }
 
+function endpointTouchesEntities(
+  endpoint: CircuitWireEndpoint | undefined,
+  componentIds: Set<string>,
+  portIds: Set<string>,
+): boolean {
+  return Boolean(
+    endpoint
+    && (
+      (endpoint.component_id && componentIds.has(endpoint.component_id))
+      || (endpoint.port_id && portIds.has(endpoint.port_id))
+    )
+  );
+}
+
+function translateWireInPlace(wire: CircuitWire, delta: CircuitPosition): void {
+  const move = (point: CircuitPosition): CircuitPosition => ({
+    x: point.x + delta.x,
+    y: point.y + delta.y,
+  });
+  wire.points = wire.points.map(move);
+  if (wire.from) wire.from = { ...wire.from, ...move(wire.from) };
+  if (wire.to) wire.to = { ...wire.to, ...move(wire.to) };
+}
+
+function stretchWireEndpointInPlace(
+  wire: CircuitWire,
+  side: 'from' | 'to',
+  delta: CircuitPosition,
+): void {
+  if (wire.points.length < 2) return;
+  const endpointIndex = side === 'from' ? 0 : wire.points.length - 1;
+  const neighborIndex = side === 'from' ? 1 : wire.points.length - 2;
+  const original = wire.points[endpointIndex]!;
+  const neighbor = wire.points[neighborIndex]!;
+  const moved = { x: original.x + delta.x, y: original.y + delta.y };
+  wire.points[endpointIndex] = moved;
+  if (original.x === neighbor.x) {
+    wire.points[neighborIndex] = { ...neighbor, x: moved.x };
+  } else if (original.y === neighbor.y) {
+    wire.points[neighborIndex] = { ...neighbor, y: moved.y };
+  }
+  const endpoint = wire[side];
+  if (endpoint) wire[side] = { ...endpoint, ...moved };
+}
+
+function detachWireEndpointInPlace(wire: CircuitWire, side: 'from' | 'to'): void {
+  const endpoint = wire[side];
+  if (!endpoint) return;
+  wire[side] = {
+    x: endpoint.x,
+    y: endpoint.y,
+    junction_id: `j_detached_${wire.id}_${side}`,
+  };
+}
+
 function splitWireInPlace(
   wires: CircuitWire[],
   wire: CircuitWire,
@@ -206,14 +261,63 @@ function applyOperation(module: CircuitModule, operation: TransactionOperation):
     case 'move_entities': {
       const next = clone(module);
       const moved: string[] = [];
+      const componentIds = new Set<string>();
+      const portIds = new Set<string>();
       for (const component of next.components) {
         if (operation.entity_ids.includes(component.id)) {
           component.position = { x: component.position.x + operation.delta.x, y: component.position.y + operation.delta.y };
           moved.push(component.id);
+          componentIds.add(component.id);
+        }
+      }
+      for (const port of next.ports) {
+        if (operation.entity_ids.includes(`port:${port.id}`)) {
+          const position = port.position ?? { x: 0, y: 0 };
+          port.position = {
+            x: position.x + operation.delta.x,
+            y: position.y + operation.delta.y,
+          };
+          moved.push(`port:${port.id}`);
+          portIds.add(port.id);
+        }
+      }
+      const affectedWires: CircuitWire[] = [];
+      for (const wire of next.wires ?? []) {
+        const fromMoved = endpointTouchesEntities(wire.from, componentIds, portIds);
+        const toMoved = endpointTouchesEntities(wire.to, componentIds, portIds);
+        if (!fromMoved && !toMoved) continue;
+        affectedWires.push(clone(wire));
+        if (fromMoved && toMoved) {
+          translateWireInPlace(wire, operation.delta);
+        } else if (operation.mode === 'free') {
+          if (fromMoved) detachWireEndpointInPlace(wire, 'from');
+          if (toMoved) detachWireEndpointInPlace(wire, 'to');
+        } else {
+          if (fromMoved) stretchWireEndpointInPlace(wire, 'from', operation.delta);
+          if (toMoved) stretchWireEndpointInPlace(wire, 'to', operation.delta);
         }
       }
       const inverseDelta = { x: -operation.delta.x, y: -operation.delta.y };
-      return { module: next, inverse: [{ op: 'move_entities', entity_ids: moved, delta: inverseDelta, mode: operation.mode }], affected: moved };
+      const inverse: TransactionOperation[] = [
+        ...affectedWires.map(createWireOperation),
+        ...(affectedWires.length > 0
+          ? [{
+              op: 'delete_entities' as const,
+              entity_ids: affectedWires.map((wire) => wire.id),
+            }]
+          : []),
+        {
+          op: 'move_entities',
+          entity_ids: moved,
+          delta: inverseDelta,
+          mode: operation.mode,
+        },
+      ];
+      return {
+        module: next,
+        inverse,
+        affected: [...moved, ...affectedWires.map((wire) => wire.id)],
+      };
     }
     case 'delete_entities': {
       const next = clone(module);

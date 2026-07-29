@@ -123,6 +123,77 @@ check('move_entities shifts position and inverse restores it', () => {
   assert.deepEqual((result.inverse[0] as { delta: { x: number; y: number } }).delta, { x: -50, y: 30 });
 });
 
+check('stretch move preserves an external connection and is reversible', () => {
+  const first = makeComponent('r1');
+  const second = makeComponent('r2');
+  second.position = { x: 300, y: 100 };
+  const module = makeModule([first, second]);
+  module.wires = [identifiedWire(
+    'w_stretch',
+    { x: 100, y: 100 },
+    { x: 300, y: 100 },
+    {
+      from: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' },
+      to: { x: 300, y: 100, component_id: 'r2', pin_id: 'a' },
+    },
+  )];
+  const result = applyTransaction(module, makeTransaction([{
+    op: 'move_entities',
+    entity_ids: ['r1'],
+    delta: { x: 40, y: 20 },
+    mode: 'stretch',
+  }]));
+  assert.equal(result.module.wires[0]?.from?.component_id, 'r1');
+  assert.deepEqual(result.module.wires[0]?.points[0], { x: 140, y: 120 });
+  const inverseTx = makeTransaction([...result.inverse].reverse());
+  inverseTx.expected_module_revision = result.module.revision;
+  const restored = applyTransaction(result.module, inverseTx);
+  assert.deepEqual(restored.module.components, module.components);
+  assert.deepEqual(restored.module.wires, module.wires);
+});
+
+check('free move detaches external wires but translates internal selection wires', () => {
+  const first = makeComponent('r1');
+  const second = makeComponent('r2');
+  second.position = { x: 300, y: 100 };
+  const module = makeModule([first, second]);
+  module.wires = [identifiedWire(
+    'w_free',
+    { x: 100, y: 100 },
+    { x: 300, y: 100 },
+    {
+      from: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' },
+      to: { x: 300, y: 100, component_id: 'r2', pin_id: 'a' },
+    },
+  )];
+  const detached = applyTransaction(module, makeTransaction([{
+    op: 'move_entities',
+    entity_ids: ['r1'],
+    delta: { x: 40, y: 20 },
+    mode: 'free',
+  }]));
+  assert.equal(detached.module.wires[0]?.from?.component_id, undefined);
+  assert.match(detached.module.wires[0]?.from?.junction_id ?? '', /^j_detached_/);
+  assert.deepEqual(detached.module.wires[0]?.points, module.wires[0]?.points);
+
+  const internal = applyTransaction(module, makeTransaction([{
+    op: 'move_entities',
+    entity_ids: ['r1', 'r2'],
+    delta: { x: 40, y: 20 },
+    mode: 'free',
+  }]));
+  assert.equal(internal.module.wires[0]?.from?.component_id, 'r1');
+  assert.equal(internal.module.wires[0]?.to?.component_id, 'r2');
+  assert.deepEqual(internal.module.wires[0]?.points[0], { x: 140, y: 120 });
+  assert.deepEqual(internal.module.wires[0]?.points.at(-1), { x: 340, y: 120 });
+
+  const inverseTx = makeTransaction([...detached.inverse].reverse());
+  inverseTx.expected_module_revision = detached.module.revision;
+  const restored = applyTransaction(detached.module, inverseTx);
+  assert.deepEqual(restored.module.components, module.components);
+  assert.deepEqual(restored.module.wires, module.wires);
+});
+
 check('update_component changes value and inverse restores it', () => {
   const module = makeModule([makeComponent('r1')]);
   const result = applyTransaction(module, makeTransaction([{ op: 'update_component', component_id: 'r1', value: '2k' }]));

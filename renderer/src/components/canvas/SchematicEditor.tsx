@@ -50,6 +50,7 @@ import {
 } from '../../schematic/schematicDocument';
 
 type ToolMode = 'select' | 'wire' | 'place' | 'place-block' | 'place-module';
+type ComponentMoveMode = 'stretch' | 'free';
 type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
 const AUTOPAN_MARGIN_PX = 44;
@@ -186,6 +187,7 @@ function componentCurrentCandidates(component: CircuitComponent): string[] {
 }
 
 interface DragState {
+  mode: ComponentMoveMode;
   componentIds: string[];
   startWorld: CircuitPosition;
   originalPositions: Record<string, CircuitPosition>;
@@ -290,6 +292,7 @@ export function SchematicEditor({
   const [draft, setDraft] = useState(() => cloneModule(initialSession.draft));
   const [dirty, setDirty] = useState(initialSession.dirty);
   const [tool, setTool] = useState<ToolMode>('select');
+  const [componentMoveMode, setComponentMoveMode] = useState<ComponentMoveMode>('stretch');
   const [placeType, setPlaceType] = useState<ToolComponentType>('R');
   const [placeRotation, setPlaceRotation] = useState(0);
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
@@ -343,14 +346,24 @@ export function SchematicEditor({
   }, [draft, dragPreviewPositions]);
   const document = useMemo(() => (
     dragPreviewPositions
-      ? createDragPreviewDocument(baseDocument, previewDraft, Object.keys(dragPreviewPositions))
+      ? createDragPreviewDocument(
+          baseDocument,
+          previewDraft,
+          Object.keys(dragPreviewPositions),
+          dragRef.current?.mode ?? componentMoveMode,
+        )
       : baseDocument
-  ), [baseDocument, dragPreviewPositions, previewDraft]);
+  ), [baseDocument, componentMoveMode, dragPreviewPositions, previewDraft]);
   const rubberBandWireIds = useMemo(() => (
-    dragPreviewPositions
+    dragPreviewPositions && (dragRef.current?.mode ?? componentMoveMode) === 'stretch'
       ? previewWireIdsForComponents(baseDocument.wires, Object.keys(dragPreviewPositions))
       : undefined
-  ), [baseDocument.wires, dragPreviewPositions]);
+  ), [baseDocument.wires, componentMoveMode, dragPreviewPositions]);
+  const detachedWireIds = useMemo(() => (
+    dragPreviewPositions && (dragRef.current?.mode ?? componentMoveMode) === 'free'
+      ? previewWireIdsForComponents(baseDocument.wires, Object.keys(dragPreviewPositions))
+      : undefined
+  ), [baseDocument.wires, componentMoveMode, dragPreviewPositions]);
   const displayedComponentPositions = useMemo(() => {
     return componentPositionsById(previewDraft, previewDraft.components.map((component) => component.id));
   }, [previewDraft]);
@@ -580,6 +593,7 @@ export function SchematicEditor({
     setInteractionCursor('grabbing');
     const draggedIdSet = new Set(componentIds);
     dragRef.current = {
+      mode: componentMoveMode,
       componentIds,
       startWorld: world,
       originalPositions: componentPositionsById(draft, componentIds),
@@ -1228,6 +1242,7 @@ export function SchematicEditor({
         drag.originalWires,
         dx,
         dy,
+        drag.mode,
       );
       return next;
     });
@@ -1573,6 +1588,17 @@ export function SchematicEditor({
     if (event.key === 'Home' || ((event.ctrlKey || event.metaKey) && key === '0')) {
       event.preventDefault();
       fitViewport();
+      return;
+    }
+    if (event.key === 'F7' || event.key === 'F8') {
+      event.preventDefault();
+      cancelActiveDrag();
+      setTool('select');
+      setComponentMoveMode(event.key === 'F7' ? 'free' : 'stretch');
+      setWireStart(null);
+      setHoverEndpoint(null);
+      setHoverSelection(null);
+      setInteractionCursor('default');
       return;
     }
     if (event.key.startsWith('Arrow') && (selectedComponentIds.length > 0 || selectedPort)) {
@@ -1972,6 +1998,7 @@ export function SchematicEditor({
       style={editorFocused ? { ...styles.editorShell, ...styles.editorShellFocused } : styles.editorShell}
       data-testid="schematic-editor"
       data-tool={tool}
+      data-move-mode={componentMoveMode}
       data-busy={busy ? 'true' : 'false'}
       data-preview-busy={buildBusy ? 'true' : 'false'}
       data-dirty={dirty ? 'true' : 'false'}
@@ -2024,6 +2051,7 @@ export function SchematicEditor({
       <EditorCommandToolbar
         selectActive={tool === 'select'}
         wireActive={tool === 'wire'}
+        moveMode={componentMoveMode}
         disabled={busy}
         canUndo={history.length > 0}
         canRedo={future.length > 0}
@@ -2064,6 +2092,20 @@ export function SchematicEditor({
           setWireStart(null);
           setHoverEndpoint(null);
           setHoverSelection(null);
+        }}
+        onMoveMode={(mode) => {
+          cancelActiveDrag();
+          setTool('select');
+          setComponentMoveMode(mode);
+          setPendingBlock(null);
+          setPendingModule(null);
+          setPlaceRotation(0);
+          setWireStart(null);
+          setHoverEndpoint(null);
+          setHoverSelection(null);
+          setActionNotice(mode === 'free'
+            ? 'Free Move: external wires will detach'
+            : 'Stretch Move: connected wires remain attached');
         }}
         onUndo={undo}
         onRedo={redo}
@@ -2133,6 +2175,7 @@ export function SchematicEditor({
             cursor={editorCursor}
             viewBoxOverride={activeViewBox}
             rubberBandWireIds={rubberBandWireIds}
+            detachedWireIds={detachedWireIds}
             placeGhost={placeGhost}
             testId="schematic-editor-svg"
             onPointerDown={handlePointerDown}
@@ -2850,6 +2893,7 @@ function createDragPreviewDocument(
   baseDocument: SchematicDocument,
   previewModule: CircuitModule,
   draggedComponentIds: string[],
+  mode: ComponentMoveMode,
 ): SchematicDocument {
   const draggedIds = new Set(draggedComponentIds);
   const sampleId = draggedComponentIds[0];
@@ -2870,7 +2914,11 @@ function createDragPreviewDocument(
   // obstacle search, port recomputation, or document-wide bounds pass per frame.
   const wires = baseDocument.wires.map((wire) => (
     wireTouchesPreviewComponent(wire, draggedIds)
-      ? moveWireWithComponentSelection(wire, draggedIds, dx, dy)
+      ? (
+          mode === 'free' && !wireOnlyTouchesDraggedComponents(wire, draggedIds)
+            ? wire
+            : moveWireWithComponentSelection(wire, draggedIds, dx, dy)
+        )
       : wire
   ));
   const netLabels = baseDocument.netLabels.map((label) => {
@@ -3004,6 +3052,7 @@ function commitWiresAfterComponentGroupMove(
   originalWires: CircuitWire[],
   dx: number,
   dy: number,
+  mode: ComponentMoveMode,
 ): CircuitWire[] {
   const ids = new Set(componentIds);
   const originalById = new Map(originalWires.map((wire) => [wire.id, wire]));
@@ -3019,11 +3068,31 @@ function commitWiresAfterComponentGroupMove(
     if (seen.has(wire.id)) continue;
     sourceWires.push(wire);
   }
-  const nextWires = sourceWires.map((wire) => (
-    wireOnlyTouchesDraggedComponents(wire, ids)
-      ? translateWireGeometry(wire, dx, dy)
-      : cloneWire(wire)
-  ));
+  const nextWires = sourceWires.map((wire) => {
+    if (wireOnlyTouchesDraggedComponents(wire, ids)) {
+      return translateWireGeometry(wire, dx, dy);
+    }
+    const next = cloneWire(wire);
+    if (mode === 'free' && wireTouchesPreviewComponent(wire, ids)) {
+      if (wire.from?.component_id && ids.has(wire.from.component_id)) {
+        next.from = {
+          x: wire.from.x,
+          y: wire.from.y,
+          junction_id: `j_detached_${wire.id}_from`,
+        };
+      }
+      if (wire.to?.component_id && ids.has(wire.to.component_id)) {
+        next.to = {
+          x: wire.to.x,
+          y: wire.to.y,
+          junction_id: `j_detached_${wire.id}_to`,
+        };
+      }
+      return materializeEditableWire(next);
+    }
+    return next;
+  });
+  if (mode === 'free') return nextWires;
   const working = { ...module, wires: nextWires };
   const needsReroute = nextWires.some(
     (wire) => wireTouchesPreviewComponent(wire, ids) && !wireOnlyTouchesDraggedComponents(wire, ids),

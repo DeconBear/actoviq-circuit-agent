@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
+import { commitMove, mutationToTransaction } from '../renderer/src/schematic-core/connectivity/topologyCommit';
 import { planTopologyMutation } from '../renderer/src/schematic-core/connectivity/topologyPlanner';
 import type { CircuitComponent, CircuitModule } from '../renderer/src/types';
 
@@ -54,7 +55,7 @@ function makeModule(components: CircuitComponent[] = [], wires: CircuitModule['w
 
 check('move free produces moved preview and dangling diagnostic', () => {
   const module = makeModule([makeComponent('r1', 100, 100, 'in')], [
-    { id: 'w1', points: [{ x: 0, y: 100 }, { x: 100, y: 100 }], from: { x: 0, y: 100, port_id: 'in' }, to: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' }, net: 'in', source: 'stored' },
+    { id: 'w1', points: [{ x: 0, y: 100 }, { x: 100, y: 100 }], from: { x: 0, y: 100, port_id: 'in' }, to: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' }, net: 'in', net_id: 'net_in', source: 'stored' },
   ]);
   const result = planTopologyMutation(module, {
     kind: 'move', point: { x: 100, y: 100 }, entity_ids: ['r1'], delta: { x: 50, y: 0 }, mode: 'free',
@@ -67,7 +68,7 @@ check('move free produces moved preview and dangling diagnostic', () => {
 
 check('move stretch produces moved preview without dangling diagnostic', () => {
   const module = makeModule([makeComponent('r1', 100, 100, 'in')], [
-    { id: 'w1', points: [{ x: 0, y: 100 }, { x: 100, y: 100 }], from: { x: 0, y: 100, port_id: 'in' }, to: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' }, net: 'in', source: 'stored' },
+    { id: 'w1', points: [{ x: 0, y: 100 }, { x: 100, y: 100 }], from: { x: 0, y: 100, port_id: 'in' }, to: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' }, net: 'in', net_id: 'net_in', source: 'stored' },
   ]);
   const result = planTopologyMutation(module, {
     kind: 'move', point: { x: 100, y: 100 }, entity_ids: ['r1'], delta: { x: 50, y: 0 }, mode: 'stretch',
@@ -110,9 +111,63 @@ check('connect with no target returns no-target diagnostic', () => {
   assert.ok(result.diagnostics.some((d) => d.code === 'no_target'));
 });
 
+check('planned connection becomes a deterministic create_wire transaction', () => {
+  const module = makeModule([makeComponent('r1', 100, 100, 'in'), makeComponent('r2', 200, 100, 'in')]);
+  const planned = planTopologyMutation(module, {
+    kind: 'connect',
+    point: { x: 200, y: 100 },
+    source: {
+      kind: 'pin',
+      position: { x: 100, y: 100 },
+      ref: 'pin:r1.a',
+      net: 'in',
+      net_id: 'net_in',
+      endpoint: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' },
+    },
+  });
+  const transaction = mutationToTransaction(planned.mutations[0]!, {
+    module_id: module.module_id,
+    project_id: 'p1',
+    actor: 'test',
+    base_revision: 7,
+    expected_module_revision: module.revision,
+    command_id: 'connect-1',
+  });
+  assert.equal(transaction.base_revision, 7);
+  assert.equal(transaction.expected_module_revision, 0);
+  const operation = transaction.operations[0];
+  assert.ok(operation?.op === 'create_wire');
+  assert.equal(operation.wire_id, 'w_connect-1');
+  assert.equal(operation.net_id, 'net_in');
+  assert.equal(operation.from.component_id, 'r1');
+  assert.equal(operation.to.component_id, 'r2');
+});
+
+check('commitMove applies explicit free semantics without mutating the source', () => {
+  const module = makeModule([makeComponent('r1', 100, 100, 'in')], [
+    { id: 'w1', points: [{ x: 0, y: 100 }, { x: 100, y: 100 }], from: { x: 0, y: 100, port_id: 'in' }, to: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' }, net: 'in', net_id: 'net_in', source: 'stored' },
+  ]);
+  const before = structuredClone(module);
+  const result = commitMove(module, {
+    entity_ids: ['r1'],
+    delta: { x: 40, y: 20 },
+    mode: 'free',
+  }, {
+    module_id: module.module_id,
+    project_id: 'p1',
+    actor: 'test',
+    command_id: 'move-free-1',
+    base_revision: 12,
+  });
+  assert.deepEqual(module, before);
+  assert.deepEqual(result.module.components[0]?.position, { x: 140, y: 120 });
+  assert.equal(result.module.wires[0]?.to?.component_id, undefined);
+  assert.match(result.module.wires[0]?.to?.junction_id ?? '', /^j_detached_/);
+});
+
 check('split proposes a junction on a segment under the cursor', () => {
   const module = makeModule([], [
-    { id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in', source: 'stored' },
+    { id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], from: { x: 0, y: 0, junction_id: 'j_left' }, to: { x: 100, y: 0, junction_id: 'j_right' }, net: 'in', net_id: 'net_in', source: 'stored' },
   ]);
   const result = planTopologyMutation(module, {
     kind: 'split', point: { x: 50, y: 0 },
@@ -124,7 +179,7 @@ check('split proposes a junction on a segment under the cursor', () => {
 
 check('split with no segment under cursor returns no-segment diagnostic', () => {
   const module = makeModule([], [
-    { id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in', source: 'stored' },
+    { id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], from: { x: 0, y: 0, junction_id: 'j_left' }, to: { x: 100, y: 0, junction_id: 'j_right' }, net: 'in', net_id: 'net_in', source: 'stored' },
   ]);
   const result = planTopologyMutation(module, {
     kind: 'split', point: { x: 500, y: 500 },

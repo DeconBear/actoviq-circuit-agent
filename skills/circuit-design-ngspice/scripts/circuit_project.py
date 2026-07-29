@@ -2997,7 +2997,16 @@ def apply_v2_operation(
             if not from_moved and not to_moved:
                 continue
             affected.add(str(wire.get("id")))
-            if mode == "free":
+            if from_moved and to_moved:
+                for point in wire.get("points", []):
+                    point["x"] = float(point["x"]) + dx
+                    point["y"] = float(point["y"]) + dy
+                for side in ("from", "to"):
+                    endpoint = wire.get(side)
+                    if isinstance(endpoint, dict):
+                        endpoint["x"] = float(endpoint["x"]) + dx
+                        endpoint["y"] = float(endpoint["y"]) + dy
+            elif mode == "free":
                 for side, moved in (("from", from_moved), ("to", to_moved)):
                     if not moved:
                         continue
@@ -3009,20 +3018,10 @@ def apply_v2_operation(
                             "junction_id": _v2_stable_junction(str(wire["id"]), side, endpoint),
                         }
             elif mode == "stretch":
-                if from_moved and to_moved:
-                    for point in wire.get("points", []):
-                        point["x"] = float(point["x"]) + dx
-                        point["y"] = float(point["y"]) + dy
-                    for side in ("from", "to"):
-                        endpoint = wire.get(side)
-                        if isinstance(endpoint, dict):
-                            endpoint["x"] = float(endpoint["x"]) + dx
-                            endpoint["y"] = float(endpoint["y"]) + dy
-                else:
-                    if from_moved:
-                        _v2_shift_wire_endpoint(wire, "from", dx, dy)
-                    if to_moved:
-                        _v2_shift_wire_endpoint(wire, "to", dx, dy)
+                if from_moved:
+                    _v2_shift_wire_endpoint(wire, "from", dx, dy)
+                if to_moved:
+                    _v2_shift_wire_endpoint(wire, "to", dx, dy)
             else:
                 raise ValueError(f"move_entities has invalid mode: {mode}")
         affected.update(component_ids)

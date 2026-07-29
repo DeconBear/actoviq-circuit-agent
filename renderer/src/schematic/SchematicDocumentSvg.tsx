@@ -71,6 +71,7 @@ interface Props {
   cursor?: CSSCursor;
   viewBoxOverride?: SchematicBounds;
   rubberBandWireIds?: Set<string>;
+  detachedWireIds?: Set<string>;
   placeGhost?: CircuitComponent | null;
   testId?: string;
   onPointerDown?: PointerEventHandler<SVGSVGElement>;
@@ -95,6 +96,7 @@ export function SchematicDocumentSvg({
   cursor = 'default',
   viewBoxOverride,
   rubberBandWireIds,
+  detachedWireIds,
   placeGhost = null,
   testId = 'schematic-document-svg',
   onPointerDown,
@@ -197,6 +199,7 @@ export function SchematicDocumentSvg({
               attachedSelected={attachedSelected}
               hovered={hovered}
               rubberBand={rubberBandWireIds?.has(wire.id) ?? false}
+              detached={detachedWireIds?.has(wire.id) ?? false}
             />
           );
         })}
@@ -544,11 +547,32 @@ function signalLabelTextPosition(
 
 type CSSCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
-function WirePath({ wire, selected, attachedSelected, hovered, rubberBand }: { wire: CircuitWire; selected: boolean; attachedSelected?: boolean; hovered: boolean; rubberBand: boolean }) {
+function WirePath({
+  wire,
+  selected,
+  attachedSelected,
+  hovered,
+  rubberBand,
+  detached,
+}: {
+  wire: CircuitWire;
+  selected: boolean;
+  attachedSelected?: boolean;
+  hovered: boolean;
+  rubberBand: boolean;
+  detached: boolean;
+}) {
   const points = pointsAttribute(wire.points ?? []);
   if (!points) return null;
   return (
-    <g data-wire-id={wire.id} data-wire-source={wire.source ?? ''} data-net={wire.net ?? ''} data-rubber-band={rubberBand ? 'true' : 'false'} data-hovered={hovered ? 'true' : undefined}>
+    <g
+      data-wire-id={wire.id}
+      data-wire-source={wire.source ?? ''}
+      data-net={wire.net ?? ''}
+      data-rubber-band={rubberBand ? 'true' : 'false'}
+      data-detached-preview={detached ? 'true' : 'false'}
+      data-hovered={hovered ? 'true' : undefined}
+    >
       <polyline
         points={points}
         fill="none"
@@ -570,6 +594,20 @@ function WirePath({ wire, selected, attachedSelected, hovered, rubberBand }: { w
           opacity="0.35"
           pointerEvents="none"
           data-testid="schematic-rubber-band-wire"
+        />
+      ) : null}
+      {detached ? (
+        <polyline
+          points={points}
+          fill="none"
+          stroke="#dc2626"
+          strokeWidth="5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray="5 6"
+          opacity="0.7"
+          pointerEvents="none"
+          data-testid="schematic-detached-wire-preview"
         />
       ) : null}
       <polyline

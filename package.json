@@ -57,6 +57,7 @@
     "test:e2e:schematic-editor": "npm run build:src && npm run build:electron && node scripts/playwright-schematic-editor-smoke.mjs",
     "test:e2e:schematic-editor:scene": "npm run build:src && npm run build:electron && node scripts/e2e/run-schematic-editor.mjs",
     "test:e2e:schematic-baseline": "npm run build:src && npm run build:electron && node scripts/e2e/schematic-editor-baseline.mjs",
+    "test:e2e:schematic-move-modes": "npm run build:src && npm run build:electron && node scripts/e2e/schematic-move-modes.mjs",
     "test:e2e:schematic-perf": "npm run build:src && npm run build:electron && node scripts/e2e/schematic-editor-perf-baseline.mjs",
     "test:schematic-quality": "node scripts/schematic-quality-regression.mjs",
     "test:eda-export": "python scripts/eda-export-regression.py",

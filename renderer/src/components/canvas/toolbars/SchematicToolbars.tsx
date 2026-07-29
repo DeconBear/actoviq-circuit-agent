@@ -5,9 +5,11 @@ import {
   GripVertical,
   Hammer,
   Maximize2,
+  Move,
   MousePointer2,
   Redo2,
   Trash2,
+  Unlink,
   Undo2,
 } from 'lucide-react';
 import {
@@ -51,6 +53,7 @@ const COMPONENT_TOOL_ICONS: Record<ToolComponentType, CircuitSymbolKind> = {
 interface EditorCommandToolbarProps {
   selectActive: boolean;
   wireActive: boolean;
+  moveMode: 'stretch' | 'free';
   disabled: boolean;
   canUndo: boolean;
   canRedo: boolean;
@@ -61,6 +64,7 @@ interface EditorCommandToolbarProps {
   zoom: number;
   onSelect: () => void;
   onWire: () => void;
+  onMoveMode: (mode: 'stretch' | 'free') => void;
   onUndo: () => void;
   onRedo: () => void;
   onDelete: () => void;
@@ -72,6 +76,7 @@ interface EditorCommandToolbarProps {
 export function EditorCommandToolbar({
   selectActive,
   wireActive,
+  moveMode,
   disabled,
   canUndo,
   canRedo,
@@ -82,6 +87,7 @@ export function EditorCommandToolbar({
   zoom,
   onSelect,
   onWire,
+  onMoveMode,
   onUndo,
   onRedo,
   onDelete,
@@ -110,6 +116,29 @@ export function EditorCommandToolbar({
             onClick={onWire}
             disabled={disabled}
             data-testid="schematic-editor-wire"
+          />
+        </div>
+
+        <span className="av-schematic-command-divider" role="separator" aria-orientation="vertical" />
+
+        <div className="av-schematic-command-group" role="group" aria-label="Move connection policy">
+          <IconButton
+            size="sm"
+            label="Stretch connected wires while moving (F8)"
+            icon={<Move size={17} />}
+            selected={moveMode === 'stretch'}
+            onClick={() => onMoveMode('stretch')}
+            disabled={disabled}
+            data-testid="schematic-editor-move-stretch"
+          />
+          <IconButton
+            size="sm"
+            label="Free move and detach external wires (F7)"
+            icon={<Unlink size={17} />}
+            selected={moveMode === 'free'}
+            onClick={() => onMoveMode('free')}
+            disabled={disabled}
+            data-testid="schematic-editor-move-free"
           />
         </div>
 
