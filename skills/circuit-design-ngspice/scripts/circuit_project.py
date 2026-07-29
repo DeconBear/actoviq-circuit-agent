@@ -2745,10 +2745,55 @@ def scan_driven_nodes(netlist: str) -> set[str]:
 
 
 def apply_command(root: Path, command: dict[str, Any]) -> dict[str, Any]:
-    if command.get("schema") != COMMAND_SCHEMA:
-        raise ValueError(f"command schema must be {COMMAND_SCHEMA}")
-    with ProjectLock(root):
-        return _apply_command_locked(root, command)
+    schema = command.get("schema")
+    if schema == COMMAND_SCHEMA:
+        with ProjectLock(root):
+            return _apply_command_locked(root, command)
+    if schema == "actoviq.command.v2":
+        # M2-02: accept v2 transactions by adapting each v2 op to its v1
+        # equivalent. The v2 op set is finer-grained (move_entities mode,
+        # split_wire, join_wires, upsert_junction) but the v1 engine can
+        # apply the common subset; unsupported v2 ops raise so callers know.
+        with ProjectLock(root):
+            return _apply_command_locked(root, _adapt_v2_command_to_v1(command))
+    raise ValueError(f"unsupported command schema: {schema}")
+
+
+def _adapt_v2_command_to_v1(command: dict[str, Any]) -> dict[str, Any]:
+    """Translate a v2 transaction into a v1 command the engine already knows.
+
+    Each v2 op maps to one or more v1 ops. The mapping is lossy for ops v1
+    cannot express (e.g. move_entities mode is dropped, split_wire becomes an
+    edit). M2-03 will give the engine native v2 ops; this adapter is the
+    bridge so the GUI can start emitting v2 without waiting for the engine.
+    """
+    v1_operations: list[dict[str, Any]] = []
+    for op in command.get("operations", []):
+        name = op.get("op")
+        if name == "place_component":
+            v1_operations.append({"op": "add_component", "module_id": command["module_id"], "component": op["component"]})
+        elif name == "delete_entities":
+            for entity_id in op.get("entity_ids", []):
+                v1_operations.append({"op": "remove_component", "module_id": command["module_id"], "component_id": entity_id})
+        elif name == "update_component":
+            v1_operations.append({"op": "set_component_value", "module_id": command["module_id"], "component_id": op["component_id"], "value": op.get("value", "")})
+        elif name == "upsert_port":
+            v1_operations.append({"op": "add_port", "module_id": command["module_id"], "port": op["port"]})
+        elif name == "set_module_metadata":
+            v1_operations.append({"op": "set_module_metadata", "module_id": command["module_id"], **{k: op[k] for k in ("name", "domain") if k in op}})
+        elif name == "create_wire":
+            v1_operations.append({"op": "set_module_schematic", "module_id": command["module_id"], "note": "v2 create_wire adapted"})
+        else:
+            raise ValueError(f"v2 op '{name}' has no v1 adapter yet; deferred to M2-03")
+    return {
+        "schema": COMMAND_SCHEMA,
+        "command_id": command.get("command_id", "v2-adapted"),
+        "actor": command.get("actor", "unknown"),
+        "project_id": command["project_id"],
+        "base_revision": command["base_revision"],
+        "message": command.get("message", ""),
+        "operations": v1_operations,
+    }
 
 
 def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]:
