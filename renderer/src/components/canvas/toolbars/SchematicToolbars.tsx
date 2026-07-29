@@ -8,6 +8,7 @@ import {
   Move,
   MousePointer2,
   Redo2,
+  Scissors,
   Trash2,
   Unlink,
   Undo2,
@@ -53,6 +54,7 @@ const COMPONENT_TOOL_ICONS: Record<ToolComponentType, CircuitSymbolKind> = {
 interface EditorCommandToolbarProps {
   selectActive: boolean;
   wireActive: boolean;
+  cutActive: boolean;
   moveMode: 'stretch' | 'free';
   disabled: boolean;
   canUndo: boolean;
@@ -64,6 +66,7 @@ interface EditorCommandToolbarProps {
   zoom: number;
   onSelect: () => void;
   onWire: () => void;
+  onCut: () => void;
   onMoveMode: (mode: 'stretch' | 'free') => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -76,6 +79,7 @@ interface EditorCommandToolbarProps {
 export function EditorCommandToolbar({
   selectActive,
   wireActive,
+  cutActive,
   moveMode,
   disabled,
   canUndo,
@@ -87,6 +91,7 @@ export function EditorCommandToolbar({
   zoom,
   onSelect,
   onWire,
+  onCut,
   onMoveMode,
   onUndo,
   onRedo,
@@ -116,6 +121,15 @@ export function EditorCommandToolbar({
             onClick={onWire}
             disabled={disabled}
             data-testid="schematic-editor-wire"
+          />
+          <IconButton
+            size="sm"
+            label="Cut wire once (K)"
+            icon={<Scissors size={17} />}
+            selected={cutActive}
+            onClick={onCut}
+            disabled={disabled}
+            data-testid="schematic-editor-cut"
           />
         </div>
 

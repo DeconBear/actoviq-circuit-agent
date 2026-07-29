@@ -11,6 +11,7 @@ import {
   isPmosComponent,
   makePlacedComponent,
   normalizeConnectivity,
+  normalizeSchematicPorts,
   pinWorld,
   pointEndpoint,
   portRenderSide,
@@ -27,6 +28,31 @@ assertGroundPseudoComponent();
 assertPlacedComponentDefaults();
 assertRouteEgressAvoidsOwnerBody();
 assertLegacyPortNormalization();
+assertWiredInferredPortPreserved();
+
+function assertWiredInferredPortPreserved() {
+  const port: CircuitPort = {
+    id: 'input',
+    name: 'IN',
+    direction: 'input',
+    signal_type: 'analog',
+    net: 'detached_input',
+    inferred: true,
+  };
+  assert.deepEqual(
+    normalizeSchematicPorts([port], [], [{
+      id: 'input_stub',
+      points: [{ x: 0, y: 0 }, { x: 40, y: 0 }],
+      from: { x: 0, y: 0, port_id: 'input' },
+      to: { x: 40, y: 0, junction_id: 'j_input' },
+      net: 'detached_input',
+      net_id: 'net_detached_input',
+      source: 'stored',
+    }]),
+    [port],
+    'an inferred port referenced by a stored wire must remain part of the module interface',
+  );
+}
 
 function assertLegacyPortNormalization() {
   const module = moduleFixture('legacy_duplicate_ports', [
@@ -253,6 +279,26 @@ assert.ok(
     [wire.from, wire.to].some((endpoint) => endpoint?.port_id === 'input' && endpoint.x === 80 && endpoint.y === 360)
   )),
   'stored port position should be used by generated wiring',
+);
+
+const wiredPortModule = createSchematicDocument(moduleFixture('wired_port_position', [
+  component('r1', 'R', '1k', 260, 220, [['a', '1', 'in'], ['b', '2', 'out']]),
+])).module;
+const wiredInput = wiredPortModule.ports.find((port) => port.id === 'input')!;
+delete wiredInput.position;
+wiredPortModule.wires = [{
+  id: 'input_stub',
+  points: [{ x: 100, y: 340 }, { x: 160, y: 340 }],
+  from: { x: 100, y: 340, port_id: wiredInput.id },
+  to: { x: 160, y: 340, junction_id: 'j_input_stub' },
+  net: wiredInput.net,
+  net_id: wiredInput.net_id,
+  source: 'stored',
+}];
+assert.deepEqual(
+  createSchematicDocument(wiredPortModule, { autoLayout: false }).portPositions.get(wiredInput.id),
+  { x: 100, y: 340 },
+  'a stored wire endpoint should keep its port position stable after a topology edit',
 );
 
 const mosWireModule = moduleFixture('mos_wire_merge', [

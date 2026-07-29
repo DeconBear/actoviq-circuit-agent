@@ -2757,9 +2757,17 @@ try {
     await page.getByTestId('schematic-editor').waitFor({ timeout: 20_000 });
     await page.waitForFunction(() => {
       const node = document.querySelector('[data-testid="schematic-editor"]');
-      return Number(node?.getAttribute('data-component-count') ?? '0') >= 7 &&
+      return node?.getAttribute('data-module-id') === 'reset' &&
+        Number(node?.getAttribute('data-component-count') ?? '0') >= 7 &&
         Number(node?.getAttribute('data-wire-count') ?? '0') >= 4;
     });
+    const bjtResetPorts = JSON.parse(
+      await page.getByTestId('schematic-editor').getAttribute('data-ports') || '[]',
+    );
+    assert.ok(
+      bjtResetPorts.some((port) => port.id === 'rst'),
+      `hydrated BJT reset module lost RST port: ${JSON.stringify(bjtResetPorts)}`,
+    );
     assert.equal(
       await page.getByTestId('schematic-editor-svg').locator('g[data-port-id="rst"]').getAttribute('data-port-side'),
       'left',

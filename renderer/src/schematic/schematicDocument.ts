@@ -176,7 +176,7 @@ export function createSchematicDocument(
 ): SchematicDocument {
   const shouldAutoLayout = options.autoLayout !== false && (module.wires ?? []).length === 0;
   const next = shouldAutoLayout ? autoLayoutModule(cloneModule(module)) : cloneModule(module);
-  next.ports = normalizeSchematicPorts(next.ports, next.components);
+  next.ports = normalizeSchematicPorts(next.ports, next.components, next.wires);
   ensureStableNetModel(next);
   for (const component of next.components) {
     component.rotation = normalizeRotation(component.rotation);
@@ -242,6 +242,7 @@ function preferSchematicPortCandidate(
 export function normalizeSchematicPorts(
   ports: CircuitPort[],
   components: CircuitComponent[],
+  wires: CircuitWire[] = [],
 ): CircuitPort[] {
   const liveNets = new Set(
     components.flatMap((component) => component.pins.map((pin) => pin.net.trim().toLowerCase())).filter(Boolean),
@@ -252,12 +253,17 @@ export function normalizeSchematicPorts(
       .map((component) => component.pins[0]?.net.trim().toLowerCase() ?? '')
       .filter(Boolean),
   );
+  const wiredPortIds = new Set(
+    wires.flatMap((wire) => (
+      [wire.from?.port_id, wire.to?.port_id].filter((id): id is string => Boolean(id))
+    )),
+  );
   const candidates = ports.flatMap((port, index) => {
     const id = port.id.trim();
     const net = port.net.trim().toLowerCase();
     if (!id || !net) return [];
     const genericInterface = isGenericModulePort(port);
-    if (!liveNets.has(net) && (port.inferred || genericInterface)) return [];
+    if (!liveNets.has(net) && !wiredPortIds.has(id) && (port.inferred || genericInterface)) return [];
     if (
       port.inferred &&
       sourceDrivenNets.has(net) &&
@@ -3058,6 +3064,13 @@ export function computePortPositions(module: CircuitModule): Map<string, Circuit
     const storedPosition = storedPortPosition(port);
     if (storedPosition) {
       map.set(port.id, storedPosition);
+      return;
+    }
+    const wiredPosition = (module.wires ?? [])
+      .flatMap((wire) => [wire.from, wire.to])
+      .find((endpoint) => endpoint?.port_id === port.id);
+    if (wiredPosition) {
+      map.set(port.id, snapPoint(wiredPosition));
       return;
     }
     const points = pinPointsByNet.get(port.net) ?? [];
