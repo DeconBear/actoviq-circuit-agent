@@ -16,6 +16,7 @@ import {
 export const SCHEMATIC_GRID = 20;
 export const PIN_REACH = 12;
 export const BLOCK_PIN_LEAD = 24;
+export const AUTO_LAYOUT_COMPONENT_LIMIT = 80;
 const ROUTE_OBSTACLE_PADDING = SCHEMATIC_GRID + 4;
 
 export type ToolComponentType = Exclude<CircuitComponent['type'], 'E' | 'BLOCK' | 'MODULE' | 'U' | 'X' | 'F' | 'G' | 'H' | 'B'>;
@@ -128,6 +129,16 @@ export function serializeSchematicDocument(document: SchematicDocument): Seriali
   };
 }
 
+export function deserializeSchematicDocument(
+  document: SerializableSchematicDocument,
+): SchematicDocument {
+  return {
+    ...document,
+    portPositions: new Map(Object.entries(document.portPositions)),
+    connectedPortIds: new Set(document.connectedPortIds),
+  };
+}
+
 export interface WireTopologyIssue {
   code:
     | 'invalid_wire'
@@ -174,7 +185,11 @@ export function createSchematicDocument(
   module: CircuitModule,
   options: SchematicDocumentOptions = {},
 ): SchematicDocument {
-  const shouldAutoLayout = options.autoLayout !== false && (module.wires ?? []).length === 0;
+  const shouldAutoLayout = (
+    options.autoLayout !== false
+    && (module.wires ?? []).length === 0
+    && module.components.length <= AUTO_LAYOUT_COMPONENT_LIMIT
+  );
   const next = shouldAutoLayout ? autoLayoutModule(cloneModule(module)) : cloneModule(module);
   next.ports = normalizeSchematicPorts(next.ports, next.components, next.wires);
   ensureStableNetModel(next);
@@ -4713,6 +4728,11 @@ function materializeNetWires(
     .map((wire) => ({ ...syncWireEndpointPoints(module, wire, portPositions), source: 'stored' as const }));
   const usedPairs = new Set(stored.map((wire) => endpointPairKey(wire.from, wire.to)));
   const existingIds = new Set(stored.map((wire) => wire.id));
+  // Large sheets preserve every user-authored stored route, but any remaining
+  // derived net fan-out uses the bounded orthogonal router. A single edited
+  // net must not force hundreds of unrelated implicit nets back through the
+  // obstacle-search router on the next projection.
+  const fastImplicitRouting = module.components.length > AUTO_LAYOUT_COMPONENT_LIMIT;
   // Nets that already carry stored wires only get the anchor fan-out: the >=4-endpoint
   // spine/tree decomposition does not subtract partially-stored pairs and would add
   // parallel links (e.g. after a component move materialized one wire of the net).
@@ -4759,7 +4779,7 @@ function materializeNetWires(
     if (endpoints.length < 2) continue;
     if (shouldRepresentNetWithLocalLabel(module, net)) continue;
     if (shouldRepresentSignalNetWithLocalLabel(module, net, endpoints)) continue;
-    if (endpoints.length >= 4 && !netsWithStoredWires.has(net)) {
+    if (!fastImplicitRouting && endpoints.length >= 4 && !netsWithStoredWires.has(net)) {
       if (!isCmosRingFeedbackNet(module, net)) {
         const spineWires = materializeEndpointSpineWires(module, net, endpoints, existingIds, usedPairs, wires);
         if (spineWires.length > 0) {
@@ -4800,7 +4820,9 @@ function materializeNetWires(
       const endPoint = endpointDrawPoint(endpoint);
       wires.push({
         id,
-        points: routePointsForModule(module, startPoint, endPoint, anchor, endpoint, net, wires),
+        points: fastImplicitRouting
+          ? routePoints(startPoint, endPoint)
+          : routePointsForModule(module, startPoint, endPoint, anchor, endpoint, net, wires),
         from: stripEndpoint(startPoint, anchor),
         to: stripEndpoint(endPoint, endpoint),
         net,

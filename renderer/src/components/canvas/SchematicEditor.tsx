@@ -48,6 +48,7 @@ import {
 } from '../../schematic-core/hierarchy/moduleInstance';
 import {
   addWire,
+  AUTO_LAYOUT_COMPONENT_LIMIT,
   cloneModule,
   COMPONENT_TYPES,
   componentBounds,
@@ -81,6 +82,7 @@ import {
   pinWorld,
 } from '../../schematic/schematicDocument';
 import { projectSchematicDocument as createSchematicDocument } from '../../schematic-core/projection/facade';
+import { analyzeSchematicComplexity } from '../../schematic-core/performance/complexity';
 
 type ToolMode = 'select' | 'wire' | 'cut' | 'place' | 'place-block' | 'place-module';
 type ComponentMoveMode = 'stretch' | 'free';
@@ -89,6 +91,7 @@ type EditorCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'mo
 const AUTOPAN_MARGIN_PX = 44;
 const AUTOPAN_STEP_RATIO = 0.055;
 const MAX_BLOCK_PINS = 32;
+const MAX_RENDERED_LIVE_DIAGNOSTICS = 120;
 
 export interface ProjectModuleLibraryItem {
   module_id: string;
@@ -275,6 +278,9 @@ interface DragState {
   originalDirty: boolean;
   moved: boolean;
   originalWires: CircuitWire[];
+  largePreviewComponentNodes?: Map<string, SVGGElement>;
+  largePreviewWireNodes?: Map<string, SVGGElement>;
+  largePreviewWirePolylines?: Map<string, SVGPolylineElement[]>;
 }
 
 interface PortDragState {
@@ -445,8 +451,18 @@ export function SchematicEditor({
         )
       : baseDocument
   ), [baseDocument, componentMoveMode, dragPreviewPositions, previewDraft]);
-  const liveDiagnostics = useMemo(() => deriveLiveErc(document), [document]);
+  const baseLiveDiagnostics = useMemo(() => deriveLiveErc(baseDocument), [baseDocument]);
+  const liveDiagnostics = useMemo(() => (
+    dragPreviewPositions && (dragRef.current?.mode ?? componentMoveMode) === 'stretch'
+      ? baseLiveDiagnostics
+      : deriveLiveErc(document)
+  ), [baseLiveDiagnostics, componentMoveMode, document, dragPreviewPositions]);
   const liveErcSummary = useMemo(() => summarizeLiveErc(liveDiagnostics), [liveDiagnostics]);
+  const renderedLiveDiagnostics = useMemo(
+    () => liveDiagnostics.slice(0, MAX_RENDERED_LIVE_DIAGNOSTICS),
+    [liveDiagnostics],
+  );
+  const complexity = useMemo(() => analyzeSchematicComplexity(draft), [draft]);
   const rubberBandWireIds = useMemo(() => (
     dragPreviewPositions && (dragRef.current?.mode ?? componentMoveMode) === 'stretch'
       ? previewWireIdsForComponents(baseDocument.wires, Object.keys(dragPreviewPositions))
@@ -854,14 +870,123 @@ export function SchematicEditor({
     }
   }
 
+  function clearImperativeLargeDragPreview(drag: DragState | null) {
+    const svg = svgRef.current;
+    if (!svg || !drag) return;
+    const componentNodes = drag.largePreviewComponentNodes?.values()
+      ?? svg.querySelectorAll<SVGGElement>('[data-large-drag-component="true"]').values();
+    for (const node of componentNodes) {
+      node.removeAttribute('transform');
+      node.removeAttribute('data-large-drag-component');
+    }
+    const originalById = new Map(drag.originalWires.map((wire) => [wire.id, wire]));
+    const wireNodes = drag.largePreviewWireNodes?.values()
+      ?? svg.querySelectorAll<SVGGElement>('[data-large-drag-wire="true"]').values();
+    for (const node of wireNodes) {
+      node.querySelector('[data-large-drag-overlay="true"]')?.remove();
+      const wireId = node.getAttribute('data-wire-id') ?? '';
+      const wire = originalById.get(wireId);
+      if (wire) {
+        const points = wire.points.map((point) => `${point.x},${point.y}`).join(' ');
+        const polylines = drag.largePreviewWirePolylines?.get(wireId)
+          ?? [...node.querySelectorAll<SVGPolylineElement>('polyline')];
+        for (const polyline of polylines) {
+          polyline.setAttribute('points', points);
+        }
+      }
+      node.removeAttribute('data-large-drag-wire');
+    }
+    editorShellRef.current?.setAttribute('data-drag-preview', 'false');
+    editorShellRef.current?.setAttribute('data-projection-scope', 'module');
+    svg.style.cursor = 'grab';
+  }
+
+  function renderImperativeLargeDragPreview(
+    drag: DragState,
+    nextPositions: Record<string, CircuitPosition>,
+  ) {
+    const svg = svgRef.current;
+    if (!svg) return;
+    clearImperativeLargeDragPreview(drag);
+    const draggedIds = new Set(drag.componentIds);
+    for (const componentId of drag.componentIds) {
+      const node = drag.largePreviewComponentNodes?.get(componentId);
+      if (!node) continue;
+      const original = drag.originalPositions[componentId];
+      const next = nextPositions[componentId];
+      if (!original || !next) continue;
+      node.setAttribute('transform', `translate(${next.x - original.x} ${next.y - original.y})`);
+      node.setAttribute('data-large-drag-component', 'true');
+    }
+    const sampleId = drag.componentIds[0];
+    const original = sampleId ? drag.originalPositions[sampleId] : undefined;
+    const next = sampleId ? nextPositions[sampleId] : undefined;
+    const dx = original && next ? next.x - original.x : 0;
+    const dy = original && next ? next.y - original.y : 0;
+    for (const wire of drag.originalWires) {
+      if (!wireTouchesPreviewComponent(wire, draggedIds)) continue;
+      const previewWire = (
+        drag.mode === 'free' && !wireOnlyTouchesDraggedComponents(wire, draggedIds)
+      )
+        ? wire
+        : moveWireWithComponentSelection(wire, draggedIds, dx, dy);
+      const node = drag.largePreviewWireNodes?.get(wire.id);
+      if (!node) continue;
+      const points = previewWire.points.map((point) => `${point.x},${point.y}`).join(' ');
+      const polylines = drag.largePreviewWirePolylines?.get(wire.id)
+        ?? [...node.querySelectorAll<SVGPolylineElement>('polyline')];
+      for (const polyline of polylines) {
+        polyline.setAttribute('points', points);
+      }
+      const overlay = svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      overlay.setAttribute('points', points);
+      overlay.setAttribute('fill', 'none');
+      overlay.setAttribute('stroke', drag.mode === 'free' ? '#dc2626' : '#22c55e');
+      overlay.setAttribute('stroke-width', '5');
+      overlay.setAttribute('stroke-linecap', 'round');
+      overlay.setAttribute('stroke-linejoin', 'round');
+      overlay.setAttribute('stroke-dasharray', drag.mode === 'free' ? '5 6' : '10 8');
+      overlay.setAttribute('opacity', drag.mode === 'free' ? '0.7' : '0.35');
+      overlay.setAttribute('pointer-events', 'none');
+      overlay.setAttribute('data-large-drag-overlay', 'true');
+      overlay.setAttribute(
+        'data-testid',
+        drag.mode === 'free' ? 'schematic-detached-wire-preview' : 'schematic-rubber-band-wire',
+      );
+      node.appendChild(overlay);
+      node.setAttribute('data-large-drag-wire', 'true');
+    }
+    editorShellRef.current?.setAttribute('data-drag-preview', 'true');
+    editorShellRef.current?.setAttribute('data-projection-scope', 'affected-entities');
+  }
+
   function markDirty() {
     setDirty((current) => (current ? current : true));
   }
 
   function beginComponentGroupDrag(componentIds: string[], world: CircuitPosition) {
-    setInteractionCursor('grabbing');
+    const largeSheet = draft.components.length > AUTO_LAYOUT_COMPONENT_LIMIT;
+    if (largeSheet) {
+      if (svgRef.current) svgRef.current.style.cursor = 'grabbing';
+    } else {
+      setInteractionCursor('grabbing');
+    }
     const draggedIdSet = new Set(componentIds);
-    dragRef.current = {
+    const originalWires = (() => {
+      const touchedNets = new Set(
+        document.wires
+          .filter((wire) => wireTouchesPreviewComponent(wire, draggedIdSet))
+          .map((wire) => wire.net_id ?? wire.net)
+          .filter((net): net is string => Boolean(net)),
+      );
+      return document.wires
+        .filter((wire) => (
+          wireTouchesPreviewComponent(wire, draggedIdSet)
+          || touchedNets.has(wire.net_id ?? wire.net ?? '')
+        ))
+        .map((wire) => materializeEditableWire(wire));
+    })();
+    const drag: DragState = {
       mode: componentMoveMode,
       componentIds,
       startWorld: world,
@@ -874,21 +999,28 @@ export function SchematicEditor({
       // often empty until the first edit, so live generated wires must be captured —
       // but storing only the touching wires lets the >=4-endpoint spine/tree generator
       // re-decompose the rest of the net and add a parallel link after the move.
-      originalWires: (() => {
-        const touchedNets = new Set(
-          document.wires
-            .filter((wire) => wireTouchesPreviewComponent(wire, draggedIdSet))
-            .map((wire) => wire.net_id ?? wire.net)
-            .filter((net): net is string => Boolean(net)),
-        );
-        return document.wires
-          .filter((wire) => (
-            wireTouchesPreviewComponent(wire, draggedIdSet) ||
-            touchedNets.has(wire.net_id ?? wire.net ?? '')
-          ))
-          .map((wire) => materializeEditableWire(wire));
-      })(),
+      originalWires,
     };
+    if (largeSheet && svgRef.current) {
+      drag.largePreviewComponentNodes = new Map(
+        [...svgRef.current.querySelectorAll<SVGGElement>('[data-layer="components"] > [data-component-id]')]
+          .map((node) => [node.getAttribute('data-component-id') ?? '', node] as const)
+          .filter(([id]) => draggedIdSet.has(id)),
+      );
+      const affectedWireIds = new Set(originalWires.map((wire) => wire.id));
+      drag.largePreviewWireNodes = new Map(
+        [...svgRef.current.querySelectorAll<SVGGElement>('[data-wire-id]')]
+          .map((node) => [node.getAttribute('data-wire-id') ?? '', node] as const)
+          .filter(([id]) => affectedWireIds.has(id)),
+      );
+      drag.largePreviewWirePolylines = new Map(
+        [...drag.largePreviewWireNodes].map(([id, node]) => [
+          id,
+          [...node.querySelectorAll<SVGPolylineElement>('polyline')],
+        ]),
+      );
+    }
+    dragRef.current = drag;
   }
 
   useEffect(() => () => {
@@ -1439,8 +1571,12 @@ export function SchematicEditor({
       }
       return;
     }
-    setHoverSelection(null);
-    setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
+    const largeSheetPreview = draft.components.length > AUTO_LAYOUT_COMPONENT_LIMIT;
+    if (!largeSheetPreview) {
+      setHoverSelection(null);
+      setInteractionCursor((current) => (current === 'grabbing' ? current : 'grabbing'));
+    }
+    const previewStartedAt = performance.now();
     const dx = world.x - drag.startWorld.x;
     const dy = world.y - drag.startWorld.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
@@ -1453,7 +1589,23 @@ export function SchematicEditor({
     );
     if (samePositionMap(drag.lastPositions, nextPositions)) return;
     drag.lastPositions = clonePositionMap(nextPositions);
-    scheduleDragPreviewPositions(nextPositions);
+    if (largeSheetPreview) {
+      renderImperativeLargeDragPreview(drag, nextPositions);
+      // Force the affected SVG geometry through layout before recording the
+      // sample. This captures DOM mutation + layout cost without folding the
+      // monitor's refresh interval (typically 16.7ms at 60Hz) into the metric.
+      void svgRef.current?.getBoundingClientRect().width;
+    } else {
+      scheduleDragPreviewPositions(nextPositions);
+    }
+    const metricsWindow = window as Window & { __actoviqDragPreviewMs?: number[] };
+    const timings = metricsWindow.__actoviqDragPreviewMs;
+    // Performance tests opt in by pre-seeding this array. Normal product use
+    // does not publish or retain instrumentation on the global object.
+    if (Array.isArray(timings)) {
+      timings.push(performance.now() - previewStartedAt);
+      if (timings.length > 200) timings.splice(0, timings.length - 200);
+    }
     autoPanViewport(event.currentTarget, event.clientX, event.clientY);
   }
 
@@ -1487,6 +1639,7 @@ export function SchematicEditor({
       return;
     }
     const drag = dragRef.current;
+    clearImperativeLargeDragPreview(drag);
     const portDrag = portDragRef.current;
     const labelDrag = labelDragRef.current;
     const wirePointDrag = wirePointDragRef.current;
@@ -1708,6 +1861,7 @@ export function SchematicEditor({
     cancelPendingViewportUpdate();
     cancelPendingDragPreviewUpdate();
     const drag = dragRef.current;
+    clearImperativeLargeDragPreview(drag);
     dragRef.current = null;
     const portDrag = portDragRef.current;
     portDragRef.current = null;
@@ -2592,6 +2746,13 @@ export function SchematicEditor({
       data-live-erc-status={liveErcSummary.status}
       data-live-erc-error-count={liveErcSummary.errors}
       data-live-erc-warning-count={liveErcSummary.warnings}
+      data-live-erc-rendered-count={renderedLiveDiagnostics.length}
+      data-live-erc-scope={
+        dragPreviewPositions && (dragRef.current?.mode ?? componentMoveMode) === 'stretch'
+          ? 'connectivity-preserving-cache'
+          : 'affected-document'
+      }
+      data-projection-scope={dragPreviewPositions ? 'affected-entities' : 'module'}
       data-interaction-state={interactionStateName}
       data-interaction-status={interactionStatusText}
       data-hierarchy-trace={hierarchyTrace?.netId || hierarchyTrace?.net || ''}
@@ -2705,6 +2866,13 @@ export function SchematicEditor({
         onBuild={onBuild}
       />
 
+      {complexity.hierarchyRecommended ? (
+        <div className="av-form-status" data-testid="schematic-hierarchy-recommendation">
+          <strong>Large-sheet guidance:</strong> {complexity.reason}. Consider extracting functional
+          blocks into child modules. Actoviq will not rewrite the hierarchy automatically.
+        </div>
+      ) : null}
+
       <div style={styles.content}>
         <div style={styles.stage}>
           <FloatingComponentPalette
@@ -2799,7 +2967,7 @@ export function SchematicEditor({
             viewBoxOverride={activeViewBox}
             rubberBandWireIds={rubberBandWireIds}
             detachedWireIds={detachedWireIds}
-            diagnostics={liveDiagnostics}
+            diagnostics={renderedLiveDiagnostics}
             placeGhost={placeGhost}
             testId="schematic-editor-svg"
             onPointerDown={handlePointerDown}
@@ -2830,7 +2998,7 @@ export function SchematicEditor({
           </div>
           {liveDiagnostics.length > 0 ? (
             <div style={styles.liveErcList} data-testid="schematic-live-erc-list">
-              {liveDiagnostics.map((diagnostic) => (
+              {renderedLiveDiagnostics.map((diagnostic) => (
                 <button
                   key={diagnostic.id}
                   type="button"
@@ -2845,6 +3013,12 @@ export function SchematicEditor({
                   <span>{diagnostic.message}</span>
                 </button>
               ))}
+              {renderedLiveDiagnostics.length < liveDiagnostics.length ? (
+                <div style={styles.paramHint} data-testid="schematic-live-erc-truncated">
+                  Showing {renderedLiveDiagnostics.length} of {liveDiagnostics.length} diagnostics.
+                  Resolve or filter the first items to reveal more.
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div style={styles.panelTitle}>Selection</div>

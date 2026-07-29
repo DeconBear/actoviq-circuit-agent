@@ -2402,13 +2402,22 @@ try {
     assert.equal(await editor.getAttribute('data-dirty'), 'true', 'Ctrl/Cmd+S persistence check requires a dirty schematic');
     await editor.focus();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
-    await page.getByText('Applied netlist and SVG rebuilt', { exact: true }).waitFor({ timeout: 30_000 });
     await page.waitForFunction(() => {
       const node = document.querySelector('[data-testid="schematic-editor"]');
       return node?.getAttribute('data-dirty') === 'false' &&
         node?.getAttribute('data-component-count') === '4' &&
         Number(node?.getAttribute('data-wire-count') ?? '0') >= 3;
     });
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[data-testid="schematic-editor"]');
+      return node?.getAttribute('data-preview-busy') === 'true'
+        || document.body.innerText.includes('Applied netlist and affected module SVG rebuilt');
+    }, { timeout: 30_000 });
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[data-testid="schematic-editor"]');
+      return node?.getAttribute('data-preview-busy') === 'false'
+        && document.body.innerText.includes('Applied netlist and affected module SVG rebuilt');
+    }, { timeout: 60_000 });
     assert.equal(
       await optimizeLayoutButton.isEnabled(),
       true,
@@ -4322,6 +4331,6 @@ try {
     throw error;
   } finally {
     await electronApp.close();
-    await rm(e2eRunRoot, { recursive: true, force: true });
+    await rm(e2eRunRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     if (viteProcess) viteProcess.kill();
   }

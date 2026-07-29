@@ -7,18 +7,19 @@
  * export path share. GUI-side timings (first paint, pan/zoom, drag, save)
  * are captured by scripts/e2e/schematic-editor-perf-baseline.mjs.
  *
- * Two modes are measured per size:
+ * Two requests are measured per size:
  *   - autoLayout=false: pure projection (routing + net labels), no layout pass
- *   - autoLayout=true:  full projection including the auto-layout pass
- * The auto-layout pass on large modules is a known M6 target; if it exceeds
- * the 30s budget it is recorded as a timeout rather than blocking the run.
+ *   - autoLayout=true:  projection with the bounded auto-layout policy
+ * Modules above AUTO_LAYOUT_COMPONENT_LIMIT retain user positions so a large
+ * sheet cannot synchronously monopolize the renderer.
  *
  * Run:  npx tsx scripts/schematic-perf-baseline.ts
  */
 import { performance } from 'node:perf_hooks';
 
 import type { CircuitComponent, CircuitModule, CircuitPort } from '../renderer/src/types';
-import { createSchematicDocument } from '../renderer/src/schematic/schematicDocument';
+import { AUTO_LAYOUT_COMPONENT_LIMIT } from '../renderer/src/schematic/schematicDocument';
+import { projectSchematicDocument as createSchematicDocument } from '../renderer/src/schematic-core/projection/facade';
 
 const defaultPorts: CircuitPort[] = [
   { id: 'input', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' },
@@ -100,21 +101,26 @@ for (const size of sizes) {
     noLayoutWireCount: noLayout.wireCount,
     noLayoutHeapMb: noLayout.heapUsedMb,
   };
-  // autoLayout=true on 500 components blocks the event loop well past any
-  // reasonable budget (the 30s setTimeout cannot fire while the synchronous
-  // layout pass holds the thread). Measure it only for 100; for 500 we
-  // record the known gap honestly.
-  if (size <= 100) {
-    const withLayout = measureProjection(module, true);
-    entry.withLayoutMedianMs = withLayout.medianMs;
-    entry.withLayoutWireCount = withLayout.wireCount;
-    entry.withLayoutHeapMb = withLayout.heapUsedMb;
-    console.log(`[perf] ${size} components (autoLayout=true): median=${withLayout.medianMs.toFixed(1)}ms, wires=${withLayout.wireCount}, heapUsed=${withLayout.heapUsedMb}MB`);
-  } else {
-    entry.withLayoutMedianMs = 'skipped (synchronous layout blocks event loop; M6 target)';
-    console.log(`[perf] ${size} components (autoLayout=true): SKIPPED - synchronous layout would block; M6 incremental projection needed`);
-  }
+  const withLayoutPolicy = measureProjection(module, true);
+  entry.withLayoutPolicyMedianMs = withLayoutPolicy.medianMs;
+  entry.withLayoutPolicyWireCount = withLayoutPolicy.wireCount;
+  entry.withLayoutPolicyHeapMb = withLayoutPolicy.heapUsedMb;
+  entry.autoLayoutApplied = size <= AUTO_LAYOUT_COMPONENT_LIMIT;
+  console.log(`[perf] ${size} components (bounded autoLayout=true): median=${withLayoutPolicy.medianMs.toFixed(1)}ms, wires=${withLayoutPolicy.wireCount}, heapUsed=${withLayoutPolicy.heapUsedMb}MB`);
+  assertPerformanceBudget(size, noLayout.medianMs, withLayoutPolicy.medianMs);
   results.push(entry);
 }
 
-console.log(JSON.stringify({ ok: true, baseline: 'M0-03 projection', results }, null, 2));
+function assertPerformanceBudget(size: number, noLayoutMs: number, policyMs: number): void {
+  if (size !== 500) return;
+  if (noLayoutMs >= 2000 || policyMs >= 2000) {
+    throw new Error(`500-component projection exceeded 2s: ${noLayoutMs.toFixed(1)} / ${policyMs.toFixed(1)}ms`);
+  }
+}
+
+console.log(JSON.stringify({
+  ok: true,
+  baseline: 'M6 bounded projection',
+  autoLayoutComponentLimit: AUTO_LAYOUT_COMPONENT_LIMIT,
+  results,
+}, null, 2));

@@ -15,7 +15,6 @@ import { useAppStore } from '../../store/appStore';
 import type {
   CircuitCommand,
   CircuitCommandV2,
-  CircuitConnection,
   CircuitHistoryEntry,
   DesignMemoryItem,
   CircuitModule,
@@ -39,6 +38,12 @@ import {
   projectSchematicArtifact,
   projectSchematicDocument as createSchematicDocument,
 } from '../../schematic-core/projection/facade';
+import { useSchematicProjection } from '../../schematic-core/projection/useSchematicProjection';
+import {
+  modulePortEndpointKey as endpointKey,
+  resolveSystemNetworks,
+  type SystemNetworkMap,
+} from '../../schematic-core/connectivity/modulePortGraph';
 import { diffModuleToOperations } from '../../schematic-core/commands/diffModule';
 import type { TransactionOperation } from '../../schematic-core/commands/applyTransaction';
 import type { PdkDeviceCatalog } from './componentParams';
@@ -242,85 +247,6 @@ function visibleInterfaces(module: CircuitModuleRef): {
   };
 }
 
-interface SystemNetwork {
-  label: string;
-  endpoints: string[];
-}
-
-type SystemNetworkMap = Record<string, SystemNetwork>;
-
-function endpointKey(moduleId: string, portId: string): string {
-  return `${moduleId}::${portId}`;
-}
-
-function resolveSystemNetworks(
-  modules: CircuitModuleRef[],
-  connections: CircuitConnection[],
-): SystemNetworkMap {
-  const parents = new Map<string, string>();
-  const ports = new Map<string, { moduleId: string; port: CircuitPort }>();
-  const find = (value: string): string => {
-    if (!parents.has(value)) parents.set(value, value);
-    const parent = parents.get(value) ?? value;
-    if (parent === value) return value;
-    const root = find(parent);
-    parents.set(value, root);
-    return root;
-  };
-  const union = (left: string, right: string) => {
-    const leftRoot = find(left);
-    const rightRoot = find(right);
-    if (leftRoot !== rightRoot) parents.set(rightRoot, leftRoot);
-  };
-
-  for (const module of modules) {
-    for (const port of module.ports) {
-      const key = endpointKey(module.id, port.id);
-      ports.set(key, { moduleId: module.id, port });
-      find(key);
-    }
-  }
-  for (const connection of connections) {
-    union(
-      endpointKey(connection.from.module_id, connection.from.port_id),
-      endpointKey(connection.to.module_id, connection.to.port_id),
-    );
-  }
-
-  const groups = new Map<string, Array<{ key: string; moduleId: string; port: CircuitPort }>>();
-  for (const [key, value] of ports) {
-    const root = find(key);
-    groups.set(root, [...(groups.get(root) ?? []), { key, ...value }]);
-  }
-  const explicitLabels = new Map<string, string[]>();
-  for (const connection of connections) {
-    const network = connection.network?.trim();
-    if (!network) continue;
-    const root = find(endpointKey(connection.from.module_id, connection.from.port_id));
-    explicitLabels.set(root, [...new Set([...(explicitLabels.get(root) ?? []), network])]);
-  }
-
-  const resolved: SystemNetworkMap = {};
-  for (const [root, members] of groups) {
-    const source = members.find(({ port }) => port.direction === 'output');
-    const ground = members.find(({ port }) => isGround(port));
-    const label = explicitLabels.get(root)?.[0]
-      ?? ground?.port.network
-      ?? (/^(?:AGND|DGND|PGND)$/i.test(ground?.port.name ?? '') ? ground?.port.name : undefined)
-      ?? source?.port.network
-      ?? source?.port.net
-      ?? source?.port.name
-      ?? members[0]?.port.network
-      ?? members[0]?.port.net
-      ?? 'UNNAMED';
-    const endpoints = members.map(({ moduleId, port }) => `${moduleId}.${port.id}`);
-    for (const member of members) {
-      resolved[member.key] = { label, endpoints };
-    }
-  }
-  return resolved;
-}
-
 function interfaceNetworks(
   moduleId: string,
   ports: CircuitPort[],
@@ -496,6 +422,7 @@ export function CircuitWorkbench({
     Record<string, { width: number; height: number }>
   >({});
   const [modulePreviewBusy, setModulePreviewBusy] = useState<Record<string, boolean>>({});
+  const [lastPreviewBuildModule, setLastPreviewBuildModule] = useState('');
   const modulePreviewBusyRef = useRef<Set<string>>(new Set());
   const [moduleSimulation, setModuleSimulation] = useState<(SimulationRun & { module_id: string }) | null>(null);
   const [designMemory, setDesignMemory] = useState<{
@@ -666,6 +593,7 @@ export function CircuitWorkbench({
     setModulePreviewPositions({});
     setModulePreviewSizes({});
     setModulePreviewBusy({});
+    setLastPreviewBuildModule('');
     setEdaExportOpen(false);
     setEdaImportOpen(false);
     setEdaExportNotice('');
@@ -943,7 +871,20 @@ export function CircuitWorkbench({
   ): Promise<boolean> {
     if (!currentProjectId) return false;
     const operationProjectId = currentProjectId;
-    if (modulePreviewBusyRef.current.has(moduleId)) return false;
+    if (modulePreviewBusyRef.current.has(moduleId)) {
+      // A save carries a newer structured module snapshot than an open-time
+      // background build. Queue that affected module behind the in-flight
+      // compile so the old derived SVG cannot remain the final artifact.
+      if (!sourceModule) return false;
+      const deadline = Date.now() + 60_000;
+      while (modulePreviewBusyRef.current.has(moduleId) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+      if (modulePreviewBusyRef.current.has(moduleId) || !isActiveProject(operationProjectId)) {
+        return false;
+      }
+    }
+    setLastPreviewBuildModule(moduleId);
     setModulePreviewBuildBusy(moduleId, true);
     setError('');
     if (showNotice) setNotice('Rendering module with netlistsvg...');
@@ -1072,14 +1013,12 @@ export function CircuitWorkbench({
       moduleNotebookMarkdown(moduleId, moduleData),
     );
     if (saved) {
-      setBusy(true);
-      setNotice('Applying schematic netlist and rebuilding SVG...');
-      try {
-        const built = await buildModulePreview(moduleId, false, moduleData);
-        if (built && isActiveProject(operationProjectId)) setNotice('Applied netlist and SVG rebuilt');
-      } finally {
-        if (isActiveProject(operationProjectId)) setBusy(false);
-      }
+      setNotice('Schematic saved. Rebuilding the affected module SVG in the background...');
+      void buildModulePreview(moduleId, false, moduleData).then((built) => {
+        if (built && isActiveProject(operationProjectId)) {
+          setNotice('Applied netlist and affected module SVG rebuilt');
+        }
+      });
     }
     return saved;
   }
@@ -1091,9 +1030,6 @@ export function CircuitWorkbench({
     setSchematicLocateTarget(null);
     setActiveModuleId(moduleId);
     setView('module');
-    if (!bundle?.module_previews[moduleId]) {
-      await buildModulePreview(moduleId);
-    }
   }
 
   async function openChildModule(
@@ -1145,9 +1081,6 @@ export function CircuitWorkbench({
     }
     setActiveModuleId(moduleId);
     setView('module');
-    if (!bundle?.module_previews[moduleId]) {
-      await buildModulePreview(moduleId);
-    }
   }
 
   function navigateHierarchy(index: number) {
@@ -1194,9 +1127,6 @@ export function CircuitWorkbench({
       net: result.net,
       netId: result.netId,
     });
-    if (!bundle?.module_previews[result.moduleId]) {
-      await buildModulePreview(result.moduleId);
-    }
   }
 
   async function togglePreview(module: CircuitModuleRef): Promise<void> {
@@ -2054,6 +1984,8 @@ export function CircuitWorkbench({
       data-project-id={project.project_id}
       data-action-project-id={currentProjectId ?? ''}
       data-hierarchy-path={hierarchyPath.map((entry) => entry.moduleId).join('/')}
+      data-preview-build-modules={Object.keys(modulePreviewBusy).sort().join(',')}
+      data-last-preview-build-module={lastPreviewBuildModule}
     >
       <header style={styles.header} className="av-workbench-header">
         <div style={styles.titleBlock} className="av-workbench-header__title">
@@ -3023,17 +2955,36 @@ function ModuleCard({
   onResizeStart: (event: ReactPointerEvent) => void;
   onContextMenu: (event: ReactMouseEvent) => void;
 }) {
+  const cardRef = useRef<HTMLElement | null>(null);
+  const [projectionEnabled, setProjectionEnabled] = useState(false);
   const previewEnabled = module.preview_enabled ?? true;
   const interfaces = visibleInterfaces(module);
   const parameters = module.parameters && Object.keys(module.parameters).length > 0
     ? module.parameters
     : fallbackParameters(moduleData);
-  const schematicDocument = useMemo(
-    () => moduleData ? createSchematicDocument(moduleData) : null,
-    [moduleData],
+  const schematicProjection = useSchematicProjection(
+    moduleData,
+    previewEnabled && projectionEnabled,
   );
+  const schematicDocument = schematicProjection?.document ?? null;
+  useEffect(() => {
+    const node = cardRef.current;
+    if (!node || projectionEnabled) return undefined;
+    if (typeof IntersectionObserver === 'undefined') {
+      setProjectionEnabled(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setProjectionEnabled(true);
+      observer.disconnect();
+    }, { rootMargin: '240px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [projectionEnabled]);
   return (
     <article
+      ref={cardRef}
       style={{
         ...styles.moduleCard,
         left: module.position.x + origin.x,
@@ -3049,6 +3000,9 @@ function ModuleCard({
       onPointerDown={onDragStart}
       onContextMenu={onContextMenu}
       data-testid={`module-card-${module.id}`}
+      data-projection-mode="lazy-worker"
+      data-projection-ready={schematicDocument ? 'true' : 'false'}
+      data-interactive-quality={schematicProjection?.quality.readabilityScore ?? ''}
     >
       <div style={styles.moduleCardHeader}>
         <div style={styles.moduleTitleGroup}>

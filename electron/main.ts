@@ -10,8 +10,11 @@ import { registerWorkspaceHandlers } from './ipc/workspaces.js';
 import { registerProjectHandlers } from './ipc/projects.js';
 import { inspectCircuitSkillStatus, registerSkillHandlers } from './ipc/skills.js';
 import { closeDesktopAgentService } from './agent/desktopAgentService.js';
+import { stopActiveProjectTools } from './agent/circuitProjectCli.js';
 
 let mainWindow: BrowserWindow | null = null;
+let quitCleanupStarted = false;
+let quitCleanupComplete = false;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -131,6 +134,16 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
-  void closeDesktopAgentService();
+app.on('before-quit', (event) => {
+  if (quitCleanupComplete) return;
+  event.preventDefault();
+  if (quitCleanupStarted) return;
+  quitCleanupStarted = true;
+  void Promise.allSettled([
+    closeDesktopAgentService(),
+    stopActiveProjectTools(),
+  ]).finally(() => {
+    quitCleanupComplete = true;
+    app.quit();
+  });
 });

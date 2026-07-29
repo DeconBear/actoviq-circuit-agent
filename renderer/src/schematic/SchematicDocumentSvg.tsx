@@ -1,4 +1,4 @@
-import type { MouseEventHandler, PointerEventHandler, Ref } from 'react';
+import { memo, type MouseEventHandler, type PointerEventHandler, type Ref } from 'react';
 import type { CircuitComponent, CircuitPosition, CircuitWire } from '../types';
 import {
   blockBodySize,
@@ -585,7 +585,7 @@ function signalLabelTextPosition(
 
 type CSSCursor = 'default' | 'crosshair' | 'grab' | 'grabbing' | 'copy' | 'move';
 
-function WirePath({
+const WirePath = memo(function WirePath({
   wire,
   selected,
   attachedSelected,
@@ -711,7 +711,7 @@ function WirePath({
       {selected ? <WirePointHandles wire={wire} /> : null}
     </g>
   );
-}
+});
 
 function InlineDiagnosticLayer({ diagnostics }: { diagnostics: LiveErcDiagnostic[] }) {
   return (
@@ -863,7 +863,7 @@ function WirePointHandles({ wire }: { wire: CircuitWire }) {
   );
 }
 
-function ComponentSymbol({ component, selected, hovered }: { component: CircuitComponent; selected: boolean; hovered: boolean }) {
+const ComponentSymbol = memo(function ComponentSymbol({ component, selected, hovered }: { component: CircuitComponent; selected: boolean; hovered: boolean }) {
   const bounds = componentBounds(component);
   const pins = component.pins.map((pin, index) => ({ pin, point: pinWorld(component, pin, index) }));
   const labels = componentLabelPositions(component);
@@ -924,7 +924,7 @@ function ComponentSymbol({ component, selected, hovered }: { component: CircuitC
       ) : null}
     </g>
   );
-}
+});
 
 function PlaceGhostSymbol({ component }: { component: CircuitComponent }) {
   const labels = componentLabelPositions(component);

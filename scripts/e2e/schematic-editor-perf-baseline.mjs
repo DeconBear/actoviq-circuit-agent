@@ -18,10 +18,15 @@ const h = await createHarness({ tag: 'perf' });
 const {
   outputRoot, e2eRunRoot, workspaceRoot, projectsRoot,
   runSkill, removePrefixedProjects, startEnvironment,
-  openModuleCard, waitForEditorIdle, waitForWorkbenchProject,
+  openModuleCard, waitForWorkbenchProject,
+  componentScreenCenter, selectComponentForDrag,
 } = h;
 
-const SIZES = [100, 500];
+const SIZES = (process.env.ACTOVIQ_PERF_SIZES ?? '100,500')
+  .split(',')
+  .map((value) => Number(value.trim()))
+  .filter((value) => Number.isInteger(value) && value > 0);
+const STOP_AFTER = process.env.ACTOVIQ_PERF_STOP_AFTER ?? '';
 
 function generateLargeModuleJson(componentCount) {
   const components = [];
@@ -70,36 +75,45 @@ const projectName = created.project.name;
 const projectRoot = created.project_root;
 const filterModulePath = path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json');
 
-// Pre-generate and compile large modules so the editor can load them.
-for (const size of SIZES) {
-  const moduleJson = generateLargeModuleJson(size);
-  await writeFile(filterModulePath, JSON.stringify(moduleJson, null, 2), 'utf8');
-  runSkill(['compile-module', '--project-root', projectRoot, '--module-id', 'filter']);
-}
-
 const { electronApp, page, pageErrors, viteProcess } = await startEnvironment();
 const results = [];
 
 async function reloadAndOpen(size) {
-  // Write the size-specific module and recompile before reload.
+  // Write the size-specific module. Board/editor projection consumes module.v2
+  // directly; a large-sheet load must not wait for netlistsvg compilation.
   const moduleJson = generateLargeModuleJson(size);
   await writeFile(filterModulePath, JSON.stringify(moduleJson, null, 2), 'utf8');
-  runSkill(['compile-module', '--project-root', projectRoot, '--module-id', 'filter']);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 30_000 });
   await page.getByTestId(`sidebar-project-${projectId}`).click();
   await waitForWorkbenchProject(page, projectId);
   await page.getByTestId('circuit-workbench').getByText(projectName, { exact: true }).waitFor();
   await page.getByTestId('module-preview-filter').waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="module-card-filter"]')?.getAttribute('data-projection-ready') === 'true'
+  ), { timeout: 30_000 });
   const t0 = await page.evaluate(() => performance.now());
   await openModuleCard(page, 'filter');
   await page.getByTestId('schematic-editor').waitFor({ timeout: 60_000 });
   await page.waitForFunction((expected) => (
     Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') ?? '0') >= expected
   ), size, { timeout: 60_000 });
-  await waitForEditorIdle(page);
+  // "First interactive" intentionally excludes the derived netlistsvg build
+  // that may still be running in the background. Wait for two paint frames so
+  // the editable SVG and its event handlers have reached the compositor.
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
   const t1 = await page.evaluate(() => performance.now());
   return t1 - t0;
+}
+
+async function waitForInteractionIdle() {
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return node?.getAttribute('data-busy') === 'false'
+      && node?.getAttribute('data-drag-preview') === 'false';
+  });
 }
 
 async function measureZoom() {
@@ -115,17 +129,34 @@ async function measureZoom() {
 }
 
 async function measureDrag() {
-  const canvas = page.getByTestId('schematic-editor-svg');
-  const box = await canvas.boundingBox();
-  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await selectComponentForDrag(page, 'r0', [
+    { x: 0, y: 0 },
+    { x: 0, y: -10 },
+    { x: 0, y: 10 },
+    { x: 12, y: 0 },
+  ]);
+  const center = await componentScreenCenter(page, 'r0');
+  await page.evaluate(() => { window.__actoviqDragPreviewMs = []; });
   const t0 = await page.evaluate(() => performance.now());
   await page.mouse.move(center.x, center.y);
   await page.mouse.down();
-  await page.mouse.move(center.x + 40, center.y + 40, { steps: 8 });
+  // Twenty samples make p95 ignore a single outlier without letting
+  // Playwright input-injection overhead dominate the observation.
+  await page.mouse.move(center.x + 240, center.y + 120, { steps: 20 });
   await page.mouse.up();
-  await waitForEditorIdle(page);
+  await waitForInteractionIdle();
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
   const t1 = await page.evaluate(() => performance.now());
-  return Math.round((t1 - t0) * 10) / 10;
+  const timings = await page.evaluate(() => window.__actoviqDragPreviewMs ?? []);
+  const ordered = timings.slice().sort((left, right) => left - right);
+  const p95 = ordered[Math.max(0, Math.ceil(ordered.length * 0.95) - 1)] ?? 0;
+  return {
+    gestureMs: Math.round((t1 - t0) * 10) / 10,
+    previewP95Ms: Math.round(p95 * 100) / 100,
+    sampleCount: timings.length,
+  };
 }
 
 async function measureSave() {
@@ -133,7 +164,8 @@ async function measureSave() {
   const canvas = page.getByTestId('schematic-editor-svg');
   const box = await canvas.boundingBox();
   await page.getByTestId('schematic-editor-place-R').click();
-  await page.mouse.click(box.x + 50, box.y + 50);
+  // Avoid the floating component/module palettes in the canvas' upper-left.
+  await page.mouse.click(box.x + box.width * 0.8, box.y + box.height * 0.75);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
   ), { timeout: 15_000 });
@@ -142,7 +174,22 @@ async function measureSave() {
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
   ), { timeout: 60_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="circuit-workbench"]')
+      ?.getAttribute('data-last-preview-build-module') === 'filter'
+  ), { timeout: 60_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false'
+  ), { timeout: 60_000 });
   const t1 = await page.evaluate(() => performance.now());
+  const compiledModules = [
+    await page.getByTestId('circuit-workbench').getAttribute('data-last-preview-build-module'),
+  ].filter(Boolean);
+  assert.deepEqual(
+    [...new Set(compiledModules)],
+    ['filter'],
+    'single-module save must compile only the affected module',
+  );
   return Math.round((t1 - t0) * 10) / 10;
 }
 
@@ -160,17 +207,62 @@ try {
   await page.waitForSelector('[data-testid="circuit-workbench"]', { timeout: 30_000 });
 
   for (const size of SIZES) {
+    console.log(`[perf] opening ${size}-component module`);
     const firstPaintMs = Math.round((await reloadAndOpen(size)) * 10) / 10;
+    console.log(`[perf] ${size} first interactive: ${firstPaintMs}ms`);
+    assert.ok(firstPaintMs < 2000, `${size}-component first paint exceeded 2s: ${firstPaintMs}ms`);
+    if (STOP_AFTER === 'open') {
+      results.push({ componentCount: size, firstPaintMs });
+      continue;
+    }
     const zoom = await measureZoom();
-    const dragMs = await measureDrag();
+    console.log(`[perf] ${size} zoom: ${zoom.ms}ms`);
+    if (STOP_AFTER === 'zoom') {
+      results.push({ componentCount: size, firstPaintMs, zoomMs: zoom.ms });
+      continue;
+    }
+    const drag = await measureDrag();
+    console.log(`[perf] ${size} drag preview p95: ${drag.previewP95Ms}ms`);
+    assert.ok(drag.sampleCount >= 20, `${size}-component drag produced only ${drag.sampleCount} preview timing samples`);
+    assert.ok(drag.previewP95Ms < 16, `${size}-component drag preview p95 exceeded 16ms: ${drag.previewP95Ms}ms`);
+    if (STOP_AFTER === 'drag') {
+      results.push({
+        componentCount: size,
+        firstPaintMs,
+        zoomMs: zoom.ms,
+        dragGestureMs: drag.gestureMs,
+        dragPreviewP95Ms: drag.previewP95Ms,
+        dragPreviewSamples: drag.sampleCount,
+      });
+      continue;
+    }
     const saveMs = await measureSave();
+    console.log(`[perf] ${size} source save: ${saveMs}ms`);
     const heapMb = await measureMemory();
-    results.push({ componentCount: size, firstPaintMs, zoomMs: zoom.ms, dragMs, saveMs, rendererHeapMb: heapMb });
-    console.log(`[perf] ${size} components: firstPaint=${firstPaintMs}ms zoom=${zoom.ms}ms drag=${dragMs}ms save=${saveMs}ms heap=${heapMb}MB`);
+    if (size === 500) {
+      await page.getByTestId('schematic-hierarchy-recommendation').waitFor();
+      await page.screenshot({ path: path.resolve(outputRoot, 'large-sheet-guidance.png'), fullPage: true });
+    }
+    results.push({
+      componentCount: size,
+      firstPaintMs,
+      zoomMs: zoom.ms,
+      dragGestureMs: drag.gestureMs,
+      dragPreviewP95Ms: drag.previewP95Ms,
+      dragPreviewSamples: drag.sampleCount,
+      saveMs,
+      rendererHeapMb: heapMb,
+    });
+    console.log(`[perf] ${size} components: firstPaint=${firstPaintMs}ms zoom=${zoom.ms}ms dragP95=${drag.previewP95Ms}ms save=${saveMs}ms heap=${heapMb}MB`);
     await page.getByTestId('back-to-board').click().catch(() => {});
   }
 
-  assert.deepEqual(pageErrors.filter((e) => !e.startsWith('electron-window') && !e.startsWith('domcontentloaded') && !e.startsWith('load:')), []);
+  assert.deepEqual(pageErrors.filter((e) => (
+    !e.startsWith('electron-window')
+    && !e.startsWith('framenavigated')
+    && !e.startsWith('domcontentloaded')
+    && !e.startsWith('load:')
+  )), []);
 } catch (error) {
   if (page) {
     await page.screenshot({ path: path.resolve(outputRoot, 'perf-failure.png') }).catch(() => {});
@@ -180,7 +272,7 @@ try {
   throw error;
 } finally {
   await electronApp.close();
-  await rm(e2eRunRoot, { recursive: true, force: true });
+  await rm(e2eRunRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   if (viteProcess) viteProcess.kill();
 }
 

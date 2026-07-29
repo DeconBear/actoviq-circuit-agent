@@ -1,7 +1,9 @@
 import { app } from 'electron';
 import { existsSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
+
+const activeProjectTools = new Set<ChildProcessWithoutNullStreams>();
 
 export function projectScriptPath(appPath = app.getAppPath(), resourcesPath = process.resourcesPath): string {
   const candidates = [
@@ -38,6 +40,7 @@ export function runProjectTool(
       windowsHide: true,
       env: options.env ?? process.env,
     });
+    activeProjectTools.add(child);
     let stdout = '';
     let stderr = '';
     const timeout = setTimeout(() => {
@@ -48,10 +51,12 @@ export function runProjectTool(
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
     child.on('error', (error) => {
       clearTimeout(timeout);
+      activeProjectTools.delete(child);
       reject(error);
     });
     child.on('close', (code) => {
       clearTimeout(timeout);
+      activeProjectTools.delete(child);
       const line = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? '';
       let result: Record<string, unknown>;
       try {
@@ -67,6 +72,37 @@ export function runProjectTool(
       resolve(result);
     });
   });
+}
+
+export async function stopActiveProjectTools(): Promise<void> {
+  const children = [...activeProjectTools];
+  await Promise.all(children.map(async (child) => {
+    if (child.exitCode !== null || child.pid === undefined) return;
+    const closed = new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        child.off('close', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, 5_000);
+      child.once('close', finish);
+    });
+    if (process.platform === 'win32') {
+      await new Promise<void>((resolve) => {
+        const killer = spawn(
+          'taskkill',
+          ['/PID', String(child.pid), '/T', '/F'],
+          { windowsHide: true, stdio: 'ignore' },
+        );
+        killer.once('error', () => resolve());
+        killer.once('close', () => resolve());
+      });
+    } else {
+      child.kill('SIGTERM');
+    }
+    await closed;
+    activeProjectTools.delete(child);
+  }));
 }
 
 export function summarizeToolResult(result: Record<string, unknown>, maxChars = 8_000): string {

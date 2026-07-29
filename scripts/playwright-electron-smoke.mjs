@@ -1232,7 +1232,7 @@ try {
     const node = document.querySelector('[data-testid="simulation-probe-status"]');
     return node?.getAttribute('data-probe-kind') === 'power'
       && node?.getAttribute('data-probe-entity') === entity
-      && Boolean(node.textContent?.trim());
+      && /^(Added .+ from filter|Power in .+ is not present in this run\.)/.test(node.textContent?.trim() ?? '');
   }, { entity: probeResistorId });
   assert.match(
     await powerProbeStatus.innerText(),

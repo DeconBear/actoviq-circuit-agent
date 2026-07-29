@@ -54,7 +54,7 @@
     "test:schematic-core": "tsx scripts/schematic-core-invariants-test.ts && tsx scripts/schematic-core-test.ts && tsx scripts/schematic-module-diff-test.ts && tsx scripts/schematic-interaction-state-test.ts && tsx scripts/schematic-operation-property-test.ts && tsx scripts/schematic-hierarchy-test.ts && tsx scripts/schematic-pdk-device-test.ts && tsx scripts/schematic-project-search-test.ts && tsx scripts/schematic-spatial-index-test.ts && tsx scripts/schematic-snap-test.ts && tsx scripts/schematic-net-selection-test.ts && tsx scripts/schematic-live-erc-test.ts && tsx scripts/schematic-wire-topology-test.ts && tsx scripts/schematic-topology-planner-test.ts",
     "test:schematic-projection-parity": "tsx scripts/schematic-projection-parity.ts",
     "test:schematic-overrides": "python scripts/schematic-overrides-regression.py",
-    "test:schematic-perf": "tsx scripts/schematic-perf-baseline.ts",
+    "test:schematic-perf": "tsx scripts/schematic-perf-baseline.ts && tsx scripts/schematic-performance-test.ts",
     "test:e2e:electron": "npm run build:src && npm run build:electron && node scripts/playwright-electron-smoke.mjs",
     "test:e2e:agent-flow": "npm run build:src && npm run build:electron && node scripts/playwright-agent-flow.mjs",
     "test:e2e:schematic-editor": "npm run build:src && npm run build:electron && node scripts/playwright-schematic-editor-smoke.mjs",
