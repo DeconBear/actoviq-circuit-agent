@@ -21,6 +21,7 @@ const fakeApiKey = `sk-mock-agent-flow-${Date.now().toString(36)}`;
 const designMarker = 'ACTOVIQ_AGENT_FLOW_DESIGN_REQUEST';
 const reportMarker = 'ACTOVIQ_AGENT_FLOW_TECHNICAL_REPORT';
 const projectName = `Agent Flow RC ${Date.now()}`;
+const projectId = projectName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 const layoutLoopProjectId = `agent-flow-layout-loop-${process.pid}-${Date.now()}`;
 const layoutLoopProjectName = `Agent Flow Visual Layout ${Date.now()}`;
 const layoutLoopModuleId = 'layout';
@@ -148,7 +149,7 @@ function sendToolCall(response, body, name, input) {
   const model = String(body.model ?? 'mock-layout-vision');
   const toolCall = {
     index: 0,
-    id: 'layout-vision-tool-call',
+    id: `tool-call-${name}-${Date.now()}`,
     type: 'function',
     function: {
       name,
@@ -339,6 +340,7 @@ function readVisionChallengeAnswer(pngBase64) {
 
 async function startMockProvider() {
   const requests = [];
+  let circuitDesignStep = 0;
   const server = createServer(async (request, response) => {
     try {
       if (request.method !== 'POST' || !request.url?.endsWith('/chat/completions')) {
@@ -429,24 +431,40 @@ async function startMockProvider() {
           '.end',
           '```',
         ].join('\n');
-        sendProviderText(response, body, JSON.stringify({
-          text: 'I prepared a revisioned RC low-pass design and will compile, simulate, and document it.',
-          isDesignRequest: true,
-          isRevisionRequest: false,
-          formalizedRequirement: 'Create and verify a first-order RC low-pass filter.',
-          projectName,
-          projectKind: 'simulation',
-          projectOperations: [{
-            op: 'upsert_module_netlist',
-            module_id: 'filter',
-            name: 'RC low-pass filter',
-            kind: 'filter',
-            function: 'First-order low-pass response with a nominal 1.59 kHz cutoff.',
-            netlist_notebook: notebook,
+        const steps = [
+          ['create_circuit_project', { name: projectName, project_kind: 'simulation' }],
+          ['agent_context', { project_id: projectId }],
+          ['apply_circuit_command', {
+            project_id: projectId,
+            base_revision: 0,
+            message: 'Create and verify a first-order RC low-pass filter.',
+            operations: [{
+              op: 'upsert_module_netlist',
+              module_id: 'filter',
+              name: 'RC low-pass filter',
+              kind: 'filter',
+              function: 'First-order low-pass response with a nominal 1.59 kHz cutoff.',
+              netlist_notebook: notebook,
+            }],
           }],
-          compileAfterApply: true,
-          simulateAfterApply: true,
-        }));
+          ['run_erc', { project_id: projectId }],
+          ['compile_circuit_project', { project_id: projectId }],
+          ['simulate_circuit_project', { project_id: projectId }],
+          ['generate_technical_report', { project_id: projectId, source_revision: 1 }],
+        ];
+        const step = steps[circuitDesignStep];
+        circuitDesignStep += 1;
+        if (step) {
+          const [name, input] = step;
+          assert(toolNames.includes(name), `desktop ReAct request is missing ${name}`);
+          sendToolCall(response, body, name, input);
+          return;
+        }
+        sendProviderText(
+          response,
+          body,
+          'Applied 1 project operation at revision 1. Technical report generated for revision 1.',
+        );
         return;
       }
       if (scenario === 'technical-report') {
@@ -784,6 +802,13 @@ try {
   await page.getByTestId('chat-streaming-message').waitFor({ timeout: 30_000 });
   await page.getByText(/Technical report generated for revision 1/).waitFor({ timeout: 120_000 });
   await page.getByText(/Applied 1 project operation at revision 1/).waitFor({ timeout: 30_000 });
+  await page.getByTestId('chat-streaming-message').waitFor({ state: 'detached', timeout: 30_000 });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="chat-composer"]')?.getAttribute('placeholder') === 'Ask Actoviq…'
+  ));
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="module-card-filter"]')?.getAttribute('data-projection-ready') === 'true'
+  ));
   await page.screenshot({ path: path.resolve(outputRoot, 'agent-flow-chat.png') });
 
   const { projectRoot, project } = await findProjectByName(projectName);
@@ -927,7 +952,14 @@ try {
     'layout-vision-probe',
     'provider-check',
     'circuit-design',
+    'circuit-design',
+    'circuit-design',
+    'circuit-design',
+    'circuit-design',
+    'circuit-design',
+    'circuit-design',
     'technical-report',
+    'circuit-design',
     'layout-vision-tool-request',
     'layout-vision-final',
   ]);
@@ -955,9 +987,25 @@ try {
     request.scenario !== 'layout-vision-probe' && request.scenario !== 'layout-vision-final'
   )).every((request) => !request.hasImage));
   assert.equal(mock.requests[4]?.stream, false);
-  assert.equal(mock.requests[5]?.stream, true);
-  assert.equal(mock.requests[6]?.stream, false);
-  assert(mock.requests.slice(0, 7).every((request) => request.tools === 0));
+  const circuitRequests = mock.requests.filter((request) => request.scenario === 'circuit-design');
+  assert.equal(circuitRequests.length, 8);
+  assert(circuitRequests.every((request) => request.stream === true));
+  assert(circuitRequests.every((request) => request.tools > 0));
+  for (const toolName of [
+    'create_circuit_project',
+    'agent_context',
+    'apply_circuit_command',
+    'run_erc',
+    'compile_circuit_project',
+    'simulate_circuit_project',
+    'generate_technical_report',
+  ]) {
+    assert(circuitRequests.every((request) => request.toolNames.includes(toolName)));
+  }
+  const technicalReportRequest = mock.requests.find((request) => request.scenario === 'technical-report');
+  assert(technicalReportRequest);
+  assert.equal(technicalReportRequest.stream, false);
+  assert.equal(technicalReportRequest.tools, 0);
   assert.deepEqual(filteredPageErrors(pageErrors), []);
 
   const result = {

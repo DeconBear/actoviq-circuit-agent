@@ -33,8 +33,9 @@ Protocol loop (actoviq.project-agent.v2):
 3. For a revision: agent_context first and use the exact base_revision returned.
 4. After apply: run_erc; fix blocking errors with another apply if needed.
 5. compile_circuit_project (or compile_circuit_module), then simulate when the design has stimulus/analysis.
-6. Prefer reference_catalog_list / reference_insert_module / prepare_layout_from_reference before inventing topology.
-7. For pcb_schematic part selection, use lcsc_search / lcsc_bind. For analog_ic, run analog_ic_audit before simulation.
+6. When the user asks for documentation, call generate_technical_report after compile/simulation with the verified source revision.
+7. Prefer reference_catalog_list / reference_insert_module / prepare_layout_from_reference before inventing topology.
+8. For pcb_schematic part selection, use lcsc_search / lcsc_bind. For analog_ic, run analog_ic_audit before simulation.
 
 apply_circuit_command operations MUST be flat objects with an "op" field, e.g.
 {"op":"upsert_module_netlist","module_id":"power_stage","name":"Power Stage","netlist_notebook":"..."}.
@@ -168,11 +169,21 @@ export interface DesktopAgentRunHandle {
 
 interface CachedClient {
   signature: string;
+  hasTechnicalReportTool: boolean;
   client: ActoviqAgentClient;
 }
 
 let cachedClient: CachedClient | null = null;
 let clientTransition: Promise<void> = Promise.resolve();
+let cachedReportClient: Omit<CachedClient, 'hasTechnicalReportTool'> | null = null;
+let reportClientTransition: Promise<void> = Promise.resolve();
+
+export interface DesktopAgentRunOptions {
+  generateTechnicalReport?: (input: {
+    projectId: string;
+    sourceRevision: number;
+  }) => Promise<Record<string, unknown>>;
+}
 
 function configSignature(config: DesktopAgentConfig): string {
   return createHash('sha256')
@@ -219,13 +230,25 @@ async function loadCircuitDesignSkill(): Promise<ActoviqSkillDefinition | null> 
   }
 }
 
-async function getClient(config: DesktopAgentConfig): Promise<ActoviqAgentClient> {
+async function getClient(
+  config: DesktopAgentConfig,
+  options: DesktopAgentRunOptions = {},
+): Promise<ActoviqAgentClient> {
   const signature = configSignature(config);
-  if (cachedClient?.signature === signature) return cachedClient.client;
+  const needsTechnicalReportTool = Boolean(options.generateTechnicalReport);
+  if (
+    cachedClient?.signature === signature
+    && (!needsTechnicalReportTool || cachedClient.hasTechnicalReportTool)
+  ) {
+    return cachedClient.client;
+  }
 
   let resolved: ActoviqAgentClient | null = null;
   clientTransition = clientTransition.then(async () => {
-    if (cachedClient?.signature === signature) {
+    if (
+      cachedClient?.signature === signature
+      && (!needsTechnicalReportTool || cachedClient.hasTechnicalReportTool)
+    ) {
       resolved = cachedClient.client;
       return;
     }
@@ -237,7 +260,9 @@ async function getClient(config: DesktopAgentConfig): Promise<ActoviqAgentClient
     const homeDir = path.resolve(config.homeDir || path.join(homedir(), '.actoviq'));
     const circuitTools = withAgentFacingToolErrorsForAll([
       createDisabledTaskTool(),
-      ...createDesktopCircuitTools(),
+      ...createDesktopCircuitTools({
+        generateTechnicalReport: options.generateTechnicalReport,
+      }),
     ]);
     const circuitSkill = await loadCircuitDesignSkill();
     const client = await createAgentSdk({
@@ -289,11 +314,73 @@ async function getClient(config: DesktopAgentConfig): Promise<ActoviqAgentClient
         source: 'custom',
       }],
     });
-    cachedClient = { signature, client };
+    cachedClient = {
+      signature,
+      hasTechnicalReportTool: needsTechnicalReportTool,
+      client,
+    };
     resolved = client;
   });
   await clientTransition;
   if (!resolved) throw new Error('Unable to initialize the desktop agent runtime.');
+  return resolved;
+}
+
+async function getReportClient(config: DesktopAgentConfig): Promise<ActoviqAgentClient> {
+  const signature = configSignature(config);
+  if (cachedReportClient?.signature === signature) return cachedReportClient.client;
+
+  let resolved: ActoviqAgentClient | null = null;
+  reportClientTransition = reportClientTransition.then(async () => {
+    if (cachedReportClient?.signature === signature) {
+      resolved = cachedReportClient.client;
+      return;
+    }
+    if (cachedReportClient) {
+      await cachedReportClient.client.close().catch(() => undefined);
+      cachedReportClient = null;
+    }
+    const workDir = path.resolve(config.workDir || process.cwd());
+    const homeDir = path.resolve(config.homeDir || path.join(homedir(), '.actoviq'));
+    const client = await createAgentSdk({
+      provider: config.provider,
+      apiKey: config.apiKey,
+      authToken: config.provider === 'anthropic' ? config.apiKey : undefined,
+      baseURL: config.baseURL,
+      model: config.model,
+      workDir,
+      homeDir,
+      sessionDirectory: path.join(homeDir, 'circuit-agent-desktop-report', 'sessions'),
+      clientName: 'actoviq-circuit-agent-report',
+      clientVersion: '0.1.11',
+      tools: [],
+      mcpServers: [],
+      disableDefaultAgents: true,
+      loadDefaultAgentDirectories: false,
+      disableDefaultSkills: true,
+      loadDefaultSkillDirectories: false,
+      permissionMode: 'default',
+      maxToolIterations: 0,
+      agents: [{
+        name: REPORT_AGENT_NAME,
+        description: 'Writes a revision-bound technical report from verified circuit artifacts.',
+        systemPrompt: REPORT_SYSTEM_PROMPT,
+        model: config.model,
+        tools: [],
+        allowedTools: [],
+        mcpServers: [],
+        inheritDefaultTools: false,
+        inheritDefaultMcpServers: false,
+        allowNestedAgents: false,
+        maxToolIterations: 0,
+        source: 'custom',
+      }],
+    });
+    cachedReportClient = { signature, client };
+    resolved = client;
+  });
+  await reportClientTransition;
+  if (!resolved) throw new Error('Unable to initialize the desktop report agent runtime.');
   return resolved;
 }
 
@@ -363,6 +450,7 @@ function toolLabel(name: string, phase: 'call' | 'result'): string {
     compile_circuit_module: 'Compiling module',
     simulate_circuit_project: 'Running simulation',
     simulate_circuit_module: 'Simulating module',
+    generate_technical_report: 'Generating technical report',
     analog_ic_audit: 'Auditing analog IC constraints',
     export_eda: 'Exporting EDA package',
     lcsc_search: 'Searching LCSC parts',
@@ -398,6 +486,7 @@ export function startDesktopAgentRun(
   config: DesktopAgentConfig,
   input: DesktopAgentRunInput,
   onEvent: (event: DesktopAgentEvent) => void,
+  options: DesktopAgentRunOptions = {},
 ): DesktopAgentRunHandle {
   const abortController = new AbortController();
   let activeStream: { cancel: (reason?: string) => void } | null = null;
@@ -562,7 +651,7 @@ export function startDesktopAgentRun(
 
   const result = (async (): Promise<DesktopAgentChatResponse> => {
     try {
-      const client = await getClient(config);
+      const client = await getClient(config, options);
       const session = await getSession(client, config, input);
       const first = await runAttempt(session, buildPrompt(input));
       const text = (first.raw || '').trim() || 'Done.';
@@ -628,11 +717,13 @@ export function startDesktopAgentRun(
 }
 
 export async function closeDesktopAgentService(): Promise<void> {
-  await clientTransition;
-  if (!cachedClient) return;
-  const client = cachedClient.client;
+  await Promise.all([clientTransition, reportClientTransition]);
+  const clients = [cachedClient?.client, cachedReportClient?.client].filter(
+    (client): client is ActoviqAgentClient => Boolean(client),
+  );
   cachedClient = null;
-  await client.close().catch(() => undefined);
+  cachedReportClient = null;
+  await Promise.all(clients.map((client) => client.close().catch(() => undefined)));
 }
 
 export interface TechnicalReportInput {
@@ -653,7 +744,7 @@ export async function generateDesktopTechnicalReport(
   config: DesktopAgentConfig,
   input: TechnicalReportInput,
 ): Promise<TechnicalReportResult> {
-  const client = await getClient(config);
+  const client = await getReportClient(config);
   const evidence = JSON.stringify(input.evidence).slice(0, 120_000);
   const result = await client.runWithAgent(REPORT_AGENT_NAME, [
     `Project: ${input.projectId}`,

@@ -14,6 +14,13 @@ import {
 } from '../agent/modelTiers.js';
 import { loadSettingsWithSecrets } from './settings.js';
 
+interface ChatHandlerOptions {
+  generateTechnicalReport?: (input: {
+    projectId: string;
+    sourceRevision: number;
+  }) => Promise<Record<string, unknown>>;
+}
+
 interface ChatContext {
   conversationId?: string;
   activeJobId?: string | null;
@@ -42,7 +49,7 @@ function normalizeTier(value: unknown): ChatModelTier {
   return value === 'basic' || value === 'professional' ? value : 'medium';
 }
 
-export function registerChatHandlers(ipcMain: IpcMain): void {
+export function registerChatHandlers(ipcMain: IpcMain, options: ChatHandlerOptions = {}): void {
   ipcMain.handle('chat:send', async (
     event,
     message: string,
@@ -112,6 +119,9 @@ export function registerChatHandlers(ipcMain: IpcMain): void {
       },
       (agentEvent) => {
         if (!event.sender.isDestroyed()) event.sender.send('chat:event', agentEvent);
+      },
+      {
+        generateTechnicalReport: options.generateTechnicalReport,
       },
     );
     activeRuns.set(key, handle);

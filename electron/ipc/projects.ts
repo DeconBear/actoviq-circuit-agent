@@ -1520,7 +1520,7 @@ async function readOptionalText(targetPath: string): Promise<string> {
   return await exists(targetPath) ? readFile(targetPath, 'utf8') : '';
 }
 
-async function generateProjectTechnicalReport(projectId: string, sourceRevision: number): Promise<{
+export async function generateProjectTechnicalReport(projectId: string, sourceRevision: number): Promise<{
   ok: true;
   report: string;
   metadata: Record<string, unknown>;

@@ -7,7 +7,7 @@ import { registerWorkflowHandlers } from './ipc/workflow.js';
 import { registerFileHandlers } from './ipc/fileTools.js';
 import { registerSettingsHandlers } from './ipc/settings.js';
 import { registerWorkspaceHandlers } from './ipc/workspaces.js';
-import { registerProjectHandlers } from './ipc/projects.js';
+import { generateProjectTechnicalReport, registerProjectHandlers } from './ipc/projects.js';
 import { inspectCircuitSkillStatus, registerSkillHandlers } from './ipc/skills.js';
 import { closeDesktopAgentService } from './agent/desktopAgentService.js';
 import { stopActiveProjectTools } from './agent/circuitProjectCli.js';
@@ -88,7 +88,11 @@ function createWindow(): void {
 }
 
 function registerIpcHandlers(): void {
-  registerChatHandlers(ipcMain);
+  registerChatHandlers(ipcMain, {
+    generateTechnicalReport: async ({ projectId, sourceRevision }) => (
+      generateProjectTechnicalReport(projectId, sourceRevision)
+    ),
+  });
   registerWorkflowHandlers(ipcMain);
   registerFileHandlers(ipcMain);
   registerSettingsHandlers(ipcMain);
