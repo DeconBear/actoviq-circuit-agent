@@ -68,6 +68,9 @@ def main() -> int:
         validation = headless_validate(peer_file, root / "headless", str(fake_xschem), module)
         assert validation["status"] == "passed"
         assert validation["metadata"]["connectivity_comparison"]["compared_instance_count"] == 1
+        assert validation["metadata"]["source_module_id"] == "core"
+        assert len(validation["metadata"]["source_module_hash"]) == 64
+        assert len(validation["metadata"]["source_connectivity_hash"]) == 64
         assert validation["metadata"]["topology_writeback"] is False
 
         mismatched = json.loads(json.dumps(module))

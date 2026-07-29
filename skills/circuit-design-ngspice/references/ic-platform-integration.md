@@ -126,3 +126,7 @@ measurement, specification, LVS, and AMS states remain separate.
 Run `npm run test:ic-platform` for non-GUI qualification. GUI qualification also
 requires `test:schematic-document`, `test:e2e:schematic-editor`, and
 `test:e2e:electron`.
+
+For real-project evidence, fixed PDK/tool hashes, dual-simulator waveforms, and
+the native/commercial release boundary, follow
+[`ic-project-qualification.md`](ic-project-qualification.md).

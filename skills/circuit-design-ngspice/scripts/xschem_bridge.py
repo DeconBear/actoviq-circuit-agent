@@ -233,6 +233,9 @@ def headless_validate(
             "peer_hash": file_hash(peer),
             "reference_netlist_hash": file_hash(netlist) if netlist.is_file() else "",
             "connectivity_comparison": comparison,
+            "source_module_id": str(source_module.get("module_id") or "") if source_module else "",
+            "source_module_hash": module_hash(source_module) if source_module else "",
+            "source_connectivity_hash": connectivity_hash(source_module) if source_module else "",
             "topology_writeback": False,
         },
     })

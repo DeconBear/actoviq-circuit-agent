@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,20 @@ def smoke(tools: dict[str, dict[str, object]]) -> dict[str, object]:
                 timeout=60,
             )
             results["ngspice"] = {"passed": completed.returncode == 0}
+        if tools["xyce"]["available"]:
+            deck = root / "xyce-smoke.cir"
+            log = root / "xyce-smoke.log"
+            deck.write_text("smoke\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n", encoding="utf-8")
+            completed = subprocess.run(
+                [str(tools["xyce"]["executable"]), "-l", str(log), str(deck)],
+                cwd=root,
+                shell=False,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            results["xyce"] = {"passed": completed.returncode == 0}
         if tools["iverilog"]["available"]:
             source = root / "smoke.v"
             output = root / "smoke.vvp"
@@ -102,6 +117,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--require", default="")
+    parser.add_argument("--require-native-linux", action="store_true")
     args = parser.parse_args()
     tools = {name: probe(commands) for name, commands in TOOLS.items()}
     smoke_results = smoke(tools)
@@ -111,17 +127,25 @@ def main() -> int:
         name for name in required
         if name in smoke_results and not bool(smoke_results[name].get("passed"))
     ]
-    passed = (not missing and not failed_smoke) if required else None
+    release = platform.release()
+    wsl = "microsoft" in release.casefold() or "wsl" in release.casefold()
+    native_eligible = sys.platform.startswith("linux") and not wsl
+    environment_ok = native_eligible or not args.require_native_linux
+    passed = (not missing and not failed_smoke and environment_ok) if required else None
     record = {
         "schema": "actoviq.ic-tool-qualification.v1",
         "qualified_at": datetime.now(timezone.utc).isoformat(),
         "platform": sys.platform,
+        "platform_release": release,
+        "native_eligible": native_eligible,
+        "wsl": wsl,
         "tools": tools,
         "smoke": smoke_results,
         "required": required,
         "passed": passed,
         "missing": missing,
         "failed_smoke": failed_smoke,
+        "ineligible_environment": bool(args.require_native_linux and not native_eligible),
     }
     target = Path(args.output).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)

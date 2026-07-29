@@ -192,6 +192,7 @@ Use `--scope project --project-root <path>` for a repo-local install.
 - [references/modular-project-design.md](references/modular-project-design.md) — default multi-module canvas design
 - [references/analog-ic-design.md](references/analog-ic-design.md) — PDK, transistor sizing, ngspice, Razavi-Bench license boundary, and Virtuoso handoff
 - [references/ic-platform-integration.md](references/ic-platform-integration.md) — IC PDK/tool setup, support matrix, migration, and security boundaries
+- [references/ic-project-qualification.md](references/ic-project-qualification.md) — native IC golden-chain evidence and release gates
 - [references/eda-export.md](references/eda-export.md) — multi-EDA schematic export contract
 - [references/jobs-workflow.md](references/jobs-workflow.md) — jobs 8-step workflow
 - [references/tool-contracts.md](references/tool-contracts.md) — CLI contracts and errors

@@ -1,2 +1,4 @@
 # Runtime dependency used by the optional schemdraw renderer.
 schemdraw==0.22
+# Release/schema gates use Draft 2020-12 validation.
+jsonschema==4.23.0

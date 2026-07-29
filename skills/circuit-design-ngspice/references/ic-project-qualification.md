@@ -1,0 +1,84 @@
+# IC project qualification
+
+Use this procedure only on a native Linux host with legal access to the selected
+PDK and tools. Windows and WSL2 may run fixture/regression checks, but they must
+not produce `native_verified` evidence.
+
+## Evidence contract
+
+The first golden chain is the required IHP SG13G2 revision in
+`.github/ic-qualification-lock.json`. A qualifying project must:
+
+- use `project_kind=analog_ic` or `mixed_signal_ic`;
+- contain at least two modules and one explicit `MODULE` instance;
+- contain at least one catalog-backed PDK device with model, W, and L;
+- have non-blocking ERC for the exact project revision and document hash;
+- have a canonical netlist containing every placed PDK model;
+- archive waveform-bearing ngspice and Xyce `actoviq.simulation.v3` runs;
+- archive a passing dual-simulation comparison for the same document hash;
+- archive a passing Xschem reference-netlist connectivity comparison;
+- archive project/module, PDK, tool, connectivity, and evidence hashes.
+
+The report contains metadata and hashes only. It never copies, packages, or
+uploads PDK content. Commercial PDK qualification additionally requires the
+operator's explicit `--commercial-boundary-attested` flag.
+
+## Native run
+
+1. Check out the locked PDK revision and scan it:
+
+   ```text
+   python skills/circuit-design-ngspice/scripts/circuit_project.py pdk-scan \
+     --root /opt/pdks/IHP-Open-PDK --adapter ihp-sg13g2 \
+     --revision 22f2a25f1734796de3debbbf29cf697cbbc54081 \
+     > output/qualification/ihp-scan.json
+   ```
+
+2. Record the exact native tools. All four are mandatory:
+
+   ```text
+   python scripts/open-tool-qualification.py \
+     --require ngspice,xyce,openvaf,xschem \
+     --require-native-linux \
+     --output output/qualification/native-tools.json
+   ```
+
+3. In Actoviq, complete and save the hierarchical project, then run ERC,
+   compile the canonical netlist, run independent ngspice and Xyce profiles,
+   run `simulate-dual`, and run `xschem-validate`. Keep the generated JSON
+   evidence and waveform tables under the project build directory.
+
+4. Verify and archive the evidence:
+
+   ```text
+   python scripts/ic_project_qualification.py \
+     --project-root /work/qualified-gain-stage \
+     --pdk-scan output/qualification/ihp-scan.json \
+     --lock .github/ic-qualification-lock.json \
+     --tool-record output/qualification/native-tools.json \
+     --erc /work/qualified-gain-stage/build/erc.json \
+     --netlist /work/qualified-gain-stage/build/system/design.final.cir \
+     --ngspice-run /work/qualified-gain-stage/build/system/simulation/runs/NG/RUN.json \
+     --xyce-run /work/qualified-gain-stage/build/system/simulation/runs/XY/RUN.json \
+     --dual-run /work/qualified-gain-stage/build/system/simulation/dual-comparison.json \
+     --xschem-run /work/qualified-gain-stage/build/xschem-validation/core/RUN/run.json \
+     --output output/qualification/ic-project-native.json
+   ```
+
+`qualification=native_verified` is emitted only when every gate passes on
+native Linux. `--allow-fixture` exists only for deterministic contract tests and
+can emit no stronger result than `fixture_verified`.
+
+## Release gates
+
+Run:
+
+```text
+npm run test:schematic-release
+npm run test:schematic-release:gui
+```
+
+The manual `IC project native qualification` workflow repeats the local release
+gate on a self-hosted `linux, ic-qualified` runner and verifies the archived
+golden-chain evidence. A release must not claim native IC qualification without
+its uploaded `ic-project-native.json`.

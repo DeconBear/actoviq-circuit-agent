@@ -1,6 +1,14 @@
 {
   "schema": "actoviq.ic-qualification-lock.v1",
   "captured_at": "2026-07-27",
+  "environment": {
+    "platform": "native_linux",
+    "distribution": "ubuntu",
+    "version": "24.04",
+    "wsl": false
+  },
+  "golden_pdk": "ihp-sg13g2",
+  "required_tools": ["ngspice", "xyce", "openvaf", "xschem"],
   "open_pdks": {
     "ihp-sg13g2": {
       "repository": "https://github.com/IHP-GmbH/IHP-Open-PDK.git",

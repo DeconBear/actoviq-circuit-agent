@@ -1,0 +1,65 @@
+name: IC project native qualification
+
+on:
+  workflow_dispatch:
+
+jobs:
+  native-golden-chain:
+    runs-on: [self-hosted, linux, ic-qualified]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-circuit.txt
+      - run: python -m pip install --requirement requirements-circuit.txt
+      - run: npm ci
+      - run: npm run test:schematic-release
+      - name: Require native open-tool evidence
+        run: |
+          python scripts/open-tool-qualification.py \
+            --require ngspice,xyce,openvaf,xschem \
+            --require-native-linux \
+            --output output/qualification/native-tools.json
+      - name: Verify archived golden-chain evidence
+        env:
+          PROJECT_ROOT: ${{ vars.ACTOVIQ_IC_QUAL_PROJECT_ROOT }}
+          PDK_SCAN: ${{ vars.ACTOVIQ_IC_QUAL_PDK_SCAN }}
+          ERC_RUN: ${{ vars.ACTOVIQ_IC_QUAL_ERC }}
+          NETLIST: ${{ vars.ACTOVIQ_IC_QUAL_NETLIST }}
+          NGSPICE_RUN: ${{ vars.ACTOVIQ_IC_QUAL_NGSPICE_RUN }}
+          XYCE_RUN: ${{ vars.ACTOVIQ_IC_QUAL_XYCE_RUN }}
+          DUAL_RUN: ${{ vars.ACTOVIQ_IC_QUAL_DUAL_RUN }}
+          XSCHEM_RUN: ${{ vars.ACTOVIQ_IC_QUAL_XSCHEM_RUN }}
+        run: |
+          : "${PROJECT_ROOT:?Configure ACTOVIQ_IC_QUAL_PROJECT_ROOT on the qualified runner}"
+          : "${PDK_SCAN:?Configure ACTOVIQ_IC_QUAL_PDK_SCAN on the qualified runner}"
+          : "${ERC_RUN:?Configure ACTOVIQ_IC_QUAL_ERC on the qualified runner}"
+          : "${NETLIST:?Configure ACTOVIQ_IC_QUAL_NETLIST on the qualified runner}"
+          : "${NGSPICE_RUN:?Configure ACTOVIQ_IC_QUAL_NGSPICE_RUN on the qualified runner}"
+          : "${XYCE_RUN:?Configure ACTOVIQ_IC_QUAL_XYCE_RUN on the qualified runner}"
+          : "${DUAL_RUN:?Configure ACTOVIQ_IC_QUAL_DUAL_RUN on the qualified runner}"
+          : "${XSCHEM_RUN:?Configure ACTOVIQ_IC_QUAL_XSCHEM_RUN on the qualified runner}"
+          python scripts/ic_project_qualification.py \
+            --project-root "$PROJECT_ROOT" \
+            --pdk-scan "$PDK_SCAN" \
+            --lock .github/ic-qualification-lock.json \
+            --tool-record output/qualification/native-tools.json \
+            --erc "$ERC_RUN" \
+            --netlist "$NETLIST" \
+            --ngspice-run "$NGSPICE_RUN" \
+            --xyce-run "$XYCE_RUN" \
+            --dual-run "$DUAL_RUN" \
+            --xschem-run "$XSCHEM_RUN" \
+            --output output/qualification/ic-project-native.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-ic-project-qualification
+          path: output/qualification/
