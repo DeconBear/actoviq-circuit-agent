@@ -71,7 +71,8 @@ def main() -> int:
         v2_command = {
             "schema": "actoviq.command.v2", "command_id": "v2-lease-block",
             "actor": "user-B", "project_id": project_id, "module_id": "filter",
-            "base_revision": base_revision, "message": "blocked",
+            "base_revision": base_revision, "expected_module_revision": 0,
+            "message": "blocked",
             "operations": [{"op": "set_module_metadata", "name": "Blocked"}],
         }
         blocked = run_skill_raw([

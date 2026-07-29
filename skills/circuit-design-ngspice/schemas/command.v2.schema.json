@@ -4,7 +4,7 @@
   "title": "Actoviq Circuit Command v2",
   "description": "Discriminated transaction schema for actoviq.command.v2. Each operation is a oneOf branch with its own required fields, so schema validation rejects missing or extraneous fields per operation type. v1 remains readable via the adapter at command.schema.json; project history is not migrated in bulk. See ADR-0003.",
   "type": "object",
-  "required": ["schema", "command_id", "actor", "project_id", "module_id", "base_revision", "operations"],
+  "required": ["schema", "command_id", "actor", "project_id", "module_id", "base_revision", "expected_module_revision", "operations"],
   "properties": {
     "schema": { "const": "actoviq.command.v2" },
     "command_id": { "type": "string", "minLength": 1 },
@@ -18,6 +18,10 @@
       "description": "Module revision precondition; a stale value must be rejected by the reducer."
     },
     "message": { "type": "string" },
+    "notebook_markdown": {
+      "type": "string",
+      "description": "Derived editable notebook text to persist atomically with the module transaction."
+    },
     "created_at": { "type": "string", "format": "date-time" },
     "source": {
       "type": "string",
@@ -146,7 +150,7 @@
     },
     "create_wire": {
       "type": "object",
-      "required": ["op", "wire_id", "points", "net"],
+      "required": ["op", "wire_id", "points", "from", "to", "net", "net_id"],
       "properties": {
         "op": { "const": "create_wire" },
         "wire_id": { "type": "string", "minLength": 1 },
@@ -157,7 +161,9 @@
         },
         "from": { "$ref": "#/$defs/wire_endpoint" },
         "to": { "$ref": "#/$defs/wire_endpoint" },
-        "net": { "type": "string", "minLength": 1 }
+        "net": { "type": "string", "minLength": 1 },
+        "net_id": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["stored", "net"] }
       },
       "additionalProperties": false
     },
@@ -234,7 +240,10 @@
             "direction": { "enum": ["input", "output", "bidirectional"] },
             "signal_type": { "enum": ["analog", "digital", "power", "ground"] },
             "net": { "type": "string", "minLength": 1 },
-            "position": { "$ref": "#/$defs/position" }
+            "position": { "$ref": "#/$defs/position" },
+            "net_id": { "type": "string", "minLength": 1 },
+            "inferred": { "type": "boolean" },
+            "network": { "type": "string" }
           },
           "additionalProperties": false
         }
@@ -243,7 +252,7 @@
     },
     "place_module_instance": {
       "type": "object",
-      "required": ["op", "component_id", "module_ref", "position"],
+      "required": ["op", "component_id", "module_ref", "position", "pins"],
       "properties": {
         "op": { "const": "place_module_instance" },
         "component_id": { "type": "string", "minLength": 1 },
@@ -257,6 +266,23 @@
           "additionalProperties": false
         },
         "position": { "$ref": "#/$defs/position" },
+        "pins": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "net"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1 },
+              "net": { "type": "string", "minLength": 1 },
+              "net_id": { "type": "string", "minLength": 1 },
+              "side": { "enum": ["left", "right", "top", "bottom"] },
+              "order": { "type": "number" }
+            },
+            "additionalProperties": true
+          }
+        },
         "rotation": { "type": "number" }
       },
       "additionalProperties": false

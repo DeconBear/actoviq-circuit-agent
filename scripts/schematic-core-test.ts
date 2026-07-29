@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 
-import type { CircuitComponent, CircuitModule } from '../renderer/src/types';
+import type { CircuitComponent, CircuitModule, CircuitWire } from '../renderer/src/types';
 import { applyTransaction, type Transaction } from '../renderer/src/schematic-core/commands/applyTransaction';
 import {
   addToSelection,
@@ -37,10 +37,36 @@ function makeModule(components: CircuitComponent[] = []): CircuitModule {
     module_id: 'test',
     name: 'Test',
     revision: 0,
-    ports: [{ id: 'in', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in' }],
+    nets: [
+      { id: 'net_in', name: 'in', kind: 'analog', aliases: [] },
+      { id: 'net_out', name: 'out', kind: 'analog', aliases: [] },
+    ],
+    ports: [{ id: 'in', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in', net_id: 'net_in' }],
     components,
     wires: [],
     annotations: [],
+  };
+}
+
+function identifiedWire(
+  id: string,
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  options: {
+    from?: CircuitWire['from'];
+    to?: CircuitWire['to'];
+    net?: string;
+    net_id?: string;
+  } = {},
+): CircuitWire {
+  return {
+    id,
+    points: [start, end],
+    from: options.from ?? { ...start, junction_id: `${id}_from` },
+    to: options.to ?? { ...end, junction_id: `${id}_to` },
+    net: options.net ?? 'in',
+    net_id: options.net_id ?? 'net_in',
+    source: 'stored',
   };
 }
 
@@ -52,6 +78,7 @@ function makeTransaction(operations: Transaction['operations']): Transaction {
     project_id: 'p1',
     module_id: 'test',
     base_revision: 0,
+    expected_module_revision: 0,
     operations,
   };
 }
@@ -113,19 +140,34 @@ check('inverse round-trip restores original module', () => {
   assert.equal(result.module.components.length, 2);
   // Apply inverse in reverse order.
   const inverseTx = makeTransaction([...result.inverse].reverse());
-  inverseTx.base_revision = result.module.revision;
+  inverseTx.expected_module_revision = result.module.revision;
   const restored = applyTransaction(result.module, inverseTx);
   assert.equal(restored.module.components.length, 1);
   assert.equal(restored.module.components[0]!.id, 'r1');
   assert.deepEqual(restored.module.components[0]!.position, { x: 100, y: 100 });
 });
 
-check('stale base_revision is rejected', () => {
+check('project base_revision is independent from module revision', () => {
   const module = makeModule();
   module.revision = 5;
   const tx = makeTransaction([{ op: 'place_component', component: makeComponent('r1') }]);
   tx.base_revision = 3;
-  assert.throws(() => applyTransaction(module, tx), /stale base_revision/);
+  tx.expected_module_revision = 5;
+  assert.equal(applyTransaction(module, tx).module.revision, 6);
+});
+
+check('stale expected_module_revision is rejected', () => {
+  const module = makeModule();
+  const tx = makeTransaction([{ op: 'place_component', component: makeComponent('r1') }]);
+  tx.expected_module_revision = 4;
+  assert.throws(() => applyTransaction(module, tx), /stale expected_module_revision/);
+});
+
+check('transaction module_id mismatch is rejected', () => {
+  const module = makeModule();
+  const tx = makeTransaction([{ op: 'place_component', component: makeComponent('r1') }]);
+  tx.module_id = 'other';
+  assert.throws(() => applyTransaction(module, tx), /module_id mismatch/);
 });
 
 check('result includes topology diagnostics', () => {
@@ -141,16 +183,27 @@ check('result includes topology diagnostics', () => {
 check('create_wire adds stored wire and produces delete inverse', () => {
   const module = makeModule([makeComponent('r1')]);
   const result = applyTransaction(module, makeTransaction([
-    { op: 'create_wire', wire_id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in' },
+    {
+      op: 'create_wire',
+      wire_id: 'w1',
+      points: [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+      from: { x: 0, y: 0, junction_id: 'j1' },
+      to: { x: 100, y: 0, junction_id: 'j2' },
+      net: 'in',
+      net_id: 'net_in',
+    },
   ]));
   assert.equal(result.module.wires?.length, 1);
   assert.equal(result.module.wires?.[0]?.source, 'stored');
+  assert.equal(result.module.wires?.[0]?.from?.junction_id, 'j1');
+  assert.equal(result.module.wires?.[0]?.to?.junction_id, 'j2');
+  assert.equal(result.module.wires?.[0]?.net_id, 'net_in');
   assert.equal(result.inverse[0]?.op, 'delete_entities');
 });
 
 check('edit_wire_path replaces points and inverse restores', () => {
   const module = makeModule();
-  module.wires = [{ id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in', source: 'stored' }];
+  module.wires = [identifiedWire('w1', { x: 0, y: 0 }, { x: 100, y: 0 })];
   const result = applyTransaction(module, makeTransaction([
     { op: 'edit_wire_path', wire_id: 'w1', points: [{ x: 0, y: 0 }, { x: 200, y: 50 }] },
   ]));
@@ -158,21 +211,67 @@ check('edit_wire_path replaces points and inverse restores', () => {
   assert.equal(result.inverse[0]?.op, 'edit_wire_path');
 });
 
-check('split_wire inserts point and inverse removes it', () => {
+check('split_wire creates identified segments and inverse restores the wire', () => {
   const module = makeModule();
-  module.wires = [{ id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in', source: 'stored' }];
+  module.wires = [identifiedWire('w1', { x: 0, y: 0 }, { x: 100, y: 0 })];
   const result = applyTransaction(module, makeTransaction([
-    { op: 'split_wire', wire_id: 'w1', point: { x: 50, y: 0 } },
+    { op: 'split_wire', wire_id: 'w1', point: { x: 50, y: 0 }, junction_id: 'j_mid' },
   ]));
-  assert.equal(result.module.wires?.[0]?.points?.length, 3);
-  assert.equal(result.inverse[0]?.op, 'edit_wire_path');
+  assert.equal(result.module.wires?.length, 2);
+  assert.equal(result.module.wires?.[0]?.to?.junction_id, 'j_mid');
+  assert.equal(result.module.wires?.[1]?.from?.junction_id, 'j_mid');
+  const inverseTx = makeTransaction([...result.inverse].reverse());
+  inverseTx.expected_module_revision = result.module.revision;
+  const restored = applyTransaction(result.module, inverseTx);
+  assert.deepEqual(
+    [...restored.module.wires].sort((left, right) => left.id.localeCompare(right.id)),
+    [...module.wires].sort((left, right) => left.id.localeCompare(right.id)),
+  );
+});
+
+check('upsert_junction splits every same-net crossing and has a lossless inverse', () => {
+  const module = makeModule();
+  module.wires = [
+    identifiedWire('horizontal', { x: 0, y: 50 }, { x: 100, y: 50 }),
+    identifiedWire('vertical', { x: 50, y: 0 }, { x: 50, y: 100 }),
+  ];
+  const result = applyTransaction(module, makeTransaction([{
+    op: 'upsert_junction',
+    junction_id: 'j_cross',
+    point: { x: 50, y: 50 },
+    net: 'in',
+  }]));
+  assert.equal(result.module.wires?.length, 4);
+  assert.equal(
+    result.module.wires?.filter((wire) => (
+      wire.from?.junction_id === 'j_cross' || wire.to?.junction_id === 'j_cross'
+    )).length,
+    4,
+  );
+  const inverseTx = makeTransaction([...result.inverse].reverse());
+  inverseTx.expected_module_revision = result.module.revision;
+  const restored = applyTransaction(result.module, inverseTx);
+  assert.deepEqual(
+    [...restored.module.wires].sort((left, right) => left.id.localeCompare(right.id)),
+    [...module.wires].sort((left, right) => left.id.localeCompare(right.id)),
+  );
 });
 
 check('join_wires merges two wires and inverse restores both', () => {
   const module = makeModule();
   module.wires = [
-    { id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], net: 'in', source: 'stored' },
-    { id: 'w2', points: [{ x: 100, y: 0 }, { x: 200, y: 0 }], net: 'in', source: 'stored' },
+    identifiedWire(
+      'w1',
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { to: { x: 100, y: 0, junction_id: 'j_shared' } },
+    ),
+    identifiedWire(
+      'w2',
+      { x: 100, y: 0 },
+      { x: 200, y: 0 },
+      { from: { x: 100, y: 0, junction_id: 'j_shared' } },
+    ),
   ];
   const result = applyTransaction(module, makeTransaction([
     { op: 'join_wires', wire_ids: ['w1', 'w2'] },
@@ -184,7 +283,7 @@ check('join_wires merges two wires and inverse restores both', () => {
 
 check('rename_net updates pins, ports, and wires; inverse restores', () => {
   const module = makeModule([makeComponent('r1')]);
-  module.wires = [{ id: 'w1', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], net: 'in', source: 'stored' }];
+  module.wires = [identifiedWire('w1', { x: 0, y: 0 }, { x: 10, y: 0 })];
   const result = applyTransaction(module, makeTransaction([
     { op: 'rename_net', old_net: 'in', new_net: 'input' },
   ]));
@@ -201,6 +300,10 @@ check('upsert_port adds new port and inverse removes it', () => {
   ]));
   assert.equal(result.module.ports.length, 2);
   assert.equal(result.module.ports[1]!.id, 'out');
+  const inverseTx = makeTransaction([...result.inverse].reverse());
+  inverseTx.expected_module_revision = result.module.revision;
+  const restored = applyTransaction(result.module, inverseTx);
+  assert.equal(restored.module.ports.some((port) => port.id === 'out'), false);
 });
 
 check('upsert_port updates existing port and inverse restores', () => {
@@ -215,7 +318,13 @@ check('upsert_port updates existing port and inverse restores', () => {
 check('place_module_instance adds MODULE component with module_ref', () => {
   const module = makeModule();
   const result = applyTransaction(module, makeTransaction([
-    { op: 'place_module_instance', component_id: 'm1', module_ref: { module_id: 'amp', revision: 2 }, position: { x: 200, y: 200 } },
+    {
+      op: 'place_module_instance',
+      component_id: 'm1',
+      module_ref: { module_id: 'amp', revision: 2 },
+      position: { x: 200, y: 200 },
+      pins: [{ id: 'in', name: 'IN', net: 'm1_in' }],
+    },
   ]));
   assert.equal(result.module.components.length, 1);
   assert.equal(result.module.components[0]!.type, 'MODULE');
@@ -235,8 +344,13 @@ check('set_module_metadata updates name and inverse restores', () => {
 check('delete_entities also removes wires by id', () => {
   const module = makeModule([makeComponent('r1')]);
   module.wires = [
-    { id: 'w1', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], net: 'in', source: 'stored' },
-    { id: 'w2', points: [{ x: 0, y: 0 }, { x: 20, y: 0 }], net: 'out', source: 'stored' },
+    identifiedWire('w1', { x: 0, y: 0 }, { x: 10, y: 0 }),
+    identifiedWire(
+      'w2',
+      { x: 0, y: 20 },
+      { x: 20, y: 20 },
+      { net: 'out', net_id: 'net_out' },
+    ),
   ];
   const result = applyTransaction(module, makeTransaction([
     { op: 'delete_entities', entity_ids: ['w1'] },
@@ -244,6 +358,72 @@ check('delete_entities also removes wires by id', () => {
   assert.equal(result.module.wires?.length, 1);
   assert.equal(result.module.wires?.[0]?.id, 'w2');
   assert.equal(result.inverse[0]?.op, 'create_wire');
+});
+
+check('delete component removes attached wires and inverse restores topology', () => {
+  const component = makeComponent('r1');
+  component.pins[0]!.net_id = 'net_in';
+  const module = makeModule([component]);
+  module.wires = [
+    identifiedWire(
+      'w1',
+      { x: 0, y: 0 },
+      { x: 100, y: 100 },
+      {
+        from: { x: 0, y: 0, port_id: 'in' },
+        to: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' },
+      },
+    ),
+  ];
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'delete_entities', entity_ids: ['r1'] },
+  ]));
+  assert.equal(result.module.components.length, 0);
+  assert.equal(result.module.wires.length, 0);
+  const inverseTx = makeTransaction([...result.inverse].reverse());
+  inverseTx.expected_module_revision = result.module.revision;
+  const restored = applyTransaction(result.module, inverseTx);
+  assert.equal(restored.module.components.some((entry) => entry.id === 'r1'), true);
+  assert.equal(restored.module.wires.some((entry) => entry.id === 'w1'), true);
+});
+
+check('join three wires has a lossless inverse', () => {
+  const module = makeModule();
+  module.wires = [
+    identifiedWire(
+      'w1',
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { to: { x: 100, y: 0, junction_id: 'j1' } },
+    ),
+    identifiedWire(
+      'w2',
+      { x: 100, y: 0 },
+      { x: 200, y: 0 },
+      {
+        from: { x: 100, y: 0, junction_id: 'j1' },
+        to: { x: 200, y: 0, junction_id: 'j2' },
+      },
+    ),
+    identifiedWire(
+      'w3',
+      { x: 200, y: 0 },
+      { x: 300, y: 0 },
+      { from: { x: 200, y: 0, junction_id: 'j2' } },
+    ),
+  ];
+  const result = applyTransaction(module, makeTransaction([
+    { op: 'join_wires', wire_ids: ['w1', 'w2', 'w3'] },
+  ]));
+  assert.equal(result.module.wires.length, 1);
+  assert.equal(result.module.wires[0]!.points.length, 4);
+  const inverseTx = makeTransaction([...result.inverse].reverse());
+  inverseTx.expected_module_revision = result.module.revision;
+  const restored = applyTransaction(result.module, inverseTx);
+  assert.deepEqual(
+    restored.module.wires.map((wire) => wire.id).sort(),
+    ['w1', 'w2', 'w3'],
+  );
 });
 
 // === SelectionSet ===

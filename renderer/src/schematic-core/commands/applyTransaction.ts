@@ -6,16 +6,21 @@
  * entity ids, and topology diagnostics. It is pure: it does not mutate the
  * input module and does not start React/Electron (M1-03 requirement).
  *
- * M1-03 implements the API contract and the four most common operations
- * (place_component, update_component, move_entities, delete_entities). The
- * remaining operations (wire editing, junction, rename_net, port, module
- * instance, metadata) are stubbed to throw so M2 can fill them in without
- * changing the call site. The reducer always runs topology invariants on the
- * result so a transaction that would leave the module in an invalid state
- * reports diagnostics (M1-06 contract).
+ * The reducer covers every command.v2 operation used by the desktop editor.
+ * It also computes inverse operations and runs topology invariants so callers
+ * can preview a transaction, reject stale module edits, and implement undo
+ * without starting React or Electron.
  */
 
-import type { CircuitComponent, CircuitModule, CircuitPosition } from '../../types';
+import type {
+  CircuitComponent,
+  CircuitModule,
+  CircuitPin,
+  CircuitPort,
+  CircuitPosition,
+  CircuitWire,
+  CircuitWireEndpoint,
+} from '../../types';
 import { checkTopologyInvariants, type TopologyDiagnostic } from '../diagnostics/topologyInvariants';
 
 export type TransactionOperation =
@@ -23,14 +28,30 @@ export type TransactionOperation =
   | { op: 'update_component'; component_id: string; name?: string; value?: string; position?: CircuitPosition; rotation?: number; parameters?: Record<string, string> }
   | { op: 'move_entities'; entity_ids: string[]; delta: CircuitPosition; mode: 'free' | 'stretch' }
   | { op: 'delete_entities'; entity_ids: string[] }
-  | { op: 'create_wire'; wire_id: string; points: CircuitPosition[]; net: string }
+  | {
+      op: 'create_wire';
+      wire_id: string;
+      points: CircuitPosition[];
+      from: CircuitWireEndpoint;
+      to: CircuitWireEndpoint;
+      net: string;
+      net_id: string;
+      source?: 'stored' | 'net';
+    }
   | { op: 'edit_wire_path'; wire_id: string; points: CircuitPosition[] }
-  | { op: 'split_wire'; wire_id: string; point: CircuitPosition }
+  | { op: 'split_wire'; wire_id: string; point: CircuitPosition; junction_id?: string }
   | { op: 'join_wires'; wire_ids: string[] }
   | { op: 'upsert_junction'; junction_id: string; point: CircuitPosition; net: string }
   | { op: 'rename_net'; old_net: string; new_net: string }
-  | { op: 'upsert_port'; port: { id: string; name: string; direction: 'input' | 'output' | 'bidirectional'; signal_type: 'analog' | 'digital' | 'power' | 'ground'; net: string; position?: CircuitPosition } }
-  | { op: 'place_module_instance'; component_id: string; module_ref: { module_id: string; revision?: number }; position: CircuitPosition; rotation?: number }
+  | { op: 'upsert_port'; port: CircuitPort }
+  | {
+      op: 'place_module_instance';
+      component_id: string;
+      module_ref: { module_id: string; revision?: number };
+      position: CircuitPosition;
+      pins: CircuitPin[];
+      rotation?: number;
+    }
   | { op: 'set_module_metadata'; name?: string; domain?: 'analog' | 'digital' | 'mixed_boundary' | 'testbench' };
 
 export interface Transaction {
@@ -40,9 +61,10 @@ export interface Transaction {
   project_id: string;
   module_id: string;
   base_revision: number;
-  expected_module_revision?: number;
+  expected_module_revision: number;
   operations: TransactionOperation[];
   message?: string;
+  notebook_markdown?: string;
   source?: string;
 }
 
@@ -58,10 +80,113 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function createWireOperation(wire: CircuitWire): TransactionOperation {
+  if (!wire.from || !wire.to || !wire.net || !wire.net_id) {
+    throw new Error(`create_wire inverse: wire ${wire.id} is missing identified endpoints or net_id`);
+  }
+  return {
+    op: 'create_wire',
+    wire_id: wire.id,
+    points: clone(wire.points),
+    from: clone(wire.from),
+    to: clone(wire.to),
+    net: wire.net,
+    net_id: wire.net_id,
+    source: wire.source ?? 'stored',
+  };
+}
+
+function samePoint(left: CircuitPosition, right: CircuitPosition, epsilon = 0.001): boolean {
+  return Math.abs(left.x - right.x) <= epsilon && Math.abs(left.y - right.y) <= epsilon;
+}
+
+function pointOnSegment(
+  point: CircuitPosition,
+  left: CircuitPosition,
+  right: CircuitPosition,
+  epsilon = 0.001,
+): boolean {
+  const withinX = (
+    point.x >= Math.min(left.x, right.x) - epsilon
+    && point.x <= Math.max(left.x, right.x) + epsilon
+  );
+  const withinY = (
+    point.y >= Math.min(left.y, right.y) - epsilon
+    && point.y <= Math.max(left.y, right.y) + epsilon
+  );
+  const cross = (
+    (right.x - left.x) * (point.y - left.y)
+    - (right.y - left.y) * (point.x - left.x)
+  );
+  return withinX && withinY && Math.abs(cross) <= epsilon;
+}
+
+function junctionEndpoint(point: CircuitPosition, junctionId: string): CircuitWireEndpoint {
+  return { ...point, junction_id: junctionId };
+}
+
+function uniqueSplitWireId(wires: CircuitWire[], wireId: string, junctionId: string): string {
+  const existing = new Set(wires.map((wire) => wire.id));
+  const base = `${wireId}__${junctionId}`;
+  let candidate = base;
+  let suffix = 2;
+  while (existing.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function splitWireInPlace(
+  wires: CircuitWire[],
+  wire: CircuitWire,
+  point: CircuitPosition,
+  junctionId: string,
+): string[] {
+  if (!wire.from || !wire.to || wire.points.length < 2) {
+    throw new Error(`split_wire: wire ${wire.id} is missing a valid path or endpoints`);
+  }
+  const existingPointIndex = wire.points.findIndex((candidate) => samePoint(candidate, point));
+  if (existingPointIndex >= 0) {
+    if (existingPointIndex === 0) {
+      wire.from = junctionEndpoint(point, junctionId);
+      return [wire.id];
+    }
+    if (existingPointIndex === wire.points.length - 1) {
+      wire.to = junctionEndpoint(point, junctionId);
+      return [wire.id];
+    }
+    throw new Error(`split_wire: point already exists inside wire ${wire.id}`);
+  }
+  const splitIndex = wire.points.findIndex((candidate, index) => (
+    index > 0 && pointOnSegment(point, wire.points[index - 1]!, candidate)
+  ));
+  if (splitIndex < 1) {
+    throw new Error(`split_wire: point not on wire ${wire.id}`);
+  }
+  const originalPoints = clone(wire.points);
+  const originalTo = clone(wire.to);
+  const rightId = uniqueSplitWireId(wires, wire.id, junctionId);
+  const right: CircuitWire = {
+    ...clone(wire),
+    id: rightId,
+    points: [clone(point), ...originalPoints.slice(splitIndex)],
+    from: junctionEndpoint(point, junctionId),
+    to: originalTo,
+  };
+  wire.points = [...originalPoints.slice(0, splitIndex), clone(point)];
+  wire.to = junctionEndpoint(point, junctionId);
+  wires.push(right);
+  return [wire.id, rightId];
+}
+
 function applyOperation(module: CircuitModule, operation: TransactionOperation): { module: CircuitModule; inverse: TransactionOperation[]; affected: string[] } {
   switch (operation.op) {
     case 'place_component': {
       const next = clone(module);
+      if (next.components.some((component) => component.id === operation.component.id)) {
+        throw new Error(`place_component: component ${operation.component.id} already exists`);
+      }
       next.components = [...next.components, clone(operation.component)];
       return { module: next, inverse: [{ op: 'delete_entities', entity_ids: [operation.component.id] }], affected: [operation.component.id] };
     }
@@ -93,21 +218,58 @@ function applyOperation(module: CircuitModule, operation: TransactionOperation):
     case 'delete_entities': {
       const next = clone(module);
       const deleted: CircuitComponent[] = [];
+      const requested = new Set(operation.entity_ids);
+      const deletedPortIds = new Set(
+        next.ports
+          .filter((port) => requested.has(`port:${port.id}`))
+          .map((port) => port.id),
+      );
+      const deletedPorts = next.ports.filter((port) => deletedPortIds.has(port.id));
       next.components = next.components.filter((c) => {
-        if (operation.entity_ids.includes(c.id)) { deleted.push(c); return false; }
+        if (requested.has(c.id)) { deleted.push(c); return false; }
         return true;
       });
-      const deletedWires = (next.wires ?? []).filter((w) => operation.entity_ids.includes(w.id));
-      next.wires = (next.wires ?? []).filter((w) => !operation.entity_ids.includes(w.id));
+      next.ports = next.ports.filter((port) => !deletedPortIds.has(port.id));
+      const deletedComponentIds = new Set(deleted.map((component) => component.id));
+      const deletedWires = (next.wires ?? []).filter((wire) => (
+        requested.has(wire.id)
+        || Boolean(wire.from?.component_id && deletedComponentIds.has(wire.from.component_id))
+        || Boolean(wire.to?.component_id && deletedComponentIds.has(wire.to.component_id))
+        || Boolean(wire.from?.port_id && deletedPortIds.has(wire.from.port_id))
+        || Boolean(wire.to?.port_id && deletedPortIds.has(wire.to.port_id))
+      ));
+      const deletedWireIds = new Set(deletedWires.map((wire) => wire.id));
+      next.wires = (next.wires ?? []).filter((wire) => !deletedWireIds.has(wire.id));
       const inverse: TransactionOperation[] = [
         ...deleted.map((c) => ({ op: 'place_component' as const, component: clone(c) })),
-        ...deletedWires.map((w) => ({ op: 'create_wire' as const, wire_id: w.id, points: clone(w.points), net: w.net ?? '0', from: w.from, to: w.to })),
+        ...deletedPorts.map((port) => ({ op: 'upsert_port' as const, port: clone(port) })),
+        ...deletedWires.map(createWireOperation),
       ];
-      return { module: next, inverse, affected: operation.entity_ids };
+      return {
+        module: next,
+        inverse,
+        affected: [...requested, ...deletedWireIds],
+      };
     }
     case 'create_wire': {
       const next = clone(module);
-      const wire = { id: operation.wire_id, points: clone(operation.points), from: undefined, to: undefined, net: operation.net, source: 'stored' as const };
+      if ((next.wires ?? []).some((wire) => wire.id === operation.wire_id)) {
+        throw new Error(`create_wire: wire ${operation.wire_id} already exists`);
+      }
+      const first = operation.points[0];
+      const last = operation.points.at(-1);
+      if (!first || !last || !samePoint(first, operation.from) || !samePoint(last, operation.to)) {
+        throw new Error(`create_wire: wire ${operation.wire_id} path must start/end at its endpoints`);
+      }
+      const wire: CircuitWire = {
+        id: operation.wire_id,
+        points: clone(operation.points),
+        from: clone(operation.from),
+        to: clone(operation.to),
+        net: operation.net,
+        net_id: operation.net_id,
+        source: operation.source ?? 'stored',
+      };
       next.wires = [...(next.wires ?? []), wire];
       return { module: next, inverse: [{ op: 'delete_entities', entity_ids: [operation.wire_id] }], affected: [operation.wire_id] };
     }
@@ -117,50 +279,96 @@ function applyOperation(module: CircuitModule, operation: TransactionOperation):
       if (!wire) throw new Error(`edit_wire_path: wire ${operation.wire_id} not found`);
       const beforePoints = clone(wire.points);
       wire.points = clone(operation.points);
+      const first = wire.points[0];
+      const last = wire.points.at(-1);
+      if (first && wire.from) wire.from = { ...wire.from, x: first.x, y: first.y };
+      if (last && wire.to) wire.to = { ...wire.to, x: last.x, y: last.y };
       return { module: next, inverse: [{ op: 'edit_wire_path', wire_id: operation.wire_id, points: beforePoints }], affected: [operation.wire_id] };
     }
     case 'split_wire': {
       const next = clone(module);
       const wire = (next.wires ?? []).find((w) => w.id === operation.wire_id);
       if (!wire) throw new Error(`split_wire: wire ${operation.wire_id} not found`);
-      const points = wire.points;
-      // Find the segment whose bounding box contains the split point, then
-      // insert the point at that position. M3 will add junction-aware splitting.
-      let splitIdx = -1;
-      for (let i = 1; i < points.length; i += 1) {
-        const a = points[i - 1]!;
-        const b = points[i]!;
-        const withinX = operation.point.x >= Math.min(a.x, b.x) - 0.001 && operation.point.x <= Math.max(a.x, b.x) + 0.001;
-        const withinY = operation.point.y >= Math.min(a.y, b.y) - 0.001 && operation.point.y <= Math.max(a.y, b.y) + 0.001;
-        if (withinX && withinY) { splitIdx = i; break; }
-      }
-      if (splitIdx < 0) throw new Error(`split_wire: point not on wire ${operation.wire_id}`);
-      const beforePoints = clone(points);
-      points.splice(splitIdx, 0, clone(operation.point));
-      return { module: next, inverse: [{ op: 'edit_wire_path', wire_id: operation.wire_id, points: beforePoints }], affected: [operation.wire_id] };
+      const before = clone(wire);
+      const junctionId = operation.junction_id ?? `j_${operation.wire_id}_split`;
+      const resultIds = splitWireInPlace(next.wires ?? [], wire, operation.point, junctionId);
+      return {
+        module: next,
+        inverse: [
+          createWireOperation(before),
+          { op: 'delete_entities', entity_ids: resultIds },
+        ],
+        affected: resultIds,
+      };
     }
     case 'join_wires': {
       const next = clone(module);
-      const firstId = operation.wire_ids[0];
-      const secondId = operation.wire_ids[1];
-      if (!firstId || !secondId) throw new Error('join_wires: requires at least two wire ids');
-      const first = (next.wires ?? []).find((w) => w.id === firstId);
-      const second = (next.wires ?? []).find((w) => w.id === secondId);
-      if (!first || !second) throw new Error(`join_wires: wire not found`);
-      const restIds = operation.wire_ids.slice(2);
-      const beforeFirst = clone(first.points);
-      const beforeSecond = clone(second.points);
-      first.points = [...first.points, ...second.points.slice(1)];
-      next.wires = (next.wires ?? []).filter((w) => w.id !== secondId && !restIds.includes(w.id));
-      return { module: next, inverse: [
-        { op: 'edit_wire_path', wire_id: firstId, points: beforeFirst },
-        { op: 'create_wire', wire_id: secondId, points: beforeSecond, net: second.net ?? '0' },
-      ], affected: [firstId, secondId] };
+      const joined = operation.wire_ids.map((wireId) => {
+        const wire = (next.wires ?? []).find((candidate) => candidate.id === wireId);
+        if (!wire) throw new Error(`join_wires: wire ${wireId} not found`);
+        return wire;
+      });
+      const first = joined[0];
+      if (!first) throw new Error('join_wires: requires at least two wire ids');
+      if (joined.some((wire) => wire.net_id !== first.net_id || wire.net !== first.net)) {
+        throw new Error('join_wires: all wires must belong to the same net');
+      }
+      const snapshots = joined.map((wire) => clone(wire));
+      let points = clone(first.points);
+      let tail = first.to ? clone(first.to) : undefined;
+      for (const wire of joined.slice(1)) {
+        const currentEnd = points.at(-1);
+        const wireStart = wire.points[0];
+        const wireEnd = wire.points.at(-1);
+        if (!currentEnd || !wireStart || !wireEnd) throw new Error(`join_wires: wire ${wire.id} has no path`);
+        if (samePoint(currentEnd, wireStart)) {
+          points.push(...clone(wire.points.slice(1)));
+          tail = wire.to ? clone(wire.to) : tail;
+        } else if (samePoint(currentEnd, wireEnd)) {
+          points.push(...clone([...wire.points].reverse().slice(1)));
+          tail = wire.from ? clone(wire.from) : tail;
+        } else {
+          throw new Error(`join_wires: wire ${wire.id} is not connected to the current tail`);
+        }
+      }
+      first.points = points;
+      first.to = tail;
+      const removedIds = new Set(operation.wire_ids.slice(1));
+      next.wires = (next.wires ?? []).filter((wire) => !removedIds.has(wire.id));
+      return {
+        module: next,
+        // applyTransaction callers reverse inverse operations before applying
+        // them, so delete the merged wire first, then restore every snapshot.
+        inverse: [
+          ...snapshots.map(createWireOperation),
+          { op: 'delete_entities', entity_ids: [first.id] },
+        ],
+        affected: operation.wire_ids,
+      };
     }
     case 'upsert_junction': {
-      // Junctions are represented as wire endpoints with junction_id; M3 will
-      // add first-class junction entities. For now this is a no-op marker.
-      return { module: clone(module), inverse: [{ op: 'upsert_junction', junction_id: operation.junction_id, point: operation.point, net: operation.net }], affected: [operation.junction_id] };
+      const next = clone(module);
+      const matching = (next.wires ?? []).filter((wire) => (
+        wire.net === operation.net
+        && wire.points.some((right, index) => (
+          index > 0 && pointOnSegment(operation.point, wire.points[index - 1]!, right)
+        ))
+      ));
+      if (matching.length === 0) {
+        throw new Error(`upsert_junction: no wire on net ${operation.net} at point`);
+      }
+      const snapshots = matching.map((wire) => clone(wire));
+      const resultIds = matching.flatMap((wire) => (
+        splitWireInPlace(next.wires ?? [], wire, operation.point, operation.junction_id)
+      ));
+      return {
+        module: next,
+        inverse: [
+          ...snapshots.map(createWireOperation),
+          { op: 'delete_entities', entity_ids: resultIds },
+        ],
+        affected: [operation.junction_id, ...resultIds],
+      };
     }
     case 'rename_net': {
       const next = clone(module);
@@ -198,7 +406,7 @@ function applyOperation(module: CircuitModule, operation: TransactionOperation):
         value: operation.module_ref.module_id,
         position: clone(operation.position),
         rotation: operation.rotation ?? 0,
-        pins: [],
+        pins: clone(operation.pins),
         module_ref: { module_id: operation.module_ref.module_id, revision: operation.module_ref.revision },
       };
       next.components = [...next.components, component];
@@ -221,8 +429,19 @@ function applyOperation(module: CircuitModule, operation: TransactionOperation):
  * mutate the input. Always runs topology invariants on the result.
  */
 export function applyTransaction(module: CircuitModule, transaction: Transaction): ApplyTransactionResult {
-  if (transaction.base_revision !== module.revision) {
-    throw new Error(`applyTransaction: stale base_revision (transaction=${transaction.base_revision}, module=${module.revision})`);
+  // The module reducer cannot validate project-level base_revision because it
+  // intentionally receives no project document. The persistence boundary
+  // validates that precondition; this reducer validates the module revision.
+  if (transaction.expected_module_revision !== module.revision) {
+    throw new Error(
+      `applyTransaction: stale expected_module_revision `
+      + `(transaction=${transaction.expected_module_revision}, module=${module.revision})`,
+    );
+  }
+  if (transaction.module_id !== module.module_id) {
+    throw new Error(
+      `applyTransaction: module_id mismatch (transaction=${transaction.module_id}, module=${module.module_id})`,
+    );
   }
   let current = clone(module);
   const inverse: TransactionOperation[] = [];

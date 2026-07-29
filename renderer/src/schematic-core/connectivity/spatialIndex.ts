@@ -22,6 +22,10 @@ export interface EndpointEntry {
   ref: string;
   /** Net the endpoint belongs to, if known. */
   net?: string;
+  /** Stable net identity, when available. */
+  net_id?: string;
+  /** Identified module endpoint payload used when committing a snapped wire. */
+  endpoint?: CircuitWireEndpoint;
   /** Source wire id for wirepoints/junctions. */
   wireId?: string;
   /** Segment index on the source wire, for wirepoints. */
@@ -34,6 +38,7 @@ export interface IndexedSegment {
   start: CircuitPosition;
   end: CircuitPosition;
   net?: string;
+  net_id?: string;
 }
 
 export interface SpatialIndex {
@@ -110,6 +115,8 @@ export function buildSpatialIndex(
         position: point,
         ref,
         net: wire.net,
+        net_id: wire.net_id,
+        endpoint: isEndpoint ? { ...(i === 0 ? wire.from : wire.to)! } : undefined,
         wireId: wire.id,
         segmentIndex: isEndpoint ? undefined : i - 1,
       });
@@ -118,7 +125,14 @@ export function buildSpatialIndex(
     for (let i = 1; i < points.length; i += 1) {
       const start = points[i - 1]!;
       const end = points[i]!;
-      const segment: IndexedSegment = { wireId: wire.id, segmentIndex: i - 1, start, end, net: wire.net };
+      const segment: IndexedSegment = {
+        wireId: wire.id,
+        segmentIndex: i - 1,
+        start,
+        end,
+        net: wire.net,
+        net_id: wire.net_id,
+      };
       for (const key of cellsForSegment(start, end, cellSize)) {
         const list = segmentCells.get(key) ?? [];
         list.push(segment);

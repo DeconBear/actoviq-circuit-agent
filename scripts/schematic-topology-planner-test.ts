@@ -25,14 +25,29 @@ function makeComponent(id: string, x: number, y: number, net: string): CircuitCo
   return {
     id, type: 'R', name: id.toUpperCase(), value: '1k',
     position: { x, y }, rotation: 0,
-    pins: [{ id: 'a', name: '1', net }, { id: 'b', name: '2', net: 'out' }],
+    pins: [
+      { id: 'a', name: '1', net, net_id: `net_${net}` },
+      { id: 'b', name: '2', net: 'out', net_id: 'net_out' },
+    ],
   };
 }
 
 function makeModule(components: CircuitComponent[] = [], wires: CircuitModule['wires'] = []): CircuitModule {
   return {
     schema: 'actoviq.module.v2', module_id: 'test', name: 'Test', revision: 0,
-    ports: [{ id: 'in', name: 'IN', direction: 'input', signal_type: 'analog', net: 'in', position: { x: 0, y: 100 } }],
+    nets: [
+      { id: 'net_in', name: 'in', kind: 'analog', aliases: [] },
+      { id: 'net_out', name: 'out', kind: 'analog', aliases: [] },
+    ],
+    ports: [{
+      id: 'in',
+      name: 'IN',
+      direction: 'input',
+      signal_type: 'analog',
+      net: 'in',
+      net_id: 'net_in',
+      position: { x: 0, y: 100 },
+    }],
     components, wires, annotations: [],
   };
 }
@@ -64,7 +79,14 @@ check('connect proposes a wire between source and target', () => {
   const module = makeModule([makeComponent('r1', 100, 100, 'in'), makeComponent('r2', 200, 100, 'in')]);
   const result = planTopologyMutation(module, {
     kind: 'connect', point: { x: 200, y: 100 },
-    source: { kind: 'pin', position: { x: 100, y: 100 }, ref: 'pin:r1.a', net: 'in' },
+    source: {
+      kind: 'pin',
+      position: { x: 100, y: 100 },
+      ref: 'pin:r1.a',
+      net: 'in',
+      net_id: 'net_in',
+      endpoint: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' },
+    },
   });
   assert.ok(result.preview.newWire, 'should propose a new wire');
   assert.equal(result.preview.newWire!.points.length, 2);
@@ -75,7 +97,14 @@ check('connect with no target returns no-target diagnostic', () => {
   const module = makeModule([makeComponent('r1', 100, 100, 'in')]);
   const result = planTopologyMutation(module, {
     kind: 'connect', point: { x: 500, y: 500 },
-    source: { kind: 'pin', position: { x: 100, y: 100 }, ref: 'pin:r1.a', net: 'in' },
+    source: {
+      kind: 'pin',
+      position: { x: 100, y: 100 },
+      ref: 'pin:r1.a',
+      net: 'in',
+      net_id: 'net_in',
+      endpoint: { x: 100, y: 100, component_id: 'r1', pin_id: 'a' },
+    },
   });
   assert.equal(result.mutations.length, 0);
   assert.ok(result.diagnostics.some((d) => d.code === 'no_target'));

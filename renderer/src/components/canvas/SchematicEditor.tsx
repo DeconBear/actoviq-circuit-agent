@@ -95,6 +95,7 @@ function defaultBlockDraft(): BlockDraft {
 }
 
 interface Props {
+  projectId: string;
   module: CircuitModule;
   busy: boolean;
   buildBusy?: boolean;
@@ -106,6 +107,63 @@ interface Props {
   onProbe?: (probe: SchematicProbeSelection) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onOpenChildModule?: (moduleId: string) => void;
+}
+
+interface EditorSession {
+  sourceRevision: number;
+  draft: CircuitModule;
+  dirty: boolean;
+  history: CircuitModule[];
+  future: CircuitModule[];
+  preserveNextRevision: boolean;
+}
+
+const editorSessions = new Map<string, EditorSession>();
+
+function freshEditorSession(module: CircuitModule): EditorSession {
+  return {
+    sourceRevision: module.revision,
+    draft: createSchematicDocument(module).module,
+    dirty: false,
+    history: [],
+    future: [],
+    preserveNextRevision: false,
+  };
+}
+
+function initialEditorSession(key: string, module: CircuitModule): EditorSession {
+  const cached = editorSessions.get(key);
+  if (!cached) return freshEditorSession(module);
+  if (cached.sourceRevision === module.revision) {
+    return {
+      ...cached,
+      draft: cloneModule(cached.draft),
+      history: cached.history.map(cloneModule),
+      future: cached.future.map(cloneModule),
+    };
+  }
+  if (cached.preserveNextRevision && module.revision > cached.sourceRevision) {
+    return {
+      sourceRevision: module.revision,
+      draft: createSchematicDocument(module).module,
+      dirty: false,
+      history: cached.history.map(cloneModule),
+      future: cached.future.map(cloneModule),
+      preserveNextRevision: false,
+    };
+  }
+  if (cached.dirty) {
+    // Preserve the unsaved draft against an external revision bump. Its
+    // original sourceRevision remains the save precondition, so a later save
+    // is rejected as stale instead of silently merging.
+    return {
+      ...cached,
+      draft: cloneModule(cached.draft),
+      history: cached.history.map(cloneModule),
+      future: cached.future.map(cloneModule),
+    };
+  }
+  return freshEditorSession(module);
 }
 
 export interface SchematicProbeSelection {
@@ -209,6 +267,7 @@ interface ContextMenuState {
 type DraftUpdate = (current: CircuitModule) => CircuitModule;
 
 export function SchematicEditor({
+  projectId,
   module,
   busy,
   buildBusy = false,
@@ -221,8 +280,15 @@ export function SchematicEditor({
   onDirtyChange,
   onOpenChildModule,
 }: Props) {
-  const [draft, setDraft] = useState(() => createSchematicDocument(module).module);
-  const [dirty, setDirty] = useState(false);
+  const sessionKey = `${projectId}:${module.module_id}`;
+  const initialSessionRef = useRef<EditorSession | null>(null);
+  if (!initialSessionRef.current) {
+    initialSessionRef.current = initialEditorSession(sessionKey, module);
+  }
+  const initialSession = initialSessionRef.current;
+  const sourceRevisionRef = useRef(initialSession.sourceRevision);
+  const [draft, setDraft] = useState(() => cloneModule(initialSession.draft));
+  const [dirty, setDirty] = useState(initialSession.dirty);
   const [tool, setTool] = useState<ToolMode>('select');
   const [placeType, setPlaceType] = useState<ToolComponentType>('R');
   const [placeRotation, setPlaceRotation] = useState(0);
@@ -245,8 +311,8 @@ export function SchematicEditor({
   const [clipboardComponentCount, setClipboardComponentCount] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
-  const [history, setHistory] = useState<CircuitModule[]>([]);
-  const [future, setFuture] = useState<CircuitModule[]>([]);
+  const [history, setHistory] = useState<CircuitModule[]>(() => initialSession.history.map(cloneModule));
+  const [future, setFuture] = useState<CircuitModule[]>(() => initialSession.future.map(cloneModule));
   const editorShellRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -347,12 +413,53 @@ export function SchematicEditor({
   }, [dirty, onDirtyChange]);
 
   useEffect(() => {
-    const preserving = preserveHistoryOnRevisionChangeRef.current;
+    const previous = editorSessions.get(sessionKey);
+    editorSessions.set(sessionKey, {
+      sourceRevision: sourceRevisionRef.current,
+      draft: cloneModule(draft),
+      dirty,
+      history: history.map(cloneModule),
+      future: future.map(cloneModule),
+      preserveNextRevision: previous?.preserveNextRevision ?? false,
+    });
+  }, [dirty, draft, future, history, sessionKey]);
+
+  useEffect(() => {
+    if (sourceRevisionRef.current === module.revision) return;
+    const cached = editorSessions.get(sessionKey);
+    const preserving = (
+      preserveHistoryOnRevisionChangeRef.current
+      || cached?.preserveNextRevision === true
+    );
     preserveHistoryOnRevisionChangeRef.current = false;
+    if (preserving) {
+      sourceRevisionRef.current = module.revision;
+      const nextDraft = createSchematicDocument(module).module;
+      setDraft(nextDraft);
+      setDirty(false);
+      editorSessions.set(sessionKey, {
+        sourceRevision: module.revision,
+        draft: cloneModule(nextDraft),
+        dirty: false,
+        history: history.map(cloneModule),
+        future: future.map(cloneModule),
+        preserveNextRevision: false,
+      });
+    } else if (dirty) {
+      setSaveError(
+        `Module revision changed from ${sourceRevisionRef.current} to ${module.revision} `
+        + 'while this draft has unsaved edits. Save will remain blocked until the conflict is resolved.',
+      );
+      return;
+    } else {
+      sourceRevisionRef.current = module.revision;
+      setDraft(createSchematicDocument(module).module);
+      setDirty(false);
+      setHistory([]);
+      setFuture([]);
+    }
     cancelPendingViewportUpdate();
     cancelPendingDragPreviewUpdate();
-    setDraft(createSchematicDocument(module).module);
-    setDirty(false);
     setTool('select');
     setPlaceRotation(0);
     setSelection(null);
@@ -369,7 +476,7 @@ export function SchematicEditor({
     setMarqueeBounds(null);
     setSpacePanActive(false);
     setDragPreviewPositions(null);
-    setSaveError(null);
+    if (!dirty) setSaveError(null);
     setActionNotice(null);
     componentClipboardRef.current = [];
     pasteSerialRef.current = 0;
@@ -377,11 +484,7 @@ export function SchematicEditor({
     // M2-04: a save bumps module.revision; the draft already matches the
     // saved content. Keep undo/redo history across save so Ctrl+Z works
     // after Apply (ADR-0004). A genuine module switch clears history.
-    if (!preserving) {
-      setHistory([]);
-      setFuture([]);
-    }
-  }, [module.module_id, module.revision]);
+  }, [module.module_id, module.revision, sessionKey]);
 
   const commitDraft = useCallback((next: CircuitModule, previous = draft) => {
     setHistory((items) => [...items, cloneModule(previous)].slice(-40));
@@ -1837,6 +1940,10 @@ export function SchematicEditor({
       // happens during onSave (applyOperations -> onReloadProject, plus
       // buildModulePreview -> onReloadProject) does not clear undo/redo.
       preserveHistoryOnRevisionChangeRef.current = true;
+      const cached = editorSessions.get(sessionKey);
+      if (cached) {
+        editorSessions.set(sessionKey, { ...cached, preserveNextRevision: true });
+      }
       const saved = await onSave(normalized);
       if (saved === false) throw new Error('Apply command was rejected');
       // Re-arm in case buildModulePreview triggers a second revision bump
@@ -1848,6 +1955,11 @@ export function SchematicEditor({
       // (ADR-0004). Previously save cleared history/future, which broke the
       // undo loop and made "place -> move -> save -> undo" impossible.
     } catch (error) {
+      preserveHistoryOnRevisionChangeRef.current = false;
+      const cached = editorSessions.get(sessionKey);
+      if (cached) {
+        editorSessions.set(sessionKey, { ...cached, preserveNextRevision: false });
+      }
       // Keep the draft dirty and surface the failure — previously a topology
       // validation throw or a rejected apply left no trace (silent data loss).
       setSaveError(error instanceof Error ? error.message : String(error));
@@ -1863,6 +1975,9 @@ export function SchematicEditor({
       data-busy={busy ? 'true' : 'false'}
       data-preview-busy={buildBusy ? 'true' : 'false'}
       data-dirty={dirty ? 'true' : 'false'}
+      data-history-count={String(history.length)}
+      data-future-count={String(future.length)}
+      data-source-revision={String(sourceRevisionRef.current)}
       data-save-error={saveError ?? ''}
       data-place-rotation={tool === 'place' || tool === 'place-block' ? String(placeRotation) : ''}
       data-selected={selectionAttribute(selection)}

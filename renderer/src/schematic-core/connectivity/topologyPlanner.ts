@@ -15,19 +15,32 @@
  *   - split: propose a junction at a segment midpoint
  */
 
-import type { CircuitModule, CircuitPosition, CircuitWire } from '../../types';
+import type {
+  CircuitModule,
+  CircuitPosition,
+  CircuitWire,
+  CircuitWireEndpoint,
+} from '../../types';
 import { buildSpatialIndex, queryEndpoints, querySegments, type EndpointEntry, type IndexedSegment } from '../connectivity/spatialIndex';
 
 export type MutationKind = 'move' | 'connect' | 'split' | 'join' | 'delete';
 
 export interface TopologyMutation {
   kind: MutationKind;
+  /** Electrical move semantics; never infer this from the display label. */
+  moveMode?: 'free' | 'stretch';
   /** Entities the mutation affects, for affected-build-scope on commit. */
   entity_ids: string[];
   /** Proposed new wire/point state for preview; commit converts these. */
   preview: {
     moved?: Array<{ id: string; from: CircuitPosition; to: CircuitPosition }>;
-    newWire?: { net: string; points: CircuitPosition[] };
+    newWire?: {
+      net: string;
+      net_id: string;
+      points: CircuitPosition[];
+      from: CircuitWireEndpoint;
+      to: CircuitWireEndpoint;
+    };
     junction?: { position: CircuitPosition; net: string };
   };
   /** Human-readable label for the status bar. */
@@ -73,6 +86,13 @@ export function planTopologyMutation(module: CircuitModule, gesture: TopologyGes
         position: component.position,
         ref: `pin:${component.id}.${pin.id}`,
         net: pin.net,
+        net_id: pin.net_id,
+        endpoint: {
+          x: component.position.x,
+          y: component.position.y,
+          component_id: component.id,
+          pin_id: pin.id,
+        },
       });
     }
   }
@@ -81,6 +101,12 @@ export function planTopologyMutation(module: CircuitModule, gesture: TopologyGes
     position: p.position ?? { x: 0, y: 0 },
     ref: `port:${p.id}`,
     net: p.net,
+    net_id: p.net_id,
+    endpoint: {
+      x: p.position?.x ?? 0,
+      y: p.position?.y ?? 0,
+      port_id: p.id,
+    },
   })));
 
   switch (gesture.kind) {
@@ -109,6 +135,7 @@ export function planTopologyMutation(module: CircuitModule, gesture: TopologyGes
         preview: { moved },
         mutations: [{
           kind: 'move',
+          moveMode: gesture.mode ?? 'free',
           entity_ids: ids,
           preview: { moved },
           label: gesture.mode === 'stretch' ? 'Stretch connected' : 'Move free',
@@ -123,19 +150,37 @@ export function planTopologyMutation(module: CircuitModule, gesture: TopologyGes
       const target = candidates.find((c) => c.ref !== source?.ref);
       if (!target) {
         return {
-          preview: source ? { newWire: { net: source.net ?? '0', points: [source.position, gesture.point] } } : {},
+          preview: {},
           mutations: [],
           diagnostics: [{ code: 'no_target', message: 'No connectable endpoint near the cursor.' }],
         };
       }
       const net = source?.net ?? target.net ?? '0';
+      const netId = source?.net_id ?? target.net_id;
+      if (!source?.endpoint || !target.endpoint || !netId) {
+        return {
+          preview: {},
+          mutations: [],
+          diagnostics: [{
+            code: 'unidentified_target',
+            message: 'Both wire endpoints and the stable net id must be identified before commit.',
+          }],
+        };
+      }
       const points = source ? [source.position, target.position] : [gesture.point, target.position];
+      const newWire = {
+        net,
+        net_id: netId,
+        points,
+        from: { ...source.endpoint, x: points[0]!.x, y: points[0]!.y },
+        to: { ...target.endpoint, x: points.at(-1)!.x, y: points.at(-1)!.y },
+      };
       return {
-        preview: { newWire: { net, points } },
+        preview: { newWire },
         mutations: [{
           kind: 'connect',
           entity_ids: [source?.ref ?? 'free', target.ref],
-          preview: { newWire: { net, points } },
+          preview: { newWire },
           label: `Connect ${source?.ref ?? 'free'} -> ${target.ref}`,
         }],
         diagnostics: [],

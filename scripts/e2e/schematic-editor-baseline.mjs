@@ -1,11 +1,8 @@
 /**
- * M0-05 baseline tests: capture the CURRENT behavior of three interaction gaps
- * that the refactor plan targets. These are intentionally probing tests, not
- * goal-state assertions. Each test records pass / expected-failure so the
- * baseline is explicit before M2/M3 change the behavior.
+ * M0-05/M2 goal-state tests for three interaction and revision guarantees.
  *
- *   1. undo-after-save:  can the user undo after saving? (target: yes; today: no)
- *   2. stale-revision:   is a save against a stale base_revision rejected? (target: yes)
+ *   1. undo-after-save:  can the user undo and persist the inverse after saving?
+ *   2. stale-revision:   is a save against a stale base_revision rejected?
  *   3. unsaved-draft-nav: does an unsaved draft survive navigating away and back?
  *
  * Run:  node scripts/e2e/schematic-editor-baseline.mjs
@@ -27,7 +24,7 @@ const results = [];
 
 function record(name, { pass, detail }) {
   results.push({ name, pass, detail });
-  const tag = pass ? 'PASS' : 'EXPECTED-FAILURE';
+  const tag = pass ? 'PASS' : 'FAIL';
   console.log(`[baseline] ${tag} ${name}: ${detail}`);
 }
 
@@ -91,21 +88,45 @@ try {
   await page.getByTestId('schematic-editor-save').click();
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
+    && document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false'
   ));
   // After save the module reloads; let the preserve-history effect settle.
   await page.waitForTimeout(500);
   const undoDisabledAfterSave = await page.getByTestId('schematic-editor-undo').isDisabled();
+  const historyCountAfterSave = await page.getByTestId('schematic-editor').getAttribute('data-history-count');
+  const busyAfterSave = await page.getByTestId('schematic-editor').getAttribute('data-busy');
+  const savedComponentCount = Number(
+    await page.getByTestId('schematic-editor').getAttribute('data-component-count'),
+  );
+  let undoPersisted = false;
+  if (!undoDisabledAfterSave) {
+    await page.getByTestId('schematic-editor-undo').click();
+    await page.waitForFunction((expected) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'true'
+      && Number(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count')) === expected
+    ), savedComponentCount - 1);
+    await page.getByTestId('schematic-editor-save').click();
+    await page.waitForFunction(() => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-dirty') === 'false'
+      && document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-busy') === 'false'
+    ));
+    await page.getByTestId('back-to-board').click();
+    await openFilterEditor();
+    undoPersisted = Number(
+      await page.getByTestId('schematic-editor').getAttribute('data-component-count'),
+    ) === savedComponentCount - 1;
+  }
   record('undo-after-save', {
-    pass: !undoDisabledAfterSave,
+    pass: !undoDisabledAfterSave && undoPersisted,
     detail: undoDisabledAfterSave
-      ? 'undo is disabled after save (history cleared)'
-      : 'undo remains enabled after save',
+      ? `undo is disabled after save (history=${historyCountAfterSave}, busy=${busyAfterSave})`
+      : `undo enabled and inverse persisted=${undoPersisted} (history=${historyCountAfterSave}, busy=${busyAfterSave})`,
   });
 
   // === Test 2: stale-revision ===
   const moduleBefore = JSON.parse(await readFile(
     path.resolve(projectRoot, 'modules', 'filter', 'module.circuit.json'), 'utf8'));
-  const staleRevision = moduleBefore.revision;
+  const staleRevision = Math.max(0, moduleBefore.revision - 1);
   // Attempt a command against the stale base_revision via the apply API.
   let staleRejected = false;
   let staleDetail = '';
@@ -175,12 +196,14 @@ try {
   if (viteProcess) viteProcess.kill();
 }
 
-const expectedFailures = results.filter((r) => !r.pass).map((r) => r.name);
+const failures = results.filter((r) => !r.pass).map((r) => r.name);
 const passes = results.filter((r) => r.pass).map((r) => r.name);
 console.log(JSON.stringify({
-  ok: true,
-  baseline: 'M0-05',
+  ok: failures.length === 0,
+  baseline: 'M0-05/M2 goal state',
   pass: passes,
-  expectedFailure: expectedFailures,
-  note: 'expected-failure items capture the current behavior the refactor plan targets; they should turn into passes as M2/M3 land.',
+  failures,
 }, null, 2));
+if (failures.length > 0) {
+  process.exitCode = 1;
+}

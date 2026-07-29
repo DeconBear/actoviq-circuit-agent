@@ -26,12 +26,22 @@ BASE = {
     "project_id": "p1",
     "module_id": "filter",
     "base_revision": 0,
+    "expected_module_revision": 0,
 }
 
 COMPONENT = {
     "id": "r1", "type": "R", "name": "R1", "value": "1k",
     "position": {"x": 100, "y": 100}, "rotation": 0,
     "pins": [{"id": "a", "name": "1", "net": "in"}],
+}
+
+WIRE = {
+    "wire_id": "w1",
+    "points": [{"x": 0, "y": 0}, {"x": 10, "y": 0}],
+    "from": {"x": 0, "y": 0, "junction_id": "j1"},
+    "to": {"x": 10, "y": 0, "junction_id": "j2"},
+    "net": "in",
+    "net_id": "net_in",
 }
 
 
@@ -49,8 +59,10 @@ CASES = [
     ("move_entities invalid mode", [op(op="move_entities", entity_ids=["r1"], delta={"x": 10, "y": 0}, mode="invalid")], False),
     ("move_entities extra field rejected", [op(op="move_entities", entity_ids=["r1"], delta={"x": 10, "y": 0}, mode="free", extra=True)], False),
     ("delete_entities valid", [op(op="delete_entities", entity_ids=["r1"])], True),
-    ("create_wire valid", [op(op="create_wire", wire_id="w1", points=[{"x": 0, "y": 0}, {"x": 10, "y": 0}], net="in")], True),
-    ("create_wire too few points", [op(op="create_wire", wire_id="w1", points=[{"x": 0, "y": 0}], net="in")], False),
+    ("create_wire valid", [op(op="create_wire", **WIRE)], True),
+    ("create_wire too few points", [op(op="create_wire", **{**WIRE, "points": [{"x": 0, "y": 0}]})], False),
+    ("create_wire missing endpoint rejected", [op(op="create_wire", **{key: value for key, value in WIRE.items() if key != "to"})], False),
+    ("create_wire missing net_id rejected", [op(op="create_wire", **{key: value for key, value in WIRE.items() if key != "net_id"})], False),
     ("edit_wire_path valid", [op(op="edit_wire_path", wire_id="w1", points=[{"x": 0, "y": 0}, {"x": 20, "y": 0}])], True),
     ("split_wire valid", [op(op="split_wire", wire_id="w1", point={"x": 10, "y": 0})], True),
     ("join_wires valid", [op(op="join_wires", wire_ids=["w1", "w2"])], True),
@@ -59,11 +71,13 @@ CASES = [
     ("rename_net valid", [op(op="rename_net", old_net="in", new_net="input")], True),
     ("upsert_port valid", [op(op="upsert_port", port={"id": "p1", "name": "P1", "direction": "input", "signal_type": "analog", "net": "in"})], True),
     ("upsert_port invalid direction", [op(op="upsert_port", port={"id": "p1", "name": "P1", "direction": "sideways", "signal_type": "analog", "net": "in"})], False),
-    ("place_module_instance valid", [op(op="place_module_instance", component_id="m1", module_ref={"module_id": "amp"}, position={"x": 0, "y": 0})], True),
+    ("place_module_instance valid", [op(op="place_module_instance", component_id="m1", module_ref={"module_id": "amp"}, position={"x": 0, "y": 0}, pins=[{"id": "in", "name": "IN", "net": "m1_in"}])], True),
+    ("place_module_instance without pins rejected", [op(op="place_module_instance", component_id="m1", module_ref={"module_id": "amp"}, position={"x": 0, "y": 0})], False),
     ("set_module_metadata valid", [op(op="set_module_metadata", name="Filter")], True),
     ("unknown op rejected", [op(op="frobnicate")], False),
     ("wrong schema const rejected", None, False),
     ("missing base_revision rejected", None, False),
+    ("missing expected_module_revision rejected", None, False),
 ]
 
 
@@ -82,6 +96,10 @@ def main() -> int:
         elif operations is None and name == "missing base_revision rejected":
             cmd = copy.deepcopy(BASE)
             del cmd["base_revision"]
+            cmd["operations"] = [op(op="place_component", component=COMPONENT)]
+        elif operations is None and name == "missing expected_module_revision rejected":
+            cmd = copy.deepcopy(BASE)
+            del cmd["expected_module_revision"]
             cmd["operations"] = [op(op="place_component", component=COMPONENT)]
         else:
             cmd = copy.deepcopy(BASE)

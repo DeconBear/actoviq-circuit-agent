@@ -14,6 +14,7 @@ import {
 import { useAppStore } from '../../store/appStore';
 import type {
   CircuitCommand,
+  CircuitCommandV2,
   CircuitConnection,
   CircuitHistoryEntry,
   DesignMemoryItem,
@@ -31,6 +32,8 @@ import { SchematicEditor, type SchematicProbeSelection } from './SchematicEditor
 import { WorkbenchToolbar } from './WorkbenchToolbar';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import { createSchematicDocument } from '../../schematic/schematicDocument';
+import { diffModuleToOperations } from '../../schematic-core/commands/diffModule';
+import type { TransactionOperation } from '../../schematic-core/commands/applyTransaction';
 import type { PdkDeviceCatalog } from './componentParams';
 
 interface RegisteredPdkInstallation {
@@ -786,6 +789,46 @@ export function CircuitWorkbench({
     }
   }
 
+  async function applyModuleOperations(
+    message: string,
+    moduleId: string,
+    expectedModuleRevision: number,
+    operations: TransactionOperation[],
+    notebookMarkdown?: string,
+  ): Promise<boolean> {
+    if (!project || !currentProjectId) return false;
+    if (operations.length === 0) return true;
+    const operationProjectId = currentProjectId;
+    const command: CircuitCommandV2 = {
+      schema: 'actoviq.command.v2',
+      command_id: commandId(),
+      actor: 'user',
+      project_id: operationProjectId,
+      module_id: moduleId,
+      base_revision: project.revision,
+      expected_module_revision: expectedModuleRevision,
+      message,
+      source: 'gui',
+      notebook_markdown: notebookMarkdown,
+      operations,
+    };
+    setBusy(true);
+    setError('');
+    try {
+      await window.electronAPI.applyCircuitCommand(operationProjectId, command);
+      await onReloadProject(operationProjectId);
+      if (isActiveProject(operationProjectId)) setNotice(message);
+      return isActiveProject(operationProjectId);
+    } catch (commandError) {
+      if (isActiveProject(operationProjectId)) {
+        setError(commandError instanceof Error ? commandError.message : String(commandError));
+      }
+      return false;
+    } finally {
+      if (isActiveProject(operationProjectId)) setBusy(false);
+    }
+  }
+
   function setModulePreviewBuildBusy(moduleId: string, value: boolean) {
     const next = new Set(modulePreviewBusyRef.current);
     if (value) {
@@ -911,16 +954,26 @@ export function CircuitWorkbench({
   async function saveModuleSchematic(moduleId: string, moduleData: CircuitModule): Promise<boolean> {
     if (!currentProjectId) return false;
     const operationProjectId = currentProjectId;
-    const saved = await applyOperations(`Edit schematic ${moduleId}`, [{
-      op: 'set_module_schematic',
-      module_id: moduleId,
-      components: moduleData.components,
-      ports: moduleData.ports,
-      nets: moduleData.nets ?? [],
-      wires: moduleData.wires ?? [],
-      annotations: moduleData.annotations ?? [],
-      netlist_notebook: moduleNotebookMarkdown(moduleId, moduleData),
-    }]);
+    const previous = bundle?.modules[moduleId];
+    if (!previous) {
+      setError(`Cannot save schematic ${moduleId}: source module is not loaded`);
+      return false;
+    }
+    const diff = diffModuleToOperations(previous, moduleData);
+    if (diff.unsupported.length > 0) {
+      setError(
+        `Cannot save schematic ${moduleId}: command.v2 does not cover changed fields `
+        + diff.unsupported.join(', '),
+      );
+      return false;
+    }
+    const saved = await applyModuleOperations(
+      `Edit schematic ${moduleId}`,
+      moduleId,
+      previous.revision,
+      diff.operations,
+      moduleNotebookMarkdown(moduleId, moduleData),
+    );
     if (saved) {
       setBusy(true);
       setNotice('Applying schematic netlist and rebuilding SVG...');
@@ -2389,6 +2442,7 @@ export function CircuitWorkbench({
             />
           ) : selectedRef ? (
             <ModuleSchematic
+              projectId={currentProjectId ?? project.project_id}
               module={selectedRef}
               moduleData={selectedModule}
               svg={selectedPreview?.svg ?? ''}
@@ -2853,6 +2907,7 @@ function PhysicalPathField({
 }
 
 function ModuleSchematic({
+  projectId,
   module,
   moduleData,
   svg,
@@ -2872,6 +2927,7 @@ function ModuleSchematic({
   onProbe,
   onOpenChildModule,
 }: {
+  projectId: string;
   module: CircuitModuleRef;
   moduleData?: CircuitModule;
   svg: string;
@@ -3332,6 +3388,7 @@ function ModuleSchematic({
               </div>
             ) : null}
             <SchematicEditor
+              projectId={projectId}
               module={moduleData}
               busy={busy || moduleData.schematic_peer?.mode === 'external'}
               buildBusy={previewBusy}

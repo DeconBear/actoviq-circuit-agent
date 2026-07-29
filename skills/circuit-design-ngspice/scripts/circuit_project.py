@@ -2804,6 +2804,403 @@ def check_module_lease(root: Path, module_id: str, actor: str) -> None:
     )
 
 
+def _v2_point(value: Any, label: str) -> dict[str, float]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a position object")
+    return {
+        "x": schematic_position(value.get("x"), f"{label}.x"),
+        "y": schematic_position(value.get("y"), f"{label}.y"),
+    }
+
+
+def _v2_same_point(left: dict[str, Any], right: dict[str, Any], epsilon: float = 0.001) -> bool:
+    return (
+        abs(float(left.get("x", 0)) - float(right.get("x", 0))) <= epsilon
+        and abs(float(left.get("y", 0)) - float(right.get("y", 0))) <= epsilon
+    )
+
+
+def _v2_wire_endpoint(value: Any, label: str) -> dict[str, Any]:
+    endpoint = _v2_point(value, label)
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an endpoint object")
+    identities = []
+    if value.get("component_id") and value.get("pin_id"):
+        endpoint["component_id"] = str(value["component_id"])
+        endpoint["pin_id"] = str(value["pin_id"])
+        identities.append("pin")
+    if value.get("port_id"):
+        endpoint["port_id"] = str(value["port_id"])
+        identities.append("port")
+    if value.get("junction_id"):
+        endpoint["junction_id"] = str(value["junction_id"])
+        identities.append("junction")
+    if len(identities) != 1:
+        raise ValueError(f"{label} must identify exactly one pin, port, or junction")
+    return endpoint
+
+
+def _v2_stable_junction(wire_id: str, side: str, endpoint: dict[str, Any]) -> str:
+    payload = "|".join((
+        wire_id,
+        side,
+        format(float(endpoint.get("x", 0)), ".12g"),
+        format(float(endpoint.get("y", 0)), ".12g"),
+    ))
+    return f"j_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _v2_endpoint_touches(
+    endpoint: dict[str, Any] | None,
+    component_ids: set[str],
+    port_ids: set[str],
+) -> bool:
+    if not isinstance(endpoint, dict):
+        return False
+    return (
+        str(endpoint.get("component_id") or "") in component_ids
+        or str(endpoint.get("port_id") or "") in port_ids
+    )
+
+
+def _v2_shift_wire_endpoint(
+    wire: dict[str, Any],
+    side: str,
+    dx: float,
+    dy: float,
+) -> None:
+    endpoint = wire.get(side)
+    points = wire.get("points")
+    if not isinstance(endpoint, dict) or not isinstance(points, list) or len(points) < 2:
+        return
+    index = 0 if side == "from" else len(points) - 1
+    adjacent_index = 1 if side == "from" else len(points) - 2
+    old = dict(points[index])
+    moved = {"x": float(old["x"]) + dx, "y": float(old["y"]) + dy}
+    points[index] = moved
+    endpoint["x"] = moved["x"]
+    endpoint["y"] = moved["y"]
+    adjacent = dict(points[adjacent_index])
+    if float(old["x"]) == float(adjacent["x"]):
+        adjacent["x"] = moved["x"]
+    elif float(old["y"]) == float(adjacent["y"]):
+        adjacent["y"] = moved["y"]
+    points[adjacent_index] = adjacent
+
+
+def _v2_split_wire_at(
+    module: dict[str, Any],
+    wire: dict[str, Any],
+    point: dict[str, float],
+    junction_id: str,
+) -> list[str]:
+    points = wire.get("points", [])
+    if len(points) < 2:
+        raise ValueError(f"split_wire: wire {wire.get('id')} has no path")
+    if any(_v2_same_point(existing, point) for existing in points):
+        for side in ("from", "to"):
+            endpoint = wire.get(side)
+            if isinstance(endpoint, dict) and _v2_same_point(endpoint, point):
+                endpoint.clear()
+                endpoint.update({**point, "junction_id": junction_id})
+                return [str(wire["id"])]
+        raise ValueError(f"split_wire: point already exists inside wire {wire.get('id')}")
+    split_index = -1
+    for index in range(1, len(points)):
+        left = points[index - 1]
+        right = points[index]
+        within_x = min(left["x"], right["x"]) - 0.001 <= point["x"] <= max(left["x"], right["x"]) + 0.001
+        within_y = min(left["y"], right["y"]) - 0.001 <= point["y"] <= max(left["y"], right["y"]) + 0.001
+        cross = (
+            (right["x"] - left["x"]) * (point["y"] - left["y"])
+            - (right["y"] - left["y"]) * (point["x"] - left["x"])
+        )
+        if within_x and within_y and abs(cross) <= 0.001:
+            split_index = index
+            break
+    if split_index < 1:
+        raise ValueError(f"split_wire: point is not on wire {wire.get('id')}")
+    existing_ids = {str(item.get("id")) for item in module.get("wires", [])}
+    base_id = f"{wire['id']}__{junction_id}"
+    right_id = base_id
+    suffix = 2
+    while right_id in existing_ids:
+        right_id = f"{base_id}_{suffix}"
+        suffix += 1
+    original_to = json.loads(json.dumps(wire["to"]))
+    junction = {**point, "junction_id": junction_id}
+    right_wire = json.loads(json.dumps(wire))
+    right_wire["id"] = right_id
+    right_wire["points"] = [point, *json.loads(json.dumps(points[split_index:]))]
+    right_wire["from"] = dict(junction)
+    right_wire["to"] = original_to
+    wire["points"] = [*json.loads(json.dumps(points[:split_index])), point]
+    wire["to"] = dict(junction)
+    module.setdefault("wires", []).append(right_wire)
+    return [str(wire["id"]), right_id]
+
+
+def apply_v2_operation(
+    module: dict[str, Any],
+    operation: dict[str, Any],
+) -> set[str]:
+    """Apply one strict command.v2 operation to a module in memory."""
+    if not isinstance(operation, dict):
+        raise ValueError("v2 operation must be an object")
+    name = str(operation.get("op") or "")
+    affected: set[str] = set()
+    components = module.setdefault("components", [])
+    ports = module.setdefault("ports", [])
+    wires = module.setdefault("wires", [])
+
+    if name == "place_component":
+        component = json.loads(json.dumps(operation.get("component")))
+        if not isinstance(component, dict) or not component.get("id"):
+            raise ValueError("place_component requires a component")
+        if any(item.get("id") == component["id"] for item in components):
+            raise ValueError(f"place_component: component {component['id']} already exists")
+        components.append(component)
+        affected.add(str(component["id"]))
+    elif name == "update_component":
+        component_id = str(operation.get("component_id") or "")
+        component = next((item for item in components if item.get("id") == component_id), None)
+        if component is None:
+            raise ValueError(f"update_component: component {component_id} not found")
+        for key in ("name", "value", "position", "rotation", "parameters"):
+            if key in operation:
+                component[key] = json.loads(json.dumps(operation[key]))
+        affected.add(component_id)
+    elif name == "move_entities":
+        ids = {str(value) for value in operation.get("entity_ids", [])}
+        if not ids:
+            raise ValueError("move_entities requires entity_ids")
+        delta = _v2_point(operation.get("delta"), "move_entities.delta")
+        dx, dy = delta["x"], delta["y"]
+        component_ids = {str(item["id"]) for item in components if str(item.get("id")) in ids}
+        port_ids = {
+            str(item["id"])
+            for item in ports
+            if f"port:{item.get('id')}" in ids
+        }
+        for component in components:
+            if str(component.get("id")) in component_ids:
+                position = _v2_point(component.get("position"), f"component {component.get('id')}.position")
+                component["position"] = {"x": position["x"] + dx, "y": position["y"] + dy}
+        for port in ports:
+            if str(port.get("id")) in port_ids:
+                position = _v2_point(port.get("position") or {"x": 0, "y": 0}, f"port {port.get('id')}.position")
+                port["position"] = {"x": position["x"] + dx, "y": position["y"] + dy}
+        mode = operation.get("mode")
+        for wire in wires:
+            from_moved = _v2_endpoint_touches(wire.get("from"), component_ids, port_ids)
+            to_moved = _v2_endpoint_touches(wire.get("to"), component_ids, port_ids)
+            if not from_moved and not to_moved:
+                continue
+            affected.add(str(wire.get("id")))
+            if mode == "free":
+                for side, moved in (("from", from_moved), ("to", to_moved)):
+                    if not moved:
+                        continue
+                    endpoint = wire.get(side)
+                    if isinstance(endpoint, dict):
+                        wire[side] = {
+                            "x": endpoint["x"],
+                            "y": endpoint["y"],
+                            "junction_id": _v2_stable_junction(str(wire["id"]), side, endpoint),
+                        }
+            elif mode == "stretch":
+                if from_moved and to_moved:
+                    for point in wire.get("points", []):
+                        point["x"] = float(point["x"]) + dx
+                        point["y"] = float(point["y"]) + dy
+                    for side in ("from", "to"):
+                        endpoint = wire.get(side)
+                        if isinstance(endpoint, dict):
+                            endpoint["x"] = float(endpoint["x"]) + dx
+                            endpoint["y"] = float(endpoint["y"]) + dy
+                else:
+                    if from_moved:
+                        _v2_shift_wire_endpoint(wire, "from", dx, dy)
+                    if to_moved:
+                        _v2_shift_wire_endpoint(wire, "to", dx, dy)
+            else:
+                raise ValueError(f"move_entities has invalid mode: {mode}")
+        affected.update(component_ids)
+        affected.update(f"port:{value}" for value in port_ids)
+    elif name == "delete_entities":
+        ids = {str(value) for value in operation.get("entity_ids", [])}
+        component_ids = {str(item.get("id")) for item in components if str(item.get("id")) in ids}
+        port_ids = {str(item.get("id")) for item in ports if f"port:{item.get('id')}" in ids}
+        module["components"] = [item for item in components if str(item.get("id")) not in component_ids]
+        module["ports"] = [item for item in ports if str(item.get("id")) not in port_ids]
+        kept_wires = []
+        for wire in wires:
+            remove = (
+                str(wire.get("id")) in ids
+                or _v2_endpoint_touches(wire.get("from"), component_ids, port_ids)
+                or _v2_endpoint_touches(wire.get("to"), component_ids, port_ids)
+            )
+            if remove:
+                affected.add(str(wire.get("id")))
+            else:
+                kept_wires.append(wire)
+        module["wires"] = kept_wires
+        affected.update(ids)
+    elif name == "create_wire":
+        wire_id = str(operation.get("wire_id") or "")
+        if not wire_id or any(item.get("id") == wire_id for item in wires):
+            raise ValueError(f"create_wire: invalid or duplicate wire id {wire_id}")
+        points = [_v2_point(point, f"create_wire {wire_id}.point") for point in operation.get("points", [])]
+        if len(points) < 2:
+            raise ValueError("create_wire requires at least two points")
+        start = _v2_wire_endpoint(operation.get("from"), "create_wire.from")
+        end = _v2_wire_endpoint(operation.get("to"), "create_wire.to")
+        if not _v2_same_point(points[0], start) or not _v2_same_point(points[-1], end):
+            raise ValueError("create_wire path must start/end at its endpoints")
+        wires.append({
+            "id": wire_id,
+            "points": points,
+            "from": start,
+            "to": end,
+            "net": str(operation.get("net") or ""),
+            "net_id": str(operation.get("net_id") or ""),
+            "source": operation.get("source", "stored"),
+        })
+        affected.add(wire_id)
+    elif name == "edit_wire_path":
+        wire_id = str(operation.get("wire_id") or "")
+        wire = next((item for item in wires if item.get("id") == wire_id), None)
+        if wire is None:
+            raise ValueError(f"edit_wire_path: wire {wire_id} not found")
+        points = [_v2_point(point, f"edit_wire_path {wire_id}.point") for point in operation.get("points", [])]
+        if len(points) < 2:
+            raise ValueError("edit_wire_path requires at least two points")
+        wire["points"] = points
+        wire["from"].update(points[0])
+        wire["to"].update(points[-1])
+        affected.add(wire_id)
+    elif name == "split_wire":
+        wire_id = str(operation.get("wire_id") or "")
+        wire = next((item for item in wires if item.get("id") == wire_id), None)
+        if wire is None:
+            raise ValueError(f"split_wire: wire {wire_id} not found")
+        point = _v2_point(operation.get("point"), "split_wire.point")
+        junction_id = str(operation.get("junction_id") or _v2_stable_junction(wire_id, "split", point))
+        affected.update(_v2_split_wire_at(module, wire, point, junction_id))
+    elif name == "join_wires":
+        wire_ids = [str(value) for value in operation.get("wire_ids", [])]
+        if len(wire_ids) < 2:
+            raise ValueError("join_wires requires at least two wire ids")
+        joined = []
+        for wire_id in wire_ids:
+            wire = next((item for item in module.get("wires", []) if item.get("id") == wire_id), None)
+            if wire is None:
+                raise ValueError(f"join_wires: wire {wire_id} not found")
+            joined.append(wire)
+        first = joined[0]
+        if any(wire.get("net_id") != first.get("net_id") for wire in joined):
+            raise ValueError("join_wires: all wires must belong to the same net")
+        points = json.loads(json.dumps(first["points"]))
+        tail = json.loads(json.dumps(first["to"]))
+        for wire in joined[1:]:
+            if _v2_same_point(points[-1], wire["points"][0]):
+                points.extend(json.loads(json.dumps(wire["points"][1:])))
+                tail = json.loads(json.dumps(wire["to"]))
+            elif _v2_same_point(points[-1], wire["points"][-1]):
+                points.extend(json.loads(json.dumps(list(reversed(wire["points"]))[1:])))
+                tail = json.loads(json.dumps(wire["from"]))
+            else:
+                raise ValueError(f"join_wires: wire {wire['id']} is not connected")
+        first["points"] = points
+        first["to"] = tail
+        removed = set(wire_ids[1:])
+        module["wires"] = [wire for wire in module["wires"] if str(wire.get("id")) not in removed]
+        affected.update(wire_ids)
+    elif name == "upsert_junction":
+        point = _v2_point(operation.get("point"), "upsert_junction.point")
+        junction_id = str(operation.get("junction_id") or "")
+        if not junction_id:
+            raise ValueError("upsert_junction requires junction_id")
+        matching = []
+        for wire in list(module.get("wires", [])):
+            if wire.get("net") != operation.get("net"):
+                continue
+            for index in range(1, len(wire.get("points", []))):
+                left, right = wire["points"][index - 1], wire["points"][index]
+                within_x = min(left["x"], right["x"]) - 0.001 <= point["x"] <= max(left["x"], right["x"]) + 0.001
+                within_y = min(left["y"], right["y"]) - 0.001 <= point["y"] <= max(left["y"], right["y"]) + 0.001
+                cross = (
+                    (right["x"] - left["x"]) * (point["y"] - left["y"])
+                    - (right["y"] - left["y"]) * (point["x"] - left["x"])
+                )
+                if within_x and within_y and abs(cross) <= 0.001:
+                    matching.append(wire)
+                    break
+        if not matching:
+            raise ValueError("upsert_junction: no wire at point")
+        for wire in matching:
+            affected.update(_v2_split_wire_at(module, wire, point, junction_id))
+    elif name == "rename_net":
+        old_net = str(operation.get("old_net") or "")
+        new_net = str(operation.get("new_net") or "")
+        if not old_net or not new_net:
+            raise ValueError("rename_net requires old_net and new_net")
+        for component in components:
+            for pin in component.get("pins", []):
+                if pin.get("net") == old_net:
+                    pin["net"] = new_net
+                    affected.add(f"{component.get('id')}.{pin.get('id')}")
+        for port in ports:
+            if port.get("net") == old_net:
+                port["net"] = new_net
+                affected.add(f"port:{port.get('id')}")
+        for wire in wires:
+            if wire.get("net") == old_net:
+                wire["net"] = new_net
+                affected.add(str(wire.get("id")))
+        for net in module.get("nets", []):
+            if net.get("name") == old_net:
+                net["name"] = new_net
+    elif name == "upsert_port":
+        port = json.loads(json.dumps(operation.get("port")))
+        if not isinstance(port, dict) or not port.get("id"):
+            raise ValueError("upsert_port requires a port")
+        index = next((index for index, item in enumerate(ports) if item.get("id") == port["id"]), -1)
+        if index >= 0:
+            ports[index] = port
+        else:
+            ports.append(port)
+        affected.add(f"port:{port['id']}")
+    elif name == "place_module_instance":
+        component_id = str(operation.get("component_id") or "")
+        if not component_id or any(item.get("id") == component_id for item in components):
+            raise ValueError(f"place_module_instance: invalid or duplicate id {component_id}")
+        module_ref = json.loads(json.dumps(operation.get("module_ref")))
+        pins = json.loads(json.dumps(operation.get("pins")))
+        if not isinstance(module_ref, dict) or not module_ref.get("module_id"):
+            raise ValueError("place_module_instance requires module_ref")
+        if not isinstance(pins, list) or not pins:
+            raise ValueError("place_module_instance requires pins")
+        components.append({
+            "id": component_id,
+            "type": "MODULE",
+            "name": component_id.upper(),
+            "value": str(module_ref["module_id"]),
+            "position": _v2_point(operation.get("position"), "place_module_instance.position"),
+            "rotation": float(operation.get("rotation", 0)),
+            "pins": pins,
+            "module_ref": module_ref,
+        })
+        affected.add(component_id)
+    elif name == "set_module_metadata":
+        for key in ("name", "domain"):
+            if key in operation:
+                module[key] = operation[key]
+    else:
+        raise ValueError(f"unsupported v2 operation: {name}")
+    return affected
+
+
 def scan_driven_nodes(netlist: str) -> set[str]:
     """Collect node names already driven by a V/I source in a raw netlist."""
     driven: set[str] = set()
@@ -2829,49 +3226,15 @@ def apply_command(root: Path, command: dict[str, Any]) -> dict[str, Any]:
         # editing; the Agent does the same before patching.
         with ProjectLock(root):
             check_module_lease(root, command["module_id"], command.get("actor", "unknown"))
-            return _apply_command_locked(root, _adapt_v2_command_to_v1(command))
+            return _apply_command_locked(root, command)
     raise ValueError(f"unsupported command schema: {schema}")
-
-
-def _adapt_v2_command_to_v1(command: dict[str, Any]) -> dict[str, Any]:
-    """Translate a v2 transaction into a v1 command the engine already knows.
-
-    Each v2 op maps to one or more v1 ops. The mapping is lossy for ops v1
-    cannot express (e.g. move_entities mode is dropped, split_wire becomes an
-    edit). M2-03 will give the engine native v2 ops; this adapter is the
-    bridge so the GUI can start emitting v2 without waiting for the engine.
-    """
-    v1_operations: list[dict[str, Any]] = []
-    for op in command.get("operations", []):
-        name = op.get("op")
-        if name == "place_component":
-            v1_operations.append({"op": "add_component", "module_id": command["module_id"], "component": op["component"]})
-        elif name == "delete_entities":
-            for entity_id in op.get("entity_ids", []):
-                v1_operations.append({"op": "remove_component", "module_id": command["module_id"], "component_id": entity_id})
-        elif name == "update_component":
-            v1_operations.append({"op": "set_component_value", "module_id": command["module_id"], "component_id": op["component_id"], "value": op.get("value", "")})
-        elif name == "upsert_port":
-            v1_operations.append({"op": "add_port", "module_id": command["module_id"], "port": op["port"]})
-        elif name == "set_module_metadata":
-            v1_operations.append({"op": "set_module_metadata", "module_id": command["module_id"], **{k: op[k] for k in ("name", "domain") if k in op}})
-        elif name == "create_wire":
-            v1_operations.append({"op": "set_module_schematic", "module_id": command["module_id"], "note": "v2 create_wire adapted"})
-        else:
-            raise ValueError(f"v2 op '{name}' has no v1 adapter yet; deferred to M2-03")
-    return {
-        "schema": COMMAND_SCHEMA,
-        "command_id": command.get("command_id", "v2-adapted"),
-        "actor": command.get("actor", "unknown"),
-        "project_id": command["project_id"],
-        "base_revision": command["base_revision"],
-        "message": command.get("message", ""),
-        "operations": v1_operations,
-    }
 
 
 def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]:
     project, modules = load_project(root)
+    snapshot_project = json.loads(json.dumps(project))
+    snapshot_modules = json.loads(json.dumps(modules))
+    is_v2 = command.get("schema") == "actoviq.command.v2"
     if command.get("project_id") != project["project_id"]:
         raise ValueError("command project_id does not match project")
     if command.get("base_revision") != project["revision"]:
@@ -2882,29 +3245,72 @@ def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]
     if not isinstance(operations, list) or not operations:
         raise ValueError("command operations must be a non-empty array")
 
-    revision_root = snapshot_revision(root, project, modules, command)
     changed_modules: set[str] = set()
     schematic_override_writes: dict[str, dict[str, Any]] = {}
     notebook_writes: dict[str, str | None] = {}
-    for operation in operations:
-        apply_operation(
-            root,
-            project,
-            modules,
-            operation,
-            changed_modules,
-            schematic_override_writes,
-            notebook_writes,
-        )
+    if is_v2:
+        module_id = str(command.get("module_id") or "")
+        module = modules.get(module_id)
+        if module is None:
+            raise ValueError(f"v2 command references unknown module: {module_id}")
+        expected_module_revision = command.get("expected_module_revision")
+        if expected_module_revision is None:
+            raise ValueError("v2 command requires expected_module_revision")
+        if int(expected_module_revision) != int(module.get("revision", 0)):
+            raise ValueError(
+                f"stale module revision: expected {module.get('revision', 0)}, "
+                f"got {expected_module_revision}"
+            )
+        peer = module.get("schematic_peer")
+        if (
+            isinstance(peer, dict)
+            and peer.get("mode") == "external"
+            and command.get("source") != "xschem"
+        ):
+            raise ValueError(
+                f"module {module_id} is read-only because Xschem is authoritative"
+            )
+        affected_entities: set[str] = set()
+        for operation in operations:
+            affected_entities.update(apply_v2_operation(module, operation))
+        command["affected_entities"] = sorted(affected_entities)
+        if command.get("notebook_markdown") is not None:
+            notebook_writes[module_id] = coerce_netlist_notebook_text(
+                command.get("notebook_markdown")
+            )
+        changed_modules.add(module_id)
+    else:
+        for operation in operations:
+            apply_operation(
+                root,
+                project,
+                modules,
+                operation,
+                changed_modules,
+                schematic_override_writes,
+                notebook_writes,
+            )
 
     project["revision"] += 1
     project["updated_at"] = utc_now()
     for module_id in changed_modules:
-        modules[module_id] = upgrade_module_document(modules[module_id])
+        modules[module_id] = upgrade_module_document(
+            modules[module_id],
+            repair_invalid_net_ids=is_v2,
+        )
         ensure_module_stable_ids(modules[module_id])
         modules[module_id]["revision"] = int(modules[module_id].get("revision", 0)) + 1
         validate_module(modules[module_id], project.get("project_kind"))
     validate_project(project)
+    # Only create revision history after every operation and invariant has
+    # succeeded. A rejected transaction must not leave a misleading revision
+    # directory behind.
+    revision_root = snapshot_revision(
+        root,
+        snapshot_project,
+        snapshot_modules,
+        command,
+    )
     for module_id, notebook in notebook_writes.items():
         notebook_path = root / "modules" / module_id / "netlist-notebook.md"
         if notebook is None:

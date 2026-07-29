@@ -482,7 +482,7 @@ export interface CircuitProjectBundle {
   project_root: string;
 }
 
-export interface CircuitCommand {
+export interface CircuitCommandV1 {
   schema: 'actoviq.command.v1';
   command_id: string;
   actor: 'user' | 'claude-code' | 'codex' | string;
@@ -491,6 +491,22 @@ export interface CircuitCommand {
   message: string;
   operations: Array<Record<string, unknown>>;
 }
+
+export interface CircuitCommandV2 {
+  schema: 'actoviq.command.v2';
+  command_id: string;
+  actor: 'user' | 'claude-code' | 'codex' | string;
+  project_id: string;
+  module_id: string;
+  base_revision: number;
+  expected_module_revision: number;
+  message: string;
+  source?: string;
+  notebook_markdown?: string;
+  operations: unknown[];
+}
+
+export type CircuitCommand = CircuitCommandV1 | CircuitCommandV2;
 
 export interface CircuitBuildState {
   manifest: {
