@@ -36,6 +36,10 @@ import {
   type InteractionStateName,
 } from '../../schematic-core/commands/interactionStateMachine';
 import {
+  inspectModuleInstance,
+  refreshModuleInstanceBinding,
+} from '../../schematic-core/hierarchy/moduleInstance';
+import {
   addWire,
   cloneModule,
   COMPONENT_TYPES,
@@ -129,7 +133,14 @@ interface Props {
   onBuild: () => void;
   onProbe?: (probe: SchematicProbeSelection) => void;
   onDirtyChange?: (dirty: boolean) => void;
-  onOpenChildModule?: (moduleId: string) => void;
+  hierarchyTrace?: {
+    id: string;
+    moduleId: string;
+    net: string;
+    netId?: string;
+    label: string;
+  } | null;
+  onOpenChildModule?: (moduleId: string, instanceId: string, pinId?: string) => void;
 }
 
 interface EditorSession {
@@ -139,9 +150,19 @@ interface EditorSession {
   history: CircuitModule[];
   future: CircuitModule[];
   preserveNextRevision: boolean;
+  viewport: SchematicBounds | null;
+  selection: SchematicSelection;
 }
 
 const editorSessions = new Map<string, EditorSession>();
+
+function cloneSelectionValue(selection: SchematicSelection): SchematicSelection {
+  if (!selection) return null;
+  if (selection.kind === 'components' || selection.kind === 'wires') {
+    return { kind: selection.kind, ids: [...selection.ids] };
+  }
+  return { ...selection };
+}
 
 function freshEditorSession(module: CircuitModule): EditorSession {
   return {
@@ -151,6 +172,8 @@ function freshEditorSession(module: CircuitModule): EditorSession {
     history: [],
     future: [],
     preserveNextRevision: false,
+    viewport: null,
+    selection: null,
   };
 }
 
@@ -163,6 +186,8 @@ function initialEditorSession(key: string, module: CircuitModule): EditorSession
       draft: cloneModule(cached.draft),
       history: cached.history.map(cloneModule),
       future: cached.future.map(cloneModule),
+      viewport: cached.viewport ? { ...cached.viewport } : null,
+      selection: cloneSelectionValue(cached.selection),
     };
   }
   if (cached.preserveNextRevision && module.revision > cached.sourceRevision) {
@@ -173,6 +198,8 @@ function initialEditorSession(key: string, module: CircuitModule): EditorSession
       history: cached.history.map(cloneModule),
       future: cached.future.map(cloneModule),
       preserveNextRevision: false,
+      viewport: cached.viewport ? { ...cached.viewport } : null,
+      selection: cloneSelectionValue(cached.selection),
     };
   }
   if (cached.dirty) {
@@ -184,6 +211,8 @@ function initialEditorSession(key: string, module: CircuitModule): EditorSession
       draft: cloneModule(cached.draft),
       history: cached.history.map(cloneModule),
       future: cached.future.map(cloneModule),
+      viewport: cached.viewport ? { ...cached.viewport } : null,
+      selection: cloneSelectionValue(cached.selection),
     };
   }
   return freshEditorSession(module);
@@ -304,6 +333,7 @@ export function SchematicEditor({
   onBuild,
   onProbe,
   onDirtyChange,
+  hierarchyTrace = null,
   onOpenChildModule,
 }: Props) {
   const sessionKey = `${projectId}:${module.module_id}`;
@@ -324,14 +354,16 @@ export function SchematicEditor({
   const [blockDraft, setBlockDraft] = useState<BlockDraft>(() => defaultBlockDraft());
   const [pendingBlock, setPendingBlock] = useState<BlockDefinition | null>(null);
   const [pendingModule, setPendingModule] = useState<ProjectModuleLibraryItem | null>(null);
-  const [selection, setSelection] = useState<SchematicSelection>(null);
+  const [selection, setSelection] = useState<SchematicSelection>(() => cloneSelectionValue(initialSession.selection));
   const [wireStart, setWireStart] = useState<EndpointHit | null>(null);
   const [hoverWorld, setHoverWorld] = useState<CircuitPosition | null>(null);
   const [hoverEndpoint, setHoverEndpoint] = useState<EndpointHit | null>(null);
   const [hoverSelection, setHoverSelection] = useState<SchematicSelection>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [interactionCursor, setInteractionCursor] = useState<EditorCursor>('default');
-  const [viewport, setViewport] = useState<SchematicBounds | null>(null);
+  const [viewport, setViewport] = useState<SchematicBounds | null>(
+    () => initialSession.viewport ? { ...initialSession.viewport } : null,
+  );
   const [editorFocused, setEditorFocused] = useState(false);
   const [marqueeBounds, setMarqueeBounds] = useState<SchematicBounds | null>(null);
   const [spacePanActive, setSpacePanActive] = useState(false);
@@ -403,6 +435,22 @@ export function SchematicEditor({
   const selectedComponent = selection?.kind === 'component'
     ? draft.components.find((component) => component.id === selection.id) ?? null
     : null;
+  const selectedChildModule = selectedComponent?.type === 'MODULE'
+    ? projectModules.find((entry) => (
+        entry.module_id === (selectedComponent.module_ref?.module_id || selectedComponent.value)
+      )) ?? null
+    : null;
+  const selectedModuleInspection = selectedComponent?.type === 'MODULE'
+    ? inspectModuleInstance(selectedComponent, selectedChildModule
+      ? {
+          module_id: selectedChildModule.module_id,
+          name: selectedChildModule.name,
+          revision: selectedChildModule.revision,
+          ports: selectedChildModule.ports,
+          parameter_defs: selectedChildModule.parameter_defs,
+        }
+      : undefined)
+    : null;
   const selectedPort = selection?.kind === 'port'
     ? draft.ports.find((port) => port.id === selection.id) ?? null
     : null;
@@ -437,6 +485,24 @@ export function SchematicEditor({
   }
   const interactionStateName = readInteractionState();
   const interactionStatusText = interactionStatus(interactionStateName);
+
+  useEffect(() => {
+    if (!hierarchyTrace?.id || hierarchyTrace.moduleId !== document.moduleId) return;
+    const wireIds = document.wires
+      .filter((wire) => (
+        wire.net === hierarchyTrace.net
+        || wire.net_id === hierarchyTrace.net
+        || Boolean(hierarchyTrace.netId && wire.net_id === hierarchyTrace.netId)
+      ))
+      .map((wire) => wire.id);
+    const frame = window.requestAnimationFrame(() => {
+      setSelection(selectionForWireIds(wireIds));
+      setActionNotice(
+        `Hierarchy trace: ${hierarchyTrace.label} → ${hierarchyTrace.netId || hierarchyTrace.net}`,
+      );
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [document.moduleId, hierarchyTrace?.id]);
   // qucs-style placement ghost: the pending symbol follows the cursor (grid-snapped,
   // rotated by placeRotation) until placement mode is exited via Esc/right tool.
   const placeGhost = useMemo(() => {
@@ -484,14 +550,18 @@ export function SchematicEditor({
       history: history.map(cloneModule),
       future: future.map(cloneModule),
       preserveNextRevision: previous?.preserveNextRevision ?? false,
+      viewport: viewport ? { ...viewport } : null,
+      selection: cloneSelectionValue(selection),
     });
-  }, [dirty, draft, future, history]);
+  }, [dirty, draft, future, history, selection, viewport]);
 
   useEffect(() => {
     const sessionChanged = activeSessionKeyRef.current !== sessionKey;
+    let restoredSession: EditorSession | null = null;
     if (!sessionChanged && sourceRevisionRef.current === module.revision) return;
     if (sessionChanged) {
       const nextSession = initialEditorSession(sessionKey, module);
+      restoredSession = nextSession;
       activeSessionKeyRef.current = sessionKey;
       sourceRevisionRef.current = nextSession.sourceRevision;
       preserveHistoryOnRevisionChangeRef.current = false;
@@ -526,6 +596,8 @@ export function SchematicEditor({
           history: history.map(cloneModule),
           future: future.map(cloneModule),
           preserveNextRevision: false,
+          viewport: viewport ? { ...viewport } : null,
+          selection: cloneSelectionValue(selection),
         });
       } else if (dirty) {
         setSaveError(
@@ -545,7 +617,7 @@ export function SchematicEditor({
     cancelPendingDragPreviewUpdate();
     setTool('select');
     setPlaceRotation(0);
-    setSelection(null);
+    setSelection(restoredSession ? cloneSelectionValue(restoredSession.selection) : null);
     setBlockDialogOpen(false);
     setBlockDraft(defaultBlockDraft());
     setPendingBlock(null);
@@ -555,7 +627,9 @@ export function SchematicEditor({
     setHoverSelection(null);
     setContextMenu(null);
     setInteractionCursor('default');
-    setViewport(null);
+    setViewport(restoredSession
+      ? (restoredSession.viewport ? { ...restoredSession.viewport } : null)
+      : viewport);
     setMarqueeBounds(null);
     setSpacePanActive(false);
     setDragPreviewPositions(null);
@@ -896,9 +970,13 @@ export function SchematicEditor({
     const directPinTarget = event.target instanceof Element
       && Boolean(event.target.closest('[data-endpoint-kind="pin"]'));
     const directPin = directPinTarget ? hitEndpoint(document, world) : null;
+    const directPinComponent = directPin?.kind === 'pin'
+      ? draft.components.find((component) => component.id === directPin.component_id)
+      : undefined;
     if (
       tool === 'select'
       && directPin?.kind === 'pin'
+      && directPinComponent?.type !== 'GND'
       && !endpointIsConnected(document, directPin)
     ) {
       setTool('wire');
@@ -1475,7 +1553,7 @@ export function SchematicEditor({
     event.stopPropagation();
     setSelection({ kind: 'component', id: component.id });
     if (component.type === 'MODULE' && component.module_ref?.module_id && onOpenChildModule) {
-      onOpenChildModule(component.module_ref.module_id);
+      onOpenChildModule(component.module_ref.module_id, component.id);
       return;
     }
     // qucs parity: double-click edits the component. The property editor lives in
@@ -2281,6 +2359,30 @@ export function SchematicEditor({
     commitDraft(next);
   }
 
+  function refreshSelectedModuleInstance() {
+    if (!selectedComponent || selectedComponent.type !== 'MODULE' || !selectedChildModule) return;
+    const next = cloneModule(draft);
+    const component = next.components.find((entry) => entry.id === selectedComponent.id);
+    if (!component) return;
+    const refreshed = refreshModuleInstanceBinding(component, {
+      module_id: selectedChildModule.module_id,
+      name: selectedChildModule.name,
+      revision: selectedChildModule.revision,
+      ports: selectedChildModule.ports,
+      parameter_defs: selectedChildModule.parameter_defs,
+    });
+    const nextPinIds = new Set(refreshed.pins.map((pin) => pin.id));
+    next.wires = (next.wires ?? []).filter((wire) => ![wire.from, wire.to].some((endpoint) => (
+      endpoint?.component_id === component.id
+      && endpoint.pin_id
+      && !nextPinIds.has(endpoint.pin_id)
+    )));
+    Object.assign(component, refreshed);
+    next.wires = rerouteStoredWires(next, { componentIds: [component.id] });
+    commitDraft(next);
+    setActionNotice(`Updated ${component.name} to ${selectedChildModule.module_id} revision ${selectedChildModule.revision}`);
+  }
+
   async function saveAndRebuild() {
     try {
       const normalized = normalizeConnectivity(draft);
@@ -2355,6 +2457,7 @@ export function SchematicEditor({
       data-live-erc-warning-count={liveErcSummary.warnings}
       data-interaction-state={interactionStateName}
       data-interaction-status={interactionStatusText}
+      data-hierarchy-trace={hierarchyTrace?.netId || hierarchyTrace?.net || ''}
       data-drag-preview={dragPreviewPositions ? 'true' : 'false'}
       data-component-positions={JSON.stringify(displayedComponentPositions)}
       data-port-positions={JSON.stringify(Object.fromEntries(document.portPositions))}
@@ -2650,9 +2753,51 @@ export function SchematicEditor({
               ) : null}
               {selectedComponent.type === 'MODULE' ? (
                 <>
-                  <div className="av-form-status" data-testid="schematic-editor-module-ref">
+                  <div
+                    className={`av-form-status${selectedModuleInspection?.upToDate ? '' : ' av-form-status--error'}`}
+                    data-testid="schematic-editor-module-ref"
+                    data-module-ref-status={selectedModuleInspection?.upToDate ? 'current' : 'stale'}
+                  >
                     Child module: {selectedComponent.module_ref?.module_id || selectedComponent.value}
+                    {' · '}instance revision {selectedComponent.module_ref?.revision ?? 'unknown'}
+                    {selectedChildModule ? ` · current ${selectedChildModule.revision}` : ''}
                   </div>
+                  {selectedModuleInspection?.diagnostics.map((diagnostic) => (
+                    <div
+                      key={`${diagnostic.code}-${diagnostic.pin_id ?? ''}`}
+                      style={styles.hierarchyDiagnostic}
+                      data-testid="schematic-module-diagnostic"
+                      data-code={diagnostic.code}
+                    >
+                      {diagnostic.message}
+                    </div>
+                  ))}
+                  {selectedModuleInspection && selectedModuleInspection.portMap.length > 0 ? (
+                    <div style={styles.hierarchyPortMap} data-testid="schematic-module-port-map">
+                      {selectedModuleInspection.portMap.map((entry) => (
+                        <div key={entry.pin_id} style={styles.hierarchyPortMapRow}>
+                          <code>{entry.pin_name}</code>
+                          <span>{entry.parent_net} → {entry.child_net}</span>
+                          {onOpenChildModule && selectedChildModule ? (
+                            <button
+                              type="button"
+                              style={styles.probeIconButton}
+                              onClick={() => onOpenChildModule(
+                                selectedChildModule.module_id,
+                                selectedComponent.id,
+                                entry.pin_id,
+                              )}
+                              disabled={busy}
+                              title={`Trace ${entry.parent_net} into ${entry.child_net}`}
+                              data-testid={`schematic-module-trace-${entry.pin_id}`}
+                            >
+                              Trace
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   <label style={styles.fieldLabel}>
                     Instance parameters (key=value per line)
                     <textarea
@@ -2677,15 +2822,31 @@ export function SchematicEditor({
                     />
                   </label>
                   {onOpenChildModule && selectedComponent.module_ref?.module_id ? (
-                    <button
-                      type="button"
-                      style={styles.smallButton}
-                      onClick={() => onOpenChildModule(selectedComponent.module_ref!.module_id)}
-                      disabled={busy}
-                      data-testid="schematic-editor-open-child-module"
-                    >
-                      Open child module
-                    </button>
+                    <div style={styles.moduleInstanceActions}>
+                      <button
+                        type="button"
+                        style={styles.smallButton}
+                        onClick={() => onOpenChildModule(
+                          selectedComponent.module_ref!.module_id,
+                          selectedComponent.id,
+                        )}
+                        disabled={busy}
+                        data-testid="schematic-editor-open-child-module"
+                      >
+                        Open child module
+                      </button>
+                      {!selectedModuleInspection?.upToDate && selectedChildModule ? (
+                        <button
+                          type="button"
+                          style={styles.smallButton}
+                          onClick={refreshSelectedModuleInstance}
+                          disabled={busy}
+                          data-testid="schematic-editor-update-module-instance"
+                        >
+                          Update instance
+                        </button>
+                      ) : null}
+                    </div>
                   ) : null}
                 </>
               ) : null}
@@ -4471,6 +4632,33 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 10,
     lineHeight: 1.3,
     cursor: 'pointer',
+  },
+  hierarchyDiagnostic: {
+    padding: '5px 7px',
+    marginBottom: 5,
+    borderRadius: 4,
+    background: '#fff7ed',
+    color: '#9a3412',
+    fontSize: 10,
+    lineHeight: 1.35,
+  },
+  hierarchyPortMap: {
+    display: 'grid',
+    gap: 4,
+    margin: '8px 0 10px',
+  },
+  hierarchyPortMapRow: {
+    display: 'grid',
+    gridTemplateColumns: '52px minmax(0, 1fr) auto',
+    gap: 6,
+    alignItems: 'center',
+    fontSize: 10,
+    color: '#536172',
+  },
+  moduleInstanceActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
   },
   fieldLabel: { display: 'grid', gap: 5, fontSize: 12, color: '#536172', marginBottom: 10, fontWeight: 650 },
   fieldGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 10px' },

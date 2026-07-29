@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL_SCRIPTS = ROOT / "skills" / "circuit-design-ngspice" / "scripts"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 
-from circuit_project import atomic_write_json, compile_project  # noqa: E402
+from circuit_project import atomic_write_json, compile_project, evaluate_erc  # noqa: E402
 from module_hierarchy import (  # noqa: E402
     compare_ordered_pin_nets,
     detect_module_cycles,
@@ -95,6 +95,43 @@ def test_cycle_detection() -> None:
     }
     cycle = detect_module_cycles(modules, start_module_id="top")
     assert cycle, "expected a hierarchy cycle"
+
+
+def test_hierarchy_erc() -> None:
+    child = {
+        "module_id": "child",
+        "revision": 3,
+        "ports": [{"id": "in", "name": "IN", "net": "child_in"}],
+        "components": [],
+        "wires": [],
+    }
+    parent = {
+        "module_id": "parent",
+        "revision": 1,
+        "ports": [],
+        "components": [{
+            "id": "xchild",
+            "type": "MODULE",
+            "name": "XCHILD",
+            "value": "child",
+            "module_ref": {"module_id": "child", "revision": 1},
+            "pins": [{"id": "old", "name": "OLD", "net": "legacy"}],
+        }],
+        "wires": [],
+    }
+    project = {
+        "revision": 1,
+        "modules": [{"id": "parent", "ports": []}, {"id": "child", "ports": child["ports"]}],
+        "connections": [],
+    }
+    diagnostics = evaluate_erc(
+        project,
+        {"parent": parent, "child": child},
+    )["diagnostics"]
+    codes = {item["code"] for item in diagnostics}
+    assert "module_revision_mismatch" in codes
+    assert "module_port_missing" in codes
+    assert "module_pin_extra" in codes
 
 
 def test_format_and_hash() -> None:
@@ -310,6 +347,7 @@ def main() -> int:
     test_symbol_geometry()
     test_pin_sync_preserves_nets()
     test_cycle_detection()
+    test_hierarchy_erc()
     test_format_and_hash()
     test_hierarchical_compile()
     print(json.dumps({"ok": True, "suite": "module-hierarchy-regression"}, ensure_ascii=False))

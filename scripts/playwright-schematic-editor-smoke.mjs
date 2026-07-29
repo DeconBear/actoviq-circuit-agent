@@ -124,8 +124,9 @@ const analogIcParamProject = await createAnalogIcParamProject();
 
 const { electronApp, page: envPage, pageErrors, viteProcess } = await startEnvironment();
 
-const ACTOVIQ_E2E_SCENES = process.env.ACTOVIQ_E2E_SCENES ? process.env.ACTOVIQ_E2E_SCENES.split(
-).map((s) => s.trim()).filter(Boolean) : null;
+const ACTOVIQ_E2E_SCENES = process.env.ACTOVIQ_E2E_SCENES
+  ? process.env.ACTOVIQ_E2E_SCENES.split(',').map((s) => s.trim()).filter(Boolean)
+  : null;
 function shouldRun(name) {
   return ACTOVIQ_E2E_SCENES === null || ACTOVIQ_E2E_SCENES.includes(name);
 }
@@ -4178,12 +4179,25 @@ try {
 
   if (shouldRun("params")) {
     // Structured param inspector by project kind
+    await page.getByTestId(`sidebar-project-${projectId}`).click();
+    await waitForWorkbenchProject(page, projectId);
+    if (await page.getByTestId('back-to-board').count()) {
+      await page.getByTestId('back-to-board').click();
+    }
+    await openModuleCard(page, 'filter');
+    await editor.waitFor({ timeout: 20_000 });
+    await page.waitForFunction(() => (
+      document.querySelector('[data-testid="schematic-editor-svg"]')?.getAttribute('data-module-id') === 'filter'
+    ));
     await waitForEditorIdle(page);
     await page.waitForFunction(() => {
       const node = document.querySelector('[data-testid="schematic-editor"]');
       const positions = JSON.parse(node?.getAttribute('data-component-positions') ?? '{}');
       return Number(node?.getAttribute('data-component-count') ?? '0') >= 3 && positions.r1 !== undefined;
     }, { timeout: 30_000 });
+    // Module sessions intentionally restore their previous viewport; fit before
+    // coordinate-based selection so this scene is independent of earlier pans.
+    await page.getByTestId('schematic-editor-fit').click();
     await selectComponentForDrag(page, 'r1');
     const typeBadge = (await page.getByTestId('schematic-editor-component-type').innerText()).replace(/\s+/g, '').toLowerCase();
     assert.ok(typeBadge.includes('r'), 'selection should show component type');

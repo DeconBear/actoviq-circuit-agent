@@ -1590,6 +1590,66 @@ def evaluate_erc(
                         module_id=module_id,
                         component_id=component_id,
                     )
+            elif component_type == "MODULE":
+                module_ref = component.get("module_ref") or {}
+                child_id = str(module_ref.get("module_id") or component.get("value") or "")
+                child = modules.get(child_id)
+                if not child:
+                    erc_diagnostic(
+                        diagnostics,
+                        "error",
+                        "child_module_missing",
+                        f"Module instance {component.get('name', component_id)} references unavailable child {child_id}.",
+                        module_id=module_id,
+                        component_id=component_id,
+                    )
+                else:
+                    bound_revision = module_ref.get("revision")
+                    current_revision = child.get("revision")
+                    if bound_revision != current_revision:
+                        erc_diagnostic(
+                            diagnostics,
+                            "warning",
+                            "module_revision_mismatch",
+                            (
+                                f"Module instance {component.get('name', component_id)} binds "
+                                f"{child_id} revision {bound_revision}, current revision is {current_revision}."
+                            ),
+                            module_id=module_id,
+                            component_id=component_id,
+                        )
+                    instance_pin_ids = {
+                        str(pin.get("id") or "") for pin in component.get("pins", [])
+                    }
+                    child_port_ids = {
+                        str(port.get("id") or "") for port in child.get("ports", [])
+                    }
+                    for port_id in sorted(child_port_ids - instance_pin_ids):
+                        erc_diagnostic(
+                            diagnostics,
+                            "error",
+                            "module_port_missing",
+                            (
+                                f"Module instance {component.get('name', component_id)} "
+                                f"is missing child port {port_id}."
+                            ),
+                            module_id=module_id,
+                            component_id=component_id,
+                            pin_id=port_id,
+                        )
+                    for pin_id in sorted(instance_pin_ids - child_port_ids):
+                        erc_diagnostic(
+                            diagnostics,
+                            "warning",
+                            "module_pin_extra",
+                            (
+                                f"Module instance {component.get('name', component_id)} "
+                                f"has stale pin {pin_id}."
+                            ),
+                            module_id=module_id,
+                            component_id=component_id,
+                            pin_id=pin_id,
+                        )
 
         wired_pins = {
             (str(endpoint.get("component_id", "")), str(endpoint.get("pin_id", "")))

@@ -93,6 +93,20 @@ interface PhysicalVerificationForm {
   lvsRun: string;
 }
 
+interface HierarchyPathEntry {
+  moduleId: string;
+  instanceId?: string;
+  instanceName?: string;
+}
+
+interface HierarchyTrace {
+  id: string;
+  moduleId: string;
+  net: string;
+  netId?: string;
+  label: string;
+}
+
 const BOARD_MARGIN = 1200;
 
 const PROJECT_KIND_OPTIONS: Array<{ value: ProjectKind; label: string }> = [
@@ -426,6 +440,8 @@ export function CircuitWorkbench({
   const setActiveTab = useAppStore((state) => state.setActiveTab);
   const setSimulationProbeRequest = useAppStore((state) => state.setSimulationProbeRequest);
   const [view, setView] = useState<'board' | 'module'>('board');
+  const [hierarchyPath, setHierarchyPath] = useState<HierarchyPathEntry[]>([]);
+  const [hierarchyTrace, setHierarchyTrace] = useState<HierarchyTrace | null>(null);
   const [zoom, setZoom] = useState(65);
   const [notice, setNotice] = useState('');
   const [layoutFeedback, setLayoutFeedback] = useState<Record<string, LayoutOptimizationResult>>({});
@@ -598,6 +614,9 @@ export function CircuitWorkbench({
     setEdaExportForm({ format: defaultSchematicIoFormat(projectKind), path: '' });
     setEdaImportForm({ format: defaultSchematicIoFormat(projectKind), path: '' });
     modulePreviewBusyRef.current = new Set();
+    setHierarchyPath([]);
+    setHierarchyTrace(null);
+    setView('board');
   }, [activeProjectId]);
 
   useEffect(() => {
@@ -988,11 +1007,92 @@ export function CircuitWorkbench({
   }
 
   async function openModule(moduleId: string): Promise<void> {
+    const moduleName = project?.modules.find((entry) => entry.id === moduleId)?.name;
+    setHierarchyPath([{ moduleId, instanceName: moduleName }]);
+    setHierarchyTrace(null);
     setActiveModuleId(moduleId);
     setView('module');
     if (!bundle?.module_previews[moduleId]) {
       await buildModulePreview(moduleId);
     }
+  }
+
+  async function openChildModule(
+    moduleId: string,
+    instanceId: string,
+    pinId?: string,
+  ): Promise<void> {
+    if (!selectedRef || !selectedModule) return;
+    const instance = selectedModule.components.find((component) => component.id === instanceId);
+    const child = bundle?.modules[moduleId];
+    if (!instance || instance.type !== 'MODULE' || !child) {
+      setError(`Cannot enter child module ${moduleId}: instance or module is unavailable.`);
+      return;
+    }
+    const existingIndex = hierarchyPath.findIndex((entry) => entry.moduleId === moduleId);
+    if (existingIndex >= 0) {
+      setNotice(`Hierarchy cycle stopped at ${moduleId}.`);
+      setHierarchyPath((current) => current.slice(0, existingIndex + 1));
+    } else {
+      setHierarchyPath((current) => {
+        const base = current.at(-1)?.moduleId === selectedRef.id
+          ? current
+          : [{ moduleId: selectedRef.id, instanceName: selectedRef.name }];
+        return [...base, {
+          moduleId,
+          instanceId,
+          instanceName: instance.name,
+        }];
+      });
+    }
+    if (pinId) {
+      const parentPin = instance.pins.find((pin) => pin.id === pinId);
+      const childPort = child.ports.find((port) => port.id === pinId);
+      if (parentPin && childPort) {
+        setHierarchyTrace({
+          id: `${Date.now()}-${instanceId}-${pinId}`,
+          moduleId,
+          net: childPort.net,
+          netId: childPort.net_id,
+          label: `${selectedRef.name}/${instance.name}.${parentPin.name}`,
+        });
+      } else {
+        setHierarchyTrace(null);
+        setError(`Cannot trace ${instance.name}.${pinId}: explicit child port mapping is missing.`);
+      }
+    } else {
+      setHierarchyTrace(null);
+    }
+    setActiveModuleId(moduleId);
+    setView('module');
+    if (!bundle?.module_previews[moduleId]) {
+      await buildModulePreview(moduleId);
+    }
+  }
+
+  function navigateHierarchy(index: number) {
+    const target = hierarchyPath[index];
+    if (!target) return;
+    setHierarchyPath((current) => current.slice(0, index + 1));
+    setHierarchyTrace(null);
+    setActiveModuleId(target.moduleId);
+    setView('module');
+  }
+
+  function backToHierarchyParent() {
+    if (hierarchyPath.length <= 1) {
+      setHierarchyPath([]);
+      setHierarchyTrace(null);
+      setView('board');
+      return;
+    }
+    navigateHierarchy(hierarchyPath.length - 2);
+  }
+
+  function backToBoard() {
+    setHierarchyPath([]);
+    setHierarchyTrace(null);
+    setView('board');
   }
 
   async function togglePreview(module: CircuitModuleRef): Promise<void> {
@@ -1849,6 +1949,7 @@ export function CircuitWorkbench({
       data-testid="circuit-workbench"
       data-project-id={project.project_id}
       data-action-project-id={currentProjectId ?? ''}
+      data-hierarchy-path={hierarchyPath.map((entry) => entry.moduleId).join('/')}
     >
       <header style={styles.header} className="av-workbench-header">
         <div style={styles.titleBlock} className="av-workbench-header__title">
@@ -1961,7 +2062,7 @@ export function CircuitWorkbench({
             warnings: erc.summary.warnings,
           } : null}
           showSchematicIo={schematicIoEnabled}
-          onBackToBoard={() => setView('board')}
+          onBackToBoard={backToBoard}
           onArrangeModules={arrangeModules}
           onZoomOut={() => zoomCanvasAtPanelCenter(zoom - 10)}
           onZoomIn={() => zoomCanvasAtPanelCenter(zoom + 10)}
@@ -1988,6 +2089,49 @@ export function CircuitWorkbench({
           onOpenFolder={() => { void openProjectFolder(); }}
         />
       </header>
+
+      {view === 'module' && hierarchyPath.length > 0 ? (
+        <nav
+          style={styles.hierarchyBar}
+          aria-label="Schematic hierarchy"
+          data-testid="schematic-hierarchy-breadcrumb"
+          data-instance-path={hierarchyPath.map((entry) => entry.instanceId || entry.moduleId).join('/')}
+        >
+          <button
+            type="button"
+            style={styles.hierarchyBackButton}
+            onClick={backToHierarchyParent}
+            data-testid="schematic-hierarchy-parent"
+          >
+            {hierarchyPath.length > 1 ? 'Parent' : 'All modules'}
+          </button>
+          {hierarchyPath.map((entry, index) => {
+            const moduleRef = project.modules.find((candidate) => candidate.id === entry.moduleId);
+            return (
+              <span key={`${entry.moduleId}-${index}`} style={styles.hierarchyCrumbGroup}>
+                {index > 0 ? <span style={styles.hierarchySeparator}>/</span> : null}
+                <button
+                  type="button"
+                  style={{
+                    ...styles.hierarchyCrumb,
+                    ...(index === hierarchyPath.length - 1 ? styles.hierarchyCrumbActive : {}),
+                  }}
+                  onClick={() => navigateHierarchy(index)}
+                  data-testid={`schematic-hierarchy-crumb-${index}`}
+                >
+                  {entry.instanceName ? `${entry.instanceName}:` : ''}
+                  {moduleRef?.name || entry.moduleId}
+                </button>
+              </span>
+            );
+          })}
+          {hierarchyTrace ? (
+            <span style={styles.hierarchyTrace} data-testid="schematic-hierarchy-trace">
+              Trace {hierarchyTrace.label} → {hierarchyTrace.netId || hierarchyTrace.net}
+            </span>
+          ) : null}
+        </nav>
+      ) : null}
 
       {(error || notice) && (
         <div style={{ ...styles.notice, ...(error ? styles.noticeError : {}) }} role={error ? 'alert' : 'status'}>
@@ -2466,7 +2610,10 @@ export function CircuitWorkbench({
               onResetItem={(itemId) => resetSchematicItem(selectedRef.id, itemId)}
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
               onProbe={(probe) => openSimulationProbe(selectedRef.id, probe)}
-              onOpenChildModule={(moduleId) => void openModule(moduleId)}
+              hierarchyTrace={hierarchyTrace?.moduleId === selectedRef.id ? hierarchyTrace : null}
+              onOpenChildModule={(moduleId, instanceId, pinId) => {
+                void openChildModule(moduleId, instanceId, pinId);
+              }}
             />
           ) : null}
         </div>
@@ -2925,6 +3072,7 @@ function ModuleSchematic({
   onResetItem,
   onResetLayout,
   onProbe,
+  hierarchyTrace,
   onOpenChildModule,
 }: {
   projectId: string;
@@ -2951,7 +3099,8 @@ function ModuleSchematic({
   onResetItem: (itemId: string) => Promise<void>;
   onResetLayout: (itemIds: string[]) => Promise<void>;
   onProbe: (probe: SchematicProbeSelection) => void;
-  onOpenChildModule?: (moduleId: string) => void;
+  hierarchyTrace?: HierarchyTrace | null;
+  onOpenChildModule?: (moduleId: string, instanceId: string, pinId?: string) => void;
 }) {
   const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
   const [editLayout, setEditLayout] = useState(false);
@@ -3399,6 +3548,7 @@ function ModuleSchematic({
               onBuild={onBuild}
               onProbe={onProbe}
               onDirtyChange={setEditorDirty}
+              hierarchyTrace={hierarchyTrace}
               onOpenChildModule={onOpenChildModule}
             />
           </>
@@ -3853,6 +4003,45 @@ const styles: Record<string, CSSProperties> = {
   eyebrow: { fontSize: 10, color: '#7a818b', textTransform: 'uppercase', fontWeight: 750 },
   projectTitle: { fontSize: 18, fontWeight: 760, marginTop: 2 },
   projectMeta: { fontSize: 11, color: '#7a818b', marginTop: 2 },
+  hierarchyBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 5,
+    minHeight: 34,
+    padding: '5px 14px',
+    borderBottom: '1px solid #d8dce2',
+    background: '#f8fafc',
+    overflowX: 'auto',
+    fontSize: 11,
+  },
+  hierarchyBackButton: {
+    border: '1px solid #c5cbd3',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#425166',
+    padding: '3px 7px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  hierarchyCrumbGroup: { display: 'inline-flex', alignItems: 'center', gap: 5 },
+  hierarchySeparator: { color: '#94a3b8' },
+  hierarchyCrumb: {
+    border: 0,
+    background: 'transparent',
+    color: '#475569',
+    padding: '3px 4px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  hierarchyCrumbActive: { color: '#1d4ed8', fontWeight: 750 },
+  hierarchyTrace: {
+    marginLeft: 'auto',
+    padding: '3px 7px',
+    borderRadius: 999,
+    background: '#ede9fe',
+    color: '#6d28d9',
+    whiteSpace: 'nowrap',
+  },
   projectKindField: {
     display: 'flex',
     alignItems: 'center',
