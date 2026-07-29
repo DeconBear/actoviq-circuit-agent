@@ -1010,6 +1010,7 @@ export async function createHarness({ tag = '' } = {}) {
         { id: 'net_v', name: 'VNET', kind: 'signal', aliases: [] },
         { id: 'net_trunk', name: 'TRUNK', kind: 'signal', aliases: [] },
         { id: 'net_out', name: 'OUT', kind: 'signal', aliases: [] },
+        { id: 'net_spare', name: 'SPARE', kind: 'signal', aliases: [] },
       ],
       components: [
         {
@@ -1022,6 +1023,25 @@ export async function createHarness({ tag = '' } = {}) {
           pins: [
             { id: 'p1', name: '1', net: 'TRUNK', net_id: 'net_trunk' },
             { id: 'p2', name: '2', net: 'OUT', net_id: 'net_out' },
+          ],
+        },
+        {
+          id: 'spare_block',
+          type: 'BLOCK',
+          name: 'SPARE',
+          value: 'unused',
+          position: { x: 640, y: 100 },
+          rotation: 0,
+          block: { width: 180, height: 84 },
+          pins: [
+            {
+              id: 'nc',
+              name: 'NC',
+              net: 'SPARE',
+              net_id: 'net_spare',
+              side: 'left',
+              order: 0,
+            },
           ],
         },
       ],

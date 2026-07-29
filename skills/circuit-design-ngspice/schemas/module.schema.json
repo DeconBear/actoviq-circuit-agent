@@ -262,6 +262,9 @@
                 "order": {
                   "type": "number"
                 },
+                "no_connect": {
+                  "type": "boolean"
+                },
                 "label_offset": {
                   "type": "object",
                   "required": [

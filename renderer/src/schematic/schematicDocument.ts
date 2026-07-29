@@ -2993,6 +2993,7 @@ function pinPointsByNetName(module: CircuitModule): Map<string, CircuitPosition[
   const points = new Map<string, CircuitPosition[]>();
   for (const component of module.components) {
     component.pins.forEach((pin, index) => {
+      if (pin.no_connect) return;
       const point = pinWorld(component, pin, index);
       points.set(pin.net, [...(points.get(pin.net) ?? []), point]);
     });
@@ -3001,7 +3002,9 @@ function pinPointsByNetName(module: CircuitModule): Map<string, CircuitPosition[
 }
 
 function computeConnectedPortIds(module: CircuitModule): Set<string> {
-  const pinNets = new Set(module.components.flatMap((component) => component.pins.map((pin) => pin.net)));
+  const pinNets = new Set(module.components.flatMap((component) => (
+    component.pins.filter((pin) => !pin.no_connect).map((pin) => pin.net)
+  )));
   const portNetCounts = new Map<string, number>();
   for (const port of module.ports) {
     portNetCounts.set(port.net, (portNetCounts.get(port.net) ?? 0) + 1);
@@ -4724,7 +4727,7 @@ function materializeNetWires(
   for (const component of module.components) {
     component.pins.forEach((pin, index) => {
       // Body/bulk pins sit inside the MOSFET artwork; wiring them creates loops through the symbol.
-      if (isMosBodyPin(component, pin)) return;
+      if (isMosBodyPin(component, pin) || pin.no_connect) return;
       const point = pinWorld(component, pin, index);
       remember(pin.net, {
         kind: 'pin',
@@ -5066,7 +5069,7 @@ function createNetLabels(module: CircuitModule, portPositions: Map<string, Circu
 
   for (const component of module.components) {
     component.pins.forEach((pin, index) => {
-      if (isMosBodyPin(component, pin)) return;
+      if (isMosBodyPin(component, pin) || pin.no_connect) return;
       const position = pinWorld(component, pin, index);
       remember(pin.net, {
         kind: 'pin',

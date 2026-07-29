@@ -21,6 +21,11 @@ import {
   trimWireTopology,
 } from '../../schematic-core/connectivity/wireTopology';
 import {
+  branchWireIds,
+  netWireIds,
+  wireSelectionScope,
+} from '../../schematic-core/selection/netSelection';
+import {
   addWire,
   cloneModule,
   COMPONENT_TYPES,
@@ -272,6 +277,7 @@ interface ContextMenuState {
   y: number;
   world: CircuitPosition;
   selection: NonNullable<SchematicSelection>;
+  pin?: { componentId: string; pinId: string };
 }
 
 type DraftUpdate = (current: CircuitModule) => CircuitModule;
@@ -391,6 +397,8 @@ export function SchematicEditor({
   const selectedWire = selection?.kind === 'wire'
     ? document.wires.find((wire) => wire.id === selection.id) ?? null
     : null;
+  const selectedWireIds = wireIdsForSelection(selection);
+  const selectedWireScope = wireSelectionScope(document.wires, selectedWireIds);
   const selectedNetLabel = selection?.kind === 'netlabel'
     ? document.netLabels.find((label) => label.id === selection.id) ?? null
     : null;
@@ -1352,6 +1360,7 @@ export function SchematicEditor({
     const hitSelection = activeGesture
       ? null
       : contextMenuSelectionForTarget(document, draft, event.target, world);
+    const pinTarget = activeGesture ? null : pinFromPointerTarget(document, event.target);
     // Right-clicking a member of the current multi-wire selection keeps the
     // group so the menu's Delete applies to all of them.
     const menuSelection = hitSelection?.kind === 'wire' &&
@@ -1383,6 +1392,9 @@ export function SchematicEditor({
         y: event.clientY,
         world: selectedWire ? nearestPointOnWire(selectedWire, world) : snapPoint(world),
         selection: menuSelection,
+        pin: pinTarget
+          ? { componentId: pinTarget.component.id, pinId: pinTarget.pin.id }
+          : undefined,
       });
     } else {
       setSelection(null);
@@ -1407,6 +1419,23 @@ export function SchematicEditor({
     }
     if (tool !== 'select') return;
     const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
+    const wire = hitEditableWireSegment(document.wires, draft, world)?.wire
+      ?? hitWire(document, world);
+    if (wire) {
+      event.preventDefault();
+      event.stopPropagation();
+      const selectNet = event.ctrlKey || event.metaKey;
+      const wireIds = selectNet
+        ? netWireIds(document.wires, wire.id)
+        : branchWireIds(document.wires, wire.id);
+      setSelection(selectionForWireIds(wireIds));
+      setActionNotice(
+        selectNet
+          ? `Selected net ${wire.net ?? wire.id} (${wireIds.length} wires)`
+          : `Selected branch (${wireIds.length} wires)`,
+      );
+      return;
+    }
     const component = componentFromPointerTarget(document, event.target)
       ?? hitComponent(document, world)
       ?? componentFromNetLabelPointerTarget(document, event.target)
@@ -1931,6 +1960,64 @@ export function SchematicEditor({
     ));
   }
 
+  function selectWireBranch(wireId: string) {
+    const wireIds = branchWireIds(document.wires, wireId);
+    setSelection(selectionForWireIds(wireIds));
+    setContextMenu(null);
+    setActionNotice(`Selected branch (${wireIds.length} wires)`);
+  }
+
+  function selectWireNet(wireId: string) {
+    const wire = document.wires.find((candidate) => candidate.id === wireId);
+    const wireIds = netWireIds(document.wires, wireId);
+    setSelection(selectionForWireIds(wireIds));
+    setContextMenu(null);
+    setActionNotice(`Selected net ${wire?.net ?? wireId} (${wireIds.length} wires)`);
+  }
+
+  function togglePinNoConnect(componentId: string, pinId: string) {
+    const component = document.module.components.find((candidate) => candidate.id === componentId);
+    const pinIndex = component?.pins.findIndex((candidate) => candidate.id === pinId) ?? -1;
+    const pin = pinIndex >= 0 ? component?.pins[pinIndex] : undefined;
+    if (!component || !pin) {
+      setContextMenu(null);
+      setActionNotice('Pin is no longer available');
+      return;
+    }
+    const point = pinWorld(component, pin, pinIndex);
+    if (
+      !pin.no_connect
+      && endpointIsConnected(document, {
+        kind: 'pin',
+        x: point.x,
+        y: point.y,
+        component_id: component.id,
+        pin_id: pin.id,
+        label: `${component.name}.${pin.name}`,
+        net: pin.net,
+        net_id: pin.net_id,
+      })
+    ) {
+      setContextMenu(null);
+      setActionNotice('Disconnect the pin before marking it no-connect');
+      return;
+    }
+    const next = cloneModule(draft);
+    const nextPin = next.components
+      .find((candidate) => candidate.id === componentId)
+      ?.pins.find((candidate) => candidate.id === pinId);
+    if (!nextPin) return;
+    if (nextPin.no_connect) {
+      delete nextPin.no_connect;
+    } else {
+      nextPin.no_connect = true;
+    }
+    commitDraft(next);
+    setSelection({ kind: 'component', id: componentId });
+    setContextMenu(null);
+    setActionNotice(nextPin.no_connect ? 'Pin marked no-connect' : 'No-connect marker cleared');
+  }
+
   function deleteSelection(targetSelection: SchematicSelection = selection) {
     if (!targetSelection || busy) return;
     if (targetSelection.kind === 'port') return;
@@ -2183,6 +2270,7 @@ export function SchematicEditor({
       data-selected={selectionAttribute(selection)}
       data-selected-component-count={String(selectedComponentIds.length)}
       data-selected-wire-count={String(wireIdsForSelection(selection).length)}
+      data-selected-wire-scope={selectedWireScope}
       data-clipboard-component-count={String(clipboardComponentCount)}
       data-hover-target={selectionAttribute(hoverSelection)}
       data-hover-endpoint={hoverEndpoint ? hoverEndpoint.label : ''}
@@ -2621,7 +2709,9 @@ export function SchematicEditor({
           ) : selection?.kind === 'components' ? (
             <div style={styles.emptyText}>{selection.ids.length} components selected</div>
           ) : selection?.kind === 'wires' ? (
-            <div style={styles.emptyText} data-testid="schematic-editor-wires-panel">{selection.ids.length} wires selected</div>
+            <div style={styles.emptyText} data-testid="schematic-editor-wires-panel">
+              {selection.ids.length} wires selected · {selectedWireScope}
+            </div>
           ) : selectedNetLabel ? (
             <div style={styles.pinList} data-testid="schematic-editor-netlabel-panel">
               <div style={styles.pinRow}>
@@ -2740,6 +2830,22 @@ export function SchematicEditor({
               <button
                 type="button"
                 style={styles.contextMenuItem}
+                onClick={() => selectWireBranch(wireIdsForSelection(contextMenu.selection)[0]!)}
+                data-testid="schematic-context-menu-select-branch"
+              >
+                Select branch
+              </button>
+              <button
+                type="button"
+                style={styles.contextMenuItem}
+                onClick={() => selectWireNet(wireIdsForSelection(contextMenu.selection)[0]!)}
+                data-testid="schematic-context-menu-select-net"
+              >
+                Select whole net
+              </button>
+              <button
+                type="button"
+                style={styles.contextMenuItem}
                 onClick={() => applyWireSplit(wireIdsForSelection(contextMenu.selection)[0]!, contextMenu.world)}
                 data-testid="schematic-context-menu-split"
               >
@@ -2770,6 +2876,21 @@ export function SchematicEditor({
                 Collapse path
               </button>
             </>
+          ) : null}
+          {contextMenu.pin ? (
+            <button
+              type="button"
+              style={styles.contextMenuItem}
+              onClick={() => togglePinNoConnect(contextMenu.pin!.componentId, contextMenu.pin!.pinId)}
+              data-testid="schematic-context-menu-no-connect"
+            >
+              {draft.components
+                .find((component) => component.id === contextMenu.pin?.componentId)
+                ?.pins.find((pin) => pin.id === contextMenu.pin?.pinId)
+                ?.no_connect
+                ? 'Clear no-connect'
+                : 'Mark no-connect'}
+            </button>
           ) : null}
           {contextMenu.selection.kind === 'wires' ? (
             <button
@@ -3576,6 +3697,20 @@ function componentFromPointerTarget(
     return null;
   }
   return document.module.components.find((component) => component.id === componentId) ?? null;
+}
+
+function pinFromPointerTarget(
+  document: ReturnType<typeof createSchematicDocument>,
+  target: EventTarget | null,
+): { component: CircuitComponent; pin: CircuitPin } | null {
+  if (!(target instanceof Element)) return null;
+  const pinNode = target.closest('[data-endpoint-kind="pin"][data-component-id][data-pin-id]');
+  const componentId = pinNode?.getAttribute('data-component-id');
+  const pinId = pinNode?.getAttribute('data-pin-id');
+  if (!componentId || !pinId) return null;
+  const component = document.module.components.find((candidate) => candidate.id === componentId);
+  const pin = component?.pins.find((candidate) => candidate.id === pinId);
+  return component && pin ? { component, pin } : null;
 }
 
 function componentFromNetLabelPointerTarget(

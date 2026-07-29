@@ -6,6 +6,7 @@ import {
   blockPinSide,
   componentBounds,
   isPmosComponent,
+  isMosBodyPin,
   isGroundPort,
   isSchematicPortVisible,
   netLabelBounds,
@@ -21,6 +22,10 @@ import {
   type SchematicPortSide,
   type SchematicSelection,
 } from './schematicDocument';
+import {
+  wireSelectionScope,
+  type WireSelectionScope,
+} from '../schematic-core/selection/netSelection';
 
 const WIRE_COLOR = '#17851f';
 const SYMBOL_COLOR = '#a00012';
@@ -42,6 +47,24 @@ export interface RenderedJunction {
   net: string;
 }
 
+export interface RenderedUnconnectedCrossing {
+  point: CircuitPosition;
+  nets: [string, string];
+}
+
+export interface RenderedDanglingWireEnd {
+  wireId: string;
+  side: 'from' | 'to';
+  point: CircuitPosition;
+}
+
+export interface RenderedPinConnectionState {
+  componentId: string;
+  pinId: string;
+  point: CircuitPosition;
+  state: 'dangling' | 'no-connect';
+}
+
 type WireDirection = 'left' | 'right' | 'up' | 'down';
 
 interface JunctionAccumulator {
@@ -51,6 +74,7 @@ interface JunctionAccumulator {
 }
 
 interface JunctionSegment {
+  wireId: string;
   net: string;
   netKey: string;
   start: CircuitPosition;
@@ -114,6 +138,12 @@ export function SchematicDocumentSvg({
   const gridId = `grid-${document.moduleId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
   const majorGridId = `major-grid-${document.moduleId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
   const previewPoints = wireStart && wirePreview ? routePoints(wireStart, wirePreview) : [];
+  const selectedWireIds = selection?.kind === 'wire'
+    ? [selection.id]
+    : selection?.kind === 'wires'
+      ? selection.ids
+      : [];
+  const selectedWireScope = wireSelectionScope(document.wires, selectedWireIds);
   return (
     <svg
       ref={svgRef}
@@ -200,6 +230,7 @@ export function SchematicDocumentSvg({
               hovered={hovered}
               rubberBand={rubberBandWireIds?.has(wire.id) ?? false}
               detached={detachedWireIds?.has(wire.id) ?? false}
+              selectionScope={selectedWireScope}
             />
           );
         })}
@@ -217,6 +248,7 @@ export function SchematicDocumentSvg({
           />
         ) : null}
       </g>
+      <TopologyCrossingLayer document={document} />
       <g data-layer="net-labels">
         {document.netLabels.map((label) => (
           // Rail labels (GND / power) are first-class selectable entities with
@@ -321,6 +353,7 @@ export function SchematicDocumentSvg({
         ))}
       </g>
       {placeGhost ? <PlaceGhostSymbol component={placeGhost} /> : null}
+      <TopologyEndpointMarkers document={document} />
       <g data-layer="junctions" pointerEvents="none">
         {junctions(document).map(({ point, net }) => (
           <circle
@@ -554,6 +587,7 @@ function WirePath({
   hovered,
   rubberBand,
   detached,
+  selectionScope,
 }: {
   wire: CircuitWire;
   selected: boolean;
@@ -561,6 +595,7 @@ function WirePath({
   hovered: boolean;
   rubberBand: boolean;
   detached: boolean;
+  selectionScope: WireSelectionScope;
 }) {
   const points = pointsAttribute(wire.points ?? []);
   if (!points) return null;
@@ -572,6 +607,7 @@ function WirePath({
       data-rubber-band={rubberBand ? 'true' : 'false'}
       data-detached-preview={detached ? 'true' : 'false'}
       data-hovered={hovered ? 'true' : undefined}
+      data-selection-scope={selected ? selectionScope : undefined}
     >
       <polyline
         points={points}
@@ -641,7 +677,13 @@ function WirePath({
       <polyline
         points={points}
         fill="none"
-        stroke={selected ? WIRE_SELECTION_COLOR : 'transparent'}
+        stroke={selected ? (
+          selectionScope === 'net'
+            ? '#8b5cf6'
+            : selectionScope === 'branch'
+              ? '#0891b2'
+              : WIRE_SELECTION_COLOR
+        ) : 'transparent'}
         strokeWidth="11"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -649,6 +691,7 @@ function WirePath({
         pointerEvents="none"
         data-testid={selected ? 'schematic-selected-wire-highlight' : undefined}
         data-selection-kind={selected ? 'wire' : undefined}
+        data-selection-scope={selected ? selectionScope : undefined}
         data-selection-shape={selected ? 'route' : undefined}
       />
       <polyline
@@ -661,6 +704,85 @@ function WirePath({
         pointerEvents="none"
       />
       {selected ? <WirePointHandles wire={wire} /> : null}
+    </g>
+  );
+}
+
+function TopologyCrossingLayer({ document }: { document: SchematicDocument }) {
+  return (
+    <g data-layer="unconnected-crossings" pointerEvents="none">
+      {unconnectedCrossings(document).map((crossing) => (
+        <g
+          key={`${crossing.point.x},${crossing.point.y}:${crossing.nets.join(':')}`}
+          data-testid="schematic-unconnected-crossing"
+          data-nets={crossing.nets.join(',')}
+        >
+          <circle cx={crossing.point.x} cy={crossing.point.y} r="6.5" fill="#ffffff" />
+          <line
+            x1={crossing.point.x - 7}
+            y1={crossing.point.y}
+            x2={crossing.point.x + 7}
+            y2={crossing.point.y}
+            stroke={WIRE_COLOR}
+            strokeWidth={WIRE_STROKE}
+            strokeLinecap="round"
+          />
+        </g>
+      ))}
+    </g>
+  );
+}
+
+function TopologyEndpointMarkers({ document }: { document: SchematicDocument }) {
+  const pins = pinConnectionVisuals(document);
+  return (
+    <g data-layer="connection-state-markers" pointerEvents="none">
+      {danglingWireEnds(document).map((endpoint) => (
+        <rect
+          key={`${endpoint.wireId}:${endpoint.side}`}
+          x={endpoint.point.x - 4.5}
+          y={endpoint.point.y - 4.5}
+          width="9"
+          height="9"
+          rx="1.5"
+          fill="#ffffff"
+          stroke="#f97316"
+          strokeWidth="2"
+          data-testid="schematic-dangling-wire-end"
+          data-wire-id={endpoint.wireId}
+          data-endpoint-side={endpoint.side}
+        />
+      ))}
+      {pins.filter((pin) => pin.state === 'dangling').map((pin) => (
+        <rect
+          key={`${pin.componentId}:${pin.pinId}`}
+          x={pin.point.x - 4.5}
+          y={pin.point.y - 4.5}
+          width="9"
+          height="9"
+          transform={`rotate(45 ${pin.point.x} ${pin.point.y})`}
+          fill="#ffffff"
+          stroke="#f97316"
+          strokeWidth="2"
+          data-testid="schematic-dangling-pin"
+          data-component-id={pin.componentId}
+          data-pin-id={pin.pinId}
+        />
+      ))}
+      {pins.filter((pin) => pin.state === 'no-connect').map((pin) => (
+        <g
+          key={`${pin.componentId}:${pin.pinId}`}
+          data-testid="schematic-no-connect-marker"
+          data-component-id={pin.componentId}
+          data-pin-id={pin.pinId}
+          stroke="#7c3aed"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+        >
+          <line x1={pin.point.x - 6} y1={pin.point.y - 6} x2={pin.point.x + 6} y2={pin.point.y + 6} />
+          <line x1={pin.point.x + 6} y1={pin.point.y - 6} x2={pin.point.x - 6} y2={pin.point.y + 6} />
+        </g>
+      ))}
     </g>
   );
 }
@@ -1391,6 +1513,7 @@ export function junctions(document: SchematicDocument): RenderedJunction[] {
       const end = points[index];
       if (!start || !end || samePoint(start, end)) continue;
       const segment: JunctionSegment = {
+        wireId: wire.id,
         net,
         netKey,
         start,
@@ -1435,6 +1558,108 @@ export function junctions(document: SchematicDocument): RenderedJunction[] {
   return [...junctionMap.values()]
     .filter((entry) => entry.directions.size > 2)
     .map(({ point, net }) => ({ point, net }));
+}
+
+export function unconnectedCrossings(
+  document: SchematicDocument,
+): RenderedUnconnectedCrossing[] {
+  const segments: JunctionSegment[] = [];
+  for (const wire of document.wires) {
+    const net = wire.net ?? '';
+    const netKey = wire.net_id ?? net;
+    for (let index = 1; index < wire.points.length; index += 1) {
+      const start = wire.points[index - 1];
+      const end = wire.points[index];
+      if (!start || !end || samePoint(start, end)) continue;
+      segments.push({
+        wireId: wire.id,
+        net,
+        netKey,
+        start,
+        end,
+        horizontal: round(start.y) === round(end.y),
+        vertical: round(start.x) === round(end.x),
+      });
+    }
+  }
+  const crossings = new Map<string, RenderedUnconnectedCrossing>();
+  for (let leftIndex = 0; leftIndex < segments.length; leftIndex += 1) {
+    const left = segments[leftIndex]!;
+    for (let rightIndex = leftIndex + 1; rightIndex < segments.length; rightIndex += 1) {
+      const right = segments[rightIndex]!;
+      if (left.wireId === right.wireId || left.netKey === right.netKey) continue;
+      const point = orthogonalSegmentIntersection(left, right);
+      if (
+        !point
+        || samePoint(point, left.start)
+        || samePoint(point, left.end)
+        || samePoint(point, right.start)
+        || samePoint(point, right.end)
+      ) {
+        continue;
+      }
+      const nets = [left.net, right.net].sort((a, b) => a.localeCompare(b)) as [string, string];
+      crossings.set(`${point.x},${point.y}:${nets.join(':')}`, { point, nets });
+    }
+  }
+  return [...crossings.values()];
+}
+
+function visualEndpointKey(endpoint: CircuitWire['from']): string {
+  if (!endpoint) return '';
+  if (endpoint.component_id && endpoint.pin_id) return `pin:${endpoint.component_id}.${endpoint.pin_id}`;
+  if (endpoint.port_id) return `port:${endpoint.port_id}`;
+  if (endpoint.junction_id) return `junction:${endpoint.junction_id}`;
+  return '';
+}
+
+export function danglingWireEnds(document: SchematicDocument): RenderedDanglingWireEnd[] {
+  const references = new Map<string, number>();
+  for (const wire of document.wires) {
+    for (const endpoint of [wire.from, wire.to]) {
+      const key = visualEndpointKey(endpoint);
+      if (key) references.set(key, (references.get(key) ?? 0) + 1);
+    }
+  }
+  const dangling: RenderedDanglingWireEnd[] = [];
+  for (const wire of document.wires) {
+    for (const [side, endpoint] of [['from', wire.from], ['to', wire.to]] as const) {
+      if (!endpoint || endpoint.component_id || endpoint.port_id) continue;
+      const key = visualEndpointKey(endpoint);
+      if (!key || (references.get(key) ?? 0) <= 1) {
+        dangling.push({ wireId: wire.id, side, point: { x: endpoint.x, y: endpoint.y } });
+      }
+    }
+  }
+  return dangling;
+}
+
+export function pinConnectionVisuals(
+  document: SchematicDocument,
+): RenderedPinConnectionState[] {
+  const connectedPins = new Set(
+    document.wires.flatMap((wire) => [wire.from, wire.to])
+      .filter((endpoint) => endpoint?.component_id && endpoint.pin_id)
+      .map((endpoint) => `${endpoint!.component_id}.${endpoint!.pin_id}`),
+  );
+  return document.module.components.flatMap((component) => (
+    component.pins.flatMap((pin, index) => {
+      if (isMosBodyPin(component, pin)) return [];
+      const state = pin.no_connect
+        ? 'no-connect'
+        : connectedPins.has(`${component.id}.${pin.id}`)
+          ? null
+          : 'dangling';
+      return state
+        ? [{
+            componentId: component.id,
+            pinId: pin.id,
+            point: pinWorld(component, pin, index),
+            state,
+          }]
+        : [];
+    })
+  ));
 }
 
 function addSegmentDirectionsAtPoint(

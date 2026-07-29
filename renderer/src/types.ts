@@ -280,6 +280,8 @@ export interface CircuitPin {
   net_id?: string;
   side?: 'left' | 'right' | 'top' | 'bottom';
   order?: number;
+  /** Explicitly marks an intentionally unused pin; no implicit wire is generated. */
+  no_connect?: boolean;
   /** Optional rail-label anchor offset from the pin (draggable label position). */
   label_offset?: CircuitPosition;
 }
