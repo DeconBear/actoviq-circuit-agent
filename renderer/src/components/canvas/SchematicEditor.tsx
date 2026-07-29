@@ -31,6 +31,11 @@ import {
   type LiveErcDiagnostic,
 } from '../../schematic-core/diagnostics/liveErc';
 import {
+  interactionStateFromSnapshot,
+  interactionStatus,
+  type InteractionStateName,
+} from '../../schematic-core/commands/interactionStateMachine';
+import {
   addWire,
   cloneModule,
   COMPONENT_TYPES,
@@ -412,6 +417,26 @@ export function SchematicEditor({
   const wirePreview = hoverWorld
     ? hoverEndpoint ?? pointEndpoint(snapPoint(hoverWorld))
     : null;
+  function readInteractionState(): InteractionStateName {
+    return interactionStateFromSnapshot({
+      dialogOpen: blockDialogOpen,
+      panning: Boolean(panRef.current),
+      editingWirePoint: Boolean(wirePointDragRef.current),
+      editingWireSegment: Boolean(wireSegmentDragRef.current),
+      moving: dragRef.current?.mode
+        ?? (portDragRef.current || labelDragRef.current ? 'stretch' : null),
+      selectingMarquee: Boolean(marqueeRef.current),
+      wiring: Boolean(wireStart || wireDragRef.current || tool === 'wire'),
+      placing: tool === 'place-module'
+        ? 'module'
+        : tool === 'place' || tool === 'place-block'
+          ? 'component'
+          : null,
+      cutting: tool === 'cut',
+    });
+  }
+  const interactionStateName = readInteractionState();
+  const interactionStatusText = interactionStatus(interactionStateName);
   // qucs-style placement ghost: the pending symbol follows the cursor (grid-snapped,
   // rotated by placeRotation) until placement mode is exited via Esc/right tool.
   const placeGhost = useMemo(() => {
@@ -1336,10 +1361,7 @@ export function SchematicEditor({
 
   function handlePointerCancel(event: ReactPointerEvent<SVGSVGElement>) {
     event.stopPropagation();
-    cancelActiveDrag();
-    setHoverEndpoint(null);
-    setHoverSelection(null);
-    setInteractionCursor('default');
+    cancelEditorInteraction();
   }
 
   function handlePointerLeave(event: ReactPointerEvent<SVGSVGElement>) {
@@ -1422,6 +1444,7 @@ export function SchematicEditor({
       setHoverWorld(null);
       setHoverEndpoint(null);
       wireDragRef.current = null;
+      setTool('select');
       return;
     }
     if (tool !== 'select') return;
@@ -1516,6 +1539,23 @@ export function SchematicEditor({
       setDraft(drag.originalModule);
       setDirty(drag.originalDirty);
     }
+  }
+
+  function cancelEditorInteraction() {
+    cancelActiveDrag();
+    setWireStart(null);
+    setHoverWorld(null);
+    setHoverEndpoint(null);
+    setHoverSelection(null);
+    setMarqueeBounds(null);
+    setSpacePanActive(false);
+    setBlockDialogOpen(false);
+    setPendingBlock(null);
+    setPendingModule(null);
+    setPlaceRotation(0);
+    setTool('select');
+    setInteractionCursor('default');
+    setActionNotice(null);
   }
 
   function nudgeSelectedComponents(dx: number, dy: number) {
@@ -1624,18 +1664,24 @@ export function SchematicEditor({
     }
     if (event.key === 'Escape') {
       event.preventDefault();
-      cancelActiveDrag();
+      if (contextMenu) {
+        setContextMenu(null);
+        return;
+      }
+      const dialogWasOpen = blockDialogOpen;
+      cancelEditorInteraction();
+      if (!dialogWasOpen) setSelection(null);
+      return;
+    }
+    if (event.key === 'Enter' && wireStart) {
+      event.preventDefault();
       setWireStart(null);
+      setHoverWorld(null);
       setHoverEndpoint(null);
-      setSelection(null);
-      setContextMenu(null);
+      wireDragRef.current = null;
       setTool('select');
-      setPlaceRotation(0);
-      setBlockDialogOpen(false);
-      setPendingBlock(null);
-      setSpacePanActive(false);
-      setHoverSelection(null);
       setInteractionCursor('default');
+      setActionNotice('Wire finished');
       return;
     }
     if (isSpacePanKey(event) && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -1842,9 +1888,7 @@ export function SchematicEditor({
     }
 
     function handleWindowBlur() {
-      setSpacePanActive(false);
-      panRef.current = null;
-      setInteractionCursor('default');
+      cancelEditorInteraction();
     }
 
     window.addEventListener('keydown', handleWindowKeyDown);
@@ -2309,6 +2353,8 @@ export function SchematicEditor({
       data-live-erc-status={liveErcSummary.status}
       data-live-erc-error-count={liveErcSummary.errors}
       data-live-erc-warning-count={liveErcSummary.warnings}
+      data-interaction-state={interactionStateName}
+      data-interaction-status={interactionStatusText}
       data-drag-preview={dragPreviewPositions ? 'true' : 'false'}
       data-component-positions={JSON.stringify(displayedComponentPositions)}
       data-port-positions={JSON.stringify(Object.fromEntries(document.portPositions))}
@@ -2344,7 +2390,9 @@ export function SchematicEditor({
         hasSelection={Boolean(selection)}
         dirty={dirty}
         buildBusy={buildBusy}
-        status={actionNotice
+        status={interactionStateName === 'dialog'
+          ? 'Configure custom block · Enter confirms · Esc cancels'
+          : actionNotice
           ?? (saveError
             ? `Save failed: ${saveError}`
             : wireStart
@@ -2980,9 +3028,20 @@ export function SchematicEditor({
           data-testid="schematic-block-dialog"
           onPointerDown={(event) => event.stopPropagation()}
           onKeyDown={(event) => {
+            event.stopPropagation();
             if (event.key === 'Escape') {
               event.preventDefault();
               setBlockDialogOpen(false);
+              return;
+            }
+            if (
+              event.key === 'Enter'
+              && !(event.target instanceof HTMLButtonElement)
+              && blockDraft.value.trim()
+              && blockDraft.pins.length > 0
+            ) {
+              event.preventDefault();
+              beginBlockPlacement();
             }
           }}
         >

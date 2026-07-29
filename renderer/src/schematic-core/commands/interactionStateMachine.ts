@@ -24,6 +24,7 @@ export type InteractionStateName =
   | 'moving.stretch'
   | 'editing.wirePoint'
   | 'editing.wireSegment'
+  | 'cutting'
   | 'panning'
   | 'probing'
   | 'dialog';
@@ -47,6 +48,7 @@ export type InteractionEventName =
   | 'mirror'
   | 'tool-select'
   | 'tool-wire'
+  | 'tool-cut'
   | 'tool-place'
   | 'tool-pan'
   | 'tool-probe'
@@ -82,8 +84,8 @@ export interface InteractionReducerResult {
  * Events each state accepts. An event not in a state's set is ignored.
  * `pointer-cancel` and `escape` are always accepted (they cancel anything).
  */
-const ALLOWED_EVENTS: Record<InteractionStateName, Set<InteractionEventName>> = {
-  'idle': new Set(['pointer-down', 'tool-select', 'tool-wire', 'tool-place', 'tool-pan', 'tool-probe', 'open-dialog', 'right-click']),
+const ALLOWED_EVENTS: Record<InteractionStateName, ReadonlySet<InteractionEventName>> = {
+  'idle': new Set(['pointer-down', 'tool-select', 'tool-wire', 'tool-cut', 'tool-place', 'tool-pan', 'tool-probe', 'open-dialog', 'right-click']),
   'selecting.marquee': new Set(['pointer-move', 'pointer-up', 'pointer-cancel', 'escape']),
   'placing.component': new Set(['pointer-move', 'pointer-up', 'rotate', 'mirror', 'escape', 'right-click', 'tool-select']),
   'placing.module': new Set(['pointer-move', 'pointer-up', 'rotate', 'mirror', 'escape', 'right-click', 'tool-select']),
@@ -92,6 +94,7 @@ const ALLOWED_EVENTS: Record<InteractionStateName, Set<InteractionEventName>> = 
   'moving.stretch': new Set(['pointer-move', 'pointer-up', 'pointer-cancel', 'escape']),
   'editing.wirePoint': new Set(['pointer-move', 'pointer-up', 'pointer-cancel', 'escape']),
   'editing.wireSegment': new Set(['pointer-move', 'pointer-up', 'pointer-cancel', 'escape']),
+  'cutting': new Set(['pointer-down', 'escape', 'right-click', 'tool-select']),
   'panning': new Set(['pointer-move', 'pointer-up', 'pointer-cancel', 'escape']),
   'probing': new Set(['pointer-down', 'pointer-up', 'escape', 'tool-select']),
   'dialog': new Set(['close-dialog', 'escape']),
@@ -101,6 +104,62 @@ const ALWAYS_ACCEPTED = new Set<InteractionEventName>(['pointer-cancel', 'escape
 
 export function isEventAllowed(state: InteractionStateName, event: InteractionEventName): boolean {
   return ALWAYS_ACCEPTED.has(event) || ALLOWED_EVENTS[state]?.has(event) === true;
+}
+
+export function allowedEventsForState(state: InteractionStateName): InteractionEventName[] {
+  return [...new Set([...ALLOWED_EVENTS[state], ...ALWAYS_ACCEPTED])].sort();
+}
+
+export interface InteractionSnapshot {
+  dialogOpen?: boolean;
+  panning?: boolean;
+  editingWirePoint?: boolean;
+  editingWireSegment?: boolean;
+  moving?: 'free' | 'stretch' | null;
+  selectingMarquee?: boolean;
+  wiring?: boolean;
+  placing?: 'component' | 'module' | null;
+  cutting?: boolean;
+  probing?: boolean;
+}
+
+/**
+ * Adapter used by the legacy React handlers while they are migrated to the
+ * reducer. Priority is explicit so simultaneous transient flags cannot expose
+ * an ambiguous modal status.
+ */
+export function interactionStateFromSnapshot(snapshot: InteractionSnapshot): InteractionStateName {
+  if (snapshot.dialogOpen) return 'dialog';
+  if (snapshot.panning) return 'panning';
+  if (snapshot.editingWirePoint) return 'editing.wirePoint';
+  if (snapshot.editingWireSegment) return 'editing.wireSegment';
+  if (snapshot.moving === 'free') return 'moving.free';
+  if (snapshot.moving === 'stretch') return 'moving.stretch';
+  if (snapshot.selectingMarquee) return 'selecting.marquee';
+  if (snapshot.wiring) return 'wiring.preview';
+  if (snapshot.placing === 'module') return 'placing.module';
+  if (snapshot.placing === 'component') return 'placing.component';
+  if (snapshot.cutting) return 'cutting';
+  if (snapshot.probing) return 'probing';
+  return 'idle';
+}
+
+export function interactionStatus(stateName: InteractionStateName): string {
+  return ({
+    idle: 'Ready',
+    'selecting.marquee': 'Selecting area · Esc cancels',
+    'placing.component': 'Placing component · right-click rotates · Esc exits',
+    'placing.module': 'Placing module · right-click rotates · Esc exits',
+    'wiring.preview': 'Wiring · Enter finishes · right-click or Esc cancels',
+    'moving.free': 'Free Move · Esc cancels',
+    'moving.stretch': 'Stretch Move · Esc cancels',
+    'editing.wirePoint': 'Editing wire point · Esc cancels',
+    'editing.wireSegment': 'Editing wire segment · Esc cancels',
+    cutting: 'Cut · click a wire segment · Esc cancels',
+    panning: 'Panning · Esc cancels',
+    probing: 'Probing · Esc exits',
+    dialog: 'Dialog · Enter confirms · Esc cancels',
+  } satisfies Record<InteractionStateName, string>)[stateName];
 }
 
 export function idleState(): InteractionState {
@@ -131,8 +190,16 @@ export function reduceInteraction(prev: InteractionState, event: InteractionEven
           return { state: state('idle'), effects: [] };
         case 'tool-wire':
           return { state: state('wiring.preview', { startPoint: event.point, points: event.point ? [event.point] : [] }), effects: [effect('preview', { tool: 'wire' })] };
+        case 'tool-cut':
+          return { state: state('cutting'), effects: [effect('preview', { tool: 'cut' })] };
         case 'tool-place':
-          return { state: state('placing.component', { componentType: event.data?.componentType, position: event.point }), effects: [effect('preview', { componentType: event.data?.componentType })] };
+          return {
+            state: state(event.data?.kind === 'module' ? 'placing.module' : 'placing.component', {
+              componentType: event.data?.componentType,
+              position: event.point,
+            }),
+            effects: [effect('preview', { componentType: event.data?.componentType })],
+          };
         case 'tool-pan':
           return { state: state('panning', { start: event.point }), effects: [] };
         case 'tool-probe':
@@ -169,10 +236,17 @@ export function reduceInteraction(prev: InteractionState, event: InteractionEven
           return { state: state(prev.name, { ...prev.payload, rotation: ((prev.payload.rotation as number | undefined) ?? 0) + 90 }), effects: [effect('preview', { rotate: true })] };
         case 'mirror':
           return { state: state(prev.name, { ...prev.payload, mirrored: true }), effects: [effect('preview', { mirror: true })] };
-        case 'pointer-up':
-          return { state: state('idle'), effects: [effect('commit', { placed: prev.payload })] };
-        case 'tool-select':
         case 'right-click':
+          return {
+            state: state(prev.name, {
+              ...prev.payload,
+              rotation: ((prev.payload.rotation as number | undefined) ?? 0) + 90,
+            }),
+            effects: [effect('preview', { rotate: true })],
+          };
+        case 'pointer-up':
+          return { state: state(prev.name, prev.payload), effects: [effect('commit', { placed: prev.payload })] };
+        case 'tool-select':
         case 'pointer-cancel':
         case 'escape':
           return { state: state('idle'), effects: [effect('cancel')] };
@@ -187,9 +261,31 @@ export function reduceInteraction(prev: InteractionState, event: InteractionEven
         case 'pointer-up':
         case 'enter':
         case 'double-click':
-          return { state: state('wiring.preview', { ...prev.payload, lastCommit: event.point }), effects: [effect('commit', { wireSegment: true, point: event.point, final: event.name === 'enter' || event.name === 'double-click' })] };
+          return {
+            state: event.name === 'pointer-up'
+              ? state('wiring.preview', { ...prev.payload, lastCommit: event.point })
+              : state('idle'),
+            effects: [effect('commit', {
+              wireSegment: true,
+              point: event.point,
+              final: event.name === 'enter' || event.name === 'double-click',
+            })],
+          };
         case 'tool-select':
         case 'right-click':
+        case 'pointer-cancel':
+        case 'escape':
+          return { state: state('idle'), effects: [effect('cancel')] };
+        default:
+          return { state: prev, effects: [] };
+      }
+
+    case 'cutting':
+      switch (event.name) {
+        case 'pointer-down':
+          return { state: state('idle'), effects: [effect('commit', { cut: true, point: event.point })] };
+        case 'right-click':
+        case 'tool-select':
         case 'pointer-cancel':
         case 'escape':
           return { state: state('idle'), effects: [effect('cancel')] };
@@ -234,7 +330,6 @@ export function reduceInteraction(prev: InteractionState, event: InteractionEven
           return { state: state('probing'), effects: [effect('commit', { probe: true, target: prev.payload.target })] };
         case 'tool-select':
         case 'pointer-cancel':
-        case 'tool-select':
         case 'escape':
           return { state: state('idle'), effects: [effect('cancel')] };
         default:

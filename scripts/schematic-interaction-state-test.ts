@@ -7,8 +7,15 @@
 import assert from 'node:assert/strict';
 
 import {
-  idleState, reduceInteraction, isEventAllowed,
-  type InteractionEvent, type InteractionStateName,
+  allowedEventsForState,
+  idleState,
+  interactionStateFromSnapshot,
+  interactionStatus,
+  isEventAllowed,
+  reduceInteraction,
+  type InteractionEvent,
+  type InteractionEventName,
+  type InteractionStateName,
 } from '../renderer/src/schematic-core/commands/interactionStateMachine';
 
 let passed = 0;
@@ -35,10 +42,10 @@ check('idle -> placing.component on tool-place', () => {
   assert.equal(result.effects.some((e) => e.name === 'preview'), true);
 });
 
-check('placing.component commits on pointer-up', () => {
+check('placing.component commits on pointer-up and remains armed', () => {
   let result = reduceInteraction(idleState(), ev('tool-place', { x: 100, y: 100 }, { componentType: 'R' }));
   result = reduceInteraction(result.state, ev('pointer-up', { x: 120, y: 120 }));
-  assert.equal(result.state.name, 'idle');
+  assert.equal(result.state.name, 'placing.component');
   assert.equal(result.effects.some((e) => e.name === 'commit'), true);
 });
 
@@ -70,6 +77,7 @@ check('wiring.preview commits segment on pointer-up, final on enter', () => {
   assert.equal(result.effects.some((e) => e.name === 'commit' && e.data?.final !== true), true);
   result = reduceInteraction(result.state, ev('enter', { x: 200, y: 0 }));
   assert.equal(result.effects.some((e) => e.name === 'commit' && e.data?.final === true), true);
+  assert.equal(result.state.name, 'idle');
 });
 
 check('idle -> selecting.marquee on pointer-down', () => {
@@ -118,11 +126,12 @@ check('right-click in idle opens context menu, stays idle', () => {
   assert.equal(result.effects.some((e) => e.name === 'open-context-menu'), true);
 });
 
-check('right-click in placing cancels (no context menu)', () => {
+check('right-click in placing rotates without opening context menu', () => {
   let result = reduceInteraction(idleState(), ev('tool-place', { x: 100, y: 100 }, { componentType: 'R' }));
   result = reduceInteraction(result.state, ev('right-click', { x: 100, y: 100 }));
-  assert.equal(result.state.name, 'idle');
-  assert.equal(result.effects.some((e) => e.name === 'cancel'), true);
+  assert.equal(result.state.name, 'placing.component');
+  assert.equal(result.state.payload.rotation, 90);
+  assert.equal(result.effects.some((e) => e.name === 'preview' && e.data?.rotate === true), true);
   assert.equal(result.effects.some((e) => e.name === 'open-context-menu'), false);
 });
 
@@ -150,12 +159,48 @@ check('every state accepts escape and pointer-cancel', () => {
   const states: InteractionStateName[] = [
     'idle', 'selecting.marquee', 'placing.component', 'placing.module',
     'wiring.preview', 'moving.free', 'moving.stretch',
-    'editing.wirePoint', 'editing.wireSegment', 'panning', 'probing', 'dialog',
+    'editing.wirePoint', 'editing.wireSegment', 'cutting', 'panning', 'probing', 'dialog',
   ];
   for (const s of states) {
     assert.equal(isEventAllowed(s, 'escape'), true, `${s} must accept escape`);
     assert.equal(isEventAllowed(s, 'pointer-cancel'), true, `${s} must accept pointer-cancel`);
   }
+});
+
+check('every state publishes a non-empty allowed-event table and modal status', () => {
+  const states: InteractionStateName[] = [
+    'idle', 'selecting.marquee', 'placing.component', 'placing.module',
+    'wiring.preview', 'moving.free', 'moving.stretch',
+    'editing.wirePoint', 'editing.wireSegment', 'cutting', 'panning', 'probing', 'dialog',
+  ];
+  for (const state of states) {
+    const events = allowedEventsForState(state);
+    assert.ok(events.length > 0, `${state} has no allowed events`);
+    assert.ok(events.includes('escape'), `${state} omits escape`);
+    assert.ok(events.includes('pointer-cancel'), `${state} omits pointer-cancel`);
+    assert.ok(interactionStatus(state).length > 0, `${state} has no status`);
+  }
+});
+
+check('allowed-event table rejects every undeclared event', () => {
+  const events: InteractionEventName[] = [
+    'pointer-down', 'pointer-move', 'pointer-up', 'pointer-cancel', 'escape',
+    'right-click', 'enter', 'double-click', 'rotate', 'mirror', 'tool-select',
+    'tool-wire', 'tool-cut', 'tool-place', 'tool-pan', 'tool-probe',
+    'open-dialog', 'close-dialog',
+  ];
+  const allowed = new Set(allowedEventsForState('dialog'));
+  for (const event of events) {
+    assert.equal(isEventAllowed('dialog', event), allowed.has(event));
+  }
+});
+
+check('legacy handler snapshot adapter has deterministic priority', () => {
+  assert.equal(interactionStateFromSnapshot({ placing: 'component' }), 'placing.component');
+  assert.equal(interactionStateFromSnapshot({ wiring: true, placing: 'component' }), 'wiring.preview');
+  assert.equal(interactionStateFromSnapshot({ moving: 'free', wiring: true }), 'moving.free');
+  assert.equal(interactionStateFromSnapshot({ dialogOpen: true, moving: 'stretch' }), 'dialog');
+  assert.equal(interactionStateFromSnapshot({ cutting: true }), 'cutting');
 });
 
 check('moving.free preview emits free mode', () => {
