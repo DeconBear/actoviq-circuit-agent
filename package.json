@@ -49,7 +49,7 @@
     "test:command-v1-adapter": "python scripts/command-v1-adapter-regression.py",
     "test:command-v2-apply": "python scripts/command-v2-apply-regression.py",
     "test:module-lease": "python scripts/module-lease-regression.py",
-    "test:schematic-core": "tsx scripts/schematic-core-invariants-test.ts && tsx scripts/schematic-core-test.ts && tsx scripts/schematic-interaction-state-test.ts",
+    "test:schematic-core": "tsx scripts/schematic-core-invariants-test.ts && tsx scripts/schematic-core-test.ts && tsx scripts/schematic-interaction-state-test.ts && tsx scripts/schematic-spatial-index-test.ts",
     "test:schematic-projection-parity": "tsx scripts/schematic-projection-parity.ts",
     "test:schematic-perf": "tsx scripts/schematic-perf-baseline.ts",
     "test:e2e:electron": "npm run build:src && npm run build:electron && node scripts/playwright-electron-smoke.mjs",
