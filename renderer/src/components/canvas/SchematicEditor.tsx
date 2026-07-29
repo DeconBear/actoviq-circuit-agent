@@ -147,6 +147,7 @@ interface Props {
     netId?: string;
     label: string;
   } | null;
+  locateTarget?: SchematicLocateTarget | null;
   onOpenChildModule?: (moduleId: string, instanceId: string, pinId?: string) => void;
 }
 
@@ -226,11 +227,14 @@ function initialEditorSession(key: string, module: CircuitModule): EditorSession
 }
 
 export interface SchematicProbeSelection {
-  kind: 'voltage' | 'current';
+  kind: 'voltage' | 'current' | 'power';
   label: string;
   candidates: string[];
   net?: string;
+  netId?: string;
+  wireId?: string;
   componentId?: string;
+  pinId?: string;
   componentType?: CircuitComponent['type'];
 }
 
@@ -242,6 +246,23 @@ function componentCurrentCandidates(component: CircuitComponent): string[] {
     ...(parameter ? [`i(@${component.name}[${parameter}])`] : []),
     `i(${component.name})`,
   ];
+}
+
+function componentPowerCandidates(component: CircuitComponent): string[] {
+  return [
+    `@${component.name}[p]`,
+    `p(${component.name})`,
+    `power(${component.name})`,
+  ];
+}
+
+export interface SchematicLocateTarget {
+  id: string;
+  moduleId: string;
+  kind: 'module' | 'component' | 'net';
+  entityId?: string;
+  net?: string;
+  netId?: string;
 }
 
 interface DragState {
@@ -341,6 +362,7 @@ export function SchematicEditor({
   onProbe,
   onDirtyChange,
   hierarchyTrace = null,
+  locateTarget = null,
   onOpenChildModule,
 }: Props) {
   const sessionKey = `${projectId}:${module.module_id}`;
@@ -515,6 +537,76 @@ export function SchematicEditor({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [document.moduleId, hierarchyTrace?.id]);
+
+  useEffect(() => {
+    if (!locateTarget?.id || locateTarget.moduleId !== document.moduleId) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (locateTarget.kind === 'module') {
+        setSelection(null);
+        setViewport(null);
+        setActionNotice(`Located module ${document.module.name}`);
+        return;
+      }
+      if (locateTarget.kind === 'component' && locateTarget.entityId) {
+        const component = draft.components.find((entry) => entry.id === locateTarget.entityId);
+        if (!component) return;
+        const bounds = componentBounds(component);
+        const centerX = (bounds.minX + bounds.maxX) / 2;
+        const centerY = (bounds.minY + bounds.maxY) / 2;
+        const width = Math.max(360, bounds.maxX - bounds.minX + 240);
+        const height = Math.max(280, bounds.maxY - bounds.minY + 200);
+        setSelection({ kind: 'component', id: component.id });
+        setViewport({
+          minX: centerX - width / 2,
+          minY: centerY - height / 2,
+          maxX: centerX + width / 2,
+          maxY: centerY + height / 2,
+        });
+        setActionNotice(`Located ${component.name}`);
+        return;
+      }
+      const matchingWires = document.wires.filter((wire) => (
+        Boolean(locateTarget.netId && wire.net_id === locateTarget.netId)
+        || Boolean(locateTarget.net && wire.net === locateTarget.net)
+      ));
+      if (matchingWires.length > 0) {
+        const points = matchingWires.flatMap((wire) => wire.points);
+        const minX = Math.min(...points.map((point) => point.x));
+        const minY = Math.min(...points.map((point) => point.y));
+        const maxX = Math.max(...points.map((point) => point.x));
+        const maxY = Math.max(...points.map((point) => point.y));
+        const width = Math.max(420, maxX - minX + 240);
+        const height = Math.max(300, maxY - minY + 200);
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        setSelection(selectionForWireIds(matchingWires.map((wire) => wire.id)));
+        setViewport({
+          minX: centerX - width / 2,
+          minY: centerY - height / 2,
+          maxX: centerX + width / 2,
+          maxY: centerY + height / 2,
+        });
+        setActionNotice(`Located net ${locateTarget.net || locateTarget.netId}`);
+        return;
+      }
+      const component = draft.components.find((entry) => entry.pins.some((pin) => (
+        Boolean(locateTarget.netId && pin.net_id === locateTarget.netId)
+        || Boolean(locateTarget.net && pin.net === locateTarget.net)
+      )));
+      if (component) {
+        setSelection({ kind: 'component', id: component.id });
+        setActionNotice(`Located ${locateTarget.net || locateTarget.netId} at ${component.name}`);
+        return;
+      }
+      const port = draft.ports.find((entry) => (
+        Boolean(locateTarget.netId && entry.net_id === locateTarget.netId)
+        || Boolean(locateTarget.net && entry.net === locateTarget.net)
+      ));
+      if (port) setSelection({ kind: 'port', id: port.id });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [document.moduleId, locateTarget?.id]);
+
   // qucs-style placement ghost: the pending symbol follows the cursor (grid-snapped,
   // rotated by placeRotation) until placement mode is exited via Esc/right tool.
   const placeGhost = useMemo(() => {
@@ -2503,6 +2595,7 @@ export function SchematicEditor({
       data-interaction-state={interactionStateName}
       data-interaction-status={interactionStatusText}
       data-hierarchy-trace={hierarchyTrace?.netId || hierarchyTrace?.net || ''}
+      data-locate-target={locateTarget?.id || ''}
       data-drag-preview={dragPreviewPositions ? 'true' : 'false'}
       data-component-positions={JSON.stringify(displayedComponentPositions)}
       data-port-positions={JSON.stringify(Object.fromEntries(document.portPositions))}
@@ -2827,6 +2920,22 @@ export function SchematicEditor({
                   >
                     Plot current
                   </button>
+                  <button
+                    type="button"
+                    style={styles.smallButton}
+                    onClick={() => onProbe({
+                      kind: 'power',
+                      label: `Power in ${selectedComponent.name}`,
+                      candidates: componentPowerCandidates(selectedComponent),
+                      componentId: selectedComponent.id,
+                      componentType: selectedComponent.type,
+                    })}
+                    disabled={busy || dirty}
+                    title={dirty ? 'Apply schematic changes before probing' : `Plot power in ${selectedComponent.name}`}
+                    data-testid="schematic-editor-probe-power"
+                  >
+                    Plot power
+                  </button>
                 </div>
               ) : null}
               {selectedComponent.type === 'MODULE' ? (
@@ -3037,6 +3146,10 @@ export function SchematicEditor({
                               label: `Voltage at ${pin.net}`,
                               candidates: [`v(${pin.net})`],
                               net: pin.net,
+                              netId: pin.net_id,
+                              componentId: selectedComponent.id,
+                              pinId: pin.id,
+                              componentType: selectedComponent.type,
                             })}
                             disabled={busy || dirty}
                             aria-label={`Plot voltage at ${pin.net}`}
@@ -3122,6 +3235,8 @@ export function SchematicEditor({
                     label: `Voltage at ${selectedWire.net}`,
                     candidates: [`v(${selectedWire.net})`],
                     net: selectedWire.net,
+                    netId: selectedWire.net_id,
+                    wireId: selectedWire.id,
                   })}
                   disabled={busy || dirty}
                   title={dirty ? 'Apply schematic changes before probing' : `Plot voltage at ${selectedWire.net}`}

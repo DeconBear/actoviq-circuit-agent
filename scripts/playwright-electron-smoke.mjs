@@ -556,9 +556,10 @@ try {
   await page.getByTestId('sidebar-new-project').click();
   await page.getByTestId('project-create-panel').waitFor({ timeout: 10_000 });
   await page.getByText('New project', { exact: true }).waitFor();
-  assert.equal(await page.getByTestId('project-kind-select').inputValue(), 'simulation');
+  const createProjectKindSelect = page.getByTestId('project-create-panel').getByTestId('project-kind-select');
+  assert.equal(await createProjectKindSelect.inputValue(), 'simulation');
   assert.deepEqual(
-    await page.getByTestId('project-kind-select').evaluate((select) => (
+    await createProjectKindSelect.evaluate((select) => (
       select instanceof HTMLSelectElement
         ? [...select.options].map((option) => option.textContent)
         : []
@@ -1225,6 +1226,25 @@ try {
   await waitForWorkbenchProject(page, projectId);
   await page.getByTestId('module-card-filter').dblclick();
   await clickSchematicComponent(page, probeResistorId);
+  await page.getByTestId('schematic-editor-probe-power').click();
+  const powerProbeStatus = page.getByTestId('simulation-probe-status');
+  await page.waitForFunction(({ entity }) => {
+    const node = document.querySelector('[data-testid="simulation-probe-status"]');
+    return node?.getAttribute('data-probe-kind') === 'power'
+      && node?.getAttribute('data-probe-entity') === entity
+      && Boolean(node.textContent?.trim());
+  }, { entity: probeResistorId });
+  assert.match(
+    await powerProbeStatus.innerText(),
+    /^(Added .+ from filter|Power in .+ is not present in this run\.)/,
+    'power probe should resolve a trace or report that the run did not capture it',
+  );
+  await page.screenshot({ path: path.resolve(outputRoot, 'simulation-probe-power.png') });
+
+  await page.getByTestId('topbar-tab-design').click();
+  await waitForWorkbenchProject(page, projectId);
+  await page.getByTestId('module-card-filter').dblclick();
+  await clickSchematicComponent(page, probeResistorId);
   await page.getByTestId(/^schematic-editor-probe-pin-/).last().click();
   const voltageProbeStatus = page.getByTestId('simulation-probe-status');
   await voltageProbeStatus.getByText(/^Added v\(.+\) from filter$/).waitFor({ timeout: 30_000 });
@@ -1452,6 +1472,7 @@ try {
       'output/playwright/module-document-svg.png',
       'output/playwright/simulation-workbench.png',
       'output/playwright/simulation-probe-current.png',
+      'output/playwright/simulation-probe-power.png',
       'output/playwright/simulation-probe-voltage.png',
       'output/playwright/saved-design-memory.png',
       'output/playwright/imported-template-project.png',

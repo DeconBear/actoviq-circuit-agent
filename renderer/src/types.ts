@@ -552,9 +552,17 @@ export interface SimulationProbeRequest {
   id: number;
   projectId: string;
   moduleId: string;
-  kind: 'voltage' | 'current';
+  kind: 'voltage' | 'current' | 'power';
   label: string;
   candidates: string[];
+  entity?: {
+    kind: 'wire' | 'pin' | 'component';
+    id: string;
+    net?: string;
+    netId?: string;
+    componentId?: string;
+    pinId?: string;
+  };
 }
 
 export interface SimulationRunMetric {

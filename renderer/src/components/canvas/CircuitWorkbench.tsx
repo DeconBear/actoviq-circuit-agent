@@ -28,13 +28,21 @@ import type {
   SimulationRun,
   StoredExecutionProfile,
 } from '../../types';
-import { SchematicEditor, type SchematicProbeSelection } from './SchematicEditor';
+import {
+  SchematicEditor,
+  type SchematicLocateTarget,
+  type SchematicProbeSelection,
+} from './SchematicEditor';
 import { WorkbenchToolbar } from './WorkbenchToolbar';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
 import { createSchematicDocument } from '../../schematic/schematicDocument';
 import { diffModuleToOperations } from '../../schematic-core/commands/diffModule';
 import type { TransactionOperation } from '../../schematic-core/commands/applyTransaction';
 import type { PdkDeviceCatalog } from './componentParams';
+import {
+  searchProjectSchematic,
+  type SchematicSearchResult,
+} from '../../schematic-core/search/projectSearch';
 
 interface RegisteredPdkInstallation {
   installation_id: string;
@@ -155,6 +163,10 @@ function currentVectorCandidates(instance: string, type?: CircuitModule['compone
     ...(parameter ? [`i(@${instance}[${parameter}])`] : []),
     `i(${instance})`,
   ];
+}
+
+function powerVectorCandidates(instance: string): string[] {
+  return [`@${instance}[p]`, `p(${instance})`, `power(${instance})`];
 }
 const BOARD_MIN_WIDTH = 3600;
 const BOARD_MIN_HEIGHT = 2600;
@@ -445,6 +457,9 @@ export function CircuitWorkbench({
   const [view, setView] = useState<'board' | 'module'>('board');
   const [hierarchyPath, setHierarchyPath] = useState<HierarchyPathEntry[]>([]);
   const [hierarchyTrace, setHierarchyTrace] = useState<HierarchyTrace | null>(null);
+  const [schematicSearchOpen, setSchematicSearchOpen] = useState(false);
+  const [schematicSearchQuery, setSchematicSearchQuery] = useState('');
+  const [schematicLocateTarget, setSchematicLocateTarget] = useState<SchematicLocateTarget | null>(null);
   const [zoom, setZoom] = useState(65);
   const [notice, setNotice] = useState('');
   const [layoutFeedback, setLayoutFeedback] = useState<Record<string, LayoutOptimizationResult>>({});
@@ -546,6 +561,10 @@ export function CircuitWorkbench({
       },
     };
   }, [projectPdkBinding, projectPdkRef, registeredPdks]);
+  const schematicSearchResults = useMemo(
+    () => searchProjectSchematic(bundle?.modules ?? {}, schematicSearchQuery),
+    [bundle?.modules, schematicSearchQuery],
+  );
   const schematicIoEnabled = supportsSchematicIo(projectKind);
   const schematicFormats = schematicIoFormats(projectKind);
   const erc = bundle?.erc ?? build?.erc ?? null;
@@ -583,10 +602,14 @@ export function CircuitWorkbench({
         if (source.module_id === moduleId && source.local_net === probe.net) mapped.push(`v(${node})`);
       }
     }
-    if (probe.componentId) {
+    if (probe.componentId && probe.kind !== 'voltage') {
       for (const [instance, source] of Object.entries(build?.sourceMap?.components ?? {})) {
         if (source.module_id === moduleId && source.component_id === probe.componentId) {
-          mapped.push(...currentVectorCandidates(instance, probe.componentType));
+          mapped.push(...(
+            probe.kind === 'power'
+              ? powerVectorCandidates(instance)
+              : currentVectorCandidates(instance, probe.componentType)
+          ));
         }
       }
     }
@@ -600,6 +623,23 @@ export function CircuitWorkbench({
       kind: probe.kind,
       label: probe.label,
       candidates,
+      entity: probe.wireId ? {
+        kind: 'wire',
+        id: probe.wireId,
+        net: probe.net,
+        netId: probe.netId,
+      } : probe.pinId && probe.componentId ? {
+        kind: 'pin',
+        id: `${probe.componentId}:${probe.pinId}`,
+        net: probe.net,
+        netId: probe.netId,
+        componentId: probe.componentId,
+        pinId: probe.pinId,
+      } : probe.componentId ? {
+        kind: 'component',
+        id: probe.componentId,
+        componentId: probe.componentId,
+      } : undefined,
     });
     setActiveTab('simulation');
   }
@@ -632,6 +672,9 @@ export function CircuitWorkbench({
     modulePreviewBusyRef.current = new Set();
     setHierarchyPath([]);
     setHierarchyTrace(null);
+    setSchematicSearchOpen(false);
+    setSchematicSearchQuery('');
+    setSchematicLocateTarget(null);
     setView('board');
   }, [activeProjectId]);
 
@@ -1033,6 +1076,7 @@ export function CircuitWorkbench({
     const moduleName = project?.modules.find((entry) => entry.id === moduleId)?.name;
     setHierarchyPath([{ moduleId, instanceName: moduleName }]);
     setHierarchyTrace(null);
+    setSchematicLocateTarget(null);
     setActiveModuleId(moduleId);
     setView('module');
     if (!bundle?.module_previews[moduleId]) {
@@ -1046,6 +1090,7 @@ export function CircuitWorkbench({
     pinId?: string,
   ): Promise<void> {
     if (!selectedRef || !selectedModule) return;
+    setSchematicLocateTarget(null);
     const instance = selectedModule.components.find((component) => component.id === instanceId);
     const child = bundle?.modules[moduleId];
     if (!instance || instance.type !== 'MODULE' || !child) {
@@ -1098,6 +1143,7 @@ export function CircuitWorkbench({
     if (!target) return;
     setHierarchyPath((current) => current.slice(0, index + 1));
     setHierarchyTrace(null);
+    setSchematicLocateTarget(null);
     setActiveModuleId(target.moduleId);
     setView('module');
   }
@@ -1115,7 +1161,30 @@ export function CircuitWorkbench({
   function backToBoard() {
     setHierarchyPath([]);
     setHierarchyTrace(null);
+    setSchematicLocateTarget(null);
     setView('board');
+  }
+
+  async function locateSchematicSearchResult(result: SchematicSearchResult) {
+    const module = bundle?.modules[result.moduleId];
+    if (!module) return;
+    setHierarchyPath([{ moduleId: result.moduleId, instanceName: module.name }]);
+    setHierarchyTrace(null);
+    setActiveModuleId(result.moduleId);
+    setView('module');
+    setSchematicLocateTarget({
+      id: `${Date.now()}-${result.id}`,
+      moduleId: result.moduleId,
+      kind: result.kind === 'net'
+        ? 'net'
+        : result.kind === 'module' ? 'module' : 'component',
+      entityId: result.entityId,
+      net: result.net,
+      netId: result.netId,
+    });
+    if (!bundle?.module_previews[result.moduleId]) {
+      await buildModulePreview(result.moduleId);
+    }
   }
 
   async function togglePreview(module: CircuitModuleRef): Promise<void> {
@@ -2148,12 +2217,53 @@ export function CircuitWorkbench({
               </span>
             );
           })}
+          <button
+            type="button"
+            style={styles.hierarchySearchButton}
+            onClick={() => setSchematicSearchOpen((current) => !current)}
+            data-testid="schematic-search-toggle"
+          >
+            Find
+          </button>
           {hierarchyTrace ? (
             <span style={styles.hierarchyTrace} data-testid="schematic-hierarchy-trace">
               Trace {hierarchyTrace.label} → {hierarchyTrace.netId || hierarchyTrace.net}
             </span>
           ) : null}
         </nav>
+      ) : null}
+      {view === 'module' && schematicSearchOpen ? (
+        <section style={styles.schematicSearch} data-testid="schematic-search-panel">
+          <input
+            style={styles.schematicSearchInput}
+            value={schematicSearchQuery}
+            onChange={(event) => setSchematicSearchQuery(event.target.value)}
+            placeholder="Find refdes, net, model, or module instance"
+            aria-label="Find schematic entity"
+            data-testid="schematic-search-input"
+            autoFocus
+          />
+          {schematicSearchQuery.trim() ? (
+            <div style={styles.schematicSearchResults} data-testid="schematic-search-results">
+              {schematicSearchResults.length === 0 ? (
+                <div style={styles.schematicSearchEmpty}>No schematic matches.</div>
+              ) : null}
+              {schematicSearchResults.map((result) => (
+                <button
+                  key={result.id}
+                  type="button"
+                  style={styles.schematicSearchResult}
+                  onClick={() => void locateSchematicSearchResult(result)}
+                  data-testid={`schematic-search-result-${result.kind}-${result.moduleId}-${result.entityId || 'module'}`}
+                >
+                  <span style={styles.schematicSearchKind}>{result.kind.replace('_', ' ')}</span>
+                  <strong>{result.title}</strong>
+                  <small>{result.subtitle}</small>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       {(error || notice) && (
@@ -2634,6 +2744,7 @@ export function CircuitWorkbench({
               onResetLayout={(itemIds) => resetSchematicLayout(selectedRef.id, itemIds)}
               onProbe={(probe) => openSimulationProbe(selectedRef.id, probe)}
               hierarchyTrace={hierarchyTrace?.moduleId === selectedRef.id ? hierarchyTrace : null}
+              locateTarget={schematicLocateTarget?.moduleId === selectedRef.id ? schematicLocateTarget : null}
               onOpenChildModule={(moduleId, instanceId, pinId) => {
                 void openChildModule(moduleId, instanceId, pinId);
               }}
@@ -3096,6 +3207,7 @@ function ModuleSchematic({
   onResetLayout,
   onProbe,
   hierarchyTrace,
+  locateTarget,
   onOpenChildModule,
 }: {
   projectId: string;
@@ -3123,6 +3235,7 @@ function ModuleSchematic({
   onResetLayout: (itemIds: string[]) => Promise<void>;
   onProbe: (probe: SchematicProbeSelection) => void;
   hierarchyTrace?: HierarchyTrace | null;
+  locateTarget?: SchematicLocateTarget | null;
   onOpenChildModule?: (moduleId: string, instanceId: string, pinId?: string) => void;
 }) {
   const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
@@ -3572,6 +3685,7 @@ function ModuleSchematic({
               onProbe={onProbe}
               onDirtyChange={setEditorDirty}
               hierarchyTrace={hierarchyTrace}
+              locateTarget={locateTarget}
               onOpenChildModule={onOpenChildModule}
             />
           </>
@@ -4057,14 +4171,77 @@ const styles: Record<string, CSSProperties> = {
     whiteSpace: 'nowrap',
   },
   hierarchyCrumbActive: { color: '#1d4ed8', fontWeight: 750 },
-  hierarchyTrace: {
+  hierarchySearchButton: {
     marginLeft: 'auto',
+    border: '1px solid #c5cbd3',
+    borderRadius: 4,
+    background: '#ffffff',
+    color: '#334155',
+    padding: '3px 8px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  hierarchyTrace: {
     padding: '3px 7px',
     borderRadius: 999,
     background: '#ede9fe',
     color: '#6d28d9',
     whiteSpace: 'nowrap',
   },
+  schematicSearch: {
+    position: 'relative',
+    zIndex: 22,
+    display: 'grid',
+    gridTemplateColumns: 'minmax(280px, 460px)',
+    gap: 5,
+    padding: '7px 14px',
+    borderBottom: '1px solid #d8dce2',
+    background: '#f8fafc',
+  },
+  schematicSearchInput: {
+    border: '1px solid #94a3b8',
+    borderRadius: 5,
+    padding: '6px 8px',
+    fontSize: 11,
+    color: '#172033',
+    background: '#fff',
+  },
+  schematicSearchResults: {
+    position: 'absolute',
+    top: 39,
+    left: 14,
+    width: 'min(520px, calc(100vw - 290px))',
+    maxHeight: 300,
+    overflow: 'auto',
+    display: 'grid',
+    gap: 3,
+    padding: 6,
+    border: '1px solid #cbd5e1',
+    borderRadius: 6,
+    background: '#fff',
+    boxShadow: '0 12px 28px rgba(15, 23, 42, 0.18)',
+  },
+  schematicSearchResult: {
+    display: 'grid',
+    gridTemplateColumns: '82px minmax(0, 1fr)',
+    gap: '2px 8px',
+    alignItems: 'center',
+    border: 0,
+    borderRadius: 4,
+    background: '#fff',
+    padding: '6px 7px',
+    textAlign: 'left',
+    color: '#172033',
+    cursor: 'pointer',
+  },
+  schematicSearchKind: {
+    gridRow: '1 / span 2',
+    fontSize: 9,
+    textTransform: 'uppercase',
+    color: '#2563eb',
+    fontWeight: 750,
+  },
+  schematicSearchEmpty: { padding: 8, color: '#64748b', fontSize: 11 },
   projectKindField: {
     display: 'flex',
     alignItems: 'center',

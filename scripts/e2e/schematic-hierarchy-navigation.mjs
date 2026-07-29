@@ -304,6 +304,34 @@ try {
     ['vin', 'vout'],
   );
 
+  await page.getByTestId('schematic-search-toggle').click();
+  await page.getByTestId('schematic-search-input').fill('RLEAF');
+  await page.getByTestId('schematic-search-result-component-leaf-rleaf').click();
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return node?.getAttribute('data-module-id') === 'leaf'
+      && node?.getAttribute('data-selected') === 'component:rleaf';
+  });
+  assert.ok(await editor.getAttribute('data-locate-target'));
+  await page.getByTestId('schematic-search-input').fill('net_leaf_in');
+  await page.getByTestId('schematic-search-result-net-leaf-net_leaf_in').click();
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return node?.getAttribute('data-module-id') === 'leaf'
+      && Number(node?.getAttribute('data-selected-wire-count')) > 0;
+  });
+  await page.getByTestId('schematic-search-input').fill('XLEAF');
+  await page.getByTestId('schematic-search-result-module_instance-mid-xleaf').click();
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return node?.getAttribute('data-module-id') === 'mid'
+      && node?.getAttribute('data-selected') === 'component:xleaf';
+  });
+  await page.screenshot({
+    path: path.resolve(outputRoot, 'project-search-locate.png'),
+    fullPage: true,
+  });
+
   assert.deepEqual(
     pageErrors.filter((entry) => (
       !entry.startsWith('electron-window')
@@ -321,9 +349,11 @@ try {
     explicitPortMapTrace: true,
     staleRevisionDetected: true,
     explicitInstanceUpdatePersisted: true,
+    projectSearchLocate: true,
     artifacts: [
       path.relative(root, path.resolve(outputRoot, 'stale-instance.png')),
       path.relative(root, path.resolve(outputRoot, 'three-level-net-trace.png')),
+      path.relative(root, path.resolve(outputRoot, 'project-search-locate.png')),
     ],
   }, null, 2));
 } catch (error) {

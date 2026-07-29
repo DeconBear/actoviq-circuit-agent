@@ -19,6 +19,7 @@ import type {
   SimulationDatasetTrace,
   SimulationRun,
   SimulationRunMetric,
+  SimulationProbeRequest,
   StoredExecutionProfile,
 } from '../../types';
 
@@ -92,6 +93,7 @@ function ProjectSimulation({
   const [selectedTraces, setSelectedTraces] = useState<string[]>([]);
   const [diagram, setDiagram] = useState<DiagramMode>('cartesian');
   const [probeMessage, setProbeMessage] = useState('');
+  const [lastProbeContext, setLastProbeContext] = useState<SimulationProbeRequest | null>(null);
   const probeRequest = useAppStore((state) => state.simulationProbeRequest);
   const setProbeRequest = useAppStore((state) => state.setSimulationProbeRequest);
   const activeProbe = probeRequest?.projectId === projectId ? probeRequest : null;
@@ -222,10 +224,11 @@ function ProjectSimulation({
 
   useEffect(() => {
     if (!activeProbe || !dataset) return;
+    setLastProbeContext(activeProbe);
     const probedTrace = matchingTraceName(dataset.traces, activeProbe.candidates);
     if (probedTrace) {
       setSelectedTraces((current) => (
-        activeProbe.kind === 'current'
+        activeProbe.kind === 'current' || activeProbe.kind === 'power'
           ? [probedTrace]
           : [...new Set([...current, probedTrace])]
       ));
@@ -329,7 +332,14 @@ function ProjectSimulation({
       </div>
 
       {probeMessage ? (
-        <div style={styles.probeStatus} data-testid="simulation-probe-status">{probeMessage}</div>
+        <div
+          style={styles.probeStatus}
+          data-testid="simulation-probe-status"
+          data-probe-kind={(activeProbe || lastProbeContext)?.kind || ''}
+          data-probe-entity={(activeProbe || lastProbeContext)?.entity?.id || ''}
+        >
+          {probeMessage}
+        </div>
       ) : null}
 
       <div style={styles.analysisBar}>
