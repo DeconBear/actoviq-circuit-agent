@@ -4892,6 +4892,8 @@ def compile_project(root: Path) -> dict[str, Any]:
                     )
                     continue
                 component_name = compiled_component_name(module_id, component)
+                for pin in component.get("pins", []) or []:
+                    compiled_node_name(str(pin.get("net") or ""))
                 compiled_value = rewrite_compiled_value_references(
                     component_type,
                     component["value"],
@@ -5244,6 +5246,8 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
             )
             continue
         component_name = compiled_component_name(module_id, component)
+        for pin in component.get("pins", []) or []:
+            node_name(str(pin.get("net") or ""))
         compiled_value = rewrite_compiled_value_references(
             component_type,
             component["value"],
