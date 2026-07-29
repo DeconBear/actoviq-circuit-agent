@@ -811,6 +811,28 @@ export function SchematicEditor({
       return;
     }
 
+    const directPinTarget = event.target instanceof Element
+      && Boolean(event.target.closest('[data-endpoint-kind="pin"]'));
+    const directPin = directPinTarget ? hitEndpoint(document, world) : null;
+    if (
+      tool === 'select'
+      && directPin?.kind === 'pin'
+      && !endpointIsConnected(document, directPin)
+    ) {
+      setTool('wire');
+      setWireStart(directPin);
+      setHoverEndpoint(directPin);
+      setHoverWorld(snapPoint(world));
+      setSelection(null);
+      setActionNotice(`Wiring from unconnected pin ${directPin.label}`);
+      wireDragRef.current = {
+        start: directPin,
+        startClient: { x: event.clientX, y: event.clientY },
+        moved: false,
+      };
+      return;
+    }
+
     const wirePointHit = hitSelectedStoredWirePoint(document.wires, draft, selection, world);
     if (wirePointHit) {
       setSelection({ kind: 'wire', id: wirePointHit.wire.id });
@@ -990,6 +1012,12 @@ export function SchematicEditor({
       ));
       const nextHoverWorld = snapPoint(world);
       setHoverWorld((current) => (samePosition(current, nextHoverWorld) ? current : nextHoverWorld));
+    } else if (tool === 'select') {
+      const hit = hitEndpoint(document, world);
+      const next = hit?.kind === 'pin' && !endpointIsConnected(document, hit) ? hit : null;
+      setHoverEndpoint((current) => (
+        endpointIdentity(current) === endpointIdentity(next) ? current : next
+      ));
     }
     const wireDrag = wireDragRef.current;
     if (wireDrag && !wireDrag.moved) {
@@ -2714,6 +2742,25 @@ function endpointIdentity(endpoint: EndpointHit | null): string {
   if (endpoint.component_id && endpoint.pin_id) return `pin:${endpoint.component_id}:${endpoint.pin_id}`;
   if (endpoint.port_id) return `port:${endpoint.port_id}`;
   return `point:${endpoint.x},${endpoint.y}`;
+}
+
+function endpointIsConnected(
+  document: SchematicDocument,
+  endpoint: EndpointHit,
+): boolean {
+  if (endpoint.kind !== 'pin' || !endpoint.component_id || !endpoint.pin_id) {
+    return false;
+  }
+  return document.wires.some((wire) => (
+    (
+      wire.from?.component_id === endpoint.component_id
+      && wire.from?.pin_id === endpoint.pin_id
+    )
+    || (
+      wire.to?.component_id === endpoint.component_id
+      && wire.to?.pin_id === endpoint.pin_id
+    )
+  ));
 }
 
 function cloneComponent(component: CircuitComponent): CircuitComponent {

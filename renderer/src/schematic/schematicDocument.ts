@@ -4340,13 +4340,18 @@ export function pointEndpoint(point: CircuitPosition): EndpointHit {
 }
 
 export function hitEndpoint(document: SchematicDocument, world: CircuitPosition): EndpointHit | null {
+  const pinCandidates: Array<{ endpoint: EndpointHit; distance: number; key: string }> = [];
   for (const component of document.module.components) {
     for (let index = 0; index < component.pins.length; index += 1) {
       const pin = component.pins[index];
       if (!pin) continue;
       const point = pinWorld(component, pin, index);
-      if (distance(point, world) <= PIN_REACH) {
-        return {
+      const hitDistance = distance(point, world);
+      if (hitDistance <= PIN_REACH) {
+        pinCandidates.push({
+          distance: hitDistance,
+          key: `${component.id}.${pin.id}`,
+          endpoint: {
           kind: 'pin',
           x: point.x,
           y: point.y,
@@ -4354,41 +4359,72 @@ export function hitEndpoint(document: SchematicDocument, world: CircuitPosition)
           pin_id: pin.id,
           label: `${component.name}.${pin.name}`,
           net: pin.net,
-        };
+          net_id: pin.net_id,
+          },
+        });
       }
     }
   }
+  pinCandidates.sort((left, right) => (
+    left.distance - right.distance || left.key.localeCompare(right.key)
+  ));
+  if (pinCandidates[0]) return pinCandidates[0].endpoint;
+
+  const portCandidates: Array<{ endpoint: EndpointHit; distance: number; key: string }> = [];
   for (const port of document.module.ports) {
     if (!isSchematicPortVisible(document, port)) continue;
     const point = document.portPositions.get(port.id);
-    if (point && distance(point, world) <= PIN_REACH + 3) {
-      return {
-        kind: 'port',
-        x: point.x,
-        y: point.y,
-        port_id: port.id,
-        label: port.name,
-        net: port.net,
-      };
+    if (point) {
+      const hitDistance = distance(point, world);
+      if (hitDistance <= PIN_REACH + 3) {
+        portCandidates.push({
+          distance: hitDistance,
+          key: port.id,
+          endpoint: {
+            kind: 'port',
+            x: point.x,
+            y: point.y,
+            port_id: port.id,
+            label: port.name,
+            net: port.net,
+            net_id: port.net_id,
+          },
+        });
+      }
     }
   }
+  portCandidates.sort((left, right) => (
+    left.distance - right.distance || left.key.localeCompare(right.key)
+  ));
+  if (portCandidates[0]) return portCandidates[0].endpoint;
   return hitWireNode(document, world);
 }
 
 function hitWireNode(document: SchematicDocument, world: CircuitPosition): EndpointHit | null {
+  const junctionCandidates: Array<{ endpoint: EndpointHit; distance: number; key: string }> = [];
   for (const wire of document.wires) {
     for (const endpoint of [wire.from, wire.to]) {
-      if (!endpoint?.junction_id || distance(endpoint, world) > PIN_REACH) continue;
-      return {
-        kind: 'junction',
-        ...endpoint,
-        label: wire.net ? `Junction ${wire.net}` : 'Junction',
-        net: wire.net,
-        net_id: wire.net_id,
-        wire_id: wire.id,
-      };
+      if (!endpoint?.junction_id) continue;
+      const hitDistance = distance(endpoint, world);
+      if (hitDistance > PIN_REACH) continue;
+      junctionCandidates.push({
+        distance: hitDistance,
+        key: `${endpoint.junction_id}:${wire.id}`,
+        endpoint: {
+          kind: 'junction',
+          ...endpoint,
+          label: wire.net ? `Junction ${wire.net}` : 'Junction',
+          net: wire.net,
+          net_id: wire.net_id,
+          wire_id: wire.id,
+        },
+      });
     }
   }
+  junctionCandidates.sort((left, right) => (
+    left.distance - right.distance || left.key.localeCompare(right.key)
+  ));
+  if (junctionCandidates[0]) return junctionCandidates[0].endpoint;
 
   const candidates: Array<{
     wire: CircuitWire;
