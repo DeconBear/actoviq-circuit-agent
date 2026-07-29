@@ -35,7 +35,10 @@ import {
 } from './SchematicEditor';
 import { WorkbenchToolbar } from './WorkbenchToolbar';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
-import { createSchematicDocument } from '../../schematic/schematicDocument';
+import {
+  projectSchematicArtifact,
+  projectSchematicDocument as createSchematicDocument,
+} from '../../schematic-core/projection/facade';
 import { diffModuleToOperations } from '../../schematic-core/commands/diffModule';
 import type { TransactionOperation } from '../../schematic-core/commands/applyTransaction';
 import type { PdkDeviceCatalog } from './componentParams';
@@ -933,7 +936,11 @@ export function CircuitWorkbench({
     return modulePreviewBusyRef.current.size === 0;
   }
 
-  async function buildModulePreview(moduleId: string, showNotice = true): Promise<boolean> {
+  async function buildModulePreview(
+    moduleId: string,
+    showNotice = true,
+    sourceModule?: CircuitModule,
+  ): Promise<boolean> {
     if (!currentProjectId) return false;
     const operationProjectId = currentProjectId;
     if (modulePreviewBusyRef.current.has(moduleId)) return false;
@@ -941,7 +948,12 @@ export function CircuitWorkbench({
     setError('');
     if (showNotice) setNotice('Rendering module with netlistsvg...');
     try {
-      const result = await window.electronAPI.compileCircuitModule(operationProjectId, moduleId);
+      const artifactSource = sourceModule ?? bundle?.modules[moduleId];
+      const result = await window.electronAPI.compileCircuitModule(
+        operationProjectId,
+        moduleId,
+        artifactSource ? projectSchematicArtifact(artifactSource) : undefined,
+      );
       if (!result.schematic_path) {
         throw new Error('netlistsvg did not produce a module SVG.');
       }
@@ -1063,7 +1075,7 @@ export function CircuitWorkbench({
       setBusy(true);
       setNotice('Applying schematic netlist and rebuilding SVG...');
       try {
-        const built = await buildModulePreview(moduleId, false);
+        const built = await buildModulePreview(moduleId, false, moduleData);
         if (built && isActiveProject(operationProjectId)) setNotice('Applied netlist and SVG rebuilt');
       } finally {
         if (isActiveProject(operationProjectId)) setBusy(false);
@@ -2735,7 +2747,7 @@ export function CircuitWorkbench({
                 ports: bundle?.modules[entry.id]?.ports || entry.ports || [],
                 parameter_defs: bundle?.modules[entry.id]?.parameter_defs,
               }))}
-              onBuild={() => buildModulePreview(selectedRef.id)}
+              onBuild={() => buildModulePreview(selectedRef.id, true, selectedModule)}
               onOptimize={() => optimizeModuleSchematic(selectedRef.id)}
               layoutFeedback={layoutFeedback[selectedRef.id]}
               onSaveSchematic={(moduleData) => saveModuleSchematic(selectedRef.id, moduleData)}

@@ -43,6 +43,7 @@ import type {
   WorkspaceSummary,
   XschemSyncResult,
 } from './types';
+import type { SerializableSchematicDocument } from './schematic/schematicDocument';
 
 export {};
 
@@ -204,12 +205,18 @@ declare global {
       ): Promise<LcscBindResult>;
       simulateCircuitProject(projectId: string): Promise<SimulationRun>;
       generateCircuitTechnicalReport(projectId: string, sourceRevision: number): Promise<TechnicalReportResult>;
-      compileCircuitModule(projectId: string, moduleId: string): Promise<{
+      compileCircuitModule(
+        projectId: string,
+        moduleId: string,
+        schematicDocument?: SerializableSchematicDocument,
+      ): Promise<{
         ok: true;
         module_id: string;
         revision: number;
         netlist_path: string;
         schematic_path: string;
+        schematic_document_path?: string;
+        render_map_path?: string;
         render: {
           ok: boolean;
           svg_path?: string;

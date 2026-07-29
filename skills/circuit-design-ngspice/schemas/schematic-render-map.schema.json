@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actoviq.local/schemas/schematic-render-map.schema.json",
+  "title": "Actoviq Schematic Renderer Entity Map",
+  "type": "object",
+  "required": [
+    "schema",
+    "module_id",
+    "module_revision",
+    "renderer",
+    "connectivity_hash",
+    "entities",
+    "truth",
+    "projection",
+    "render_output"
+  ],
+  "properties": {
+    "schema": { "const": "actoviq.schematic-render-map.v1" },
+    "module_id": { "type": "string", "minLength": 1 },
+    "module_revision": { "type": "integer", "minimum": 0 },
+    "renderer": { "enum": ["netlistsvg", "grid-experimental"] },
+    "connectivity_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "entities": {
+      "type": "object",
+      "required": ["components", "pins", "ports", "nets", "wires", "junctions"],
+      "properties": {
+        "components": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "pins": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "ports": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "nets": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "wires": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+        "junctions": { "type": "array", "items": { "$ref": "#/$defs/entity" } }
+      },
+      "additionalProperties": false
+    },
+    "truth": {
+      "type": "object",
+      "required": ["schema", "role"],
+      "properties": {
+        "schema": { "const": "actoviq.module.v2" },
+        "role": { "const": "canonical_edit_source" }
+      },
+      "additionalProperties": false
+    },
+    "projection": {
+      "type": "object",
+      "required": ["schema", "artifact_consumed"],
+      "properties": {
+        "schema": { "const": "actoviq.schematic-document.v1" },
+        "artifact_consumed": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "render_output": {
+      "type": "object",
+      "required": ["role", "editable"],
+      "properties": {
+        "role": { "const": "derived_preview_export" },
+        "editable": { "const": false }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "entity": {
+      "type": "object",
+      "required": ["entity_id"],
+      "properties": {
+        "entity_id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string" },
+        "render_id": { "type": "string" },
+        "component_id": { "type": "string" },
+        "pin_id": { "type": "string" },
+        "render_index": { "type": "integer", "minimum": 0 },
+        "net": { "type": "string" },
+        "net_id": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

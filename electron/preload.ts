@@ -602,8 +602,8 @@ const electronAPI = {
     return ipcRenderer.invoke('project:generate-technical-report', projectId, sourceRevision);
   },
 
-  compileCircuitModule(projectId: string, moduleId: string): Promise<unknown> {
-    return ipcRenderer.invoke('project:compile-module', projectId, moduleId);
+  compileCircuitModule(projectId: string, moduleId: string, schematicDocument?: unknown): Promise<unknown> {
+    return ipcRenderer.invoke('project:compile-module', projectId, moduleId, schematicDocument);
   },
 
   saveCircuitModuleNotebook(projectId: string, moduleId: string, markdown: string, baseRevision?: number): Promise<unknown> {

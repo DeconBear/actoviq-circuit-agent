@@ -356,6 +356,74 @@ async function readJsonFile<T>(targetPath: string): Promise<T> {
   return JSON.parse(await readFile(targetPath, 'utf8')) as T;
 }
 
+async function writeSchematicDocumentArtifact(
+  projectRoot: string,
+  moduleId: string,
+  artifact: unknown,
+): Promise<string> {
+  if (!artifact || typeof artifact !== 'object') {
+    throw new Error('Schematic document artifact must be an object');
+  }
+  const document = artifact as {
+    schema?: unknown;
+    moduleId?: unknown;
+    module?: {
+      module_id?: unknown;
+      revision?: unknown;
+      components?: Array<{ id?: unknown; pins?: Array<{ id?: unknown }> }>;
+      wires?: Array<{ id?: unknown }>;
+    };
+  };
+  if (document.schema !== 'actoviq.schematic-document.v1') {
+    throw new Error('Schematic document artifact schema must be actoviq.schematic-document.v1');
+  }
+  if (document.moduleId !== moduleId || document.module?.module_id !== moduleId) {
+    throw new Error(`Schematic document artifact module mismatch: ${moduleId}`);
+  }
+  const source = await readJsonFile<{
+    module_id: string;
+    revision: number;
+    components: Array<{ id: string; pins: Array<{ id: string }> }>;
+    wires?: Array<{ id: string }>;
+  }>(
+    path.resolve(projectRoot, 'modules', moduleId, 'module.circuit.json'),
+  );
+  const artifactRevision = Number(document.module.revision);
+  if (
+    source.module_id !== moduleId
+    || !Number.isInteger(artifactRevision)
+    || (artifactRevision !== source.revision && artifactRevision !== source.revision - 1)
+  ) {
+    throw new Error(`Schematic document artifact is stale for ${moduleId}`);
+  }
+  const sourceEntityIds = [
+    ...source.components.map((component) => `component:${component.id}`),
+    ...source.components.flatMap((component) => component.pins.map((pin) => `pin:${component.id}.${pin.id}`)),
+  ].sort();
+  const artifactEntityIds = [
+    ...(document.module.components ?? []).map((component) => `component:${String(component.id ?? '')}`),
+    ...(document.module.components ?? []).flatMap((component) => (
+      component.pins ?? []
+    ).map((pin) => `pin:${String(component.id ?? '')}.${String(pin.id ?? '')}`)),
+  ].sort();
+  const artifactEntityIdSet = new Set(artifactEntityIds);
+  if (sourceEntityIds.some((entityId) => !artifactEntityIdSet.has(entityId))) {
+    throw new Error(`Schematic document artifact entities are stale for ${moduleId}`);
+  }
+  const artifactWireIds = new Set((document.module.wires ?? []).map((wire) => String(wire.id ?? '')));
+  if ((source.wires ?? []).some((wire) => !artifactWireIds.has(wire.id))) {
+    throw new Error(`Schematic document artifact wires are stale for ${moduleId}`);
+  }
+  const normalizedArtifact = structuredClone(artifact) as typeof document;
+  if (normalizedArtifact.module) normalizedArtifact.module.revision = source.revision;
+  const target = path.resolve(projectRoot, 'build', 'modules', moduleId, 'schematic-document.json');
+  await mkdir(path.dirname(target), { recursive: true });
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(normalizedArtifact, null, 2)}\n`, 'utf8');
+  await rename(temporary, target);
+  return target;
+}
+
 const HDL_SOURCE_EXTENSIONS = new Set(['.v', '.vh', '.sv', '.svh', '.json', '.sdc', '.tcl']);
 
 function resolveHdlProjectFile(projectRoot: string, relativePath: string): string {
@@ -2746,15 +2814,24 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     ),
   );
 
-  ipcMain.handle('project:compile-module', async (_event, projectId: string, moduleId: string) => {
+  ipcMain.handle('project:compile-module', async (
+    _event,
+    projectId: string,
+    moduleId: string,
+    schematicDocument?: unknown,
+  ) => {
     assertModuleId(moduleId);
-    return withProjectWatchPaused(async () => (
-      runProjectTool([
+    return withProjectWatchPaused(async () => {
+      const projectRoot = await resolveProjectRoot(projectId);
+      if (schematicDocument) {
+        await writeSchematicDocumentArtifact(projectRoot, moduleId, schematicDocument);
+      }
+      return runProjectTool([
         'compile-module',
-        '--project-root', await resolveProjectRoot(projectId),
+        '--project-root', projectRoot,
         '--module-id', moduleId,
-      ])
-    ));
+      ]);
+    });
   });
 
   ipcMain.handle(

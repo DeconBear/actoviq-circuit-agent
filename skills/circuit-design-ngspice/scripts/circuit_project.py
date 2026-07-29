@@ -122,6 +122,7 @@ COMMAND_SCHEMA = "actoviq.command.v1"
 ERC_SCHEMA = "actoviq.erc.v1"
 AGENT_PROTOCOL_VERSION = "actoviq.project-agent.v2"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
+SCHEMATIC_RENDER_MAP_SCHEMA = "actoviq.schematic-render-map.v1"
 DEFAULT_MODULE_SIZE = {"width": 360.0, "height": 280.0}
 DEFAULT_MODULE_POSITION = {"x": 100.0, "y": 100.0}
 # Match renderer Arrange modules grid so auto-placed cards stay readable.
@@ -1425,6 +1426,12 @@ def compile_hierarchical_project(
                     else None
                 ),
                 "hierarchical_netlist": f"modules/{result['module_id']}/design.hier.cir",
+                "schematic_document": (
+                    f"modules/{result['module_id']}/schematic-document.json"
+                    if result.get("schematic_document_path")
+                    else None
+                ),
+                "render_map": f"modules/{result['module_id']}/schematic-render-map.json",
             }
             for result in module_results
         },
@@ -3748,6 +3755,109 @@ def compiled_component_name(module_id: str, component: dict[str, Any]) -> str:
     return component_name
 
 
+def schematic_render_map(
+    module: dict[str, Any],
+    renderer: str = "netlistsvg",
+    schematic_document: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Map canonical module entities to a derived renderer without making SVG truth."""
+    connectivity_module = upgrade_module_document(
+        json.loads(json.dumps(module)),
+        repair_legacy_wire_endpoints=False,
+        repair_invalid_net_ids=False,
+    )
+    projected_module = (
+        schematic_document.get("module")
+        if isinstance(schematic_document, dict)
+        and schematic_document.get("schema") == "actoviq.schematic-document.v1"
+        and schematic_document.get("moduleId") == module.get("module_id")
+        and isinstance(schematic_document.get("module"), dict)
+        and schematic_document["module"].get("revision") == module.get("revision")
+        else None
+    )
+    normalized = upgrade_module_document(
+        json.loads(json.dumps(projected_module or connectivity_module)),
+        repair_legacy_wire_endpoints=False,
+        repair_invalid_net_ids=False,
+    )
+    module_id = str(normalized.get("module_id") or "")
+    components: list[dict[str, Any]] = []
+    pins: list[dict[str, Any]] = []
+    ports: list[dict[str, Any]] = []
+    wires: list[dict[str, Any]] = []
+    junction_ids: set[str] = set()
+    for component in normalized.get("components", []) or []:
+        component_id = str(component.get("id") or "")
+        components.append({
+            "entity_id": component_id,
+            "type": str(component.get("type") or ""),
+            "render_id": compiled_component_name(module_id, component),
+        })
+        for index, pin in enumerate(component.get("pins", []) or []):
+            pin_id = str(pin.get("id") or "")
+            pins.append({
+                "entity_id": f"{component_id}.{pin_id}",
+                "component_id": component_id,
+                "pin_id": pin_id,
+                "render_index": index,
+                "net": str(pin.get("net") or ""),
+                "net_id": str(pin.get("net_id") or ""),
+            })
+    for port in normalized.get("ports", []) or []:
+        ports.append({
+            "entity_id": str(port.get("id") or ""),
+            "net": str(port.get("net") or ""),
+            "net_id": str(port.get("net_id") or ""),
+        })
+    for wire in normalized.get("wires", []) or []:
+        wires.append({
+            "entity_id": str(wire.get("id") or ""),
+            "net": str(wire.get("net") or ""),
+            "net_id": str(wire.get("net_id") or ""),
+        })
+        for endpoint_name in ("from", "to"):
+            endpoint = wire.get(endpoint_name)
+            if isinstance(endpoint, dict) and endpoint.get("junction_id"):
+                junction_ids.add(str(endpoint["junction_id"]))
+    nets = [
+        {
+            "entity_id": str(net.get("id") or ""),
+            "name": str(net.get("name") or ""),
+        }
+        for net in normalized.get("nets", []) or []
+    ]
+    return {
+        "schema": SCHEMATIC_RENDER_MAP_SCHEMA,
+        "module_id": module_id,
+        "module_revision": int(normalized.get("revision") or 0),
+        "renderer": renderer,
+        "connectivity_hash": ordered_connectivity_hash(connectivity_module),
+        "entities": {
+            "components": sorted(components, key=lambda item: item["entity_id"]),
+            "pins": sorted(pins, key=lambda item: item["entity_id"]),
+            "ports": sorted(ports, key=lambda item: item["entity_id"]),
+            "nets": sorted(nets, key=lambda item: item["entity_id"]),
+            "wires": sorted(wires, key=lambda item: item["entity_id"]),
+            "junctions": [
+                {"entity_id": junction_id}
+                for junction_id in sorted(junction_ids)
+            ],
+        },
+        "truth": {
+            "schema": MODULE_SCHEMA,
+            "role": "canonical_edit_source",
+        },
+        "projection": {
+            "schema": "actoviq.schematic-document.v1",
+            "artifact_consumed": projected_module is not None,
+        },
+        "render_output": {
+            "role": "derived_preview_export",
+            "editable": False,
+        },
+    }
+
+
 def compiled_instance_name_map(module_id: str, components: list[dict[str, Any]]) -> dict[str, str]:
     names: dict[str, str] = {}
     for component in components:
@@ -4805,6 +4915,12 @@ def compile_project(root: Path) -> dict[str, Any]:
                 ),
                 "renderer": result.get("render", {}).get("renderer", "netlistsvg"),
                 "render_ok": bool(result.get("render", {}).get("ok")),
+                "schematic_document": (
+                    f"modules/{result['module_id']}/schematic-document.json"
+                    if result.get("schematic_document_path")
+                    else None
+                ),
+                "render_map": f"modules/{result['module_id']}/schematic-render-map.json",
             }
             for result in module_results
         },
@@ -5061,7 +5177,14 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
             ".end",
         ]
         (build_root / "design.hier.cir").write_text("\n".join(hier_lines) + "\n", encoding="utf-8")
+    schematic_document_path = build_root / "schematic-document.json"
+    schematic_document = read_json(schematic_document_path) if schematic_document_path.exists() else None
     render_result = render_module_schematic(build_root, netlist_path, module, renderer)
+    render_map_path = build_root / "schematic-render-map.json"
+    atomic_write_json(
+        render_map_path,
+        schematic_render_map(module, renderer, schematic_document),
+    )
     manifest_path = root / "build" / "build-manifest.json"
     manifest = read_json(manifest_path) if manifest_path.exists() else {
         "schema": "actoviq.build.v1",
@@ -5077,6 +5200,12 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
         "schematic": f"modules/{module_id}/schematic.svg" if render_result.get("ok") else None,
         "renderer": render_result.get("renderer", "netlistsvg"),
         "render_ok": bool(render_result.get("ok")),
+        "schematic_document": (
+            f"modules/{module_id}/schematic-document.json"
+            if schematic_document_path.exists()
+            else None
+        ),
+        "render_map": f"modules/{module_id}/schematic-render-map.json",
     }
     manifest["erc"] = "erc.json"
     manifest["erc_status"] = erc["status"]
@@ -5089,6 +5218,8 @@ def compile_module(root: Path, module_id: str, renderer: str = "netlistsvg") -> 
         "revision": module["revision"],
         "netlist_path": str(netlist_path),
         "schematic_path": render_result.get("svg_path", ""),
+        "schematic_document_path": str(schematic_document_path) if schematic_document_path.exists() else "",
+        "render_map_path": str(render_map_path),
         "render": render_result,
         "erc": erc,
     }
@@ -7545,6 +7676,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["netlistsvg", "grid-experimental"],
     )
 
+    render_map_parser = subparsers.add_parser(
+        "schematic-render-map",
+        help="Emit the canonical entity map and connectivity hash used by a derived renderer.",
+    )
+    render_map_parser.add_argument("--module-file", required=True)
+    render_map_parser.add_argument("--schematic-document", default="")
+    render_map_parser.add_argument(
+        "--renderer",
+        default="netlistsvg",
+        choices=["netlistsvg", "grid-experimental"],
+    )
+
     simulate_parser = subparsers.add_parser("simulate")
     simulate_parser.add_argument("--project-root", required=True)
     simulate_parser.add_argument("--ngspice-bin", default="")
@@ -8155,6 +8298,12 @@ def main() -> int:
             result = compile_project(Path(args.project_root).resolve())
         elif args.command == "compile-module":
             result = compile_module(Path(args.project_root).resolve(), args.module_id, args.renderer)
+        elif args.command == "schematic-render-map":
+            result = schematic_render_map(
+                read_json(Path(args.module_file)),
+                args.renderer,
+                read_json(Path(args.schematic_document)) if args.schematic_document else None,
+            )
         elif args.command == "simulate":
             result = simulate_project(
                 Path(args.project_root).resolve(),

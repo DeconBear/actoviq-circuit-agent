@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
 import { SchematicDocumentSvg } from '../../schematic/SchematicDocumentSvg';
-import { createSchematicDocument } from '../../schematic/schematicDocument';
+import { projectSchematicDocument as createSchematicDocument } from '../../schematic-core/projection/facade';
 
 export function SvgViewer() {
   const workflowSvg = useAppStore((s) => s.svgContent);

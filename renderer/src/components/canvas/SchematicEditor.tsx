@@ -51,7 +51,6 @@ import {
   cloneModule,
   COMPONENT_TYPES,
   componentBounds,
-  createSchematicDocument,
   hitComponent,
   hitEndpoint,
   hitPort,
@@ -81,6 +80,7 @@ import {
   distance,
   pinWorld,
 } from '../../schematic/schematicDocument';
+import { projectSchematicDocument as createSchematicDocument } from '../../schematic-core/projection/facade';
 
 type ToolMode = 'select' | 'wire' | 'cut' | 'place' | 'place-block' | 'place-module';
 type ComponentMoveMode = 'stretch' | 'free';
