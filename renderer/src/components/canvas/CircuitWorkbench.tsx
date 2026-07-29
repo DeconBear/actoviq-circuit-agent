@@ -3250,7 +3250,7 @@ function ModuleSchematic({
   locateTarget?: SchematicLocateTarget | null;
   onOpenChildModule?: (moduleId: string, instanceId: string, pinId?: string) => void;
 }) {
-  const [viewMode, setViewMode] = useState<'editor' | 'svg'>('editor');
+  const [viewMode, setViewMode] = useState<'editor' | 'document' | 'compatibility'>('editor');
   const [editLayout, setEditLayout] = useState(false);
   const [editorDirty, setEditorDirty] = useState(false);
   const [draggedItem, setDraggedItem] = useState('');
@@ -3300,6 +3300,20 @@ function ModuleSchematic({
     () => Object.entries(overrides?.items ?? {}).sort(([left], [right]) => left.localeCompare(right)),
     [overrides],
   );
+  const compatibilityMapping = useMemo(() => {
+    const candidates = new Map<string, string>();
+    for (const component of moduleData?.components ?? []) {
+      const baseName = `${module.id}_${component.name}`.replace(/[^A-Za-z0-9_.:+-]+/g, '_');
+      const renderId = baseName.toUpperCase().startsWith(component.type.toUpperCase())
+        ? baseName
+        : `${component.type}${baseName}`;
+      for (const candidate of [component.id, component.name, renderId]) {
+        candidates.set(candidate.toLowerCase(), component.id);
+      }
+    }
+    const mapped = overrideItems.filter(([itemId]) => candidates.has(itemId.toLowerCase())).length;
+    return { mapped, unmapped: overrideItems.length - mapped };
+  }, [module.id, moduleData, overrideItems]);
   const selectedOverride = selectedItem ? overrides?.items[selectedItem] : undefined;
   const schematicDocument = useMemo(
     () => moduleData ? createSchematicDocument(moduleData) : null,
@@ -3307,7 +3321,7 @@ function ModuleSchematic({
   );
 
   useEffect(() => {
-    if (!moduleData && viewMode === 'editor') setViewMode('svg');
+    if (!moduleData && viewMode !== 'compatibility') setViewMode('compatibility');
   }, [moduleData, viewMode]);
 
   useEffect(() => {
@@ -3578,12 +3592,27 @@ function ModuleSchematic({
             Editable model
           </button>
           <button
-            style={viewMode === 'svg' ? styles.primaryButton : styles.secondaryButton}
-            onClick={() => setViewMode('svg')}
-            disabled={busy}
+            style={viewMode === 'document' ? styles.primaryButton : styles.secondaryButton}
+            onClick={() => {
+              setViewMode('document');
+              setEditLayout(false);
+            }}
+            disabled={busy || !moduleData}
             data-testid="schematic-svg-tab"
           >
-            SVG
+            Projected SVG
+          </button>
+          <button
+            style={viewMode === 'compatibility' ? styles.primaryButton : styles.secondaryButton}
+            onClick={() => {
+              setViewMode('compatibility');
+              setEditLayout(false);
+            }}
+            disabled={busy}
+            title="Derived netlistsvg preview for compatibility and export checks. It is not the editable source."
+            data-testid="schematic-netlistsvg-compatibility-tab"
+          >
+            netlistsvg (compat)
           </button>
           <button
             style={styles.secondaryButton}
@@ -3622,7 +3651,30 @@ function ModuleSchematic({
           </span>
         </div>
       ) : null}
-      {viewMode === 'svg' && editLayout ? (
+      {viewMode === 'compatibility' ? (
+        <div style={styles.layoutFeedback} data-testid="schematic-compatibility-notice">
+          <strong>Compatibility/export preview</strong>
+          <span>
+            This SVG and schematic.overrides.json are derived legacy artifacts. Editable model
+            (actoviq.module.v2) remains the only native edit source.
+          </span>
+          <span data-testid="schematic-overrides-migration-summary">
+            Migration report: {overrideItems.length} override{overrideItems.length === 1 ? '' : 's'};
+            {' '}{compatibilityMapping.mapped} renderer id{compatibilityMapping.mapped === 1 ? '' : 's'} mapped,
+            {' '}{compatibilityMapping.unmapped} require review; 0 applied automatically.
+          </span>
+          <button
+            type="button"
+            style={styles.secondaryButton}
+            onClick={() => setEditLayout((current) => !current)}
+            disabled={busy || !svg}
+            data-testid="schematic-compatibility-layout-toggle"
+          >
+            {editLayout ? 'Stop compatibility editing' : 'Edit legacy placement overrides'}
+          </button>
+        </div>
+      ) : null}
+      {viewMode === 'compatibility' && editLayout ? (
         <div style={styles.layoutToolbar} data-testid="schematic-layout-tools">
           <label style={styles.layoutCheck}>
             <input
@@ -3701,7 +3753,7 @@ function ModuleSchematic({
               onOpenChildModule={onOpenChildModule}
             />
           </>
-        ) : schematicDocument ? (
+        ) : viewMode === 'document' && schematicDocument ? (
           <div
             style={styles.documentSvgPanel}
             data-testid="module-netlistsvg"
@@ -3712,7 +3764,7 @@ function ModuleSchematic({
               testId="module-document-svg"
             />
           </div>
-        ) : svg ? (
+        ) : viewMode === 'compatibility' && svg ? (
           <>
             <div
               style={{
@@ -3722,12 +3774,17 @@ function ModuleSchematic({
               ref={setSvgContainer}
               dangerouslySetInnerHTML={{ __html: prepareSvg(svg) }}
               data-testid="module-netlistsvg"
+              data-schematic-source="netlistsvg-compatibility"
               data-layout-editing={editLayout ? 'true' : 'false'}
               data-dragged-item={draggedItem}
             />
             {editLayout ? (
               <aside style={styles.overridePanel} data-testid="schematic-overrides-panel">
-                <div style={styles.overridePanelTitle}>Overrides</div>
+                <div style={styles.overridePanelTitle}>Legacy overrides (compatibility only)</div>
+                <div style={styles.overrideEmpty}>
+                  Import/export/report: circuit_project.py schematic-overrides-*. Coordinates are
+                  never copied into module.v2 automatically.
+                </div>
                 {overrideItems.length === 0 ? (
                   <div style={styles.overrideEmpty}>No layout overrides yet.</div>
                 ) : overrideItems.map(([itemId, item]) => (
@@ -4528,21 +4585,22 @@ const styles: Record<string, CSSProperties> = {
   layoutCheck: { display: 'inline-flex', alignItems: 'center', gap: 6, color: '#4e5965', fontSize: 11, fontWeight: 700 },
   layoutNudgeGroup: { display: 'inline-flex', alignItems: 'center', gap: 4 },
   nudgeButton: {
-    width: 30,
+    minWidth: 44,
     height: 30,
+    padding: '0 7px',
     border: '1px solid #c5cbd3',
     borderRadius: 5,
     background: '#fff',
     color: '#303741',
     cursor: 'pointer',
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: 800,
   },
-  layoutSelectedText: { minWidth: 160, color: '#69727d', fontFamily: 'Consolas, monospace', fontSize: 10, overflowWrap: 'anywhere' },
+  layoutSelectedText: { flex: '1 1 120px', minWidth: 120, color: '#69727d', fontFamily: 'Consolas, monospace', fontSize: 10, overflowWrap: 'anywhere' },
   fullSvgStage: { flex: 1, minHeight: 0, display: 'flex', background: '#fff', border: '1px solid #d9dde3', boxShadow: '0 2px 8px rgba(27, 38, 51, 0.08)', overflow: 'auto' },
   fullSvg: { flex: 1, minWidth: 680, minHeight: 500, padding: 18 },
   documentSvgPanel: { flex: 1, minWidth: 0, minHeight: 0, height: '100%', padding: 18, boxSizing: 'border-box' },
-  fullSvgEditing: { outline: '2px solid rgba(37, 99, 235, 0.32)', outlineOffset: -2, cursor: 'move', touchAction: 'none' },
+  fullSvgEditing: { minWidth: 0, overflow: 'auto', outline: '2px solid rgba(37, 99, 235, 0.32)', outlineOffset: -2, cursor: 'move', touchAction: 'none' },
   fullSvgEmpty: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 10, color: '#7b8490', fontSize: 12 },
   overridePanel: {
     flex: '0 0 260px',

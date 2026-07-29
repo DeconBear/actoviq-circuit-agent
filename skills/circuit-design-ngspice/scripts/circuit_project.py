@@ -630,6 +630,146 @@ def read_schematic_overrides(root: Path, project: dict[str, Any], module_id: str
     return overrides
 
 
+def normalize_schematic_overrides(
+    project: dict[str, Any],
+    module_id: str,
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    if value.get("schema") != SCHEMATIC_OVERRIDES_SCHEMA:
+        raise ValueError(f"schematic overrides schema must be {SCHEMATIC_OVERRIDES_SCHEMA}")
+    source_module_id = str(value.get("module_id") or "")
+    if source_module_id and source_module_id != module_id:
+        raise ValueError(
+            f"schematic overrides module mismatch: expected {module_id}, got {source_module_id}"
+        )
+    raw_items = value.get("items")
+    if not isinstance(raw_items, dict):
+        raise ValueError("schematic overrides items must be an object")
+    items: dict[str, dict[str, Any]] = {}
+    for raw_id, raw_item in raw_items.items():
+        item_id = normalize_schematic_item_id(raw_id)
+        if not isinstance(raw_item, dict):
+            raise ValueError(f"schematic override {item_id} must be an object")
+        items[item_id] = {
+            "x": schematic_position(raw_item.get("x"), f"{item_id}.x"),
+            "y": schematic_position(raw_item.get("y"), f"{item_id}.y"),
+            "locked": bool(raw_item.get("locked", True)),
+        }
+    return {
+        "schema": SCHEMATIC_OVERRIDES_SCHEMA,
+        "project_id": project["project_id"],
+        "module_id": module_id,
+        "updated_at": utc_now(),
+        "items": items,
+    }
+
+
+def schematic_overrides_migration_report(
+    root: Path,
+    project: dict[str, Any],
+    module: dict[str, Any],
+    overrides: dict[str, Any],
+) -> dict[str, Any]:
+    module_id = str(module["module_id"])
+    component_keys: dict[str, str] = {}
+    for component in module.get("components", []) or []:
+        component_id = str(component.get("id") or "")
+        for candidate in (
+            component_id,
+            str(component.get("name") or ""),
+            compiled_component_name(module_id, component),
+        ):
+            if candidate:
+                component_keys[candidate.casefold()] = component_id
+    mapped: list[dict[str, Any]] = []
+    unmapped: list[dict[str, Any]] = []
+    for item_id, position in sorted((overrides.get("items") or {}).items()):
+        component_id = component_keys.get(str(item_id).casefold())
+        item = {
+            "item_id": item_id,
+            "position": {
+                "x": float(position["x"]),
+                "y": float(position["y"]),
+            },
+        }
+        if component_id:
+            mapped.append({
+                **item,
+                "component_id": component_id,
+                "automatic_apply": False,
+                "reason": "netlistsvg and editable-model coordinates require visual review",
+            })
+        else:
+            unmapped.append({
+                **item,
+                "reason": "no canonical module component matches this legacy renderer id",
+            })
+    item_count = len(mapped) + len(unmapped)
+    status = (
+        "no_overrides"
+        if item_count == 0
+        else "review_required"
+        if unmapped or mapped
+        else "fully_mappable"
+    )
+    report = {
+        "schema": "actoviq.schematic-overrides-migration-report.v1",
+        "project_id": project["project_id"],
+        "module_id": module_id,
+        "module_revision": int(module.get("revision") or 0),
+        "connectivity_hash": ordered_connectivity_hash(module),
+        "status": status,
+        "canonical_source": f"modules/{module_id}/module.circuit.json",
+        "compatibility_source": f"modules/{module_id}/schematic.overrides.json",
+        "compatibility_only": True,
+        "module_was_modified": False,
+        "summary": {
+            "override_count": item_count,
+            "mapped_count": len(mapped),
+            "unmapped_count": len(unmapped),
+        },
+        "mapped": mapped,
+        "unmapped": unmapped,
+        "recommendation": (
+            "Reposition mapped components in Editable model, verify connectivity, then remove "
+            "the compatibility overrides after visual review."
+        ),
+    }
+    report_path = root / "build" / "modules" / module_id / "schematic-overrides-migration-report.json"
+    atomic_write_json(report_path, report)
+    return {**report, "report_path": str(report_path)}
+
+
+def export_schematic_overrides(root: Path, module_id: str, output_path: Path) -> dict[str, Any]:
+    project, modules = load_project(root)
+    if module_id not in modules:
+        raise ValueError(f"unknown module: {module_id}")
+    overrides = read_schematic_overrides(root, project, module_id)
+    atomic_write_json(output_path.resolve(), overrides)
+    report = schematic_overrides_migration_report(root, project, modules[module_id], overrides)
+    return {
+        "ok": True,
+        "output_path": str(output_path.resolve()),
+        "override_count": len(overrides["items"]),
+        "migration_report": report,
+    }
+
+
+def import_schematic_overrides(root: Path, module_id: str, input_path: Path) -> dict[str, Any]:
+    project, modules = load_project(root)
+    if module_id not in modules:
+        raise ValueError(f"unknown module: {module_id}")
+    overrides = normalize_schematic_overrides(project, module_id, read_json(input_path.resolve()))
+    atomic_write_json(schematic_overrides_path(root, module_id), overrides)
+    report = schematic_overrides_migration_report(root, project, modules[module_id], overrides)
+    return {
+        "ok": True,
+        "input_path": str(input_path.resolve()),
+        "override_count": len(overrides["items"]),
+        "migration_report": report,
+    }
+
+
 def normalize_schematic_item_id(value: Any) -> str:
     item_id = str(value or "").strip()
     if not re.match(r"^[A-Za-z0-9_.$:-]+$", item_id):
@@ -7688,6 +7828,29 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["netlistsvg", "grid-experimental"],
     )
 
+    overrides_export_parser = subparsers.add_parser(
+        "schematic-overrides-export",
+        help="Export legacy netlistsvg placement overrides without treating them as edit truth.",
+    )
+    overrides_export_parser.add_argument("--project-root", required=True)
+    overrides_export_parser.add_argument("--module-id", required=True)
+    overrides_export_parser.add_argument("--output-path", required=True)
+
+    overrides_import_parser = subparsers.add_parser(
+        "schematic-overrides-import",
+        help="Import validated legacy netlistsvg placement overrides and emit a migration report.",
+    )
+    overrides_import_parser.add_argument("--project-root", required=True)
+    overrides_import_parser.add_argument("--module-id", required=True)
+    overrides_import_parser.add_argument("--input-path", required=True)
+
+    overrides_report_parser = subparsers.add_parser(
+        "schematic-overrides-report",
+        help="Report how legacy renderer placements map to canonical module entities.",
+    )
+    overrides_report_parser.add_argument("--project-root", required=True)
+    overrides_report_parser.add_argument("--module-id", required=True)
+
     simulate_parser = subparsers.add_parser("simulate")
     simulate_parser.add_argument("--project-root", required=True)
     simulate_parser.add_argument("--ngspice-bin", default="")
@@ -8304,6 +8467,32 @@ def main() -> int:
                 args.renderer,
                 read_json(Path(args.schematic_document)) if args.schematic_document else None,
             )
+        elif args.command == "schematic-overrides-export":
+            result = export_schematic_overrides(
+                Path(args.project_root).resolve(),
+                args.module_id,
+                Path(args.output_path),
+            )
+        elif args.command == "schematic-overrides-import":
+            result = import_schematic_overrides(
+                Path(args.project_root).resolve(),
+                args.module_id,
+                Path(args.input_path),
+            )
+        elif args.command == "schematic-overrides-report":
+            root = Path(args.project_root).resolve()
+            project, modules = load_project(root)
+            if args.module_id not in modules:
+                raise ValueError(f"unknown module: {args.module_id}")
+            result = {
+                "ok": True,
+                **schematic_overrides_migration_report(
+                    root,
+                    project,
+                    modules[args.module_id],
+                    read_schematic_overrides(root, project, args.module_id),
+                ),
+            }
         elif args.command == "simulate":
             result = simulate_project(
                 Path(args.project_root).resolve(),
