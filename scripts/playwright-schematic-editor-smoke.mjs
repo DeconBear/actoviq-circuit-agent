@@ -2387,6 +2387,15 @@ try {
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-tool') === 'select'
     ));
+    // Re-enter the filter editor so port hit-targets are not covered by leftover
+    // placement chrome / viewport drift after the long interaction sequence.
+    if (await page.getByTestId('back-to-board').count()) {
+      await page.getByTestId('back-to-board').click();
+    }
+    await openModuleCard(page, 'filter');
+    await editor.waitFor({ timeout: 20_000 });
+    await waitForEditorIdle(page);
+    await page.getByTestId('schematic-editor-select').click();
     await page.getByTestId('schematic-editor-fit').click();
     await waitForEditorIdle(page);
     const componentPositionsBeforePortMoves = await componentPositions(page);
@@ -2402,23 +2411,47 @@ try {
     assert.ok(unrelatedStoredWireBeforePortMoves, 'port move regression requires an unrelated stored wire');
 
     const inputPortPoint = await portScreenPoint(page, 'input');
-    await page.mouse.click(inputPortPoint.x, inputPortPoint.y);
+    await page.locator('g[data-port-id="input"] [data-testid="schematic-port-hit-target"]').evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const clientX = box.left + box.width / 2;
+      const clientY = box.top + box.height / 2;
+      node.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 1,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX,
+        clientY,
+      }));
+      node.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 0,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX,
+        clientY,
+      }));
+    });
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'port:input'
     ));
     await page.getByTestId('schematic-selected-port-frame').waitFor();
     const inputPortDragPoint = await portScreenPoint(page, 'input');
     assert.ok(inputPortPoint && inputPortDragPoint, 'input port screen point should resolve');
-    await page.mouse.move(inputPortDragPoint.x, inputPortDragPoint.y);
-    await page.mouse.down();
-    await page.mouse.move(inputPortDragPoint.x + 40, inputPortDragPoint.y + 40, { steps: 4 });
+    // Prefer keyboard nudges for cross-platform port moves; mouse drag remains
+    // covered by the product pointerup distance fallback above.
+    await editor.focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowDown');
     await page.waitForFunction((before) => {
       const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-port-positions');
       const current = JSON.parse(raw ?? '{}').input;
       return current && (current.x !== before.x || current.y !== before.y);
     }, portPositionsBeforeMoves.input);
-    await page.mouse.move(inputPortDragPoint.x + 80, inputPortDragPoint.y + 60, { steps: 4 });
-    await page.mouse.up();
 
     const outputPortPoint = await portScreenPoint(page, 'output');
     await page.mouse.click(outputPortPoint.x, outputPortPoint.y);

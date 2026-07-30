@@ -1741,18 +1741,29 @@ export function SchematicEditor({
       setFuture([]);
       return;
     }
-    if (portDrag?.moved) {
-      setHistory((items) => [...items, portDrag.originalModule].slice(-40));
-      setFuture([]);
-      setDraft((current) => {
-        const next = cloneModule(current);
-        const port = next.ports.find((entry) => entry.id === portDrag.portId);
-        if (port) port.position = { ...portDrag.lastPosition };
-        next.wires = rerouteStoredWires(next, { portIds: [portDrag.portId] });
-        return next;
+    if (portDrag) {
+      const releaseWorld = screenToWorld(event);
+      const releasePosition = snapPoint({
+        x: portDrag.originalPosition.x + releaseWorld.x - portDrag.startWorld.x,
+        y: portDrag.originalPosition.y + releaseWorld.y - portDrag.startWorld.y,
       });
-      setDirty(true);
-      return;
+      // Linux/Electron may omit intermediate moves; still commit when the release
+      // point left the original snapped port position.
+      const dragged = portDrag.moved || !samePosition(releasePosition, portDrag.originalPosition);
+      if (dragged) {
+        const finalPosition = portDrag.moved ? portDrag.lastPosition : releasePosition;
+        setHistory((items) => [...items, portDrag.originalModule].slice(-40));
+        setFuture([]);
+        setDraft((current) => {
+          const next = cloneModule(current);
+          const port = next.ports.find((entry) => entry.id === portDrag.portId);
+          if (port) port.position = { ...finalPosition };
+          next.wires = rerouteStoredWires(next, { portIds: [portDrag.portId] });
+          return next;
+        });
+        setDirty(true);
+        return;
+      }
     }
     if (!drag?.moved) {
       if (drag) setInteractionCursor('grab');
