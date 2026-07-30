@@ -1,5 +1,5 @@
 /**
- * M0-03 GUI performance baseline: measure first-paint, zoom, drag, and save
+ * M0-03 GUI performance baseline: measure first-paint, pan, zoom, drag, and save
  * timings for 100- and 500-component modules in the Electron editor.
  *
  * The large modules are generated in-process and written to the filter module
@@ -116,6 +116,41 @@ async function waitForInteractionIdle() {
   });
 }
 
+async function measurePan() {
+  await waitForInteractionIdle();
+  const editor = page.getByTestId('schematic-editor');
+  const canvas = page.getByTestId('schematic-editor-svg');
+  const box = await canvas.boundingBox();
+  assert.ok(box, 'schematic canvas must be visible for the pan baseline');
+  const before = JSON.parse(await editor.getAttribute('data-viewport') || '{}');
+  // Anchor the gesture to rendered geometry instead of the SVG bounding-box
+  // centre: preserveAspectRatio can leave large letterboxed regions that do
+  // not receive pointer events in Electron.
+  const start = await componentScreenCenter(page, 'r0');
+  await editor.focus();
+  await page.keyboard.down('Space');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-space-pan') === 'true'
+  ));
+  const t0 = await page.evaluate(() => performance.now());
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-cursor-mode') === 'grabbing'
+  ));
+  await page.mouse.move(start.x + 80, start.y + 40, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up('Space');
+  await page.waitForFunction((previous) => {
+    const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-viewport') ?? '{}';
+    const viewport = JSON.parse(raw);
+    return Number(viewport.minX) !== Number(previous.minX)
+      || Number(viewport.minY) !== Number(previous.minY);
+  }, before);
+  const t1 = await page.evaluate(() => performance.now());
+  return Math.round((t1 - t0) * 10) / 10;
+}
+
 async function measureZoom() {
   const editor = page.getByTestId('schematic-editor');
   const before = await editor.getAttribute('data-zoom');
@@ -215,10 +250,16 @@ try {
       results.push({ componentCount: size, firstPaintMs });
       continue;
     }
+    const panMs = await measurePan();
+    console.log(`[perf] ${size} pan: ${panMs}ms`);
+    if (STOP_AFTER === 'pan') {
+      results.push({ componentCount: size, firstPaintMs, panMs });
+      continue;
+    }
     const zoom = await measureZoom();
     console.log(`[perf] ${size} zoom: ${zoom.ms}ms`);
     if (STOP_AFTER === 'zoom') {
-      results.push({ componentCount: size, firstPaintMs, zoomMs: zoom.ms });
+      results.push({ componentCount: size, firstPaintMs, panMs, zoomMs: zoom.ms });
       continue;
     }
     const drag = await measureDrag();
@@ -229,6 +270,7 @@ try {
       results.push({
         componentCount: size,
         firstPaintMs,
+        panMs,
         zoomMs: zoom.ms,
         dragGestureMs: drag.gestureMs,
         dragPreviewP95Ms: drag.previewP95Ms,
@@ -246,6 +288,7 @@ try {
     results.push({
       componentCount: size,
       firstPaintMs,
+      panMs,
       zoomMs: zoom.ms,
       dragGestureMs: drag.gestureMs,
       dragPreviewP95Ms: drag.previewP95Ms,
@@ -253,7 +296,7 @@ try {
       saveMs,
       rendererHeapMb: heapMb,
     });
-    console.log(`[perf] ${size} components: firstPaint=${firstPaintMs}ms zoom=${zoom.ms}ms dragP95=${drag.previewP95Ms}ms save=${saveMs}ms heap=${heapMb}MB`);
+    console.log(`[perf] ${size} components: firstPaint=${firstPaintMs}ms pan=${panMs}ms zoom=${zoom.ms}ms dragP95=${drag.previewP95Ms}ms save=${saveMs}ms heap=${heapMb}MB`);
     await page.getByTestId('back-to-board').click().catch(() => {});
   }
 
