@@ -32,6 +32,8 @@ mac:
 linux:
   target:
     - AppImage
+  icon: assets/icon.png
+  category: Science
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

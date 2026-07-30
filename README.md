@@ -26,18 +26,42 @@ The Electron desktop app is a result-first workbench: the home screen is a modul
 
 Launch it from a source checkout:
 
+```bash
+npm install
+python3 -m pip install --requirement requirements-circuit.txt
+npm run electron:dev
+```
+
+Windows (PowerShell) uses the same npm commands:
+
 ```powershell
 npm install
 npm run electron:dev
 ```
 
-This compiles the Electron main process, starts Vite, and opens the window.
+This compiles the Electron main process, starts Vite, and opens the window. On Linux, a graphical session (`DISPLAY` / Wayland) is required for the Electron window.
+
+**Linux runtime prerequisites (desktop GUI + ngspice)**
+
+- Node.js 22+, npm, Python 3.10+
+- `ngspice` on `PATH` for simulation (`sudo apt-get install -y ngspice` on Debian/Ubuntu)
+- Optional open IC tools for local probes: `iverilog`, `yosys`, `xschem`, `klayout`, `magic`, `netgen-lvs`
+- Full native IC qualification still locks to native Ubuntu 22.04 (non-WSL) plus ngspice/Xyce/OpenVAF/Xschem and the pinned IHP revision; see `plan/actoviq-ic-platform-implementation-plan.md`
+
+Production build without the Vite dev server:
+
+```bash
+npm run build:all
+npm run electron:start
+```
+
+`electron:start` sets `ACTOVIQ_USE_BUILT_RENDERER=1` so the unpackaged Electron process loads `dist-renderer/` instead of `http://127.0.0.1:5173`.
 
 **App icon**
 
 - Canonical assets: `assets/icon.png` (cross-platform) and `assets/icon.ico` (Windows multi-size).
-- Runtime/packaging: Windows window/taskbar prefers `.ico` and sets `AppUserModelId` to `com.actoviq.circuit-agent`; macOS packaging uses `assets/icon.png`.
-- When replacing branding, update both files and keep `electron-builder.yml` `win.icon` / `mac.icon` pointed at them. Do not ship draft `assets/icon-scheme-*.png` candidates as the packaged icon.
+- Runtime/packaging: Windows window/taskbar prefers `.ico` and sets `AppUserModelId` to `com.actoviq.circuit-agent`; macOS/Linux packaging uses `assets/icon.png` (`electron-builder.yml` `linux.icon`).
+- When replacing branding, update both files and keep `electron-builder.yml` `win.icon` / `mac.icon` / `linux.icon` pointed at them. Do not ship draft `assets/icon-scheme-*.png` candidates as the packaged icon.
 
 **Tabs**
 

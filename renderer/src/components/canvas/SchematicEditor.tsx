@@ -1257,6 +1257,27 @@ export function SchematicEditor({
       return;
     }
 
+    // Prefer an explicit port hit-target before nearby pin/wire geometry. On dense
+    // sheets (and some Linux pointer backends) ports otherwise lose to wire points.
+    const portFromTarget = portFromPointerTarget(document, event.target);
+    if (tool === 'select' && portFromTarget) {
+      const position = document.portPositions.get(portFromTarget.id);
+      if (position) {
+        setSelection({ kind: 'port', id: portFromTarget.id });
+        setInteractionCursor('grabbing');
+        portDragRef.current = {
+          portId: portFromTarget.id,
+          startWorld: world,
+          originalPosition: { ...position },
+          lastPosition: { ...position },
+          originalModule: cloneModule(draft),
+          originalDirty: dirty,
+          moved: false,
+        };
+        return;
+      }
+    }
+
     const directPinTarget = event.target instanceof Element
       && Boolean(event.target.closest('[data-endpoint-kind="pin"]'));
     const directPin = directPinTarget ? hitEndpoint(document, world) : null;
@@ -1649,17 +1670,29 @@ export function SchematicEditor({
     }
     const wireDrag = wireDragRef.current;
     wireDragRef.current = null;
-    if (wireDrag?.moved && tool === 'wire') {
-      const world = screenToWorld(event);
-      const end = hitEndpoint(document, world) ?? pointEndpoint(snapPoint(world));
-      const next = cloneModule(draft);
-      const nextWireStart = addWire(next, wireDrag.start, end, document.wires);
-      if (!nextWireStart) return;
-      commitDraft(next);
-      setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
-      setWireStart(nextWireStart);
-      setHoverWorld(null);
-      setHoverEndpoint(null);
+    if (wireDrag && tool === 'wire') {
+      // Some Linux/Electron pointer paths deliver the release without intermediate
+      // moves. Re-check client distance here so drag-to-wire still commits.
+      const dragged = wireDrag.moved ||
+        Math.abs(event.clientX - wireDrag.startClient.x) + Math.abs(event.clientY - wireDrag.startClient.y) > 8;
+      if (dragged) {
+        const world = screenToWorld(event);
+        const end = hitEndpoint(document, world) ?? pointEndpoint(snapPoint(world));
+        const next = cloneModule(draft);
+        const nextWireStart = addWire(next, wireDrag.start, end, document.wires);
+        if (!nextWireStart) {
+          setInteractionCursor('default');
+          return;
+        }
+        commitDraft(next);
+        setSelection({ kind: 'wire', id: next.wires.at(-1)?.id ?? '' });
+        setWireStart(nextWireStart);
+        setHoverWorld(null);
+        setHoverEndpoint(null);
+        setInteractionCursor('default');
+        return;
+      }
+      // Pure click: keep wireStart so the next click can finish the wire.
       setInteractionCursor('default');
       return;
     }
@@ -1840,6 +1873,35 @@ export function SchematicEditor({
     }
     if (tool !== 'select') return;
     const world = clientToWorld(event.currentTarget, event.clientX, event.clientY);
+    // Prefer components over nearby wires so double-clicking a symbol body opens
+    // the inspector even when a routed net passes close to the artwork.
+    const component = componentFromPointerTarget(document, event.target)
+      ?? hitComponent(document, world)
+      ?? componentFromNetLabelPointerTarget(document, event.target)
+      ?? hitNetLabelComponent(document, world);
+    if (component) {
+      event.preventDefault();
+      event.stopPropagation();
+      setSelection({ kind: 'component', id: component.id });
+      if (component.type === 'MODULE' && component.module_ref?.module_id && onOpenChildModule) {
+        onOpenChildModule(component.module_ref.module_id, component.id);
+        return;
+      }
+      // qucs parity: double-click edits the component. The property editor lives in
+      // the side panel, so focus the primary param field and select its current text.
+      // Defer past React commit + layout; Linux/Electron often needs more than one rAF.
+      window.setTimeout(() => {
+        const input = editorShellRef.current?.querySelector<HTMLInputElement>([
+          '[data-testid="schematic-param-magnitude"]',
+          '[data-testid="schematic-param-dc"]',
+          '[data-testid="schematic-param-w"]',
+          '[data-testid="schematic-editor-component-value"]',
+        ].join(', '));
+        input?.focus();
+        input?.select();
+      }, 0);
+      return;
+    }
     const wire = hitEditableWireSegment(document.wires, draft, world)?.wire
       ?? hitWire(document, world);
     if (wire) {
@@ -1855,32 +1917,7 @@ export function SchematicEditor({
           ? `Selected net ${wire.net ?? wire.id} (${wireIds.length} wires)`
           : `Selected branch (${wireIds.length} wires)`,
       );
-      return;
     }
-    const component = componentFromPointerTarget(document, event.target)
-      ?? hitComponent(document, world)
-      ?? componentFromNetLabelPointerTarget(document, event.target)
-      ?? hitNetLabelComponent(document, world);
-    if (!component) return;
-    event.preventDefault();
-    event.stopPropagation();
-    setSelection({ kind: 'component', id: component.id });
-    if (component.type === 'MODULE' && component.module_ref?.module_id && onOpenChildModule) {
-      onOpenChildModule(component.module_ref.module_id, component.id);
-      return;
-    }
-    // qucs parity: double-click edits the component. The property editor lives in
-    // the side panel, so focus the primary param field and select its current text.
-    window.requestAnimationFrame(() => {
-      const input = editorShellRef.current?.querySelector<HTMLInputElement>([
-        '[data-testid="schematic-param-magnitude"]',
-        '[data-testid="schematic-param-dc"]',
-        '[data-testid="schematic-param-w"]',
-        '[data-testid="schematic-editor-component-value"]',
-      ].join(', '));
-      input?.focus();
-      input?.select();
-    });
   }
 
   function cancelActiveDrag() {
@@ -3924,25 +3961,44 @@ function appendCopiedComponents(
   if (storedWiresToCopy.length > 0) {
     const existingWireIds = new Set((module.wires ?? []).map((wire) => wire.id));
     const translate = (point: CircuitPosition) => snapPoint({ x: point.x + offset, y: point.y + offset });
+    const pinPointFor = (componentId: string | undefined, pinId: string | undefined): CircuitPosition | null => {
+      if (!componentId || !pinId) return null;
+      const component = module.components.find((entry) => entry.id === componentId);
+      if (!component) return null;
+      const pinIndex = component.pins.findIndex((pin) => pin.id === pinId);
+      if (pinIndex < 0) return null;
+      return pinWorld(component, component.pins[pinIndex], pinIndex);
+    };
     const nextWires = [...(module.wires ?? [])];
     for (const wire of storedWiresToCopy) {
       const id = makeId('w', existingWireIds);
       existingWireIds.add(id);
       const net = pinNetAssignments.get(`${wire.from?.component_id}:${wire.from?.pin_id}`) ?? wire.net;
+      const newFromComponentId = componentIdMap.get(wire.from?.component_id ?? '');
+      const newToComponentId = componentIdMap.get(wire.to?.component_id ?? '');
+      const translatedPoints = (wire.points ?? []).map(translate);
+      // Anchor the translated route to the copied pin worlds so projection sync
+      // does not treat sub-pixel drift as a move and rebuild a different Manhattan path.
+      const fromPin = pinPointFor(newFromComponentId, wire.from?.pin_id);
+      const toPin = pinPointFor(newToComponentId, wire.to?.pin_id);
+      if (fromPin && translatedPoints.length > 0) translatedPoints[0] = { ...fromPin };
+      if (toPin && translatedPoints.length > 1) {
+        translatedPoints[translatedPoints.length - 1] = { ...toPin };
+      }
       nextWires.push({
         ...cloneWire(wire),
         id,
-        points: (wire.points ?? []).map(translate),
+        points: translatedPoints,
         from: wire.from ? {
           ...wire.from,
-          ...translate(wire.from),
-          component_id: componentIdMap.get(wire.from.component_id ?? ''),
+          ...(fromPin ?? translate(wire.from)),
+          component_id: newFromComponentId,
           junction_id: undefined,
         } : undefined,
         to: wire.to ? {
           ...wire.to,
-          ...translate(wire.to),
-          component_id: componentIdMap.get(wire.to.component_id ?? ''),
+          ...(toPin ?? translate(wire.to)),
+          component_id: newToComponentId,
           junction_id: undefined,
         } : undefined,
         net,
