@@ -1,7 +1,7 @@
 # Actoviq 原理图编辑交互缺口、架构重构与 IC 规划落地计划
 
-> 状态：M0–M6 已完成并通过最新代码的功能、性能、GUI 与视觉验证；M7 的本地资格契约和发布门禁已完成，但 native Linux/IHP 与商业持牌黄金链尚未执行，不能标记为完整完成（2026-07-30）  
-> 完成审计基线：`ce97b51`  
+> 状态：M0–M6 已完成并通过最新代码的功能、性能、GUI 与视觉验证；M7 的本地资格契约和发布门禁已完成，但 native Linux/IHP 与商业持牌黄金链尚未执行，不能标记为完整完成（2026-07-30）
+> 完成审计基线：`9bdbb6e`
 
 ## 执行结果（2026-07-30）
 
@@ -11,6 +11,7 @@
 - M5：共享投影、render map、20 fixture parity 和 legacy override 隔离已闭合；阶段提交 `fc125f6`、`48bd2c3`；旧 `createSchematicDocument` 已改为委托 facade，兼容实现下沉到独立文件（`6e9f046`）。
 - M6：worker 投影、懒加载、affected-module compile、20/500/5,000 基准和大图建议已闭合；阶段提交 `abbc4e9`；属性/模块元数据已走安全增量投影和增量 ERC，几何/拓扑变化保留完整回退（`e2daf59`）。
 - M7：固定环境/PDK 锁、真实项目证据 schema、hash/波形/Xschem/商业边界校验和发布门禁已闭合；阶段提交 `987749f`。真实 native/商业 qualification 仍属于外部待资格，不得以 fixture 或 WSL 结果代替。
+- M7 补充审查修复：资格报告现在把同机 tool record、provider 版本/可执行文件、左右仿真 run ID、profile、revision、document hash 和实际比较 metric 互相绑定，并拒绝不合格 tool record、缺波形、未关联 run 和 provider 版本漂移（`c3edb9b`）；self-hosted workflow 在安装依赖和运行发布套件前执行无绝对路径泄露的 native/IHP/8 项证据 preflight（`9bdbb6e`）。
 - 补充审查修复：大图性能基准改为真实 Space+drag 平移（`1edff91`）；Agent manual policy 增加持久化待审 transaction 的接受/拒绝/陈旧保护（`9d45763`）；应用壳层改用不可滚动的裁切容器，修复聚焦右侧工具后工作台左边缘被裁切，并增加视觉边界断言（`ce97b51`）。
 - 补充全功能审计发现并修复两个既有缺陷：编译端子网络与受控源/行为源表达式命名不一致（`277620b`）；ReAct 迁移后技术报告工具未注册且旧 Agent Flow E2E 仍使用废弃响应协议（`d944ae4`）。
 - 完整非 GUI 发布门禁 `npm run test:schematic-release` 通过；完整 GUI 发布门禁 `npm run test:schematic-release:gui` 通过，覆盖 move/free/stretch、snap/autowire、wire topology、connectivity selection、live ERC、cancel、hierarchy、PDK、投影兼容、Agent 待审、性能、综合编辑器和 Electron。
@@ -18,7 +19,7 @@
 - Agent Flow 实测完成 `create → context → apply → ERC → compile → simulate → technical report` 七工具闭环：revision 1、ERC 0 error、simulation success、`actoviq.technical-report.v1`，并通过视觉布局反馈循环。布局专用夹具有意省略地，项目级唯一错误被明确断言为 `missing_ground`，编辑器局部 Live ERC 为 0/0。
 - 最新 100 元件 GUI 实测：首次可交互 `392.2 ms`、pan `266.8 ms`、zoom `63.4 ms`、drag preview p95 `0.8 ms`、增量属性投影 `101.4 ms`、保存 `1377.3 ms`、renderer heap `74.8 MB`。
 - 最新 500 元件 GUI 实测：首次可交互 `552.4 ms`、pan `1146.1 ms`、zoom `160.6 ms`、drag preview p95 `1.4 ms`、增量属性投影 `360.9 ms`、保存 `2697.3 ms`、renderer heap `149.3 MB`。
-- 当前主机只有 WSL2 Ubuntu 22.04（内核 `6.18.33.2-microsoft-standard-WSL2`），不是锁文件要求的 native Ubuntu 24.04。执行资格探针后得到 `native_eligible=false`、`wsl=true`，且 ngspice、Xyce、OpenVAF、Xschem 四个锁定工具全部缺失；因此未生成 `native_verified`。远端默认分支当前也没有可调度的 `IC project native qualification` workflow。商业 PDK/EDA 没有合法持牌运行环境，未执行。
+- 当前主机只有 WSL2 Ubuntu 22.04（内核 `6.18.33.2-microsoft-standard-WSL2`），不是锁文件要求的 native Ubuntu 24.04。执行资格探针后得到 `native_eligible=false`、`wsl=true`，且 ngspice、Xyce、OpenVAF、Xschem 四个锁定工具全部缺失；因此未生成 `native_verified`。当前远端默认分支没有 `IC project native qualification` workflow，仓库级 self-hosted runner 查询结果为 `total_count=0`。商业 PDK/EDA 没有合法持牌运行环境，未执行。
 
 ### 完成度与证据矩阵
 
@@ -31,8 +32,8 @@
 | M4 hierarchy/PDK/probe | 已完成 | 三级导航、端口映射、revision mismatch、PDK browser/直接放置/参数验证、项目搜索、probe 映射；GUI 发布门禁通过 |
 | M5 共享投影与兼容 | 已完成 | `schematic-document.v1`、render map、20/20 parity、netlistsvg compatibility、override migration；`6e9f046` |
 | M6 大图性能 | 已完成 | 安全增量投影/ERC、worker、懒加载、affected compile、100/500 GUI 和 5,000 segment 基准；`e2daf59` |
-| M7 本地资格契约/门禁 | 已完成 | 锁文件、qualification schema、正反例、开放/商业 provider 边界、`test:schematic-release` |
-| M7 native Linux/IHP 黄金链 | **外部阻塞，未执行** | WSL2 探针明确拒绝；缺 native Ubuntu 24.04、锁定 IHP revision 和四个工具；远端 workflow 尚不可调度 |
+| M7 本地资格契约/门禁 | 已完成 | 锁文件、qualification schema、同机工具/仿真证据绑定、preflight、开放/商业 provider 边界、`test:schematic-release`；`c3edb9b`、`9bdbb6e` |
+| M7 native Linux/IHP 黄金链 | **外部阻塞，未执行** | WSL2 探针和 preflight 明确拒绝；缺 native Ubuntu 24.04、锁定 IHP revision 和四个工具；远端 workflow 尚不可见且 self-hosted runner 为 0 |
 | M7 商业黄金链 | **外部阻塞，未执行** | 缺合法持牌 PDK/EDA 环境；不得由 mock/fixture 冒充 |
 
 > 第 1–8 节保留 2026-07-28 的原始缺口分析和实施依据，其中的“部分完成/缺失”是历史基线；当前状态以本节矩阵为准。
@@ -40,10 +41,11 @@
 ### M7 剩余可执行步骤
 
 1. 将当前分支合并到远端默认分支，使 `.github/workflows/ic-project-qualification.yml` 可见。
-2. 准备带 `self-hosted, linux, ic-qualified` 标签的 **native Ubuntu 24.04** runner，禁止 WSL/容器伪装 native。
+2. 注册带 `self-hosted, linux, ic-qualified` 标签的 **native Ubuntu 24.04** runner；当前仓库 runner 数量为 0，禁止 WSL/容器伪装 native。
 3. 按 `.github/ic-qualification-lock.json` 安装并锁定 IHP SG13G2 revision `22f2a25f1734796de3debbbf29cf697cbbc54081`、ngspice、Xyce、OpenVAF、Xschem。
-4. 调度 `IC project native qualification`，归档 project/module/PDK/tool/connectivity hash、双模拟波形、Xschem 比较和最终 report；只有报告签名满足契约后才更新为 `native_verified`。
-5. 在合法持牌环境选择 Spectre、PrimeSim 或 AFS 中至少一个完成同一黄金设计；确认 PDK 不被复制、上传或打包后，单独记录商业资格。
+4. 在仓库变量中配置黄金项目、PDK scan、ERC、netlist、ngspice、Xyce、dual 和 Xschem 共 8 个证据路径；先取得 `preflight.status=ready`。
+5. 调度 `IC project native qualification`，归档 project/module/PDK/tool/connectivity hash、双模拟波形、Xschem 比较和最终 report；只有报告签名满足契约后才更新为 `native_verified`。
+6. 在合法持牌环境选择 Spectre、PrimeSim 或 AFS 中至少一个完成同一黄金设计；确认 PDK 不被复制、上传或打包后，单独记录商业资格。
 
 > 基线日期：2026-07-28  
 > 基线提交：`ac46e93fa374944e25bd731c652117d12497f4e8`  
