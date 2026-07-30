@@ -657,7 +657,7 @@ async function createLayoutLoopFixture() {
       id: layoutLoopModuleId,
       name: module.name,
       kind: 'test',
-      function: 'Deliberately low-scoring but electrically valid fixture for the visual layout feedback loop.',
+      function: 'Deliberately low-scoring connectivity fixture; the omitted ground keeps project ERC visibly independent from layout quality.',
       parameters: {},
       notes: '',
       preview_enabled: true,
@@ -881,7 +881,38 @@ try {
     JSON.parse(await schematicEditor.getAttribute('data-port-positions') ?? '{}'),
     { in: { x: -20, y: 0 }, out: { x: 20, y: 120 } },
   );
+  const layoutViewport = await page.evaluate(() => {
+    const workbench = document.querySelector('[data-testid="circuit-workbench"]');
+    const title = document.querySelector('[data-testid="project-title"]');
+    const viewport = workbench?.parentElement;
+    if (!(workbench instanceof HTMLElement) || !(title instanceof HTMLElement) || !(viewport instanceof HTMLElement)) {
+      throw new Error('layout workbench viewport is unavailable');
+    }
+    const workbenchRect = workbench.getBoundingClientRect();
+    const titleRect = title.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    return {
+      viewportScrollLeft: viewport.scrollLeft,
+      viewportLeft: viewportRect.left,
+      workbenchLeft: workbenchRect.left,
+      titleLeft: titleRect.left,
+    };
+  });
+  assert.equal(layoutViewport.viewportScrollLeft, 0);
+  assert(layoutViewport.workbenchLeft >= layoutViewport.viewportLeft);
+  assert(layoutViewport.titleLeft >= layoutViewport.viewportLeft + 12);
   await page.screenshot({ path: path.resolve(outputRoot, 'agent-flow-layout-loop.png') });
+  const layoutFixtureErc = await page.evaluate(
+    async (projectId) => window.electronAPI.runCircuitErc(projectId),
+    layoutLoopProjectId,
+  );
+  assert.equal(layoutFixtureErc.summary.errors, 1);
+  assert.deepEqual(
+    layoutFixtureErc.diagnostics
+      .filter((diagnostic) => diagnostic.severity === 'error')
+      .map((diagnostic) => diagnostic.code),
+    ['missing_ground'],
+  );
 
   const layoutProject = JSON.parse(await readFile(
     path.resolve(layoutFixture.projectRoot, 'project.circuit.json'),
@@ -1016,6 +1047,8 @@ try {
     buildStatus: manifest.status,
     simulationExecutionStatus: simulation.execution_status,
     reportSchema: technicalReportMetadata.schema,
+    layoutFixtureExpectedErc: 'missing_ground',
+    layoutViewport,
     providerScenarios: mock.requests.map((request) => request.scenario),
     screenshots: [
       'output/playwright/agent-flow-settings.png',
