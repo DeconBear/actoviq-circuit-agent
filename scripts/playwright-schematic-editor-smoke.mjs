@@ -4029,15 +4029,27 @@ try {
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
     ));
+    await waitForEditorIdle(page);
+    await page.getByTestId('schematic-editor-fit').click();
+    await waitForEditorIdle(page);
+    const powerCountBeforePlace = Number(await editor.getAttribute('data-component-count'));
+    assert.ok(Number.isFinite(powerCountBeforePlace) && powerCountBeforePlace >= 2, 'power module should already contain supply components');
     const powerCanvas = page.getByTestId('schematic-editor-svg');
     const powerBox = await powerCanvas.boundingBox();
     assert.ok(powerBox);
     const powerPlacePoint = worldToScreen({ x: 520, y: 320 }, await editorViewBox(page), powerBox);
     await page.getByTestId('schematic-editor-place-R').click();
-    await page.mouse.click(powerPlacePoint.x, powerPlacePoint.y);
-    await page.waitForFunction(() => (
-      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3'
-    ));
+    assert.equal(await editor.getAttribute('data-tool'), 'place', 'power-module R toolbar button did not activate place mode');
+    // Click relative to the SVG element so Electron window chrome cannot shift the hit.
+    await powerCanvas.click({
+      position: {
+        x: Math.min(Math.max(powerPlacePoint.x - powerBox.x, 8), powerBox.width - 8),
+        y: Math.min(Math.max(powerPlacePoint.y - powerBox.y, 8), powerBox.height - 8),
+      },
+    });
+    await page.waitForFunction((expectedCount) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(expectedCount)
+    ), powerCountBeforePlace + 1);
     const powerPositionsAfterPlace = await componentPositions(page);
     const powerWiresBeforeR1Drag = await editorWires(page);
     await selectComponentForDrag(page, 'r1', [{ x: 0, y: -10 }, { x: 0, y: 0 }, { x: 10, y: 0 }]);
