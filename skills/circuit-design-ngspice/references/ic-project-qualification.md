@@ -55,7 +55,25 @@ operator's explicit `--commercial-boundary-attested` flag.
    run `simulate-dual`, and run `xschem-validate`. Keep the generated JSON
    evidence and waveform tables under the project build directory.
 
-4. Verify and archive the evidence:
+4. Before a self-hosted workflow spends time installing dependencies and
+   running the release suite, verify that the native runner can see the locked
+   PDK scan, hierarchical project, and every required evidence file:
+
+   ```text
+   python scripts/ic_qualification_preflight.py \
+     --lock .github/ic-qualification-lock.json \
+     --project-root /work/qualified-gain-stage \
+     --pdk-scan output/qualification/ihp-scan.json \
+     --erc /work/qualified-gain-stage/build/erc.json \
+     --netlist /work/qualified-gain-stage/build/system/design.final.cir \
+     --ngspice-run /work/qualified-gain-stage/build/system/simulation/runs/NG/RUN.json \
+     --xyce-run /work/qualified-gain-stage/build/system/simulation/runs/XY/RUN.json \
+     --dual-run /work/qualified-gain-stage/build/system/simulation/dual-comparison.json \
+     --xschem-run /work/qualified-gain-stage/build/xschem-validation/core/RUN/run.json \
+     --output output/qualification/preflight.json
+   ```
+
+5. Verify and archive the evidence:
 
    ```text
    python scripts/ic_project_qualification.py \
