@@ -27,6 +27,7 @@ verified.
 ## Layout Rules
 
 - `SKILL.md` is the agent-facing navigation page. Keep it short; put detailed contracts in `references/` and keep them in sync with the scripts and the desktop schematic-document model (`actoviq.module.v2` → `actoviq.schematic-document.v1`).
+- When schematic editor tools, `actoviq.command.v2`, soft leases, or Apply/compile semantics change, update `references/schematic-editor-guide.md`, `references/gui-project-canvas.md`, and `references/project-agent-protocol.md` in the same change.
 - `agents/openai.yaml` is the platform integration shim for OpenAI Codex.
 - `tool_paths.json` is a user-editable config file — always keep the default `""` value.
 - References in `references/` are documentation for the agent, not executable code.

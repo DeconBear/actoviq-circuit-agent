@@ -14,3 +14,12 @@ adding a new one and updating the index below, never by editing the prior file.
 - [ADR-0003 — `actoviq.command.v2` discriminated transactions](0003-command-v2-discriminated-transactions.md)
 - [ADR-0004 — Unified undo and revision history](0004-unified-undo-and-revision-history.md)
 - [ADR-0005 — Xschem ownership and bridge semantics](0005-xschem-ownership-and-bridge-semantics.md)
+
+## Tutorials (living docs)
+
+ADRs are frozen decisions. For how to use the shipped editor and agent loop, see:
+
+- [Schematic editor guide](../../skills/circuit-design-ngspice/references/schematic-editor-guide.md)
+- [GUI project canvas contract](../../skills/circuit-design-ngspice/references/gui-project-canvas.md)
+- [Project agent protocol](../../skills/circuit-design-ngspice/references/project-agent-protocol.md)
+- [README (EN)](../../README.md) / [README (ZH)](../../README-zh.md)

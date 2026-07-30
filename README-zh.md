@@ -43,7 +43,7 @@ npm run electron:dev
 
 **标签页**
 
-- **Design**——每个模块都可在基于 `actoviq.module.v2` 的轻量网格原理图编辑器中打开。可以选中并用鼠标左键拖动符号，放置 R/C/L/D/M/Q/V/I 器件或自定义引脚 Block，绘制正交导线，编辑参数，删除对象并撤销/重做。引脚和端口引用稳定的电气 `net_id`；网络名称、别名、电源符号和标签都是显式属性，因此连接两个 MOS 引脚不会再复制 `VIN` 标签或重命名无关网络。一次完整手势只提交一个带版本的事务。
+- **Design**——每个模块都可在基于 `actoviq.module.v2` 的网格原理图编辑器中打开。工具：选择 (`S`)、连线 (`W`)、剪线 (`K`)、拉伸移动 (`F8`) / 自由移动 (`F7`)，放置 R/C/L/D/M/Q/V/I 或自定义引脚 Block，以及 `analog_ic` 下的绑定 PDK 器件。支持正交布线、结点/折点拓扑、即时 ERC、层级导航、仿真探针映射，以及 Agent 事务审阅。编辑留在本地草稿；**Apply**（`Ctrl+S`）写入 `actoviq.command.v2` 并后台重建预览。模块软租约与 revision 冲突时会阻止保存。引脚/端口引用稳定 `net_id`；网络名、别名与标签是显式属性。完整快捷键与保存路径见 [schematic-editor-guide.md](./skills/circuit-design-ngspice/references/schematic-editor-guide.md)。
 - **Design memory**——*Save template* 和 *Save flow* 会在 `references/design-memory/` 中保存来源 revision、文档哈希、电路族、仿真覆盖和验证状态。Agent 优先复用已验证记录，但仍会重新执行 ERC 和仿真。
 - **Netlist**——每个模块一份可编辑的 Markdown 笔记本：`spice` 代码块是网表，代码块之外是说明。受支持器件会映射为原生可编辑符号；符合当前项目类型的 `.model`、`.param`、分析、测量及 opaque 语句会被保留，禁止的前缀/指令会在解析前失败。保存会提交统一文档并从同一 revision 重建预览。
 - **SVG**——当前模块的 `SchematicDocument` 预览，与 Design 编辑器使用完全相同的几何结果。
@@ -55,7 +55,7 @@ npm run electron:dev
 
 **项目生命周期**——删除项目默认移动到 `.trash/projects/`，可在回收站视图中恢复或永久清理；项目列表支持右键删除和批量选择。用户或 Agent 的每个事务都会生成可恢复 revision，记录 actor、父版本、内容哈希、规范化网表、文档快照、构建来源和网表 diff。
 
-**Agent 如何驱动**——Claude Code / Codex 使用 `circuit-design-ngspice` skill 在当前工作空间下创建和修改项目；GUI 监听这些文件并刷新对应卡片。详见 [SKILL.md](./skills/circuit-design-ngspice/SKILL.md) 中的 *GUI Project Canvas Contract*。
+**Agent 如何驱动**——Claude Code / Codex 使用 `circuit-design-ngspice` skill 在当前工作空间下创建和修改项目；GUI 监听这些文件并刷新对应卡片。原理图拓扑编辑优先使用 `actoviq.command.v2`，并遵守模块软租约。详见 [SKILL.md](./skills/circuit-design-ngspice/SKILL.md) 与 [schematic-editor-guide.md](./skills/circuit-design-ngspice/references/schematic-editor-guide.md)。
 
 ### 项目类型、EDA Bridge 与立创商城
 
@@ -82,6 +82,7 @@ npm run electron:dev
 
 细节与 CLI：
 
+- [schematic-editor-guide.md](./skills/circuit-design-ngspice/references/schematic-editor-guide.md)
 - [eda-bridge-lcsc.md](./skills/circuit-design-ngspice/references/eda-bridge-lcsc.md)
 - [SKILL.md](./skills/circuit-design-ngspice/SKILL.md)
 - [project-agent-protocol.md](./skills/circuit-design-ngspice/references/project-agent-protocol.md)

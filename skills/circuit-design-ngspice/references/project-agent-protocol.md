@@ -21,22 +21,35 @@ another revision.
 4. For `pcb_schematic`, prefer LCSC search → bind (`bind_lcsc_part` / `lcsc-bind`)
    before a KiCad handoff or experimental JLCEDA exchange. For `analog_ic`, set and validate
    `analog_ic_profile` before accepting transistor sizing or simulation.
-5. Submit one `actoviq.command.v1` transaction with the exact current
-   `base_revision` and `actor: "agent"`.
-6. Read the transaction ERC. Fix blocking errors before claiming a valid
-   circuit. Reread context after any stale-revision rejection.
-7. Run `compile`, then reread context and confirm the build revision/hash are
+5. Submit one transaction with the exact current `base_revision` and
+   `actor: "agent"`:
+   - Prefer `actoviq.command.v2` for in-module schematic topology
+     (`module_id` + `expected_module_revision` + discriminated ops).
+   - Use `actoviq.command.v1` for project-canvas composition
+     (`connect_ports`, `upsert_module_netlist`, metadata, LCSC bind, …).
+   - Keep `set_module_schematic` as import/compatibility batch only — not the
+     normal desktop save path (GUI Apply emits command.v2).
+6. If the GUI editor holds a soft lease on the target module, acquire as the
+   same actor or wait for release (`module-lease-acquire` /
+   `module-lease-release`). Expired leases are recoverable; active foreign
+   leases must fail closed.
+7. Read the transaction ERC. Fix blocking errors before claiming a valid
+   circuit. Reread context after any stale-revision or lease rejection.
+8. Run `compile`, then reread context and confirm the build revision/hash are
    current.
-8. Run the analyses required by the specification when simulation is in-scope.
+9. Run the analyses required by the specification when simulation is in-scope.
    Execution success, measurement success, and specification pass are independent
    states.
-9. For `pcb_schematic`, use `bridge-push` / `bridge-pull` for stable-ID-based
-   layout/property handoff with KiCad or the vendor-unverified experimental
-   嘉立创 EDA exchange JSON. This does not yet reconstruct
-   arbitrary peer connectivity edits. For `analog_ic`, use the validated
-   SPICE/CDL + mapping + SKILL Virtuoso package instead.
-10. Write the report only from simulation runs whose source revision and hash
+10. For `pcb_schematic`, use `bridge-push` / `bridge-pull` for stable-ID-based
+    layout/property handoff with KiCad or the vendor-unverified experimental
+    嘉立创 EDA exchange JSON. This does not yet reconstruct
+    arbitrary peer connectivity edits. For `analog_ic`, use the validated
+    SPICE/CDL + mapping + SKILL Virtuoso package instead.
+11. Write the report only from simulation runs whose source revision and hash
     match the current document.
+
+Schematic editor tools, shortcuts, and the Apply → compile revision window
+are documented in [schematic-editor-guide.md](schematic-editor-guide.md).
 
 Native project analyses are `.op`, `.dc`, `.ac`, `.tran`, `.sp`, `.noise`, and
 `.pz`. Use `.actoviq fft`, `.actoviq sweep`, and `.actoviq montecarlo` for
@@ -119,11 +132,17 @@ stable `net_id`; visible text alone is not connectivity.
 
 ## Revision Rules
 
-- Mouse-up, completed wire, property submit, and Agent command are transaction
-  boundaries.
+- Mouse-up, completed wire, property submit, and Agent command are local or
+  committed transaction boundaries. Desktop Apply packages the dirty draft as
+  one `actoviq.command.v2` commit with entity-level ops.
 - A stale command must fail. Never silently rebase it.
+- Soft leases guard edit intent across GUI and Agent; file locks still guard
+  atomic writes.
 - Restore creates a new revision and does not rewrite history.
 - Build, simulation, report, template, and flow records must carry source
   revision and document hash.
 - A result from an older hash is stale even if its numeric revision appears
   similar.
+- After Apply, compile may receive a schematic-document artifact stamped with
+  `module.revision - 1` for one hop while entity/wire ids still match; the
+  write path stamps the disk revision. Older lags are rejected.

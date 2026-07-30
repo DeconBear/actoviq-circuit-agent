@@ -205,6 +205,26 @@ resolution order is: CLI argument → `NGSPICE_BIN` env var → `tool_paths.json
 → `PATH`. If ngspice cannot be resolved, stop and instruct the user to
 configure it.
 
+### Desktop project apply, leases, and command.v2
+
+```bash
+python scripts/circuit_project.py agent-context --project-root <project>
+python scripts/circuit_project.py apply --project-root <project> --command-file <command.json>
+python scripts/circuit_project.py module-lease-acquire \
+  --project-root <project> --module-id <id> --actor agent
+python scripts/circuit_project.py module-lease-release \
+  --project-root <project> --module-id <id> --actor agent
+python scripts/circuit_project.py compile-module --project-root <project> --module-id <id>
+```
+
+`apply` accepts `actoviq.command.v1` or `actoviq.command.v2`. Prefer v2 for
+in-module schematic topology (`expected_module_revision` required). Soft leases
+fail closed when another actor holds an unexpired lease on a touched module.
+Stale `base_revision` / module revision must be rejected — reread
+`agent-context` and retry. See
+[schematic-editor-guide.md](schematic-editor-guide.md) and
+`schemas/command.v2.schema.json`.
+
 ## Convergence Rules
 
 During the netlist design step (Step 5), follow these rules:

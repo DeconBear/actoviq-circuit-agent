@@ -48,14 +48,23 @@ Implements `actoviq.project-agent.v2`. Before changing a desktop project, read
 and `skill-version.json`.
 
 1. Run `agent-context`; use exact `project_id` and `base_revision`.
-2. Submit one `actoviq.command.v1` transaction (`actor: "agent"`).
-3. Read returned ERC; fix blocking errors.
-4. Run `compile`, then required simulations for the current revision.
-5. Never invent a new revision number to retry a stale command — reread context.
+2. Submit one transaction (`actor: "agent"`):
+   - Prefer `actoviq.command.v2` for schematic topology edits on one module
+     (`expected_module_revision` required).
+   - Use `actoviq.command.v1` for project-canvas ops (`connect_ports`,
+     `upsert_module_netlist`, …) and for compatibility batch
+     `set_module_schematic`.
+3. Respect module soft leases (`module-lease-acquire` / `release`) when the GUI
+   editor holds a module.
+4. Read returned ERC; fix blocking errors.
+5. Run `compile`, then required simulations for the current revision.
+6. Never invent a new revision number to retry a stale command — reread context.
 
 Editable truth: `modules/<id>/module.circuit.json` (`actoviq.module.v2`).  
 Design/SVG: shared `actoviq.schematic-document.v1` projection.  
-netlistsvg / `schematic.overrides.json`: export / legacy placement only.
+netlistsvg / `schematic.overrides.json`: export / legacy placement only.  
+Desktop editor tutorial:
+[references/schematic-editor-guide.md](references/schematic-editor-guide.md).
 
 ## Desktop Canvas — Quick Start
 
@@ -188,6 +197,7 @@ Use `--scope project --project-root <path>` for a repo-local install.
 
 - [references/project-agent-protocol.md](references/project-agent-protocol.md) — revisioned project loop
 - [references/gui-project-canvas.md](references/gui-project-canvas.md) — desktop GUI contract
+- [references/schematic-editor-guide.md](references/schematic-editor-guide.md) — schematic editor tools, save path, command.v2
 - [references/user-reference-assets.md](references/user-reference-assets.md) — catalog import (circuit + schematic layout)
 - [references/modular-project-design.md](references/modular-project-design.md) — default multi-module canvas design
 - [references/analog-ic-design.md](references/analog-ic-design.md) — PDK, transistor sizing, ngspice, Razavi-Bench license boundary, and Virtuoso handoff

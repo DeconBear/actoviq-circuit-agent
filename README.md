@@ -41,7 +41,7 @@ This compiles the Electron main process, starts Vite, and opens the window.
 
 **Tabs**
 
-- **Design** — each module opens in a lightweight grid-based schematic editor backed by `actoviq.module.v2`. Select and left-drag symbols, place primitive R/C/L/D/M/Q/V/I devices or custom-pin blocks, draw orthogonal wires, edit values, delete items, and undo/redo. Pins and ports reference stable electrical `net_id` values; visible names, aliases, rail symbols, and labels are explicit properties, so joining two MOS pins cannot silently duplicate a `VIN` label or rename unrelated networks. A completed gesture is committed as one revisioned transaction.
+- **Design** — each module opens in a grid-based schematic editor backed by `actoviq.module.v2`. Tools: select (`S`), wire (`W`), cut (`K`), stretch (`F8`) / free (`F7`) move, place R/C/L/D/M/Q/V/I or custom-pin blocks, plus bound PDK devices for `analog_ic`. Orthogonal routing, junction/bend topology, inline ERC, hierarchy navigation, simulation probe mapping, and Agent transaction review are first-class. Edits stay in a local draft; **Apply** (`Ctrl+S`) writes `actoviq.command.v2` and rebuilds the preview. Soft leases and revision conflicts block save until resolved. Pins/ports use stable `net_id` values; names, aliases, and labels are explicit. Full shortcuts and save path: [schematic-editor-guide.md](./skills/circuit-design-ngspice/references/schematic-editor-guide.md).
 - **Design memory** — *Save template* and *Save flow* store revision, document hash, circuit family, simulation coverage, and validation status under `references/design-memory/`. Agent reuse prioritizes validated memories and still requires fresh ERC and simulation.
 - **Netlist** — an editable Markdown notebook per module: fenced `spice` blocks are the netlist, prose around them is notes. Supported devices become native editable symbols; kind-valid `.model`, `.param`, analyses, measurements, and opaque statements survive round trips, while forbidden prefixes/directives fail before parsing. Saving commits the document and rebuilds previews from the same revision.
 - **SVG** — the selected module's `SchematicDocument` preview, matching the editable module view.
@@ -53,7 +53,7 @@ This compiles the Electron main process, starts Vite, and opens the window.
 
 **Project lifecycle** — project deletion moves items to `.trash/projects/`; the Trash view can restore or permanently purge them. The project list supports context-menu deletion and multi-select. Every user or Agent transaction produces a restorable revision with actor, parent, content hash, normalized netlist, document snapshot, build provenance, and netlist diff.
 
-**How the agent drives it** — Claude Code / Codex use the `circuit-design-ngspice` skill to create and edit projects under the active workspace; the GUI watches those files and refreshes the affected card. See the *GUI Project Canvas Contract* in [SKILL.md](./skills/circuit-design-ngspice/SKILL.md).
+**How the agent drives it** — Claude Code / Codex use the `circuit-design-ngspice` skill to create and edit projects under the active workspace; the GUI watches those files and refreshes the affected card. Prefer `actoviq.command.v2` for schematic topology and honor module soft leases. See [SKILL.md](./skills/circuit-design-ngspice/SKILL.md) and [schematic-editor-guide.md](./skills/circuit-design-ngspice/references/schematic-editor-guide.md).
 
 ### Project kinds, EDA Bridge, and LCSC
 
@@ -85,6 +85,7 @@ licensed EDA integration contracts are documented in
 
 Details / CLI:
 
+- [schematic-editor-guide.md](./skills/circuit-design-ngspice/references/schematic-editor-guide.md)
 - [eda-bridge-lcsc.md](./skills/circuit-design-ngspice/references/eda-bridge-lcsc.md)
 - [SKILL.md](./skills/circuit-design-ngspice/SKILL.md)
 - [project-agent-protocol.md](./skills/circuit-design-ngspice/references/project-agent-protocol.md)

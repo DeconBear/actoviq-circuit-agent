@@ -106,11 +106,24 @@ python scripts/circuit_project.py simulate-module --project-root <project-root> 
 ```
 
 Every command must use the current `base_revision`. A stale command must be
-rejected, not silently rebased. Supported initial operations are
-`move_module`, `resize_module`, `set_component_value`, `move_component`,
-`set_module_schematic`, `move_schematic_item`, `reset_schematic_item`, `connect_ports`,
-`set_connection_network`, and `connect_pins`. Agents can construct larger designs with `upsert_module`,
+rejected, not silently rebased.
+
+**Desktop schematic edits** prefer `actoviq.command.v2` (see
+[schematic-editor-guide.md](schematic-editor-guide.md) and
+`schemas/command.v2.schema.json`): `place_component`, `update_component`,
+`move_entities`, `delete_entities`, `create_wire`, `edit_wire_path`,
+`split_wire`, `join_wires`, `upsert_junction`, `rename_net`, `upsert_port`,
+`place_module_instance`, `set_module_metadata`. The GUI Apply button emits
+these operations with `expected_module_revision`. Soft leases under
+`leases/<module>.json` block conflicting actors while an editor is open.
+
+**Project-canvas / composition** still use `actoviq.command.v1` operations such
+as `move_module`, `resize_module`, `set_component_value`, `move_component`,
+`connect_ports`, `set_connection_network`, `connect_pins`, `upsert_module`,
 `remove_module`, `add_port`, `add_component`, and `remove_component`.
+`set_module_schematic` remains an import/compatibility whole-module batch, not
+the normal editor save path. `move_schematic_item` / `reset_schematic_item`
+stay available for legacy override workflows.
 Use `set_module_note`, `set_module_preview`, and `set_module_metadata` for the
 GUI card note, preview preference, name, kind, function summary, and parameter
 summary. Keep the stable module `id` unchanged when editing metadata.
@@ -156,11 +169,12 @@ Editable truth is each `modules/<id>/module.circuit.json` (`actoviq.module.v2`)
 inside a revisioned CircuitDocument. Design and SVG both render the same
 `actoviq.schematic-document.v1` projection (symbols, semantic pin anchors such
 as MOS `D/G/S/B`, orthogonal wires, junctions, explicit labels, and view
-bounds). Save electrical and layout edits through `set_module_schematic` (or
-netlist notebook upserts); one completed gesture is one revisioned transaction.
-The background build coordinator regenerates the SPICE module netlist and
-previews from that revision. Do not treat document SVG as a second editable
-model, and do not edit generated `build/` artifacts.
+bounds). Save electrical and layout edits through GUI Apply → `command.v2`
+(or Agent `apply` with the same schema); netlist notebook upserts remain the
+composition path for stimuli/models. One completed Apply is one revisioned
+transaction. The background build coordinator regenerates the SPICE module
+netlist and previews from that revision. Do not treat document SVG as a second
+editable model, and do not edit generated `build/` artifacts.
 
 `render/netlistsvg.svg` and module compatibility builds remain the AI/netlist
 → `netlist_to_json` → netlistsvg export path with independent geometry checks.
