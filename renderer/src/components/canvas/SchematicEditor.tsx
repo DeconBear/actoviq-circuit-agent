@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -34,6 +35,7 @@ import {
 } from '../../schematic-core/selection/netSelection';
 import {
   deriveLiveErc,
+  deriveLiveErcIncremental,
   summarizeLiveErc,
   type LiveErcDiagnostic,
 } from '../../schematic-core/diagnostics/liveErc';
@@ -81,7 +83,11 @@ import {
   distance,
   pinWorld,
 } from '../../schematic/schematicDocument';
-import { projectSchematicDocument as createSchematicDocument } from '../../schematic-core/projection/facade';
+import {
+  projectSchematicDocument as createSchematicDocument,
+  projectSchematicDocumentIncremental,
+  type SchematicProjectionSnapshot,
+} from '../../schematic-core/projection/facade';
 import { analyzeSchematicComplexity } from '../../schematic-core/performance/complexity';
 
 type ToolMode = 'select' | 'wire' | 'cut' | 'place' | 'place-block' | 'place-module';
@@ -435,8 +441,18 @@ export function SchematicEditor({
   const pendingViewportRef = useRef<SchematicBounds | null>(null);
   const dragPreviewFrameRef = useRef<number | null>(null);
   const pendingDragPreviewRef = useRef<Record<string, CircuitPosition> | null>(null);
+  const previousBaseProjectionRef = useRef<SchematicProjectionSnapshot | null>(null);
+  const previousBaseDiagnosticsRef = useRef<LiveErcDiagnostic[] | null>(null);
 
-  const baseDocument = useMemo(() => createSchematicDocument(draft, { autoLayout: false }), [draft]);
+  const baseProjection = useMemo(() => projectSchematicDocumentIncremental(
+    draft,
+    { autoLayout: false },
+    previousBaseProjectionRef.current,
+  ), [draft]);
+  const baseDocument = baseProjection.document;
+  useLayoutEffect(() => {
+    previousBaseProjectionRef.current = baseProjection.snapshot;
+  }, [baseProjection]);
   const previewDraft = useMemo(() => {
     if (!dragPreviewPositions) return draft;
     return moduleWithComponentPositions(draft, dragPreviewPositions);
@@ -451,12 +467,21 @@ export function SchematicEditor({
         )
       : baseDocument
   ), [baseDocument, componentMoveMode, dragPreviewPositions, previewDraft]);
-  const baseLiveDiagnostics = useMemo(() => deriveLiveErc(baseDocument), [baseDocument]);
+  const baseLiveErc = useMemo(() => deriveLiveErcIncremental(
+    baseDocument,
+    baseProjection,
+    previousBaseDiagnosticsRef.current,
+  ), [baseDocument, baseProjection]);
+  const baseLiveDiagnostics = baseLiveErc.diagnostics;
+  useLayoutEffect(() => {
+    previousBaseDiagnosticsRef.current = baseLiveDiagnostics;
+  }, [baseLiveDiagnostics]);
   const liveDiagnostics = useMemo(() => (
     dragPreviewPositions && (dragRef.current?.mode ?? componentMoveMode) === 'stretch'
       ? baseLiveDiagnostics
       : deriveLiveErc(document)
   ), [baseLiveDiagnostics, componentMoveMode, document, dragPreviewPositions]);
+  const liveErcMode = dragPreviewPositions ? 'full' : baseLiveErc.mode;
   const liveErcSummary = useMemo(() => summarizeLiveErc(liveDiagnostics), [liveDiagnostics]);
   const renderedLiveDiagnostics = useMemo(
     () => liveDiagnostics.slice(0, MAX_RENDERED_LIVE_DIAGNOSTICS),
@@ -2737,6 +2762,10 @@ export function SchematicEditor({
       data-block-dialog={blockDialogOpen ? 'true' : 'false'}
       data-block-placement-ready={pendingBlock ? 'true' : 'false'}
       data-viewport={JSON.stringify(activeViewBox)}
+      data-projection-mode={baseProjection.mode}
+      data-projection-affected={baseProjection.affectedEntities.join(',')}
+      data-projection-routing-reused={baseProjection.reused.routing ? 'true' : 'false'}
+      data-live-erc-mode={liveErcMode}
       data-component-count={draft.components.length}
       data-components={JSON.stringify(draft.components)}
       data-port-count={draft.ports.length}

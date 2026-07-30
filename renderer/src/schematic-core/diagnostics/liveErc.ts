@@ -20,6 +20,12 @@ export interface LiveErcDiagnostic {
   port_id?: string;
 }
 
+export interface LiveErcComputation {
+  diagnostics: LiveErcDiagnostic[];
+  mode: 'full' | 'incremental';
+  affectedEntities: string[];
+}
+
 function endpointKey(endpoint: CircuitWireEndpoint | undefined): string {
   if (!endpoint) return '';
   if (endpoint.component_id && endpoint.pin_id) {
@@ -127,6 +133,46 @@ export function deriveLiveErc(document: SchematicDocument): LiveErcDiagnostic[] 
       || left.code.localeCompare(right.code)
       || left.id.localeCompare(right.id)
     ));
+}
+
+/**
+ * A property-only projection preserves connectivity and geometry. Reuse its
+ * diagnostics and refresh the human-readable component/pin labels for the
+ * affected entities. Topology/geometry changes arrive with mode=full and use
+ * the canonical complete ERC path.
+ */
+export function deriveLiveErcIncremental(
+  document: SchematicDocument,
+  projection: { mode: 'full' | 'incremental'; affectedEntities: string[] },
+  previous?: LiveErcDiagnostic[] | null,
+): LiveErcComputation {
+  if (projection.mode !== 'incremental' || !previous) {
+    return {
+      diagnostics: deriveLiveErc(document),
+      mode: 'full',
+      affectedEntities: projection.affectedEntities,
+    };
+  }
+  const affected = new Set(projection.affectedEntities);
+  const components = new Map(document.module.components.map((component) => [component.id, component]));
+  const diagnostics = previous.map((diagnostic) => {
+    if (!diagnostic.component_id || !affected.has(diagnostic.component_id)) return diagnostic;
+    const component = components.get(diagnostic.component_id);
+    const pin = component?.pins.find((entry) => entry.id === diagnostic.pin_id);
+    if (!component || !pin) return diagnostic;
+    if (diagnostic.code === 'unconnected_pin') {
+      return { ...diagnostic, message: `${component.name}.${pin.name} is not connected.` };
+    }
+    if (diagnostic.code === 'connected_no_connect') {
+      return { ...diagnostic, message: `${component.name}.${pin.name} is marked no-connect but has a wire.` };
+    }
+    return diagnostic;
+  });
+  return {
+    diagnostics,
+    mode: 'incremental',
+    affectedEntities: projection.affectedEntities,
+  };
 }
 
 export function summarizeLiveErc(diagnostics: LiveErcDiagnostic[]) {

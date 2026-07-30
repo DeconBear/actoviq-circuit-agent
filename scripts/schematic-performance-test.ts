@@ -4,10 +4,15 @@ import { performance } from 'node:perf_hooks';
 import type { CircuitModule, CircuitModuleRef } from '../renderer/src/types';
 import { resolveSystemNetworks } from '../renderer/src/schematic-core/connectivity/modulePortGraph';
 import { analyzeSchematicComplexity } from '../renderer/src/schematic-core/performance/complexity';
-import { deriveLiveErc } from '../renderer/src/schematic-core/diagnostics/liveErc';
+import {
+  deriveLiveErc,
+  deriveLiveErcIncremental,
+} from '../renderer/src/schematic-core/diagnostics/liveErc';
 import {
   projectSchematicArtifact,
   projectSchematicDocument,
+  projectSchematicDocumentIncremental,
+  serializeSchematicDocument,
 } from '../renderer/src/schematic-core/projection/facade';
 import {
   ProjectionWorkerClient,
@@ -56,6 +61,58 @@ const ercStarted = performance.now();
 deriveLiveErc(document500);
 const ercMs = performance.now() - ercStarted;
 assert.ok(ercMs < 2000, `500-component live ERC took ${ercMs.toFixed(1)}ms`);
+
+const incrementalBase = projectSchematicDocumentIncremental(
+  module500,
+  { autoLayout: false },
+);
+assert.equal(incrementalBase.mode, 'full');
+const propertyEditModule = structuredClone(module500);
+propertyEditModule.revision = 1;
+propertyEditModule.components[250]!.value = '2k';
+propertyEditModule.components[250]!.parameters = { magnitude: '2k' };
+const incrementalStarted = performance.now();
+const propertyProjection = projectSchematicDocumentIncremental(
+  propertyEditModule,
+  { autoLayout: false },
+  incrementalBase.snapshot,
+);
+const incrementalProjectionMs = performance.now() - incrementalStarted;
+assert.equal(propertyProjection.mode, 'incremental');
+assert.equal(propertyProjection.reused.routing, true);
+assert.ok(propertyProjection.affectedEntities.includes('r250'));
+assert.deepEqual(
+  projectSchematicArtifact(propertyEditModule, { autoLayout: false }),
+  serializeSchematicDocument(propertyProjection.document),
+  'incremental property projection must remain identical to the canonical full projection',
+);
+const incrementalErc = deriveLiveErcIncremental(
+  propertyProjection.document,
+  propertyProjection,
+  deriveLiveErc(incrementalBase.document),
+);
+assert.equal(incrementalErc.mode, 'incremental');
+assert.deepEqual(incrementalErc.diagnostics, deriveLiveErc(propertyProjection.document));
+
+const geometryEditModule = structuredClone(propertyEditModule);
+geometryEditModule.revision = 2;
+geometryEditModule.components[250]!.position.x += 20;
+const geometryProjection = projectSchematicDocumentIncremental(
+  geometryEditModule,
+  { autoLayout: false },
+  propertyProjection.snapshot,
+);
+assert.equal(geometryProjection.mode, 'full', 'geometry edits must use the canonical full projector');
+
+const autoLayoutBase = largeModule(2);
+const autoLayoutProjection = projectSchematicDocumentIncremental(autoLayoutBase);
+const autoLayoutEdit = structuredClone(autoLayoutBase);
+autoLayoutEdit.components[0]!.value = '3k';
+assert.equal(
+  projectSchematicDocumentIncremental(autoLayoutEdit, {}, autoLayoutProjection.snapshot).mode,
+  'full',
+  'auto-layout inputs must not reuse a projection whose profile may change',
+);
 const topologyStarted = performance.now();
 const renderedJunctions = junctions(document500);
 const junctionMs = performance.now() - topologyStarted;
@@ -178,6 +235,7 @@ console.log(JSON.stringify({
   crossingsMs: Math.round(crossingsMs * 10) / 10,
   endpointVisualMs: Math.round(endpointVisualMs * 10) / 10,
   mixedRouteProjectionMs: Math.round(mixedRouteProjectionMs * 10) / 10,
+  incrementalProjectionMs: Math.round(incrementalProjectionMs * 10) / 10,
   renderedJunctionCount: renderedJunctions.length,
   renderedCrossingCount: renderedCrossings.length,
   renderedDanglingEndCount: renderedDanglingEnds.length,
@@ -186,5 +244,8 @@ console.log(JSON.stringify({
   wireSegmentCount: complexity.wireSegmentCount,
   staleWorkerResultIgnored: true,
   workerQualityScored: true,
+  propertyProjectionIncremental: true,
+  propertyErcIncremental: true,
+  geometryChangeFallsBackToFull: true,
   hierarchyAdviceOnly: true,
 }, null, 2));

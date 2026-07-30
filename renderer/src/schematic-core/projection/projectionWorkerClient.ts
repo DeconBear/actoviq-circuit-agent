@@ -6,6 +6,7 @@ import {
   type SerializableSchematicDocument,
 } from '../../schematic/schematicDocument';
 import type { InteractiveProjectionQuality } from './interactiveQuality';
+import type { SchematicProjectionMode } from './facade';
 
 export interface ProjectionWorkerLike {
   postMessage(value: unknown): void;
@@ -23,6 +24,13 @@ interface PendingProjection {
 export interface ProjectionWorkerResult {
   document: SchematicDocument;
   quality: InteractiveProjectionQuality;
+  mode: SchematicProjectionMode;
+  affectedEntities: string[];
+  reused: {
+    geometry: boolean;
+    routing: boolean;
+    bounds: boolean;
+  };
 }
 
 export class ProjectionWorkerClient {
@@ -34,6 +42,9 @@ export class ProjectionWorkerClient {
       requestId?: number;
       artifact?: SerializableSchematicDocument;
       quality?: InteractiveProjectionQuality;
+      mode?: SchematicProjectionMode;
+      affectedEntities?: string[];
+      reused?: ProjectionWorkerResult['reused'];
       error?: string;
     };
     const requestId = Number(message.requestId);
@@ -45,6 +56,9 @@ export class ProjectionWorkerClient {
       pending.resolve({
         document: deserializeSchematicDocument(message.artifact),
         quality: message.quality,
+        mode: message.mode ?? 'full',
+        affectedEntities: message.affectedEntities ?? [],
+        reused: message.reused ?? { geometry: false, routing: false, bounds: false },
       });
     } else {
       pending.reject(new Error(message.error || 'Schematic projection worker failed'));

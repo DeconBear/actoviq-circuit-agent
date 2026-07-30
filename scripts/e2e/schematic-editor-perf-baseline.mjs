@@ -194,6 +194,24 @@ async function measureDrag() {
   };
 }
 
+async function measureIncrementalPropertyEdit(size) {
+  const editor = page.getByTestId('schematic-editor');
+  const input = page.getByTestId('schematic-param-magnitude');
+  await input.waitFor();
+  const t0 = await page.evaluate(() => performance.now());
+  await input.fill(size === 100 ? '2k' : '3k');
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-testid="schematic-editor"]');
+    return node?.getAttribute('data-projection-mode') === 'incremental'
+      && node?.getAttribute('data-projection-routing-reused') === 'true'
+      && node?.getAttribute('data-live-erc-mode') === 'incremental'
+      && (node?.getAttribute('data-projection-affected') ?? '').split(',').includes('r0');
+  });
+  const t1 = await page.evaluate(() => performance.now());
+  assert.equal(await editor.getAttribute('data-projection-mode'), 'incremental');
+  return Math.round((t1 - t0) * 10) / 10;
+}
+
 async function measureSave() {
   // Place a component to make the editor dirty, then time the save.
   const canvas = page.getByTestId('schematic-editor-svg');
@@ -278,6 +296,21 @@ try {
       });
       continue;
     }
+    const incrementalPropertyMs = await measureIncrementalPropertyEdit(size);
+    console.log(`[perf] ${size} incremental property projection: ${incrementalPropertyMs}ms`);
+    if (STOP_AFTER === 'incremental') {
+      results.push({
+        componentCount: size,
+        firstPaintMs,
+        panMs,
+        zoomMs: zoom.ms,
+        dragGestureMs: drag.gestureMs,
+        dragPreviewP95Ms: drag.previewP95Ms,
+        dragPreviewSamples: drag.sampleCount,
+        incrementalPropertyMs,
+      });
+      continue;
+    }
     const saveMs = await measureSave();
     console.log(`[perf] ${size} source save: ${saveMs}ms`);
     const heapMb = await measureMemory();
@@ -293,6 +326,7 @@ try {
       dragGestureMs: drag.gestureMs,
       dragPreviewP95Ms: drag.previewP95Ms,
       dragPreviewSamples: drag.sampleCount,
+      incrementalPropertyMs,
       saveMs,
       rendererHeapMb: heapMb,
     });

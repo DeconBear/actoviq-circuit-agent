@@ -3161,7 +3161,9 @@ function ModuleCard({
       onPointerDown={onDragStart}
       onContextMenu={onContextMenu}
       data-testid={`module-card-${module.id}`}
-      data-projection-mode="lazy-worker"
+      data-projection-execution="lazy-worker"
+      data-projection-mode={schematicProjection?.mode ?? ''}
+      data-projection-affected={schematicProjection?.affectedEntities.join(',') ?? ''}
       data-projection-ready={schematicDocument ? 'true' : 'false'}
       data-interactive-quality={schematicProjection?.quality.readabilityScore ?? ''}
     >

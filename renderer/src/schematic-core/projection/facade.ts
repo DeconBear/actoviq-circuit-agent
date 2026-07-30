@@ -21,7 +21,9 @@
 
 import type { CircuitModule } from '../../types';
 import {
+  AUTO_LAYOUT_COMPONENT_LIMIT,
   createSchematicDocument,
+  deserializeSchematicDocument,
   serializeSchematicDocument,
   type SchematicDocument,
   type SchematicDocumentOptions,
@@ -53,6 +55,120 @@ export interface SchematicEntityMap {
   junctions: Array<{ entity_id: string }>;
 }
 
+export type SchematicProjectionMode = 'full' | 'incremental';
+
+export interface SchematicProjectionSnapshot {
+  sourceModule: CircuitModule;
+  document: SchematicDocument;
+}
+
+export interface SchematicProjectionComputation {
+  document: SchematicDocument;
+  mode: SchematicProjectionMode;
+  affectedEntities: string[];
+  reused: {
+    geometry: boolean;
+    routing: boolean;
+    bounds: boolean;
+  };
+  snapshot: SchematicProjectionSnapshot;
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function componentProjectionShape(component: CircuitModule['components'][number]) {
+  return {
+    id: component.id,
+    type: component.type,
+    position: component.position,
+    rotation: component.rotation,
+    pins: component.pins,
+    block: component.block,
+    module_ref: component.module_ref,
+  };
+}
+
+function moduleProjectionShape(module: CircuitModule) {
+  return {
+    schema: module.schema,
+    module_id: module.module_id,
+    ports: module.ports,
+    nets: module.nets ?? [],
+    wires: module.wires ?? [],
+    annotations: module.annotations ?? [],
+    components: module.components.map(componentProjectionShape),
+  };
+}
+
+function autoLayoutWouldRun(module: CircuitModule, options: SchematicDocumentOptions): boolean {
+  return (
+    options.autoLayout !== false
+    && (module.wires ?? []).length === 0
+    && module.components.length <= AUTO_LAYOUT_COMPONENT_LIMIT
+  );
+}
+
+function changedEntityIds(previous: CircuitModule, next: CircuitModule): string[] {
+  const previousById = new Map(previous.components.map((component) => [component.id, component]));
+  const affected = next.components
+    .filter((component) => !sameValue(previousById.get(component.id), component))
+    .map((component) => component.id);
+  const previousTopLevel = {
+    ...previous,
+    components: undefined,
+  };
+  const nextTopLevel = {
+    ...next,
+    components: undefined,
+  };
+  if (!sameValue(previousTopLevel, nextTopLevel)) affected.push(`module:${next.module_id}`);
+  return [...new Set(affected)].sort();
+}
+
+function reuseProjectedDocument(
+  previous: SchematicDocument,
+  nextSource: CircuitModule,
+): SchematicDocument {
+  const projectedById = new Map(previous.module.components.map((component) => [component.id, component]));
+  const module = {
+    ...clone(nextSource),
+    // These collections may have canonical net ids, normalized ports, snapped
+    // geometry, and auto-generated routing in the prior projection.
+    ports: clone(previous.module.ports),
+    nets: previous.module.nets ? clone(previous.module.nets) : undefined,
+    wires: clone(previous.module.wires),
+    components: nextSource.components.map((component) => {
+      const projected = projectedById.get(component.id)!;
+      return {
+        ...clone(component),
+        position: clone(projected.position),
+        rotation: projected.rotation,
+        pins: clone(projected.pins),
+      };
+    }),
+  };
+  return {
+    schema: 'actoviq.schematic-document.v1',
+    moduleId: nextSource.module_id,
+    moduleName: nextSource.name,
+    module,
+    portPositions: new Map(
+      [...previous.portPositions].map(([id, position]) => [id, clone(position)]),
+    ),
+    connectedPortIds: new Set(previous.connectedPortIds),
+    netLabels: clone(previous.netLabels),
+    wires: clone(previous.wires),
+    bounds: clone(previous.bounds),
+    viewBox: clone(previous.viewBox),
+  };
+}
+
 /**
  * Project a module into a SchematicDocument (interactive projection).
  * Pure: does not mutate the input module. See ADR-0002.
@@ -64,12 +180,82 @@ export function projectSchematicDocument(
   return createSchematicDocument(module, options);
 }
 
+/**
+ * Reuse derived geometry when a transaction only changes non-geometric entity
+ * properties. Connectivity, routing, positions, ports, and annotations are
+ * compared structurally; any uncertainty falls back to the canonical full
+ * projector. Auto-layout inputs also use the full path because names/values
+ * may influence a layout profile.
+ */
+export function projectSchematicDocumentIncremental(
+  module: CircuitModule,
+  options: SchematicDocumentOptions = {},
+  previous?: SchematicProjectionSnapshot | null,
+): SchematicProjectionComputation {
+  const canReuse = Boolean(
+    previous
+    && previous.sourceModule.module_id === module.module_id
+    && previous.document.moduleId === module.module_id
+    && !autoLayoutWouldRun(module, options)
+    && sameValue(moduleProjectionShape(previous.sourceModule), moduleProjectionShape(module)),
+  );
+  if (!canReuse || !previous) {
+    const document = projectSchematicDocument(module, options);
+    return {
+      document,
+      mode: 'full',
+      affectedEntities: module.components.map((component) => component.id),
+      reused: { geometry: false, routing: false, bounds: false },
+      snapshot: { sourceModule: clone(module), document },
+    };
+  }
+  const document = reuseProjectedDocument(previous.document, module);
+  return {
+    document,
+    mode: 'incremental',
+    affectedEntities: changedEntityIds(previous.sourceModule, module),
+    reused: { geometry: true, routing: true, bounds: true },
+    snapshot: { sourceModule: clone(module), document },
+  };
+}
+
 /** Produce the formal serializable artifact consumed by build and export. */
 export function projectSchematicArtifact(
   module: CircuitModule,
   options: SchematicDocumentOptions = {},
 ): SerializableSchematicDocument {
   return serializeSchematicDocument(projectSchematicDocument(module, options));
+}
+
+export function projectSchematicArtifactIncremental(
+  module: CircuitModule,
+  options: SchematicDocumentOptions = {},
+  previous?: {
+    sourceModule: CircuitModule;
+    artifact: SerializableSchematicDocument;
+  } | null,
+): {
+  artifact: SerializableSchematicDocument;
+  mode: SchematicProjectionMode;
+  affectedEntities: string[];
+  reused: SchematicProjectionComputation['reused'];
+} {
+  const computation = projectSchematicDocumentIncremental(
+    module,
+    options,
+    previous
+      ? {
+          sourceModule: previous.sourceModule,
+          document: deserializeSchematicDocument(previous.artifact),
+        }
+      : null,
+  );
+  return {
+    artifact: serializeSchematicDocument(computation.document),
+    mode: computation.mode,
+    affectedEntities: computation.affectedEntities,
+    reused: computation.reused,
+  };
 }
 
 /**
