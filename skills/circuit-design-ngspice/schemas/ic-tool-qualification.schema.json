@@ -3,7 +3,21 @@
   "$id": "https://actoviq.local/schemas/ic-tool-qualification.schema.json",
   "title": "Actoviq IC Tool Qualification",
   "type": "object",
-  "required": ["schema", "qualified_at", "platform", "tools", "smoke", "required", "passed"],
+  "required": [
+    "schema",
+    "qualified_at",
+    "platform",
+    "platform_release",
+    "native_eligible",
+    "wsl",
+    "tools",
+    "smoke",
+    "required",
+    "passed",
+    "missing",
+    "failed_smoke",
+    "ineligible_environment"
+  ],
   "properties": {
     "schema": { "const": "actoviq.ic-tool-qualification.v1" },
     "qualified_at": { "type": "string", "minLength": 1 },

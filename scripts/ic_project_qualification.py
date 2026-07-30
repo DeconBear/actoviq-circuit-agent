@@ -118,6 +118,62 @@ def has_waveform(run: dict[str, Any]) -> bool:
     return False
 
 
+def tool_record_matches_environment(
+    tool_record: dict[str, Any],
+    environment: dict[str, Any],
+    allow_fixture: bool,
+) -> bool:
+    if allow_fixture:
+        return True
+    return bool(
+        tool_record.get("schema") == "actoviq.ic-tool-qualification.v1"
+        and tool_record.get("native_eligible") is True
+        and tool_record.get("wsl") is False
+        and tool_record.get("ineligible_environment") is False
+        and str(tool_record.get("platform") or "") == str(environment.get("platform") or "")
+        and str(tool_record.get("platform_release") or "") == str(environment.get("release") or "")
+    )
+
+
+def simulation_matches_tool_record(
+    run: dict[str, Any],
+    tool_id: str,
+    tools: dict[str, Any],
+) -> bool:
+    provider = run.get("provider")
+    provider = provider if isinstance(provider, dict) else {}
+    tool = tools.get(tool_id)
+    tool = tool if isinstance(tool, dict) else {}
+    provider_executable = str(provider.get("executable") or "").strip()
+    tool_executable = str(tool.get("executable") or "").strip()
+    return bool(
+        provider.get("id") == tool_id
+        and str(provider.get("version") or "").strip()
+        == str(tool.get("version") or "").strip()
+        and provider_executable
+        and tool_executable
+        and Path(provider_executable).resolve() == Path(tool_executable).resolve()
+    )
+
+
+def successful_waveform_run(run: dict[str, Any], document_hash: str, source_revision: int) -> bool:
+    verification = run.get("verification")
+    verification = verification if isinstance(verification, dict) else {}
+    return bool(
+        run.get("ok") is True
+        and run.get("execution_status") == "success"
+        and run.get("measurement_status") == "success"
+        and run.get("specification_status") == "passed"
+        and run.get("verified") is True
+        and run.get("document_hash") == document_hash
+        and run.get("source_revision") == source_revision
+        and verification.get("executed") is True
+        and verification.get("measured") is True
+        and verification.get("spec_passed") is True
+        and has_waveform(run)
+    )
+
+
 def module_evidence(
     modules: dict[str, dict[str, Any]],
     device_catalog: dict[str, Any],
@@ -257,12 +313,25 @@ def build_report(
     }
     required_tool_set = set(tool_record.get("required") or [])
     locked_required_tools = set(lock.get("required_tools") or [])
-    tools_ok = bool(tool_record.get("passed")) and all(
-        tool_id in required_tool_set
-        and tool_id in locked_required_tools
-        and bool((tools.get(tool_id) or {}).get("available"))
-        and bool(tool_versions[tool_id])
-        for tool_id in REQUIRED_TOOLS
+    smoke = tool_record.get("smoke")
+    smoke = smoke if isinstance(smoke, dict) else {}
+    tools_ok = bool(
+        tool_record_matches_environment(tool_record, environment, allow_fixture)
+        and tool_record.get("passed") is True
+        and not (tool_record.get("missing") or [])
+        and not (tool_record.get("failed_smoke") or [])
+        and (
+            allow_fixture
+            or all(bool((smoke.get(tool_id) or {}).get("passed")) for tool_id in ("ngspice", "xyce"))
+        )
+        and all(
+            tool_id in required_tool_set
+            and tool_id in locked_required_tools
+            and bool((tools.get(tool_id) or {}).get("available"))
+            and (tools.get(tool_id) or {}).get("exit_code") == 0
+            and bool(tool_versions[tool_id])
+            for tool_id in REQUIRED_TOOLS
+        )
     )
 
     erc_ok = (
@@ -280,25 +349,49 @@ def build_report(
         and component["parameters"].get("device_id")
     }
     netlist_ok = bool(netlist_text.strip()) and all(model in netlist_text for model in device_models)
-    ngspice_ok = (
-        ngspice_run.get("ok") is True
-        and (ngspice_run.get("provider") or {}).get("id") == "ngspice"
-        and ngspice_run.get("document_hash") == document_hash
-        and ngspice_run.get("source_revision") == project.get("revision")
-        and has_waveform(ngspice_run)
-    )
-    xyce_ok = (
-        xyce_run.get("ok") is True
-        and (xyce_run.get("provider") or {}).get("id") == "xyce"
-        and xyce_run.get("document_hash") == document_hash
-        and xyce_run.get("source_revision") == project.get("revision")
-        and has_waveform(xyce_run)
-    )
+    source_revision = int(project.get("revision") or 0)
+    ngspice_ok = successful_waveform_run(ngspice_run, document_hash, source_revision)
+    xyce_ok = successful_waveform_run(xyce_run, document_hash, source_revision)
     dual_metadata = dual_run.get("metadata") if isinstance(dual_run.get("metadata"), dict) else {}
     comparison = dual_metadata.get("comparison") if isinstance(dual_metadata.get("comparison"), dict) else {}
+    comparison_metrics = {
+        str(item.get("metric") or "")
+        for item in comparison.get("comparisons", [])
+        if isinstance(item, dict) and str(item.get("metric") or "")
+    }
+    ngspice_metrics = {
+        str(item.get("name") or "")
+        for item in ngspice_run.get("metrics", [])
+        if isinstance(item, dict) and str(item.get("name") or "")
+    }
+    xyce_metrics = {
+        str(item.get("name") or "")
+        for item in xyce_run.get("metrics", [])
+        if isinstance(item, dict) and str(item.get("name") or "")
+    }
+    archived_run_linkage_ok = bool(
+        simulation_matches_tool_record(ngspice_run, "ngspice", tools)
+        and simulation_matches_tool_record(xyce_run, "xyce", tools)
+        and dual_metadata.get("source_revision") == source_revision
+        and dual_metadata.get("document_hash") == document_hash
+        and {
+            str(dual_metadata.get("left_run_id") or ""),
+            str(dual_metadata.get("right_run_id") or ""),
+        }
+        == {
+            str(ngspice_run.get("run_id") or ""),
+            str(xyce_run.get("run_id") or ""),
+        }
+        and str(dual_metadata.get("left_profile_id") or "")
+        and str(dual_metadata.get("right_profile_id") or "")
+        and dual_metadata.get("left_profile_id") != dual_metadata.get("right_profile_id")
+        and comparison_metrics
+        and comparison_metrics <= (ngspice_metrics & xyce_metrics)
+    )
     dual_ok = (
         dual_run.get("status") == "passed"
         and dual_run.get("executed") is True
+        and archived_run_linkage_ok
         and dual_metadata.get("document_hash") == document_hash
         and comparison.get("ok") is True
         and bool(comparison.get("comparisons"))
@@ -357,6 +450,11 @@ def build_report(
         gate("canonical_netlist", netlist_ok, "Canonical netlist must contain every placed PDK model."),
         gate("ngspice_waveform", ngspice_ok, "ngspice must execute successfully and archive waveform samples."),
         gate("xyce_waveform", xyce_ok, "Xyce must execute successfully and archive waveform samples."),
+        gate(
+            "archived_run_linkage",
+            archived_run_linkage_ok,
+            "Simulation providers/versions, run IDs, profiles, revision, document hash, and compared metrics must match the archived tool and run records.",
+        ),
         gate("dual_simulation_compare", dual_ok, "Dual simulation must compare common measurements for this document hash."),
         gate("xschem_reference_compare", xschem_ok, "Xschem reference netlist connectivity must pass without topology writeback."),
         gate("commercial_pdk_boundary", boundary_attested, "Commercial qualification requires an explicit no-copy/no-package/no-upload attestation."),

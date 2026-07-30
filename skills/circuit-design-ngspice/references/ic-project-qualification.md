@@ -15,7 +15,9 @@ The first golden chain is the required IHP SG13G2 revision in
 - have non-blocking ERC for the exact project revision and document hash;
 - have a canonical netlist containing every placed PDK model;
 - archive waveform-bearing ngspice and Xyce `actoviq.simulation.v3` runs;
-- archive a passing dual-simulation comparison for the same document hash;
+- archive a passing dual-simulation comparison whose provider versions, run
+  IDs, profiles, revision, document hash, and compared metrics bind to those
+  exact ngspice/Xyce run files and the same-host tool record;
 - archive a passing Xschem reference-netlist connectivity comparison;
 - archive project/module, PDK, tool, connectivity, and evidence hashes.
 
@@ -42,6 +44,11 @@ operator's explicit `--commercial-boundary-attested` flag.
      --require-native-linux \
      --output output/qualification/native-tools.json
    ```
+
+   The tool record must come from the same native kernel as the final report.
+   A WSL/fixture record, a different kernel release, missing ngspice/Xyce smoke
+   result, or a provider version that differs from an archived simulation run
+   fails qualification.
 
 3. In Actoviq, complete and save the hierarchical project, then run ERC,
    compile the canonical netlist, run independent ngspice and Xyce profiles,

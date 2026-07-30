@@ -16,8 +16,12 @@ SKILL_SCRIPTS = ROOT / "skills" / "circuit-design-ngspice" / "scripts"
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(SKILL_SCRIPTS))
 
+import ic_project_qualification as qualification_module  # noqa: E402
 from circuit_project import project_document_hash  # noqa: E402
-from ic_project_qualification import build_report  # noqa: E402
+from ic_project_qualification import (  # noqa: E402
+    build_report,
+    tool_record_matches_environment,
+)
 from module_hierarchy import ordered_connectivity_hash  # noqa: E402
 from xschem_bridge import module_hash as xschem_module_hash  # noqa: E402
 
@@ -230,6 +234,9 @@ def main() -> int:
             "schema": "actoviq.ic-tool-qualification.v1",
             "qualified_at": "2026-07-30T00:00:00Z",
             "platform": "linux",
+            "platform_release": "6.8.0-fixture",
+            "native_eligible": True,
+            "wsl": False,
             "required": ["ngspice", "xyce", "openvaf", "xschem"],
             "passed": True,
             "tools": {
@@ -241,9 +248,13 @@ def main() -> int:
                 }
                 for tool in ("ngspice", "xyce", "openvaf", "xschem")
             },
-            "smoke": {},
+            "smoke": {
+                "ngspice": {"passed": True},
+                "xyce": {"passed": True},
+            },
             "missing": [],
             "failed_smoke": [],
+            "ineligible_environment": False,
         })
         erc_path = write_json(project_root / "build" / "erc.json", {
             "schema": "actoviq.erc.v1",
@@ -276,10 +287,22 @@ def main() -> int:
             "diagnostics": [],
             "artifacts": [],
             "metadata": {
+                "source_revision": 7,
                 "document_hash": document_hash,
+                "left_profile_id": "ngspice-native",
+                "right_profile_id": "xyce-native",
+                "left_run_id": "ngspice-run",
+                "right_run_id": "xyce-run",
                 "comparison": {
                     "ok": True,
-                    "comparisons": [{"name": "gain", "passed": True}],
+                    "comparisons": [{
+                        "metric": "gain",
+                        "left": 10.0,
+                        "right": 10.0,
+                        "delta": 0.0,
+                        "tolerance": 0.01,
+                        "passed": True,
+                    }],
                 },
             },
         })
@@ -326,6 +349,58 @@ def main() -> int:
         assert report["pdk"]["revision"] == "fixture-revision"
         assert {gate["status"] for gate in report["gates"]} == {"passed"}
         assert all(len(item["sha256"]) == 64 for item in report["artifacts"])
+        native_environment = {
+            "platform": "linux",
+            "release": "6.8.0-fixture",
+        }
+        tool_record = json.loads(tool_path.read_text(encoding="utf-8"))
+        assert tool_record_matches_environment(tool_record, native_environment, False)
+        ineligible_tool_record = json.loads(json.dumps(tool_record))
+        ineligible_tool_record["native_eligible"] = False
+        ineligible_tool_record["wsl"] = True
+        ineligible_tool_record["ineligible_environment"] = True
+        assert not tool_record_matches_environment(
+            ineligible_tool_record,
+            native_environment,
+            False,
+        )
+        tool_schema = json.loads(
+            (
+                ROOT
+                / "skills"
+                / "circuit-design-ngspice"
+                / "schemas"
+                / "ic-tool-qualification.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        tool_errors = list(Draft202012Validator(tool_schema).iter_errors(tool_record))
+        assert not tool_errors, tool_errors
+
+        original_environment_state = qualification_module.environment_state
+        qualification_module.environment_state = lambda _allow_fixture: {
+            "platform": "linux",
+            "release": "6.8.0-fixture",
+            "distribution": "ubuntu",
+            "distribution_version": "24.04",
+            "native_linux": True,
+            "wsl": False,
+            "eligible": True,
+        }
+        try:
+            native_arguments = {**arguments, "allow_fixture": False}
+            native = build_report(**native_arguments)
+            assert native["passed"] is True
+            assert native["qualification"] == "native_verified"
+            write_json(tool_path, ineligible_tool_record)
+            rejected_tool_record = build_report(**native_arguments)
+            assert rejected_tool_record["passed"] is False
+            assert next(
+                gate for gate in rejected_tool_record["gates"]
+                if gate["id"] == "tool_versions_and_smoke"
+            )["status"] == "failed"
+        finally:
+            qualification_module.environment_state = original_environment_state
+            write_json(tool_path, tool_record)
 
         schema = json.loads(
             (
@@ -350,6 +425,27 @@ def main() -> int:
         restored_xyce = simulation("xyce")
         restored_xyce["document_hash"] = document_hash
         write_json(xyce_path, restored_xyce)
+        linked_dual = json.loads(dual_path.read_text(encoding="utf-8"))
+        unlinked_dual = json.loads(json.dumps(linked_dual))
+        unlinked_dual["metadata"]["left_run_id"] = "unrelated-run"
+        write_json(dual_path, unlinked_dual)
+        unlinked = build_report(**arguments)
+        assert unlinked["passed"] is False
+        assert next(
+            gate for gate in unlinked["gates"]
+            if gate["id"] == "archived_run_linkage"
+        )["status"] == "failed"
+        write_json(dual_path, linked_dual)
+        mismatched_provider = json.loads(ngspice_path.read_text(encoding="utf-8"))
+        mismatched_provider["provider"]["version"] = "different ngspice build"
+        write_json(ngspice_path, mismatched_provider)
+        mismatched = build_report(**arguments)
+        assert mismatched["passed"] is False
+        assert next(
+            gate for gate in mismatched["gates"]
+            if gate["id"] == "archived_run_linkage"
+        )["status"] == "failed"
+        write_json(ngspice_path, ngspice_run)
         commercial_scan = json.loads(pdk_path.read_text(encoding="utf-8"))
         commercial_scan["installation"]["source_kind"] = "commercial"
         write_json(pdk_path, commercial_scan)
@@ -364,7 +460,13 @@ def main() -> int:
         "ok": True,
         "suite": "ic-project-qualification",
         "positive": "fixture_verified",
-        "negative": ["missing_waveform", "commercial_boundary_unattested"],
+        "negative": [
+            "ineligible_tool_record",
+            "missing_waveform",
+            "unlinked_dual_run",
+            "provider_version_mismatch",
+            "commercial_boundary_unattested",
+        ],
     }))
     return 0
 
