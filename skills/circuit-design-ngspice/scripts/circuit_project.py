@@ -119,6 +119,7 @@ MODULE_SCHEMA = "actoviq.module.v2"
 LEGACY_PROJECT_SCHEMAS = {"actoviq.project.v1", PROJECT_SCHEMA}
 LEGACY_MODULE_SCHEMAS = {"actoviq.module.v1", MODULE_SCHEMA}
 COMMAND_SCHEMA = "actoviq.command.v1"
+PENDING_COMMAND_SCHEMA = "actoviq.pending-command.v1"
 ERC_SCHEMA = "actoviq.erc.v1"
 AGENT_PROTOCOL_VERSION = "actoviq.project-agent.v2"
 SCHEMATIC_OVERRIDES_SCHEMA = "actoviq.schematic-overrides.v1"
@@ -3624,6 +3625,170 @@ def apply_command(root: Path, command: dict[str, Any]) -> dict[str, Any]:
             check_module_lease(root, command["module_id"], command.get("actor", "unknown"))
             return _apply_command_locked(root, command)
     raise ValueError(f"unsupported command schema: {schema}")
+
+
+def pending_command_path(root: Path, command_id: str) -> Path:
+    normalized = str(command_id or "").strip()
+    if not normalized or not re.fullmatch(r"[A-Za-z0-9_.:-]+", normalized):
+        raise ValueError("pending command_id must contain only letters, digits, dot, colon, underscore, or dash")
+    return root / "commands" / "pending" / f"{normalized}.json"
+
+
+def pending_command_summary(command: dict[str, Any]) -> dict[str, Any]:
+    operations = command.get("operations")
+    operation_list = operations if isinstance(operations, list) else []
+    operation_summaries: list[dict[str, Any]] = []
+    affected_entities: set[str] = set()
+    for operation in operation_list:
+        if not isinstance(operation, dict):
+            continue
+        entity_ids = {
+            str(operation[key])
+            for key in (
+                "component_id",
+                "wire_id",
+                "port_id",
+                "annotation_id",
+                "junction_id",
+                "entity_id",
+                "id",
+            )
+            if operation.get(key) is not None
+        }
+        for key in ("entity_ids", "wire_ids"):
+            values = operation.get(key)
+            if isinstance(values, list):
+                entity_ids.update(str(value) for value in values if value is not None)
+        for key in ("component", "port"):
+            entity = operation.get(key)
+            if isinstance(entity, dict) and entity.get("id") is not None:
+                entity_ids.add(str(entity["id"]))
+        affected_entities.update(entity_ids)
+        operation_summaries.append({
+            "op": str(operation.get("op") or "unknown"),
+            "entities": sorted(entity_ids),
+        })
+    module_id = str(command.get("module_id") or "")
+    if not module_id:
+        module_ids = {
+            str(operation.get("module_id"))
+            for operation in operation_list
+            if isinstance(operation, dict) and operation.get("module_id")
+        }
+    else:
+        module_ids = {module_id}
+    return {
+        "operation_count": len(operation_list),
+        "operations": operation_summaries,
+        "affected_modules": sorted(module_ids),
+        "affected_entities": sorted(affected_entities),
+    }
+
+
+def stage_pending_command(root: Path, command: dict[str, Any]) -> dict[str, Any]:
+    project, modules = load_project(root)
+    schema = command.get("schema")
+    if schema not in {COMMAND_SCHEMA, "actoviq.command.v2"}:
+        raise ValueError(f"unsupported command schema: {schema}")
+    if command.get("project_id") != project["project_id"]:
+        raise ValueError("command project_id does not match project")
+    if command.get("base_revision") != project["revision"]:
+        raise ValueError(
+            f"stale revision: expected {project['revision']}, got {command.get('base_revision')}"
+        )
+    operations = command.get("operations")
+    if not isinstance(operations, list) or not operations:
+        raise ValueError("command operations must be a non-empty array")
+    if any(not isinstance(operation, dict) for operation in operations):
+        raise ValueError("command operations must contain objects")
+    if schema == "actoviq.command.v2":
+        module_id = str(command.get("module_id") or "")
+        module = modules.get(module_id)
+        if module is None:
+            raise ValueError(f"v2 command references unknown module: {module_id}")
+        expected = command.get("expected_module_revision")
+        if expected is None:
+            raise ValueError("v2 command requires expected_module_revision")
+        if int(expected) != int(module.get("revision", 0)):
+            raise ValueError(
+                f"stale module revision: expected {module.get('revision', 0)}, got {expected}"
+            )
+        preview_module = json.loads(json.dumps(module))
+        for operation in operations:
+            apply_v2_operation(preview_module, operation)
+        preview_module = upgrade_module_document(preview_module, repair_invalid_net_ids=True)
+        ensure_module_stable_ids(preview_module)
+        validate_module(preview_module, project.get("project_kind"))
+    command_id = str(command.get("command_id") or "")
+    target = pending_command_path(root, command_id)
+    for directory in ("pending", "applied", "rejected"):
+        candidate = root / "commands" / directory / f"{command_id}.json"
+        if candidate.exists():
+            raise ValueError(f"command_id already exists in commands/{directory}: {command_id}")
+    envelope = {
+        "schema": PENDING_COMMAND_SCHEMA,
+        "command_id": command_id,
+        "project_id": project["project_id"],
+        "status": "pending",
+        "staged_at": utc_now(),
+        "command": command,
+        "summary": pending_command_summary(command),
+    }
+    atomic_write_json(target, envelope)
+    return {"ok": True, **envelope, "path": str(target)}
+
+
+def list_pending_commands(root: Path) -> dict[str, Any]:
+    pending_root = root / "commands" / "pending"
+    proposals: list[dict[str, Any]] = []
+    for candidate in sorted(pending_root.glob("*.json")):
+        try:
+            envelope = read_json(candidate)
+            if envelope.get("schema") != PENDING_COMMAND_SCHEMA:
+                continue
+            proposals.append(envelope)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    proposals.sort(key=lambda entry: str(entry.get("staged_at") or ""), reverse=True)
+    return {"ok": True, "pending": proposals, "count": len(proposals)}
+
+
+def accept_pending_command(root: Path, command_id: str) -> dict[str, Any]:
+    target = pending_command_path(root, command_id)
+    if not target.exists():
+        raise ValueError(f"pending command not found: {command_id}")
+    envelope = read_json(target)
+    if envelope.get("schema") != PENDING_COMMAND_SCHEMA or not isinstance(envelope.get("command"), dict):
+        raise ValueError(f"invalid pending command envelope: {command_id}")
+    # apply_command re-checks project/module revisions and leases at acceptance
+    # time; an old proposal therefore cannot overwrite intervening edits.
+    result = apply_command(root, envelope["command"])
+    target.unlink(missing_ok=True)
+    return {"ok": True, "accepted": command_id, **result}
+
+
+def reject_pending_command(root: Path, command_id: str, reason: str = "") -> dict[str, Any]:
+    target = pending_command_path(root, command_id)
+    if not target.exists():
+        raise ValueError(f"pending command not found: {command_id}")
+    envelope = read_json(target)
+    if envelope.get("schema") != PENDING_COMMAND_SCHEMA:
+        raise ValueError(f"invalid pending command envelope: {command_id}")
+    rejected = {
+        **envelope,
+        "status": "rejected",
+        "rejected_at": utc_now(),
+        "rejection_reason": str(reason or "").strip(),
+    }
+    rejected_path = root / "commands" / "rejected" / f"{command_id}.json"
+    atomic_write_json(rejected_path, rejected)
+    target.unlink(missing_ok=True)
+    return {
+        "ok": True,
+        "rejected": command_id,
+        "path": str(rejected_path),
+        "project_id": envelope.get("project_id"),
+    }
 
 
 def _apply_command_locked(root: Path, command: dict[str, Any]) -> dict[str, Any]:
@@ -7808,6 +7973,35 @@ def build_parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--command-json", default="")
     apply_parser.add_argument("--command-file", default="")
 
+    pending_stage_parser = subparsers.add_parser(
+        "pending-stage",
+        help="Persist an Agent transaction for explicit user review.",
+    )
+    pending_stage_parser.add_argument("--project-root", required=True)
+    pending_stage_parser.add_argument("--command-json", default="")
+    pending_stage_parser.add_argument("--command-file", default="")
+
+    pending_list_parser = subparsers.add_parser(
+        "pending-list",
+        help="List transactions waiting for user review.",
+    )
+    pending_list_parser.add_argument("--project-root", required=True)
+
+    pending_accept_parser = subparsers.add_parser(
+        "pending-accept",
+        help="Apply a pending transaction after re-checking its preconditions.",
+    )
+    pending_accept_parser.add_argument("--project-root", required=True)
+    pending_accept_parser.add_argument("--command-id", required=True)
+
+    pending_reject_parser = subparsers.add_parser(
+        "pending-reject",
+        help="Reject a pending transaction without changing project revision.",
+    )
+    pending_reject_parser.add_argument("--project-root", required=True)
+    pending_reject_parser.add_argument("--command-id", required=True)
+    pending_reject_parser.add_argument("--reason", default="")
+
     compile_parser = subparsers.add_parser("compile")
     compile_parser.add_argument("--project-root", required=True)
 
@@ -8446,6 +8640,21 @@ def main() -> int:
             result = agent_context(Path(args.project_root).resolve())
         elif args.command == "apply":
             result = apply_command(Path(args.project_root).resolve(), parse_command(args))
+        elif args.command == "pending-stage":
+            result = stage_pending_command(Path(args.project_root).resolve(), parse_command(args))
+        elif args.command == "pending-list":
+            result = list_pending_commands(Path(args.project_root).resolve())
+        elif args.command == "pending-accept":
+            result = accept_pending_command(
+                Path(args.project_root).resolve(),
+                args.command_id,
+            )
+        elif args.command == "pending-reject":
+            result = reject_pending_command(
+                Path(args.project_root).resolve(),
+                args.command_id,
+                args.reason,
+            )
         elif args.command == "module-lease-acquire":
             result = acquire_module_lease(
                 Path(args.project_root).resolve(),

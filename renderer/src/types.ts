@@ -510,6 +510,21 @@ export interface CircuitCommandV2 {
 
 export type CircuitCommand = CircuitCommandV1 | CircuitCommandV2;
 
+export interface PendingCircuitCommand {
+  schema: 'actoviq.pending-command.v1';
+  command_id: string;
+  project_id: string;
+  status: 'pending';
+  staged_at: string;
+  command: CircuitCommand;
+  summary: {
+    operation_count: number;
+    operations: Array<{ op: string; entities: string[] }>;
+    affected_modules: string[];
+    affected_entities: string[];
+  };
+}
+
 export interface CircuitBuildState {
   manifest: {
     schema: string;

@@ -22,6 +22,7 @@ import type {
   CircuitPort,
   HdlVerificationRun,
   LayoutOptimizationResult,
+  PendingCircuitCommand,
   ProjectKind,
   SchematicOverrides,
   SimulationRun,
@@ -431,6 +432,9 @@ export function CircuitWorkbench({
   }>({ templates: [], flows: [] });
   const [designMemoryLoading, setDesignMemoryLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [pendingCommandsOpen, setPendingCommandsOpen] = useState(false);
+  const [pendingCommandsLoading, setPendingCommandsLoading] = useState(false);
+  const [pendingCommands, setPendingCommands] = useState<PendingCircuitCommand[]>([]);
   const [ercOpen, setErcOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [history, setHistory] = useState<CircuitHistoryEntry[]>([]);
@@ -726,9 +730,58 @@ export function CircuitWorkbench({
     }
   }, [currentProjectId, setError]);
 
+  const refreshPendingCommands = useCallback(async () => {
+    if (!currentProjectId) {
+      setPendingCommands([]);
+      return;
+    }
+    setPendingCommandsLoading(true);
+    try {
+      const result = await window.electronAPI.listPendingCircuitCommands(currentProjectId);
+      setPendingCommands(result.pending);
+    } catch (pendingError) {
+      setError(pendingError instanceof Error ? pendingError.message : String(pendingError));
+    } finally {
+      setPendingCommandsLoading(false);
+    }
+  }, [currentProjectId, setError]);
+
+  useEffect(() => {
+    void refreshPendingCommands();
+  }, [bundle, refreshPendingCommands]);
+
   useEffect(() => {
     if (historyOpen) void refreshHistory();
   }, [historyOpen, project?.revision, refreshHistory]);
+
+  async function reviewPendingCommand(commandId: string, decision: 'accept' | 'reject'): Promise<void> {
+    if (!currentProjectId || busy) return;
+    const operationProjectId = currentProjectId;
+    setBusy(true);
+    setError('');
+    try {
+      if (decision === 'accept') {
+        await window.electronAPI.acceptPendingCircuitCommand(operationProjectId, commandId);
+        await onReloadProject(operationProjectId);
+        if (isActiveProject(operationProjectId)) setNotice(`Accepted Agent proposal ${commandId}`);
+      } else {
+        await window.electronAPI.rejectPendingCircuitCommand(
+          operationProjectId,
+          commandId,
+          'Rejected in the schematic review panel',
+        );
+        if (isActiveProject(operationProjectId)) setNotice(`Rejected Agent proposal ${commandId}`);
+      }
+      await refreshPendingCommands();
+    } catch (reviewError) {
+      if (isActiveProject(operationProjectId)) {
+        setError(reviewError instanceof Error ? reviewError.message : String(reviewError));
+      }
+      await refreshPendingCommands();
+    } finally {
+      if (isActiveProject(operationProjectId)) setBusy(false);
+    }
+  }
 
   async function restoreRevision(revision: number): Promise<void> {
     if (!currentProjectId || !project || busy) return;
@@ -2086,6 +2139,19 @@ export function CircuitWorkbench({
               Physical verification
             </button>
           ) : null}
+          <button
+            type="button"
+            style={pendingCommands.length > 0 ? styles.pendingReviewButtonActive : styles.pendingReviewButton}
+            onClick={() => {
+              setErcOpen(false);
+              setHistoryOpen(false);
+              setPendingCommandsOpen(true);
+              void refreshPendingCommands();
+            }}
+            data-testid="open-pending-command-review"
+          >
+            Agent proposals {pendingCommands.length}
+          </button>
         </div>
         <WorkbenchToolbar
           view={view}
@@ -2116,10 +2182,12 @@ export function CircuitWorkbench({
           }}
           onOpenErc={() => {
             setHistoryOpen(false);
+            setPendingCommandsOpen(false);
             setErcOpen(true);
           }}
           onOpenHistory={() => {
             setErcOpen(false);
+            setPendingCommandsOpen(false);
             setHistoryOpen(true);
           }}
           onOpenFolder={() => { void openProjectFolder(); }}
@@ -2621,6 +2689,99 @@ export function CircuitWorkbench({
                   </details>
                 </div>
               ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {pendingCommandsOpen ? (
+        <div style={styles.historyOverlay} data-testid="pending-command-review-panel">
+          <section className="av-sheet" style={{ width: 560 }} aria-label="Agent transaction review">
+            <div className="av-sheet__header">
+              <div>
+                <div className="av-sheet__title">Agent proposals</div>
+                <div className="av-sheet__subtitle">
+                  Review complete transactions before they change {project.name}.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="av-btn av-btn--secondary"
+                onClick={() => setPendingCommandsOpen(false)}
+                aria-label="Close Agent proposal review"
+                data-testid="close-pending-command-review"
+              >
+                Close
+              </button>
+            </div>
+            <div style={styles.historyList}>
+              {pendingCommandsLoading && pendingCommands.length === 0
+                ? <div style={styles.historyEmpty}>Loading proposals...</div>
+                : null}
+              {!pendingCommandsLoading && pendingCommands.length === 0 ? (
+                <div style={styles.historyEmpty}>No Agent transactions are waiting for review.</div>
+              ) : null}
+              {pendingCommands.map((proposal) => {
+                const stale = proposal.command.base_revision !== project.revision;
+                return (
+                  <div
+                    key={proposal.command_id}
+                    style={styles.historyEntry}
+                    data-testid={`pending-command-${proposal.command_id}`}
+                    data-stale={stale ? 'true' : 'false'}
+                  >
+                    <div style={styles.historyEntryHeader}>
+                      <div>
+                        <strong>{proposal.command.message || proposal.command_id}</strong>
+                        <span style={styles.historyActor}> by {proposal.command.actor}</span>
+                      </div>
+                      <span style={stale ? styles.pendingStale : styles.pendingReady}>
+                        {stale ? 'stale' : 'ready'}
+                      </span>
+                    </div>
+                    <div style={styles.historyMeta}>
+                      base revision {proposal.command.base_revision}
+                      {' | '}
+                      {proposal.summary.operation_count} operation{proposal.summary.operation_count === 1 ? '' : 's'}
+                      {proposal.summary.affected_modules.length > 0
+                        ? ` | modules ${proposal.summary.affected_modules.join(', ')}`
+                        : ''}
+                    </div>
+                    <details style={styles.historyDiff} open>
+                      <summary>Transaction diff</summary>
+                      <ul style={styles.pendingOperationList}>
+                        {proposal.summary.operations.map((operation, index) => (
+                          <li key={`${operation.op}-${index}`}>
+                            <code>{operation.op}</code>
+                            {operation.entities.length > 0 ? ` | ${operation.entities.join(', ')}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                    <div style={styles.pendingActions}>
+                      <button
+                        type="button"
+                        style={styles.secondaryButton}
+                        onClick={() => { void reviewPendingCommand(proposal.command_id, 'reject'); }}
+                        disabled={busy}
+                        data-testid={`reject-pending-command-${proposal.command_id}`}
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        style={stale ? styles.primaryButtonDisabled : styles.primaryButton}
+                        onClick={() => { void reviewPendingCommand(proposal.command_id, 'accept'); }}
+                        disabled={busy || stale}
+                        title={stale ? 'The project changed after this proposal was created.' : 'Accept transaction'}
+                        data-testid={`accept-pending-command-${proposal.command_id}`}
+                      >
+                        Accept transaction
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
         </div>
@@ -4135,6 +4296,21 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 10,
     whiteSpace: 'pre-wrap',
   },
+  pendingReady: { color: '#15803d', fontSize: 10, fontWeight: 750, textTransform: 'uppercase' },
+  pendingStale: { color: '#b45309', fontSize: 10, fontWeight: 750, textTransform: 'uppercase' },
+  pendingOperationList: {
+    margin: '7px 0 0',
+    paddingLeft: 20,
+    color: '#475569',
+    fontSize: 11,
+    lineHeight: 1.7,
+  },
+  pendingActions: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 10,
+  },
   ercClean: { padding: 28, color: '#286744', fontSize: 12, textAlign: 'center' },
   ercDiagnostic: { padding: '13px 16px', borderBottom: '1px solid #e5e8ec', borderLeft: '3px solid #9ca6b2' },
   ercDiagnosticError: { borderLeftColor: '#b83242', background: '#fff8f8' },
@@ -4292,6 +4468,29 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 10,
     padding: '3px 7px',
   },
+  pendingReviewButton: {
+    marginTop: 6,
+    width: 'fit-content',
+    border: '1px solid #aeb8c4',
+    borderRadius: 4,
+    background: '#fff',
+    color: '#435160',
+    cursor: 'pointer',
+    fontSize: 10,
+    padding: '3px 7px',
+  },
+  pendingReviewButtonActive: {
+    marginTop: 6,
+    width: 'fit-content',
+    border: '1px solid #d97706',
+    borderRadius: 4,
+    background: '#fff7ed',
+    color: '#9a3412',
+    cursor: 'pointer',
+    fontSize: 10,
+    fontWeight: 750,
+    padding: '3px 7px',
+  },
   primaryButton: {
     border: '1px solid #2563eb',
     borderRadius: 6,
@@ -4299,6 +4498,16 @@ const styles: Record<string, CSSProperties> = {
     color: '#fff',
     padding: '7px 12px',
     cursor: 'pointer',
+    fontWeight: 680,
+    fontSize: 12,
+  },
+  primaryButtonDisabled: {
+    border: '1px solid #cbd5e1',
+    borderRadius: 6,
+    background: '#e2e8f0',
+    color: '#64748b',
+    padding: '7px 12px',
+    cursor: 'not-allowed',
     fontWeight: 680,
     fontSize: 12,
   },

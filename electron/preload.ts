@@ -367,6 +367,22 @@ const electronAPI = {
     return ipcRenderer.invoke('project:apply-command', projectId, command);
   },
 
+  stageCircuitCommand(projectId: string, command: unknown): Promise<unknown> {
+    return ipcRenderer.invoke('project:stage-command', projectId, command);
+  },
+
+  listPendingCircuitCommands(projectId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:list-pending-commands', projectId);
+  },
+
+  acceptPendingCircuitCommand(projectId: string, commandId: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:accept-pending-command', projectId, commandId);
+  },
+
+  rejectPendingCircuitCommand(projectId: string, commandId: string, reason?: string): Promise<unknown> {
+    return ipcRenderer.invoke('project:reject-pending-command', projectId, commandId, reason);
+  },
+
   runCircuitErc(projectId: string): Promise<unknown> {
     return ipcRenderer.invoke('project:run-erc', projectId);
   },
@@ -813,6 +829,7 @@ const electronAPI = {
       activeProject?: Record<string, unknown> | null;
       workspaceRoot?: string;
       modelTier?: ChatModelTier;
+      approvalPolicy?: 'manual' | 'execution' | 'all';
     },
   ): Promise<ChatResponse> {
     return ipcRenderer.invoke('chat:send', message, history, context);

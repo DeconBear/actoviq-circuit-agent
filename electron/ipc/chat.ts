@@ -28,6 +28,7 @@ interface ChatContext {
   activeProject?: Record<string, unknown> | null;
   workspaceRoot?: string;
   modelTier?: ChatModelTier;
+  approvalPolicy?: 'manual' | 'execution' | 'all';
 }
 
 const activeRuns = new Map<string, DesktopAgentRunHandle>();
@@ -114,6 +115,7 @@ export function registerChatHandlers(ipcMain: IpcMain, options: ChatHandlerOptio
           activeProjectId: context?.activeProjectId
             ?? (typeof context?.activeProject?.project_id === 'string' ? context.activeProject.project_id : null),
           workspaceRoot: context?.workspaceRoot ?? workDir,
+          approvalPolicy: context?.approvalPolicy ?? 'execution',
           activeProject: context?.activeProject,
         },
       },
@@ -121,6 +123,7 @@ export function registerChatHandlers(ipcMain: IpcMain, options: ChatHandlerOptio
         if (!event.sender.isDestroyed()) event.sender.send('chat:event', agentEvent);
       },
       {
+        approvalPolicy: context?.approvalPolicy ?? 'execution',
         generateTechnicalReport: options.generateTechnicalReport,
       },
     );

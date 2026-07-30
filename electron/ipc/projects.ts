@@ -2159,6 +2159,42 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     ]);
   });
 
+  ipcMain.handle('project:stage-command', async (_event, projectId: string, command: unknown) => {
+    return runProjectTool([
+      'pending-stage',
+      '--project-root', await resolveProjectRoot(projectId),
+      '--command-json', JSON.stringify(command),
+    ]);
+  });
+
+  ipcMain.handle('project:list-pending-commands', async (_event, projectId: string) => {
+    return runProjectTool([
+      'pending-list',
+      '--project-root', await resolveProjectRoot(projectId),
+    ]);
+  });
+
+  ipcMain.handle('project:accept-pending-command', async (_event, projectId: string, commandId: string) => {
+    return withProjectWatchPaused(async () => runProjectTool([
+      'pending-accept',
+      '--project-root', await resolveProjectRoot(projectId),
+      '--command-id', commandId,
+    ]));
+  });
+
+  ipcMain.handle(
+    'project:reject-pending-command',
+    async (_event, projectId: string, commandId: string, reason?: string) => {
+      const args = [
+        'pending-reject',
+        '--project-root', await resolveProjectRoot(projectId),
+        '--command-id', commandId,
+      ];
+      if (reason?.trim()) args.push('--reason', reason.trim());
+      return runProjectTool(args);
+    },
+  );
+
   ipcMain.handle('project:run-erc', async (_event, projectId: string) => {
     return runProjectTool(['erc', '--project-root', await resolveProjectRoot(projectId)]);
   });

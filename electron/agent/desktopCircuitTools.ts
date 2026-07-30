@@ -10,6 +10,7 @@ import { getActiveWorkspace } from '../workspaceState.js';
 import { runProjectTool, summarizeToolResult } from './circuitProjectCli.js';
 
 export interface DesktopCircuitToolsOptions {
+  approvalPolicy?: 'manual' | 'execution' | 'all';
   /** Optional callback for AI technical reports (avoids circular imports). */
   generateTechnicalReport?: (input: {
     projectId: string;
@@ -221,7 +222,11 @@ export function createDesktopCircuitTools(options: DesktopCircuitToolsOptions = 
         await mkdir(dir, { recursive: true });
         const file = path.join(dir, `${randomUUID()}.json`);
         await writeFile(file, `${JSON.stringify(command, null, 2)}\n`, 'utf8');
-        return run(['apply', '--project-root', root, '--command-file', file]);
+        return run([
+          options.approvalPolicy === 'manual' ? 'pending-stage' : 'apply',
+          '--project-root', root,
+          '--command-file', file,
+        ]);
       },
     ),
     tool(

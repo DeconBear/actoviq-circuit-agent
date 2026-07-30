@@ -1057,6 +1057,7 @@ export function App() {
         activeProjectId: latest.activeProjectId,
         workspaceRoot: latest.activeWorkspace?.root,
         modelTier,
+        approvalPolicy: latest.approvalPolicy,
       });
 
       // Finalize the assistant turn: upsert every ReAct round as its own message

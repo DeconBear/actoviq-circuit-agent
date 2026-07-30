@@ -34,6 +34,7 @@ import type {
   ExecutionProfileRegistry,
   LayoutOptimizationRequest,
   LayoutOptimizationResult,
+  PendingCircuitCommand,
   SavedDesignMemorySummary,
   SimulationDataset,
   SimulationRun,
@@ -137,6 +138,24 @@ declare global {
         revision: number;
         changed_modules: string[];
         erc: CircuitErcResult;
+      }>;
+      stageCircuitCommand(projectId: string, command: CircuitCommand): Promise<PendingCircuitCommand & { ok: true }>;
+      listPendingCircuitCommands(projectId: string): Promise<{
+        ok: true;
+        pending: PendingCircuitCommand[];
+        count: number;
+      }>;
+      acceptPendingCircuitCommand(projectId: string, commandId: string): Promise<{
+        ok: true;
+        accepted: string;
+        revision: number;
+        changed_modules: string[];
+        erc: CircuitErcResult;
+      }>;
+      rejectPendingCircuitCommand(projectId: string, commandId: string, reason?: string): Promise<{
+        ok: true;
+        rejected: string;
+        project_id: string;
       }>;
       runCircuitErc(projectId: string): Promise<CircuitErcResult & { ok: true }>;
       getCircuitAgentContext(projectId: string): Promise<CircuitAgentContext>;
@@ -380,6 +399,7 @@ declare global {
           activeProject?: Record<string, unknown> | null;
           workspaceRoot?: string;
           modelTier?: ChatModelTier;
+          approvalPolicy?: 'manual' | 'execution' | 'all';
         },
       ): Promise<ChatResponse>;
       stopChat(conversationId?: string): Promise<boolean>;

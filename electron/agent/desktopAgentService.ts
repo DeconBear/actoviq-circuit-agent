@@ -42,6 +42,8 @@ apply_circuit_command operations MUST be flat objects with an "op" field, e.g.
 Do NOT nest as {"upsert_module":{...}} or {"add_component":{...}} — that fails apply and leaves 0 modules on the canvas.
 Prefer upsert_module_netlist (netlist_notebook as a single string) over many add_component calls.
 After apply, verify tool JSON shows ok/revision/module count before claiming the canvas has modules.
+If apply_circuit_command returns status "pending", the transaction is waiting for explicit user review:
+do not run ERC, compile, or simulation against it, and tell the user to accept or reject the proposal in the canvas.
 
 Module composition (default for desktop canvas):
 - Prefer functional modules: stimuli / cores / encode-load, then add_port + connect_ports.
@@ -93,6 +95,7 @@ export interface DesktopAgentContext {
   activeJobId?: string | null;
   activeProjectId?: string | null;
   workspaceRoot?: string | null;
+  approvalPolicy?: 'manual' | 'execution' | 'all';
   /** @deprecated Prefer agent_context tool; kept for prompt hints only. */
   activeProject?: Record<string, unknown> | null;
 }
@@ -179,13 +182,17 @@ let cachedReportClient: Omit<CachedClient, 'hasTechnicalReportTool'> | null = nu
 let reportClientTransition: Promise<void> = Promise.resolve();
 
 export interface DesktopAgentRunOptions {
+  approvalPolicy?: 'manual' | 'execution' | 'all';
   generateTechnicalReport?: (input: {
     projectId: string;
     sourceRevision: number;
   }) => Promise<Record<string, unknown>>;
 }
 
-function configSignature(config: DesktopAgentConfig): string {
+function configSignature(
+  config: DesktopAgentConfig,
+  approvalPolicy: 'manual' | 'execution' | 'all' = 'execution',
+): string {
   return createHash('sha256')
     .update(JSON.stringify({
       provider: config.provider,
@@ -194,6 +201,7 @@ function configSignature(config: DesktopAgentConfig): string {
       model: config.model,
       workDir: config.workDir,
       homeDir: config.homeDir,
+      approvalPolicy,
     }))
     .digest('hex');
 }
@@ -234,7 +242,7 @@ async function getClient(
   config: DesktopAgentConfig,
   options: DesktopAgentRunOptions = {},
 ): Promise<ActoviqAgentClient> {
-  const signature = configSignature(config);
+  const signature = configSignature(config, options.approvalPolicy);
   const needsTechnicalReportTool = Boolean(options.generateTechnicalReport);
   if (
     cachedClient?.signature === signature
@@ -261,6 +269,7 @@ async function getClient(
     const circuitTools = withAgentFacingToolErrorsForAll([
       createDisabledTaskTool(),
       ...createDesktopCircuitTools({
+        approvalPolicy: options.approvalPolicy,
         generateTechnicalReport: options.generateTechnicalReport,
       }),
     ]);
@@ -429,6 +438,7 @@ function buildPrompt(input: DesktopAgentRunInput): string {
     `- activeJobId: ${input.context?.activeJobId ?? '(none)'}`,
     `- activeProjectId: ${input.context?.activeProjectId ?? '(none)'}`,
     `- workspaceRoot: ${input.context?.workspaceRoot ?? '(none)'}`,
+    `- approvalPolicy: ${input.context?.approvalPolicy ?? 'execution'}`,
     `- activeProjectHint: ${activeProjectHint}`,
     '',
     'User message:',
