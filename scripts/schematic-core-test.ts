@@ -352,8 +352,9 @@ check('join_wires merges two wires and inverse restores both', () => {
   assert.equal(result.module.wires?.[0]?.points?.length, 3);
 });
 
-check('rename_net updates pins, ports, and wires; inverse restores', () => {
+check('rename_net updates pins, ports, wires, and nets; inverse restores', () => {
   const module = makeModule([makeComponent('r1')]);
+  module.nets = [{ id: 'n-in', name: 'in', kind: 'signal', aliases: ['vin'] }];
   module.wires = [identifiedWire('w1', { x: 0, y: 0 }, { x: 10, y: 0 })];
   const result = applyTransaction(module, makeTransaction([
     { op: 'rename_net', old_net: 'in', new_net: 'input' },
@@ -361,6 +362,7 @@ check('rename_net updates pins, ports, and wires; inverse restores', () => {
   assert.equal(result.module.components[0]!.pins[0]!.net, 'input');
   assert.equal(result.module.ports[0]!.net, 'input');
   assert.equal(result.module.wires?.[0]?.net, 'input');
+  assert.equal(result.module.nets?.[0]?.name, 'input');
   assert.deepEqual(result.inverse[0], { op: 'rename_net', old_net: 'input', new_net: 'in' });
 });
 

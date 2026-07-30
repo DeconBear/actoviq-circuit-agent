@@ -79,10 +79,22 @@ function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function componentGeometryIdentity(component: CircuitModule['components'][number]) {
+  // Pin world geometry for MOS depends on polarity parsed from name/value.
+  if (component.type === 'M') {
+    return {
+      name: component.name,
+      value: component.value,
+    };
+  }
+  return null;
+}
+
 function componentProjectionShape(component: CircuitModule['components'][number]) {
   return {
     id: component.id,
     type: component.type,
+    geometryIdentity: componentGeometryIdentity(component),
     position: component.position,
     rotation: component.rotation,
     pins: component.pins,
@@ -95,6 +107,8 @@ function moduleProjectionShape(module: CircuitModule) {
   return {
     schema: module.schema,
     module_id: module.module_id,
+    // Name feeds net-label heuristics (e.g. LDO internal nets).
+    name: module.name,
     ports: module.ports,
     nets: module.nets ?? [],
     wires: module.wires ?? [],

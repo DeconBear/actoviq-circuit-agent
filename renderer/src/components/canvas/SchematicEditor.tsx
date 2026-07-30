@@ -1750,7 +1750,9 @@ export function SchematicEditor({
 
   function handlePointerCancel(event: ReactPointerEvent<SVGSVGElement>) {
     event.stopPropagation();
-    cancelEditorInteraction();
+    // Only abort an in-flight drag/pan. Place / wire / cut modes survive
+    // pointer capture loss and OS gesture cancellations.
+    cancelActiveDrag();
   }
 
   function handlePointerLeave(event: ReactPointerEvent<SVGSVGElement>) {
@@ -2100,7 +2102,7 @@ export function SchematicEditor({
     }
     if ((event.ctrlKey || event.metaKey) && key === 's') {
       event.preventDefault();
-      if (!busy && dirty) void saveAndRebuild();
+      if (!busy && dirty && !saveError) void saveAndRebuild();
       return;
     }
     if ((event.ctrlKey || event.metaKey) && key === 'c') {
@@ -2282,7 +2284,9 @@ export function SchematicEditor({
     }
 
     function handleWindowBlur() {
-      cancelEditorInteraction();
+      setSpacePanActive(false);
+      if (!panRef.current) setInteractionCursor('default');
+      cancelActiveDrag();
     }
 
     window.addEventListener('keydown', handleWindowKeyDown);
@@ -2700,6 +2704,7 @@ export function SchematicEditor({
   }
 
   async function saveAndRebuild() {
+    if (saveError) return;
     try {
       const normalized = normalizeConnectivity(draft);
       // M2-04: set the preserve flag BEFORE onSave so the revision bump that
@@ -2820,6 +2825,7 @@ export function SchematicEditor({
         canRedo={future.length > 0}
         hasSelection={Boolean(selection)}
         dirty={dirty}
+        saveBlocked={Boolean(saveError)}
         buildBusy={buildBusy}
         status={interactionStateName === 'dialog'
           ? 'Configure custom block · Enter confirms · Esc cancels'

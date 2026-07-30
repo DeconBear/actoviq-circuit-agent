@@ -389,6 +389,10 @@ async function writeSchematicDocumentArtifact(
     path.resolve(projectRoot, 'modules', moduleId, 'module.circuit.json'),
   );
   const artifactRevision = Number(document.module.revision);
+  // Allow source.revision - 1: save applies command.v2 first (disk revision
+  // bumps), then compile receives the editor projection still stamped with the
+  // pre-apply revision. Entity/wire id checks below are the real staleness
+  // guard; we rewrite artifact.revision to the disk value on write.
   if (
     source.module_id !== moduleId
     || !Number.isInteger(artifactRevision)

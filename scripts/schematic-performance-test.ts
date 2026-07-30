@@ -104,6 +104,29 @@ const geometryProjection = projectSchematicDocumentIncremental(
 );
 assert.equal(geometryProjection.mode, 'full', 'geometry edits must use the canonical full projector');
 
+const mosBaseModule = structuredClone(module500);
+mosBaseModule.components[0] = {
+  ...mosBaseModule.components[0]!,
+  id: 'm0',
+  type: 'M',
+  name: 'M0',
+  value: 'NMOS W=1u L=180n',
+  pins: [
+    { id: 'd', name: 'D', net: 'n0' },
+    { id: 'g', name: 'G', net: 'n1' },
+    { id: 's', name: 'S', net: '0' },
+    { id: 'b', name: 'B', net: '0' },
+  ],
+};
+const mosBaseProjection = projectSchematicDocumentIncremental(mosBaseModule, { autoLayout: false });
+const mosPolarityEdit = structuredClone(mosBaseModule);
+mosPolarityEdit.components[0]!.value = 'PMOS W=1u L=180n';
+assert.equal(
+  projectSchematicDocumentIncremental(mosPolarityEdit, { autoLayout: false }, mosBaseProjection.snapshot).mode,
+  'full',
+  'MOS polarity edits must not reuse drain/source geometry',
+);
+
 const autoLayoutBase = largeModule(2);
 const autoLayoutProjection = projectSchematicDocumentIncremental(autoLayoutBase);
 const autoLayoutEdit = structuredClone(autoLayoutBase);

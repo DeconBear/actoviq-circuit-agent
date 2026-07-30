@@ -1067,7 +1067,12 @@ export function CircuitWorkbench({
     );
     if (saved) {
       setNotice('Schematic saved. Rebuilding the affected module SVG in the background...');
-      void buildModulePreview(moduleId, false, moduleData).then((built) => {
+      // The editor draft still has the pre-apply revision; stamp the post-apply
+      // revision so compile's schematic-document write matches disk.
+      const artifactModule = diff.operations.length > 0
+        ? { ...moduleData, revision: previous.revision + 1 }
+        : moduleData;
+      void buildModulePreview(moduleId, false, artifactModule).then((built) => {
         if (built && isActiveProject(operationProjectId)) {
           setNotice('Applied netlist and affected module SVG rebuilt');
         }

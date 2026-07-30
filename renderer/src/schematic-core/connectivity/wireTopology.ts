@@ -225,8 +225,15 @@ export function cutWireTopology(
   const rightCutEnd = retractCutEnd(point, rightPoints[1]!);
   leftPoints[leftPoints.length - 1] = leftCutEnd;
   rightPoints[0] = rightCutEnd;
-  const leftJunction = identifiedEndpoint(leftCutEnd, `j_cut_${wire.id}_left`);
-  const rightJunction = identifiedEndpoint(rightCutEnd, `j_cut_${wire.id}_right`);
+  const existingJunctionIds = new Set(
+    (module.wires ?? [])
+      .flatMap((candidate) => [candidate.from?.junction_id, candidate.to?.junction_id])
+      .filter((id): id is string => Boolean(id)),
+  );
+  const leftJunctionId = uniqueId(`j_cut_${wire.id}_left`, existingJunctionIds);
+  const rightJunctionId = uniqueId(`j_cut_${wire.id}_right`, existingJunctionIds);
+  const leftJunction = identifiedEndpoint(leftCutEnd, leftJunctionId);
+  const rightJunction = identifiedEndpoint(rightCutEnd, rightJunctionId);
   const originalTo = clone(wire.to!);
   const right: CircuitWire = {
     ...clone(wire),

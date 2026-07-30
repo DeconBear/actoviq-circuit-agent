@@ -2864,17 +2864,16 @@ def apply_operation(
             )
             if next_connectivity_hash != expected_connectivity_hash:
                 raise ValueError("set_module_schematic layout update would change authoritative connectivity")
-        module["components"] = components
-        module["ports"] = ports
-        module["wires"] = wires
-        module["nets"] = nets
-        module["annotations"] = annotations
-        module["schema"] = next_module["schema"]
+        module["components"] = next_module["components"]
+        module["ports"] = next_module["ports"]
+        module["wires"] = next_module.get("wires", [])
         module["nets"] = next_module.get("nets", [])
+        module["annotations"] = next_module.get("annotations", [])
+        module["schema"] = next_module["schema"]
         if "spice" in next_module:
             module["spice"] = next_module["spice"]
-        find_module_ref(project, module_id)["ports"] = ports
-        rewrite_module_port_connections(project, module_id, previous_ports, ports)
+        find_module_ref(project, module_id)["ports"] = next_module["ports"]
+        rewrite_module_port_connections(project, module_id, previous_ports, next_module["ports"])
         changed_modules.add(module_id)
         return
     if op == "set_module_netlist":
@@ -3141,6 +3140,15 @@ def lease_path(root: Path, module_id: str) -> Path:
     return root / "leases" / f"{safe}.json"
 
 
+def lease_is_active(existing: dict[str, Any], now: float | None = None) -> bool:
+    """True while the lease still blocks other actors."""
+    current = time.time() if now is None else now
+    expires_at = existing.get("expires_at")
+    if isinstance(expires_at, (int, float)):
+        return current < float(expires_at)
+    return current - float(existing.get("acquired_at", 0) or 0) < LEASE_TTL_SECONDS
+
+
 def acquire_module_lease(
     root: Path, module_id: str, actor: str, ttl: float = LEASE_TTL_SECONDS
 ) -> dict[str, Any]:
@@ -3155,7 +3163,7 @@ def acquire_module_lease(
     now = time.time()
     if path.exists():
         existing = read_json(path)
-        if existing.get("actor") != actor and now - existing.get("acquired_at", 0) < ttl:
+        if existing.get("actor") != actor and lease_is_active(existing, now):
             raise ValueError(
                 f"module {module_id} is leased by {existing.get('actor')} since "
                 f"{existing.get('acquired_at')}; retry or ask the holder to release"
@@ -3166,6 +3174,7 @@ def acquire_module_lease(
         "actor": actor,
         "acquired_at": now,
         "expires_at": now + ttl,
+        "ttl_seconds": float(ttl),
     }
     atomic_write_json(path, lease)
     return lease
@@ -3178,8 +3187,7 @@ def release_module_lease(root: Path, module_id: str, actor: str) -> dict[str, An
         return {"released": True, "module_id": module_id, "note": "no lease present"}
     existing = read_json(path)
     if existing.get("actor") != actor:
-        now = time.time()
-        if now - existing.get("acquired_at", 0) < LEASE_TTL_SECONDS:
+        if lease_is_active(existing):
             raise ValueError(
                 f"cannot release lease held by {existing.get('actor')}"
             )
@@ -3195,11 +3203,26 @@ def check_module_lease(root: Path, module_id: str, actor: str) -> None:
     existing = read_json(path)
     if existing.get("actor") == actor:
         return
-    if time.time() - existing.get("acquired_at", 0) >= LEASE_TTL_SECONDS:
+    if not lease_is_active(existing):
         return
     raise ValueError(
         f"module {module_id} is leased by {existing.get('actor')}; edit blocked"
     )
+
+
+def command_lease_module_ids(command: dict[str, Any]) -> list[str]:
+    """Modules whose soft leases must be checked for this command."""
+    if command.get("schema") == "actoviq.command.v2":
+        module_id = str(command.get("module_id") or "").strip()
+        return [module_id] if module_id else []
+    module_ids: list[str] = []
+    for operation in command.get("operations") or []:
+        if not isinstance(operation, dict):
+            continue
+        module_id = str(operation.get("module_id") or "").strip()
+        if module_id:
+            module_ids.append(module_id)
+    return sorted(set(module_ids))
 
 
 def _v2_point(value: Any, label: str) -> dict[str, float]:
@@ -3295,27 +3318,40 @@ def _v2_split_wire_at(
     points = wire.get("points", [])
     if len(points) < 2:
         raise ValueError(f"split_wire: wire {wire.get('id')} has no path")
-    if any(_v2_same_point(existing, point) for existing in points):
-        for side in ("from", "to"):
-            endpoint = wire.get(side)
-            if isinstance(endpoint, dict) and _v2_same_point(endpoint, point):
-                endpoint.clear()
-                endpoint.update({**point, "junction_id": junction_id})
-                return [str(wire["id"])]
-        raise ValueError(f"split_wire: point already exists inside wire {wire.get('id')}")
-    split_index = -1
-    for index in range(1, len(points)):
-        left = points[index - 1]
-        right = points[index]
-        within_x = min(left["x"], right["x"]) - 0.001 <= point["x"] <= max(left["x"], right["x"]) + 0.001
-        within_y = min(left["y"], right["y"]) - 0.001 <= point["y"] <= max(left["y"], right["y"]) + 0.001
-        cross = (
-            (right["x"] - left["x"]) * (point["y"] - left["y"])
-            - (right["y"] - left["y"]) * (point["x"] - left["x"])
-        )
-        if within_x and within_y and abs(cross) <= 0.001:
-            split_index = index
-            break
+    existing_index = next(
+        (index for index, existing in enumerate(points) if _v2_same_point(existing, point)),
+        -1,
+    )
+    if existing_index == 0:
+        endpoint = wire.get("from")
+        if isinstance(endpoint, dict):
+            endpoint.clear()
+            endpoint.update({**point, "junction_id": junction_id})
+        else:
+            wire["from"] = {**point, "junction_id": junction_id}
+        return [str(wire["id"])]
+    if existing_index == len(points) - 1:
+        endpoint = wire.get("to")
+        if isinstance(endpoint, dict):
+            endpoint.clear()
+            endpoint.update({**point, "junction_id": junction_id})
+        else:
+            wire["to"] = {**point, "junction_id": junction_id}
+        return [str(wire["id"])]
+    split_index = existing_index if existing_index >= 1 else -1
+    if split_index < 1:
+        for index in range(1, len(points)):
+            left = points[index - 1]
+            right = points[index]
+            within_x = min(left["x"], right["x"]) - 0.001 <= point["x"] <= max(left["x"], right["x"]) + 0.001
+            within_y = min(left["y"], right["y"]) - 0.001 <= point["y"] <= max(left["y"], right["y"]) + 0.001
+            cross = (
+                (right["x"] - left["x"]) * (point["y"] - left["y"])
+                - (right["y"] - left["y"]) * (point["x"] - left["x"])
+            )
+            if within_x and within_y and abs(cross) <= 0.001:
+                split_index = index
+                break
     if split_index < 1:
         raise ValueError(f"split_wire: point is not on wire {wire.get('id')}")
     existing_ids = {str(item.get("id")) for item in module.get("wires", [])}
@@ -3326,13 +3362,18 @@ def _v2_split_wire_at(
         right_id = f"{base_id}_{suffix}"
         suffix += 1
     original_to = json.loads(json.dumps(wire["to"]))
-    junction = {**point, "junction_id": junction_id}
+    split_point = json.loads(json.dumps(points[split_index] if existing_index >= 1 else point))
+    junction = {**split_point, "junction_id": junction_id}
     right_wire = json.loads(json.dumps(wire))
     right_wire["id"] = right_id
-    right_wire["points"] = [point, *json.loads(json.dumps(points[split_index:]))]
+    if existing_index >= 1:
+        right_wire["points"] = [split_point, *json.loads(json.dumps(points[split_index + 1 :]))]
+        wire["points"] = json.loads(json.dumps(points[: split_index + 1]))
+    else:
+        right_wire["points"] = [point, *json.loads(json.dumps(points[split_index:]))]
+        wire["points"] = [*json.loads(json.dumps(points[:split_index])), point]
     right_wire["from"] = dict(junction)
     right_wire["to"] = original_to
-    wire["points"] = [*json.loads(json.dumps(points[:split_index])), point]
     wire["to"] = dict(junction)
     module.setdefault("wires", []).append(right_wire)
     return [str(wire["id"]), right_id]
@@ -3558,6 +3599,9 @@ def apply_v2_operation(
         for net in module.get("nets", []):
             if net.get("name") == old_net:
                 net["name"] = new_net
+            aliases = net.get("aliases")
+            if isinstance(aliases, list) and old_net in aliases:
+                net["aliases"] = [new_net if alias == old_net else alias for alias in aliases]
     elif name == "upsert_port":
         port = json.loads(json.dumps(operation.get("port")))
         if not isinstance(port, dict) or not port.get("id"):
@@ -3613,18 +3657,15 @@ def scan_driven_nodes(netlist: str) -> set[str]:
 
 def apply_command(root: Path, command: dict[str, Any]) -> dict[str, Any]:
     schema = command.get("schema")
-    if schema == COMMAND_SCHEMA:
-        with ProjectLock(root):
-            return _apply_command_locked(root, command)
-    if schema == "actoviq.command.v2":
-        # M2-06: respect an existing soft lease on the target module. A lease
-        # held by a different actor produces a structured conflict instead of
-        # a silent overwrite. The GUI acquires the lease when the user starts
-        # editing; the Agent does the same before patching.
-        with ProjectLock(root):
-            check_module_lease(root, command["module_id"], command.get("actor", "unknown"))
-            return _apply_command_locked(root, command)
-    raise ValueError(f"unsupported command schema: {schema}")
+    if schema not in {COMMAND_SCHEMA, "actoviq.command.v2"}:
+        raise ValueError(f"unsupported command schema: {schema}")
+    # Soft leases guard intent for both v1 and v2. Without this, set_module_schematic
+    # and other v1 ops could silently overwrite a live editor session.
+    with ProjectLock(root):
+        actor = str(command.get("actor") or "unknown")
+        for module_id in command_lease_module_ids(command):
+            check_module_lease(root, module_id, actor)
+        return _apply_command_locked(root, command)
 
 
 def pending_command_path(root: Path, command_id: str) -> Path:

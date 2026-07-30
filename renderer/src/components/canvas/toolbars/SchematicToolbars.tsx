@@ -62,6 +62,7 @@ interface EditorCommandToolbarProps {
   canRedo: boolean;
   hasSelection: boolean;
   dirty: boolean;
+  saveBlocked?: boolean;
   buildBusy: boolean;
   status: string;
   zoom: number;
@@ -87,6 +88,7 @@ export function EditorCommandToolbar({
   canRedo,
   hasSelection,
   dirty,
+  saveBlocked = false,
   buildBusy,
   status,
   zoom,
@@ -196,7 +198,7 @@ export function EditorCommandToolbar({
             icon={<Check size={17} />}
             variant="primary"
             onClick={onSave}
-            disabled={disabled || !dirty}
+            disabled={disabled || !dirty || saveBlocked}
             data-testid="schematic-editor-save"
           />
           <IconButton

@@ -5,6 +5,7 @@ Confirms:
 - acquire/renew/release lifecycle works.
 - a second actor cannot acquire a non-expired lease (structured conflict).
 - a v2 apply from a different actor is blocked when a lease is held.
+- a v1 set_module_schematic from a different actor is blocked when a lease is held.
 - the holder's own v2 apply is allowed.
 - release by a non-holder is rejected.
 - Agent transactions can be staged, listed, accepted, or rejected.
@@ -82,6 +83,31 @@ def main() -> int:
         ])
         assert blocked.returncode != 0, "v2 apply from a different actor should be blocked by the lease"
         assert "leased by user-A" in blocked.stdout, blocked.stdout
+
+        # user-B's v1 set_module_schematic is also blocked by the same lease.
+        filter_module = json.loads((Path(project_root) / "modules" / "filter" / "module.circuit.json").read_text(encoding="utf-8"))
+        v1_blocked = {
+            "schema": "actoviq.command.v1",
+            "command_id": "v1-lease-block",
+            "actor": "user-B",
+            "project_id": project_id,
+            "base_revision": base_revision,
+            "message": "blocked v1",
+            "operations": [{
+                "op": "set_module_schematic",
+                "module_id": "filter",
+                "components": filter_module.get("components", []),
+                "ports": filter_module.get("ports", []),
+                "wires": filter_module.get("wires", []),
+                "nets": filter_module.get("nets", []),
+                "annotations": filter_module.get("annotations", []),
+            }],
+        }
+        blocked_v1 = run_skill_raw([
+            "apply", "--project-root", project_root, "--command-json", json.dumps(v1_blocked),
+        ])
+        assert blocked_v1.returncode != 0, "v1 set_module_schematic from a different actor should be blocked"
+        assert "leased by user-A" in blocked_v1.stdout, blocked_v1.stdout
 
         # user-A's own v2 apply is allowed.
         v2_own = dict(v2_command, command_id="v2-lease-own", actor="user-A")

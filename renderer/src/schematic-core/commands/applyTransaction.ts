@@ -202,35 +202,44 @@ function splitWireInPlace(
     throw new Error(`split_wire: wire ${wire.id} is missing a valid path or endpoints`);
   }
   const existingPointIndex = wire.points.findIndex((candidate) => samePoint(candidate, point));
-  if (existingPointIndex >= 0) {
-    if (existingPointIndex === 0) {
-      wire.from = junctionEndpoint(point, junctionId);
-      return [wire.id];
-    }
-    if (existingPointIndex === wire.points.length - 1) {
-      wire.to = junctionEndpoint(point, junctionId);
-      return [wire.id];
-    }
-    throw new Error(`split_wire: point already exists inside wire ${wire.id}`);
+  if (existingPointIndex === 0) {
+    wire.from = junctionEndpoint(point, junctionId);
+    return [wire.id];
   }
-  const splitIndex = wire.points.findIndex((candidate, index) => (
-    index > 0 && pointOnSegment(point, wire.points[index - 1]!, candidate)
-  ));
+  if (existingPointIndex === wire.points.length - 1) {
+    wire.to = junctionEndpoint(point, junctionId);
+    return [wire.id];
+  }
+  // Interior bend vertices are valid split sites — reuse the existing vertex
+  // instead of rejecting the transaction.
+  const splitIndex = existingPointIndex >= 1
+    ? existingPointIndex
+    : wire.points.findIndex((candidate, index) => (
+      index > 0 && pointOnSegment(point, wire.points[index - 1]!, candidate)
+    ));
   if (splitIndex < 1) {
     throw new Error(`split_wire: point not on wire ${wire.id}`);
   }
   const originalPoints = clone(wire.points);
   const originalTo = clone(wire.to);
   const rightId = uniqueSplitWireId(wires, wire.id, junctionId);
+  const splitPoint = clone(originalPoints[splitIndex]!);
   const right: CircuitWire = {
     ...clone(wire),
     id: rightId,
-    points: [clone(point), ...originalPoints.slice(splitIndex)],
-    from: junctionEndpoint(point, junctionId),
+    points: [splitPoint, ...originalPoints.slice(splitIndex + (existingPointIndex >= 1 ? 1 : 0))],
+    from: junctionEndpoint(splitPoint, junctionId),
     to: originalTo,
   };
-  wire.points = [...originalPoints.slice(0, splitIndex), clone(point)];
-  wire.to = junctionEndpoint(point, junctionId);
+  // When splitting at an existing bend, keep the shared vertex on both sides.
+  // When splitting mid-segment, insert the new point on the left half.
+  wire.points = existingPointIndex >= 1
+    ? originalPoints.slice(0, splitIndex + 1)
+    : [...originalPoints.slice(0, splitIndex), clone(point)];
+  wire.to = junctionEndpoint(
+    existingPointIndex >= 1 ? splitPoint : point,
+    junctionId,
+  );
   wires.push(right);
   return [wire.id, rightId];
 }
@@ -487,6 +496,17 @@ function applyOperation(module: CircuitModule, operation: TransactionOperation):
       }
       for (const wire of (next.wires ?? [])) {
         if (wire.net === operation.old_net) { wire.net = operation.new_net; affected.push(wire.id); }
+      }
+      for (const net of (next.nets ?? [])) {
+        if (net.name === operation.old_net) {
+          net.name = operation.new_net;
+          affected.push(`net:${net.id}`);
+        } else if (Array.isArray(net.aliases) && net.aliases.includes(operation.old_net)) {
+          net.aliases = net.aliases.map((alias) => (
+            alias === operation.old_net ? operation.new_net : alias
+          ));
+          affected.push(`net:${net.id}`);
+        }
       }
       return { module: next, inverse: [{ op: 'rename_net', old_net: operation.new_net, new_net: operation.old_net }], affected };
     }

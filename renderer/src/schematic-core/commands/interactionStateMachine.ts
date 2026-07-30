@@ -301,7 +301,17 @@ export function reduceInteraction(prev: InteractionState, event: InteractionEven
         case 'pointer-move':
           return { state: state(prev.name, { ...prev.payload, current: event.point }), effects: [effect('preview', { move: true, mode: prev.name === 'moving.free' ? 'free' : prev.name === 'moving.stretch' ? 'stretch' : 'edit' })] };
         case 'pointer-up':
-          return { state: state('idle'), effects: [effect('commit', { move: true, mode: prev.payload.mode })] };
+          return {
+            state: state('idle'),
+            effects: [effect('commit', {
+              move: true,
+              mode: prev.name === 'moving.free'
+                ? 'free'
+                : prev.name === 'moving.stretch'
+                  ? 'stretch'
+                  : 'edit',
+            })],
+          };
         case 'pointer-cancel':
         case 'escape':
           return { state: state('idle'), effects: [effect('cancel')] };
