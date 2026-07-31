@@ -195,7 +195,7 @@ def main() -> int:
             "environment": {
                 "platform": "native_linux",
                 "distribution": "ubuntu",
-                "version": "24.04",
+                "version": "22.04",
                 "wsl": False,
             },
             "golden_pdk": "ihp-sg13g2",
@@ -381,7 +381,7 @@ def main() -> int:
             "platform": "linux",
             "release": "6.8.0-fixture",
             "distribution": "ubuntu",
-            "distribution_version": "24.04",
+            "distribution_version": "22.04",
             "native_linux": True,
             "wsl": False,
             "eligible": True,
