@@ -167,7 +167,9 @@ error table:
 | `lcsc_search.py` | 立创商城 search / get / bind (`eda.lcsc_id`) |
 | `analog_ic.py` | PDK/model-path and MOS W/L/M/NF audit before analog simulation/export |
 | `pdk_registry.py` / `open_sim_providers.py` / `physical_verification.py` | Local PDK registry, OpenVAF/Xyce, and KLayout/Magic/Netgen providers |
-| `xschem_bridge.py` / `hdl_flow.py` | Explicit Xschem peer modes and Verilog/Icarus/Yosys/OpenROAD flows |
+| `schematic_handoff.py` | Desktop Import/Export schematic (KiCad/JLCEDA/… + Virtuoso/Xschem) |
+| `xschem_bridge.py` | `.sch` render/parse helpers used by handoff; legacy peer CLI still present |
+| `hdl_flow.py` | Verilog/Icarus/Yosys/OpenROAD flows |
 | `razavi_bench.py` | Read-only upstream provenance check; task/evaluator access remains license-blocked |
 | `strict_param_check.py` | Parameter sanity |
 | `run_dual_analysis.py` / `run_ngspice.py` | Simulation |

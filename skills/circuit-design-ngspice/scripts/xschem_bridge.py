@@ -33,6 +33,54 @@ WIRE_RE = re.compile(
     r"^\s*N\s+([-+.\deE]+)\s+([-+.\deE]+)\s+([-+.\deE]+)\s+([-+.\deE]+)\s+\{(.*)\}\s*$"
 )
 
+# Relative pin centers for stock xschem devices (origin = component placement).
+_SYMBOL_PIN_OFFSETS: dict[str, dict[str, tuple[float, float]]] = {
+    "devices/res.sym": {"a": (0.0, -30.0), "1": (0.0, -30.0), "b": (0.0, 30.0), "2": (0.0, 30.0)},
+    "devices/capa.sym": {"a": (0.0, -30.0), "1": (0.0, -30.0), "p": (0.0, -30.0), "b": (0.0, 30.0), "2": (0.0, 30.0), "m": (0.0, 30.0)},
+    "devices/ind.sym": {"a": (0.0, -30.0), "1": (0.0, -30.0), "b": (0.0, 30.0), "2": (0.0, 30.0)},
+    "devices/diode.sym": {"a": (0.0, -20.0), "A": (0.0, -20.0), "b": (0.0, 20.0), "K": (0.0, 20.0)},
+    "devices/vsource.sym": {"p": (0.0, -30.0), "+": (0.0, -30.0), "n": (0.0, 30.0), "-": (0.0, 30.0)},
+    "devices/isource.sym": {"p": (0.0, -30.0), "+": (0.0, -30.0), "n": (0.0, 30.0), "-": (0.0, 30.0)},
+    "devices/nmos4.sym": {"D": (20.0, -30.0), "G": (-20.0, 0.0), "S": (20.0, 30.0), "B": (20.0, 0.0)},
+    "devices/pmos4.sym": {"D": (20.0, 30.0), "G": (-20.0, 0.0), "S": (20.0, -30.0), "B": (20.0, 0.0)},
+}
+
+
+def _rotate_offset(dx: float, dy: float, rotation_steps: int) -> tuple[float, float]:
+    steps = rotation_steps % 4
+    if steps == 1:
+        return -dy, dx
+    if steps == 2:
+        return -dx, -dy
+    if steps == 3:
+        return dy, -dx
+    return dx, dy
+
+
+def default_xschem_library_path() -> Path | None:
+    executable = shutil.which("xschem")
+    candidates: list[Path] = []
+    if executable:
+        prefix = Path(executable).resolve().parent.parent
+        candidates.append(prefix / "share" / "xschem" / "xschem_library")
+    candidates.append(Path("/usr/share/xschem/xschem_library"))
+    for candidate in candidates:
+        if (candidate / "devices").is_dir():
+            return candidate
+    return None
+
+
+def _ensure_xschem_rc(run_root: Path) -> Path | None:
+    library = default_xschem_library_path()
+    if library is None:
+        return None
+    rcfile = run_root / "xschemrc"
+    rcfile.write_text(
+        f"set XSCHEM_LIBRARY_PATH [list {{{library}}}]\n",
+        encoding="utf-8",
+    )
+    return rcfile
+
 
 def _canonical_hash(value: Any) -> str:
     return hashlib.sha256(
@@ -162,12 +210,17 @@ def make_binding(mode: str, peer_file: str = "") -> dict[str, Any]:
 
 
 def headless_validate(
-    peer_file: Path,
+    schematic_file: Path,
     run_root: Path,
     executable: str = "",
     source_module: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    peer = peer_file.expanduser().resolve()
+    """Validate an exported Xschem ``.sch`` against a module (Import/Export handoff).
+
+    ``schematic_file`` is a file produced by ``schematic-export`` / ``render_xschem``,
+    not a live peer binding. Topology is never written back.
+    """
+    peer = schematic_file.expanduser().resolve()
     if not peer.is_file() or peer.suffix.casefold() != ".sch":
         raise ValueError(f"Xschem validation requires an existing .sch file: {peer}")
     candidate = executable.strip() or "xschem"
@@ -190,6 +243,13 @@ def headless_validate(
         "-s",
         str(peer),
     ]
+    rcfile = _ensure_xschem_rc(run_root)
+    if rcfile is not None:
+        command[1:1] = ["--rcfile", str(rcfile)]
+    env = os.environ.copy()
+    library = default_xschem_library_path()
+    if library is not None:
+        env["XSCHEM_LIBRARY_PATH"] = str(library)
     if Path(resolved_executable).suffix.casefold() == ".py":
         command = [sys.executable, *command]
     completed = subprocess.run(
@@ -200,6 +260,7 @@ def headless_validate(
         capture_output=True,
         text=True,
         timeout=120,
+        env=env,
     )
     diagnostics = [
         text for text in (completed.stdout.strip(), completed.stderr.strip()) if text
@@ -223,14 +284,16 @@ def headless_validate(
     result = validate_verification_run({
         "schema": "actoviq.verification-run.v1",
         "run_id": run_root.name,
-        "kind": "schematic_reference_netlist",
+        "kind": "schematic_export_reference_netlist",
         "provider_id": "xschem",
         "executed": True,
         "status": "passed" if success else "failed",
         "diagnostics": diagnostics,
         "artifacts": artifacts,
         "metadata": {
-            "peer_hash": file_hash(peer),
+            "handoff": "schematic-export",
+            "schematic_path": str(peer),
+            "peer_hash": file_hash(peer),  # retained for older consumers
             "reference_netlist_hash": file_hash(netlist) if netlist.is_file() else "",
             "connectivity_comparison": comparison,
             "source_module_id": str(source_module.get("module_id") or "") if source_module else "",
@@ -278,6 +341,7 @@ def render_xschem(module: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         "E {}",
     ]
     components: dict[str, Any] = {}
+    lab_index = 0
     for component in module.get("components", []):
         stable_id = str(component.get("stable_id") or component.get("id") or "").strip()
         if not stable_id:
@@ -301,6 +365,35 @@ def render_xschem(module: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         lines.append(
             f'C {{{symbol}}} {x:.3f} {y:.3f} {rotation} 0 {{{" ".join(props)}}}'
         )
+        # Emit net labels at known pin offsets so headless xschem can resolve connectivity.
+        pin_offsets = None
+        for key, value_offsets in _SYMBOL_PIN_OFFSETS.items():
+            if key.casefold() == symbol.casefold():
+                pin_offsets = value_offsets
+                break
+        if pin_offsets:
+            for pin in component.get("pins", []) or []:
+                net = str(pin.get("net") or "").strip()
+                if not net:
+                    continue
+                pin_key = str(pin.get("id") or pin.get("name") or "").strip()
+                offset = pin_offsets.get(pin_key)
+                if offset is None:
+                    for alias, candidate in pin_offsets.items():
+                        if alias.casefold() == pin_key.casefold():
+                            offset = candidate
+                            break
+                if offset is None:
+                    continue
+                dx, dy = _rotate_offset(offset[0], offset[1], rotation)
+                lab_index += 1
+                lab_name = f"lab_{stable_id}_{pin_key}_{lab_index}".replace("-", "_")
+                # Flip=1 when label sits on the lower/right side so text stays readable.
+                flip = 1 if dy > 0 or dx < 0 else 0
+                lines.append(
+                    f'C {{devices/lab_pin.sym}} {x + dx:.3f} {y + dy:.3f} 0 {flip} '
+                    f'{{name="{_safe_property(lab_name)}" lab="{_safe_property(net)}"}}'
+                )
         components[stable_id] = {
             "component_id": component.get("id"),
             "symbol": symbol,

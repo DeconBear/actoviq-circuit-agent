@@ -1,58 +1,55 @@
 # ADR-0005: Xschem ownership and bridge semantics
 
-- Status: Accepted
+- Status: Amended (user-facing path superseded by Import/Export)
 - Date: 2026-07-28
+- Amended: 2026-07-31
 - Baseline commit: `ac46e93fa374944e25bd731c652117d12497f4e8`
 - Supersedes: none
 - Related plan section: §4.2, §6.6, §7.2, §11
 
 ## Context
 
-The IC platform plan (`plan/actoviq-ic-platform-implementation-plan.md`) ships
-three Xschem modes: native, bridge, and external. The bridge adapter passing
-local regression does not mean the bridge is a substitute for a mature
-interactive editor. Complex topologies still require human review in Xschem,
-which is a reasonable boundary but must be stated explicitly so the editor does
-not silently treat Xschem as a second source of truth.
+The IC platform plan originally shipped three Xschem peer modes: native, bridge,
+and external, with explicit Push / Pull / Takeover. That peer panel is no longer
+the desktop product path. Desktop users exchange `.sch` files through the same
+**Import schematic** / **Export schematic** handoff used for other EDA formats.
 
-Xschem attribute sets are also large and tool-specific. Opaque round-tripping
-without executing unknown Tcl scripts is the only safe default.
+Xschem attribute sets remain large and tool-specific. Opaque round-tripping
+without executing unknown Tcl scripts is still the only safe default.
 
 ## Decision
 
 Xschem is never a silent co-author of `actoviq.module.v2` (see ADR-0001).
-Ownership rules:
 
-- The Actoviq editor is the primary authoring surface for module v2.
-- Xschem is an external peer editor. Synchronization is explicit: Push, Pull,
-  or Takeover are user-initiated operations with visible diffs.
-- The bridge never executes unknown Xschem Tcl scripts. Attributes that cannot
-  be mapped are stored opaquely and surfaced as unverified, not guessed.
-- Xschem native mode is a qualification target for real PDK environments, not a
-  replacement for the interactive editor's maturity.
-- Complex topology review in Xschem is an expected workflow boundary, not a
-  defect.
+**User-facing (current):**
 
-`plan/actoviq-ic-platform-implementation-plan.md`'s "GUI entry complete" is
-split into two layers: IC flow control plane (local code and contracts done,
-real environment pending qualification) and IC schematic authoring core (still
-has the P0/P1 gaps listed in this plan).
+- Actoviq `module.v2` remains the editable source of truth.
+- Desktop Xschem integration is **file handoff only**: Export writes `.sch`
+  (`schematic_handoff` → `render_xschem`); Import reads `.sch` into the active
+  module (`import_xschem_into_module`). No live dual-write, no ownership modes
+  in the GUI.
+- Import preserves `ACTOVIQ_ID` when present; unmapped symbols become geometry
+  BLOCK placeholders (`fidelity: geometry_blocks`), not a lossless SPICE
+  topology claim.
+
+**Legacy / non-GUI:**
+
+- CLI `xschem-link` / `xschem-push` / `xschem-pull` and `schematic_peer`
+  native/bridge/external bindings may still exist for older scripts. They are
+  not the documented desktop or qualification workflow.
+- Qualification uses **schematic-export → xschem-validate** on the exported
+  `.sch`, with `metadata.handoff=schematic-export` and no topology writeback.
+- Unknown Tcl / opaque attributes are never executed.
 
 ## Consequences
 
-- The editor refactor can proceed without blocking on Xschem feature parity.
-- Users always know when Xschem has written to a module because it is an
-  explicit operation, not a background sync.
-- PDK and Xschem qualification is scoped to M7 and requires a real Linux, PDK,
-  and licensed-tool environment.
-- The bridge adapter keeps its current opaque-save contract; no new code path
-  interprets Xschem scripts.
+- Document and teach Import/Export, not peer Push/Pull UI.
+- IC qualification may still call headless validate helpers until that gate is
+  rewritten onto export + optional connectivity check without peer binding.
+- Editor maturity is independent of Xschem feature parity.
 
 ## Alternatives considered
 
-- Make Xschem bridge a silent bidirectional sync. Rejected: silent sync makes
-  Xschem a second source of truth, which breaks entity-level diff and conflict
-  detection and risks executing unknown scripts.
-- Block the editor refactor on Xschem parity. Rejected: the editor's
-  interaction gaps are independent of Xschem and are the critical path for
-  professional schematic editing.
+- Keep peer Push/Pull as the primary GUI. Rejected: replaced by unified
+  schematic Import/Export for IC formats.
+- Silent bidirectional sync. Rejected: second source of truth and script risk.

@@ -288,11 +288,43 @@ def spice_name_for_subckt(module_id: str) -> str:
     return cleaned
 
 
+def formal_subckt_port_node(port: dict[str, Any]) -> str:
+    """Formal .subckt pin name; never emit bare ``0`` (Xyce rejects ground pins named 0)."""
+    raw = str(port.get("net") or port.get("name") or port.get("id") or "").strip()
+    signal = str(port.get("signal_type") or "").strip().casefold()
+    is_ground = signal == "ground" or raw.casefold() in {"0", "gnd", "gnd!"}
+    if not is_ground:
+        cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", raw).strip("_")
+        return cleaned or "node"
+    candidate = str(port.get("id") or port.get("name") or "gnd").strip()
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", candidate).strip("_") or "gnd"
+    if cleaned == "0" or cleaned[0].isdigit():
+        cleaned = f"gnd_{cleaned}" if cleaned != "0" else "gnd"
+    return cleaned
+
+
+def subckt_port_node_map(ports: list[dict[str, Any]] | None) -> dict[str, str]:
+    """Map module net names onto formal .subckt pin names when they differ."""
+    mapping: dict[str, str] = {}
+    for port in ports or []:
+        formal = formal_subckt_port_node(port)
+        raw = str(port.get("net") or port.get("name") or port.get("id") or "").strip()
+        if raw and raw != formal:
+            mapping[raw] = formal
+        # Keep common ground aliases pointing at the same formal pin.
+        if str(port.get("signal_type") or "").casefold() == "ground" or raw.casefold() in {"0", "gnd", "gnd!"}:
+            for alias in ("0", "gnd", "GND", "gnd!"):
+                if alias != formal:
+                    mapping.setdefault(alias, formal)
+    return mapping
+
+
 def emit_x_instance_line(
     instance: dict[str, Any],
     child_module: dict[str, Any],
     *,
     node_for_pin: dict[str, str] | None = None,
+    node_map: dict[str, str] | None = None,
     unknown_policy: str = "error",
 ) -> str:
     child_id = spice_name_for_subckt(str((instance.get("module_ref") or {}).get("module_id") or ""))
@@ -302,15 +334,27 @@ def emit_x_instance_line(
         str(pin.get("id") or ""): pin
         for pin in instance.get("pins", []) or []
     }
+
+    def mapped(raw: str) -> str:
+        text = str(raw or "0")
+        if node_map and text in node_map:
+            return node_map[text]
+        if node_map:
+            folded = text.casefold()
+            for key, value in node_map.items():
+                if str(key).casefold() == folded:
+                    return value
+        return text
+
     for port in ports:
         port_id = str(port.get("id") or "")
         pin = pin_lookup.get(port_id)
         if node_for_pin and port_id in node_for_pin:
-            nodes.append(node_for_pin[port_id])
+            nodes.append(mapped(node_for_pin[port_id]))
         elif pin:
-            nodes.append(str(pin.get("net") or "0"))
+            nodes.append(mapped(str(pin.get("net") or "0")))
         else:
-            nodes.append(str(port.get("net") or "0"))
+            nodes.append(mapped(str(port.get("net") or "0")))
     params = resolve_instance_parameters(child_module, instance, unknown_policy=unknown_policy)
     name = str(instance.get("name") or instance.get("id") or "X1")
     if not name.upper().startswith("X"):

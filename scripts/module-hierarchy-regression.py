@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -339,6 +340,9 @@ def test_hierarchical_compile() -> None:
         assert ".subckt core" in netlist
         assert "Xbias" in netlist
         assert "rload=20k" in netlist
+        # Xyce rejects formal .SUBCKT pins named bare "0"; ground must be a named pin.
+        assert re.search(r"(?im)^\.subckt\s+\S+.*\s0(\s|$)", netlist) is None
+        assert ".subckt bias out vdd gnd" in netlist or ".subckt bias" in netlist and " gnd" in netlist
         assert (root / "build" / "modules" / "core" / "design.hier.cir").is_file()
         assert (root / "build" / "modules" / "core" / "connectivity.json").is_file()
 

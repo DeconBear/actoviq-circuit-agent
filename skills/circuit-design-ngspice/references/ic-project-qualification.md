@@ -18,7 +18,9 @@ The first golden chain is the required IHP SG13G2 revision in
 - archive a passing dual-simulation comparison whose provider versions, run
   IDs, profiles, revision, document hash, and compared metrics bind to those
   exact ngspice/Xyce run files and the same-host tool record;
-- archive a passing Xschem reference-netlist connectivity comparison;
+- archive a passing Xschem reference-netlist connectivity comparison produced
+  from **schematic-export** → `xschem-validate` (`metadata.handoff=schematic-export`,
+  no topology writeback; not peer Push/Pull);
 - archive project/module, PDK, tool, connectivity, and evidence hashes.
 
 The report contains metadata and hashes only. It never copies, packages, or
@@ -52,8 +54,10 @@ operator's explicit `--commercial-boundary-attested` flag.
 
 3. In Actoviq, complete and save the hierarchical project, then run ERC,
    compile the canonical netlist, run independent ngspice and Xyce profiles,
-   run `simulate-dual`, and run `xschem-validate`. Keep the generated JSON
-   evidence and waveform tables under the project build directory.
+   run `simulate-dual`, **export** the module schematic with
+   `schematic-export --format xschem`, and run `xschem-validate` on that
+   exported `.sch` (Import/Export handoff; do not use peer link/push). Keep the
+   generated JSON evidence and waveform tables under the project build directory.
 
 4. Before a self-hosted workflow spends time installing dependencies and
    running the release suite, verify that the native runner can see the locked

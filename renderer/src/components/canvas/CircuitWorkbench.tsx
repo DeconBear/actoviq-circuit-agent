@@ -1768,7 +1768,12 @@ export function CircuitWorkbench({
       const dy = moveEvent.clientY - startY;
       if (!moved && Math.abs(dx) + Math.abs(dy) < 3) return;
       moved = true;
-      if (rightPan) suppressContextMenuRef.current = true;
+      if (rightPan) {
+        // Sticky suppress: Linux/Electron may emit contextmenu after pointerup,
+        // sometimes more than once. Keep the flag until a short timeout clears it.
+        suppressContextMenuRef.current = true;
+        setContextMenu(null);
+      }
       panel.scrollLeft = startLeft - dx;
       panel.scrollTop = startTop - dy;
       setCanvasScroll({ left: panel.scrollLeft, top: panel.scrollTop });
@@ -1778,6 +1783,13 @@ export function CircuitWorkbench({
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
       setIsPanning(false);
+      if (rightPan && moved) {
+        suppressContextMenuRef.current = true;
+        setContextMenu(null);
+        window.setTimeout(() => {
+          suppressContextMenuRef.current = false;
+        }, 250);
+      }
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
@@ -1791,7 +1803,7 @@ export function CircuitWorkbench({
     event.preventDefault();
     event.stopPropagation();
     if (suppressContextMenuRef.current) {
-      suppressContextMenuRef.current = false;
+      setContextMenu(null);
       return;
     }
     const panel = canvasPanelRef.current;

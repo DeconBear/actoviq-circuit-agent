@@ -28,18 +28,42 @@ Electron 桌面应用是一个“结果优先”的工作台：首页是模块�
 
 从源码启动：
 
+```bash
+npm install
+python3 -m pip install --requirement requirements-circuit.txt
+npm run electron:dev
+```
+
+Windows（PowerShell）可用同样的 npm 命令：
+
 ```powershell
 npm install
 npm run electron:dev
 ```
 
-该命令会先编译 Electron 主进程，启动 Vite，并打开窗口。
+该命令会先编译 Electron 主进程，启动 Vite，并打开窗口。Linux 需要图形会话（`DISPLAY` / Wayland）才能显示 Electron 窗口。
+
+**Linux 运行前置（桌面 GUI + ngspice）**
+
+- Node.js 22+、npm、Python 3.10+
+- `PATH` 中可调用 `ngspice`（Debian/Ubuntu：`sudo apt-get install -y ngspice`）
+- 可选开源 IC 探测工具：`iverilog`、`yosys`、`xschem`、`klayout`、`magic`、`netgen-lvs`
+- 完整 native IC 资格仍锁定原生 Ubuntu 22.04（非 WSL），以及 ngspice/Xyce/OpenVAF/Xschem 与固定 IHP revision；详见 `plan/actoviq-ic-platform-implementation-plan.md`
+
+不含 Vite 开发服务器的生产构建启动：
+
+```bash
+npm run build:all
+npm run electron:start
+```
+
+`electron:start` 会设置 `ACTOVIQ_USE_BUILT_RENDERER=1`，让未打包的 Electron 进程加载 `dist-renderer/`，而不是 `http://127.0.0.1:5173`。
 
 **应用图标**
 
 - 正式资源：`assets/icon.png`（全平台）与 `assets/icon.ico`（Windows 多尺寸）。
-- 开发与打包：Windows 窗口/任务栏优先使用 `.ico`，并设置 `AppUserModelId` 为 `com.actoviq.circuit-agent`；macOS 打包使用 `assets/icon.png`。
-- 更换品牌图时请同时更新这两个文件，并保持 `electron-builder.yml` 的 `win.icon` / `mac.icon` 指向它们。不要用 `assets/icon-scheme-*.png` 候选稿作为打包图标。
+- 开发与打包：Windows 窗口/任务栏优先使用 `.ico`，并设置 `AppUserModelId` 为 `com.actoviq.circuit-agent`；macOS/Linux 打包使用 `assets/icon.png`（`electron-builder.yml` 的 `linux.icon`）。
+- 更换品牌图时请同时更新这两个文件，并保持 `electron-builder.yml` 的 `win.icon` / `mac.icon` / `linux.icon` 指向它们。不要用 `assets/icon-scheme-*.png` 候选稿作为打包图标。
 
 **标签页**
 

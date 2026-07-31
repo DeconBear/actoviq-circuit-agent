@@ -44,8 +44,8 @@ function createWindow(): void {
     },
   });
 
-  // Ensure taskbar icon updates even if the shell cached an older asset.
-  if (process.platform === 'win32') {
+  // Ensure taskbar/dock icon updates even if the shell cached an older asset.
+  if (process.platform === 'win32' || process.platform === 'linux') {
     mainWindow.setIcon(iconPath);
   }
 
@@ -72,7 +72,7 @@ function createWindow(): void {
     Menu.buildFromTemplate(template).popup({ window: mainWindow });
   });
 
-  if (!app.isPackaged) {
+  if (!app.isPackaged && process.env.ACTOVIQ_USE_BUILT_RENDERER !== '1') {
     mainWindow.loadURL(process.env.ACTOVIQ_RENDERER_URL ?? 'http://127.0.0.1:5173');
     // Opt-in only: set ACTOVIQ_DEVTOOLS=1 to open DevTools on startup.
     if (process.env.ACTOVIQ_DEVTOOLS === '1') {

@@ -1423,6 +1423,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     minWidth: 0,
+    overflow: 'hidden',
   },
   tabBar: {
     display: 'flex',
@@ -1461,8 +1462,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#3f4a56',
     border: '1px solid #c8cfd7',
     borderRadius: 4,
-    padding: '3px 8px',
+    padding: '3px 6px',
     fontSize: 12,
+    maxWidth: 110,
+    minWidth: 0,
+    flex: '0 1 auto',
   },
   chatToggleBtn: {
     padding: '4px 12px',
@@ -1521,7 +1525,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chatDrawer: {
     position: 'relative',
-    flex: '0 0 auto',
+    flex: '0 1 auto',
     alignSelf: 'stretch',
     minWidth: 0,
     height: '100%',

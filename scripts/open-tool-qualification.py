@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -33,19 +34,59 @@ def probe(candidates: tuple[list[str], ...]) -> dict[str, object]:
         executable = shutil.which(command[0])
         if not executable:
             continue
-        completed = subprocess.run(
-            [executable, *command[1:]],
-            shell=False,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        # Ubuntu's netgen-lvs wrapper opens a Tk console for "-version" and can hang.
+        # Prefer a short batch quit so presence is detectable without a display.
+        run_command = [executable, *command[1:]]
+        run_input = None
+        run_env = None
+        if command[0] == "netgen" and command[1:] == ["-version"]:
+            run_command = [executable, "-batch"]
+            run_input = "quit\n"
+            run_env = {key: value for key, value in os.environ.items() if key != "DISPLAY"}
+        try:
+            completed = subprocess.run(
+                run_command,
+                input=run_input,
+                shell=False,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=run_env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            text = "\n".join(
+                part.decode("utf-8", errors="replace") if isinstance(part, (bytes, bytearray)) else (part or "")
+                for part in (exc.stdout, exc.stderr)
+            ).strip()
+            return {
+                "available": False,
+                "executable": executable,
+                "version": (text.splitlines()[0][:240] if text else "probe timed out"),
+                "exit_code": None,
+            }
         text = "\n".join((completed.stdout, completed.stderr)).strip()
+        # Batch quit may return non-zero; treat a reachable executable as available
+        # when netgen printed a recognizable banner.
+        available = completed.returncode == 0
+        if command[0] == "netgen" and not available:
+            available = "Netgen" in text or "netgen" in text.lower()
+        version = ""
+        if text:
+            # ngspice prints a banner whose first line is "******"; prefer the
+            # "ngspice-X.Y" identity line so provider metadata can match.
+            if command[0] == "ngspice":
+                for line in text.splitlines():
+                    stripped = line.strip("* ").strip()
+                    if "ngspice-" in stripped.casefold():
+                        version = stripped[:240]
+                        break
+            if not version:
+                version = text.splitlines()[0][:240]
         return {
-            "available": completed.returncode == 0,
+            "available": available,
             "executable": executable,
-            "version": text.splitlines()[0][:240] if text else "",
+            "version": version,
             "exit_code": completed.returncode,
         }
     return {"available": False, "executable": "", "version": "", "exit_code": None}

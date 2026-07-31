@@ -195,7 +195,7 @@ def main() -> int:
             "environment": {
                 "platform": "native_linux",
                 "distribution": "ubuntu",
-                "version": "24.04",
+                "version": "22.04",
                 "wsl": False,
             },
             "golden_pdk": "ihp-sg13g2",
@@ -309,13 +309,14 @@ def main() -> int:
         xschem_path = write_json(project_root / "build" / "xschem-run.json", {
             "schema": "actoviq.verification-run.v1",
             "run_id": "xschem-run",
-            "kind": "schematic_reference_netlist",
+            "kind": "schematic_export_reference_netlist",
             "provider_id": "xschem",
             "executed": True,
             "status": "passed",
             "diagnostics": [],
             "artifacts": [],
             "metadata": {
+                "handoff": "schematic-export",
                 "connectivity_comparison": {
                     "ok": True,
                     "compared_instance_count": 1,
@@ -381,7 +382,7 @@ def main() -> int:
             "platform": "linux",
             "release": "6.8.0-fixture",
             "distribution": "ubuntu",
-            "distribution_version": "24.04",
+            "distribution_version": "22.04",
             "native_linux": True,
             "wsl": False,
             "eligible": True,

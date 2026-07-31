@@ -7,7 +7,7 @@ on:
 
 jobs:
   open-pdk-qualification:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4

@@ -108,9 +108,11 @@ from module_hierarchy import (
     connectivity_payload,
     detect_module_cycles,
     emit_x_instance_line,
+    formal_subckt_port_node,
     ordered_connectivity_hash,
     safe_format_interpolate,
     spice_name_for_subckt,
+    subckt_port_node_map,
 )
 
 
@@ -1392,7 +1394,8 @@ def emit_module_subckt(
 
     emitted.add(subckt_name)
     ports = module.get("ports", []) or []
-    port_names = [sanitize_node(str(port.get("net") or port.get("name") or port.get("id"))) for port in ports]
+    port_names = [formal_subckt_port_node(port) for port in ports]
+    node_map = subckt_port_node_map(ports)
     param_defs = module.get("parameter_defs", []) or []
     param_tokens = []
     for item in param_defs:
@@ -1420,11 +1423,16 @@ def emit_module_subckt(
                 emit_x_instance_line(
                     component,
                     child,
+                    node_map=node_map or None,
                     unknown_policy=unknown_policy,
                 )
             )
             continue
-        line = emit_leaf_component_line(component, device_catalog=device_catalog)
+        line = emit_leaf_component_line(
+            component,
+            device_catalog=device_catalog,
+            node_map=node_map or None,
+        )
         if line:
             body.append(line)
     spice = module.get("spice") if isinstance(module.get("spice"), dict) else {}
@@ -1495,12 +1503,61 @@ def compile_hierarchical_project(
         if port.get("signal_type") == "analog" and port.get("direction") == "output":
             lines.append(f"Rload_{sanitize_node(port.get('id'))} {node} 0 1meg")
     lines.append(f"Xtop {' '.join(port_nodes)} {top_name}".strip())
+    # Hoist top-deck analysis / measurement directives. Hierarchical system nets
+    # are the top-module port nodes + Vtest_* stimulus; rewrite local names the
+    # same way flat compile_project does before appending.
+    top_node_names: dict[str, str] = {}
+    for port in top.get("ports", []) or []:
+        external = sanitize_node(str(port.get("net") or port.get("name") or port.get("id")))
+        formal = formal_subckt_port_node(port)
+        for raw in (port.get("net"), port.get("name"), port.get("id"), formal, external):
+            text = str(raw or "").strip()
+            if text:
+                top_node_names[text.casefold()] = external
+        if (
+            str(port.get("signal_type") or "").casefold() == "ground"
+            or str(port.get("net") or "").casefold() in {"0", "gnd", "gnd!"}
+        ):
+            for alias in ("0", "gnd", "GND", "gnd!"):
+                top_node_names.setdefault(alias.casefold(), external)
+    top_instance_names: dict[str, str] = {}
+    for port in top.get("ports", []) or []:
+        port_id = sanitize_node(port.get("id"))
+        node = sanitize_node(str(port.get("net") or port.get("name") or port.get("id")))
+        is_input = str(port.get("direction") or "").casefold() == "input"
+        signal = str(port.get("signal_type") or "").casefold()
+        if is_input and signal in {"analog", "power"} and node:
+            stim = f"Vtest_{port_id}"
+            top_instance_names[stim.casefold()] = stim
+            for raw in (port.get("name"), port.get("id"), port.get("net")):
+                text = str(raw or "").strip()
+                if text:
+                    top_instance_names.setdefault(text.casefold(), stim)
+    directive_lines: list[str] = []
+    for module_id, module in modules.items():
+        spice = module.get("spice") if isinstance(module.get("spice"), dict) else {}
+        # Only the top module's nets are visible on the hierarchical system deck.
+        # Child-module .meas/.print would reference internal subckt nets.
+        if str(module_id) != str(top_id):
+            continue
+        for raw in spice.get("directives", []) or []:
+            stripped = str(raw).strip()
+            if not stripped or stripped.lower() == ".end":
+                continue
+            rewritten = rewrite_analysis_directive(stripped, top_instance_names, top_node_names)
+            if rewritten not in directive_lines and rewritten not in lines:
+                directive_lines.append(rewritten)
     ac = project.get("analyses", {}).get("ac", {}) if isinstance(project.get("analyses"), dict) else {}
-    if ac.get("enabled", True):
+    has_ac = any(
+        (parts := stripped.lower().split()) and parts[0] == ".ac"
+        for stripped in directive_lines
+    )
+    if ac.get("enabled", True) and not has_ac:
         points = int(ac.get("points_per_decade", 20))
         start = float(ac.get("start_hz", 10))
         stop = float(ac.get("stop_hz", 1_000_000))
         lines.append(f".ac dec {points} {start:g} {stop:g}")
+    lines.extend(directive_lines)
     lines.append(".end")
 
     build_root = root / "build" / "system"
@@ -6691,10 +6748,31 @@ class NgspiceSimulationProvider:
         return run_analysis(self.executable, run_root, prepared)
 
     def metadata(self) -> dict[str, str]:
+        version = Path(self.executable).name
+        try:
+            completed = subprocess.run(
+                [self.executable, "--version"],
+                shell=False,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            text = "\n".join((completed.stdout, completed.stderr)).strip()
+            for line in text.splitlines():
+                stripped = line.strip("* ").strip()
+                if "ngspice-" in stripped.casefold():
+                    version = stripped[:240]
+                    break
+            else:
+                if text:
+                    version = text.splitlines()[0][:240]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         return {
             "id": self.provider_id,
             "executable": self.executable,
-            "version": Path(self.executable).name,
+            "version": version,
             "osdi": [str(path) for path in self.osdi_paths],
         }
 
@@ -6896,7 +6974,12 @@ def simulate_dual_profiles(
     project, _ = load_project(root)
     compiled = compile_project(root)
     manifest = read_json(root / "build" / "build-manifest.json")
-    netlist_path = Path(compiled["netlist_path"])
+    netlist_value = compiled.get("netlist_path") or compiled.get("netlist")
+    if not netlist_value:
+        raise ValueError("compile_project did not return a netlist path")
+    netlist_path = Path(str(netlist_value))
+    if not netlist_path.is_absolute():
+        netlist_path = (root / "build" / netlist_path).resolve()
     source_revision = int(manifest.get("source_revision", manifest.get("revision", 0)))
     document_hash = str(manifest.get("document_hash", ""))
 
@@ -8228,8 +8311,20 @@ def build_parser() -> argparse.ArgumentParser:
         xschem_parser.add_argument("--project-root", required=True)
         xschem_parser.add_argument("--module-id", required=True)
 
-    xschem_validate_parser = subparsers.add_parser("xschem-validate")
-    xschem_validate_parser.add_argument("--peer-file", required=True)
+    xschem_validate_parser = subparsers.add_parser(
+        "xschem-validate",
+        help=(
+            "Headless-netlist an exported Xschem .sch and compare connectivity to a module. "
+            "Product path is schematic-export → xschem-validate (not peer link/push)."
+        ),
+    )
+    xschem_validate_parser.add_argument(
+        "--schematic-file",
+        "--peer-file",
+        dest="schematic_file",
+        required=True,
+        help="Exported .sch path (alias: --peer-file, deprecated name)",
+    )
     xschem_validate_parser.add_argument("--run-root", required=True)
     xschem_validate_parser.add_argument("--xschem-bin", default="")
     xschem_validate_parser.add_argument("--project-root", default="")
@@ -8650,7 +8745,7 @@ def main() -> int:
                 if source_module is None:
                     raise ValueError(f"unknown module: {args.module_id}")
             result = validate_xschem_headless(
-                Path(args.peer_file),
+                Path(args.schematic_file),
                 Path(args.run_root),
                 args.xschem_bin,
                 source_module,

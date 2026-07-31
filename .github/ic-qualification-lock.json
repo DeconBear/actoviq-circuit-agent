@@ -4,7 +4,7 @@
   "environment": {
     "platform": "native_linux",
     "distribution": "ubuntu",
-    "version": "24.04",
+    "version": "22.04",
     "wsl": false
   },
   "golden_pdk": "ihp-sg13g2",

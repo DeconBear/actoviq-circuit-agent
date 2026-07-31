@@ -2683,7 +2683,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
       const runRoot = path.resolve(root, 'build', 'xschem-validation', moduleId, String(Date.now()));
       return runProjectTool([
         'xschem-validate',
-        '--peer-file', peerFile,
+        '--schematic-file', peerFile,
         '--run-root', runRoot,
         '--project-root', root,
         '--module-id', moduleId,

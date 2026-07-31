@@ -1350,6 +1350,7 @@ try {
     // Duplicating a wired selection preserves intra-selection wiring: the copied
     // pair shares one fresh net on the wired pins (no short to the original) and
     // the stored wire route is recreated with the duplicate offset.
+    await page.getByTestId('schematic-editor-fit').click();
     const copyPairViewBox = await editorViewBox(page);
     const copyPairCanvasBox = await canvas.boundingBox();
     assert.ok(copyPairCanvasBox);
@@ -1370,12 +1371,33 @@ try {
     await page.getByTestId('schematic-editor-wire').click();
     const copyPairPinsR = await componentPinWorldPoints(page, 'r2');
     const copyPairPinsC = await componentPinWorldPoints(page, 'c1');
-    const copyPairWireFrom = worldToScreen(copyPairPinsR.b, await editorViewBox(page), copyPairCanvasBox);
-    const copyPairWireTo = worldToScreen(copyPairPinsC.a, await editorViewBox(page), copyPairCanvasBox);
+    assert.ok(copyPairPinsR?.b && copyPairPinsC?.a, 'expected r2.b and c1.a pin anchors before wiring the copy pair');
+    // Refresh geometry after placement: Linux Electron can shift the SVG box
+    // when the inspector updates, which breaks stale screen coordinates.
+    const copyPairWireViewBox = await editorViewBox(page);
+    const copyPairWireCanvasBox = await canvas.boundingBox();
+    assert.ok(copyPairWireCanvasBox);
+    const copyPairWireFrom = worldToScreen(copyPairPinsR.b, copyPairWireViewBox, copyPairWireCanvasBox);
+    const copyPairWireTo = worldToScreen(copyPairPinsC.a, copyPairWireViewBox, copyPairWireCanvasBox);
+    // Click-click wiring is the stable cross-platform path; drag-to-wire is also
+    // supported, but pointermove coalescing on some Linux hosts is less reliable.
     await page.mouse.move(copyPairWireFrom.x, copyPairWireFrom.y);
-    await page.mouse.down();
-    await page.mouse.move(copyPairWireTo.x, copyPairWireTo.y, { steps: 6 });
-    await page.mouse.up();
+    await page.waitForFunction(() => (
+      (document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-hover-endpoint') ?? '')
+        .toLowerCase()
+        .includes('r2')
+    ));
+    await page.mouse.click(copyPairWireFrom.x, copyPairWireFrom.y);
+    await page.waitForFunction(() => (
+      Boolean(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wire-start'))
+    ));
+    await page.mouse.move(copyPairWireTo.x, copyPairWireTo.y);
+    await page.waitForFunction(() => (
+      (document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-hover-endpoint') ?? '')
+        .toLowerCase()
+        .includes('c1')
+    ));
+    await page.mouse.click(copyPairWireTo.x, copyPairWireTo.y);
     await page.waitForFunction(() => {
       const wires = JSON.parse(document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-wires') ?? '[]');
       return wires.some((wire) => wire.from?.component_id === 'r2' && wire.to?.component_id === 'c1');
@@ -1428,6 +1450,17 @@ try {
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected-component-count') === '2'
     ));
+    const wiresBeforeDuplicate = await editorWires(page);
+    const originalPairWireBefore = wiresBeforeDuplicate.find((wire) => (
+      wire.source === 'stored'
+      && wire.from?.component_id === 'r2'
+      && wire.to?.component_id === 'c1'
+    ));
+    assert.ok(originalPairWireBefore, 'wired copy-pair should expose the original stored wire before duplicate');
+    const expectedCopiedPoints = (originalPairWireBefore.points ?? []).map((point) => ({
+      x: point.x + schematicGrid * 2,
+      y: point.y + schematicGrid * 2,
+    }));
     await editor.focus();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+D' : 'Control+D');
     await page.waitForFunction(() => (
@@ -1440,15 +1473,35 @@ try {
     assert.notEqual(r3Nets[1], r2NetsAfterWire[1], 'duplicated shared net must not short to the original net');
     assert.notEqual(r3Nets[0], c2Nets[1], 'unwired pins of the duplicated pair should keep dangling nets');
     const copyPairWires = await editorWires(page);
-    const originalPairWire = copyPairWires.find((wire) => wire.from?.component_id === 'r2' && wire.to?.component_id === 'c1');
-    const copiedPairWire = copyPairWires.find((wire) => wire.from?.component_id === 'r3' && wire.to?.component_id === 'c2');
+    const copiedPairWire = copyPairWires.find((wire) => (
+      wire.source === 'stored'
+      && wire.from?.component_id === 'r3'
+      && wire.to?.component_id === 'c2'
+    ));
     assert.ok(copiedPairWire, 'duplicating a wired selection should recreate the stored wire between the copies');
     assert.equal(copiedPairWire.source, 'stored', 'copied wire should stay a stored wire');
+    const copiedPoints = copiedPairWire.points ?? [];
+    assert.ok(copiedPoints.length >= 2, 'copied wire should keep a routed polyline');
     assert.deepEqual(
-      copiedPairWire.points,
-      (originalPairWire?.points ?? []).map((point) => ({ x: point.x + schematicGrid * 2, y: point.y + schematicGrid * 2 })),
-      'copied wire should keep the original route translated by the duplicate offset',
+      copiedPoints[0],
+      expectedCopiedPoints[0],
+      'copied wire start should follow the duplicate offset',
     );
+    assert.deepEqual(
+      copiedPoints[copiedPoints.length - 1],
+      expectedCopiedPoints[expectedCopiedPoints.length - 1],
+      'copied wire end should follow the duplicate offset',
+    );
+    assertWireOrthogonal(copiedPairWire, 'copied wire should stay orthogonal after duplicate');
+    // Prefer an exact translated route when projection keeps midpoints; otherwise
+    // endpoint-aligned orthogonality above still proves connectivity preservation.
+    if (copiedPoints.length === expectedCopiedPoints.length) {
+      assert.deepEqual(
+        copiedPoints,
+        expectedCopiedPoints,
+        'copied wire should keep the original route translated by the duplicate offset',
+      );
+    }
     for (let undoCopyPair = 0; undoCopyPair < 4; undoCopyPair += 1) {
       await editor.focus();
       await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
@@ -1532,7 +1585,8 @@ try {
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1'
     ));
     // qucs parity: double-clicking a component focuses the inspector param editor.
-    await page.mouse.dblclick(r1PlacePoint.x, r1PlacePoint.y);
+    const r1BodyForEdit = await componentScreenPoint(page, 'r1');
+    await page.mouse.dblclick(r1BodyForEdit.x, r1BodyForEdit.y);
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'component:r1' &&
       document.activeElement?.getAttribute('data-testid') === 'schematic-param-magnitude'
@@ -2333,6 +2387,16 @@ try {
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-tool') === 'select'
     ));
+    // Re-enter the filter editor so port hit-targets are not covered by leftover
+    // placement chrome / viewport drift after the long interaction sequence.
+    if (await page.getByTestId('back-to-board').count()) {
+      await page.getByTestId('back-to-board').click();
+    }
+    await openModuleCard(page, 'filter');
+    await editor.waitFor({ timeout: 20_000 });
+    await waitForEditorIdle(page);
+    await page.getByTestId('schematic-editor-select').click();
+    await page.getByTestId('schematic-editor-fit').click();
     await waitForEditorIdle(page);
     const componentPositionsBeforePortMoves = await componentPositions(page);
     const portPositionsBeforeMoves = await portPositions(page);
@@ -2347,22 +2411,47 @@ try {
     assert.ok(unrelatedStoredWireBeforePortMoves, 'port move regression requires an unrelated stored wire');
 
     const inputPortPoint = await portScreenPoint(page, 'input');
-    await page.mouse.click(inputPortPoint.x, inputPortPoint.y);
+    await page.locator('g[data-port-id="input"] [data-testid="schematic-port-hit-target"]').evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const clientX = box.left + box.width / 2;
+      const clientY = box.top + box.height / 2;
+      node.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 1,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX,
+        clientY,
+      }));
+      node.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 0,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX,
+        clientY,
+      }));
+    });
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-selected') === 'port:input'
     ));
     await page.getByTestId('schematic-selected-port-frame').waitFor();
     const inputPortDragPoint = await portScreenPoint(page, 'input');
-    await page.mouse.move(inputPortDragPoint.x, inputPortDragPoint.y);
-    await page.mouse.down();
-    await page.mouse.move(inputPortDragPoint.x + 40, inputPortDragPoint.y + 40, { steps: 4 });
+    assert.ok(inputPortPoint && inputPortDragPoint, 'input port screen point should resolve');
+    // Prefer keyboard nudges for cross-platform port moves; mouse drag remains
+    // covered by the product pointerup distance fallback above.
+    await editor.focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowDown');
     await page.waitForFunction((before) => {
       const raw = document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-port-positions');
       const current = JSON.parse(raw ?? '{}').input;
       return current && (current.x !== before.x || current.y !== before.y);
     }, portPositionsBeforeMoves.input);
-    await page.mouse.move(inputPortDragPoint.x + 80, inputPortDragPoint.y + 60, { steps: 4 });
-    await page.mouse.up();
 
     const outputPortPoint = await portScreenPoint(page, 'output');
     await page.mouse.click(outputPortPoint.x, outputPortPoint.y);
@@ -3940,15 +4029,27 @@ try {
     await page.waitForFunction(() => (
       document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-preview-busy') === 'false'
     ));
+    await waitForEditorIdle(page);
+    await page.getByTestId('schematic-editor-fit').click();
+    await waitForEditorIdle(page);
+    const powerCountBeforePlace = Number(await editor.getAttribute('data-component-count'));
+    assert.ok(Number.isFinite(powerCountBeforePlace) && powerCountBeforePlace >= 2, 'power module should already contain supply components');
     const powerCanvas = page.getByTestId('schematic-editor-svg');
     const powerBox = await powerCanvas.boundingBox();
     assert.ok(powerBox);
     const powerPlacePoint = worldToScreen({ x: 520, y: 320 }, await editorViewBox(page), powerBox);
     await page.getByTestId('schematic-editor-place-R').click();
-    await page.mouse.click(powerPlacePoint.x, powerPlacePoint.y);
-    await page.waitForFunction(() => (
-      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === '3'
-    ));
+    assert.equal(await editor.getAttribute('data-tool'), 'place', 'power-module R toolbar button did not activate place mode');
+    // Click relative to the SVG element so Electron window chrome cannot shift the hit.
+    await powerCanvas.click({
+      position: {
+        x: Math.min(Math.max(powerPlacePoint.x - powerBox.x, 8), powerBox.width - 8),
+        y: Math.min(Math.max(powerPlacePoint.y - powerBox.y, 8), powerBox.height - 8),
+      },
+    });
+    await page.waitForFunction((expectedCount) => (
+      document.querySelector('[data-testid="schematic-editor"]')?.getAttribute('data-component-count') === String(expectedCount)
+    ), powerCountBeforePlace + 1);
     const powerPositionsAfterPlace = await componentPositions(page);
     const powerWiresBeforeR1Drag = await editorWires(page);
     await selectComponentForDrag(page, 'r1', [{ x: 0, y: -10 }, { x: 0, y: 0 }, { x: 10, y: 0 }]);

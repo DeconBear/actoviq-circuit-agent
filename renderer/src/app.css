@@ -746,17 +746,19 @@ button {
 .av-app-toolbar {
   position: relative;
   z-index: 50;
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(280px, auto) minmax(180px, 1fr);
+  container-type: inline-size;
+  container-name: app-toolbar;
+  display: flex;
   align-items: center;
   min-height: var(--av-toolbar-height);
-  gap: var(--av-space-3);
+  gap: var(--av-space-2);
   padding: 6px var(--av-space-3);
   border-bottom: 1px solid var(--av-stroke);
   background: var(--av-surface-overlay);
   box-shadow: 0 1px 0 rgba(19, 28, 38, 0.02);
   backdrop-filter: blur(12px);
   -webkit-app-region: drag;
+  overflow: hidden;
 }
 
 .av-app-toolbar button,
@@ -776,9 +778,9 @@ button {
 .av-chat-drawer {
   position: relative;
   width: min(var(--av-chat-width, 520px), calc(100vw - 64px));
-  flex: 0 0 auto;
-  min-width: 0;
-  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: min(280px, 100%);
+  max-width: min(var(--av-chat-width, 520px), 42vw);
 }
 
 .av-app-toolbar__start,
@@ -792,18 +794,34 @@ button {
 }
 
 .av-app-toolbar__start {
+  flex: 0 1 220px;
   justify-content: flex-start;
   gap: var(--av-space-2);
+  max-width: 34%;
 }
 
 .av-app-toolbar__center {
+  flex: 1 1 auto;
   justify-content: center;
   overflow: hidden;
 }
 
+.av-app-toolbar__center .av-segmented {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.av-app-toolbar__center .av-segmented::-webkit-scrollbar {
+  display: none;
+}
+
 .av-app-toolbar__end {
+  flex: 0 1 auto;
   justify-content: flex-end;
   gap: var(--av-space-2);
+  max-width: 46%;
+  overflow: hidden;
 }
 
 .av-app-toolbar__identity {
@@ -849,6 +867,12 @@ button {
 
 .av-app-toolbar__actions {
   gap: 3px;
+  flex: 0 0 auto;
+}
+
+.av-app-toolbar__end select {
+  max-width: 110px;
+  min-width: 0;
 }
 
 .av-toolbar-divider {
@@ -875,6 +899,7 @@ button {
   height: 7px;
   border-radius: 50%;
   background: currentColor;
+  flex: 0 0 auto;
 }
 
 .av-toolbar-status[data-tone="success"] { color: var(--av-success); }
@@ -896,80 +921,71 @@ button {
 .av-circuit-icon[data-family="port"] { color: var(--av-circuit-port); }
 .av-circuit-icon[data-family="wire"] { color: var(--av-circuit-wire); }
 
+/* Shrink labels based on the toolbar's own width (sidebars don't affect viewport mq). */
+@container app-toolbar (max-width: 980px) {
+  .av-app-toolbar__subtitle,
+  .av-toolbar-status span:not(.av-toolbar-status__dot),
+  .av-segmented__label--responsive {
+    display: none;
+  }
+
+  .av-app-toolbar__title {
+    max-width: 120px;
+    font-size: var(--av-font-size-sm);
+  }
+
+  .av-app-toolbar__center .av-segmented__item {
+    padding-inline: 7px;
+    gap: 0;
+  }
+
+  .av-app-toolbar__end {
+    max-width: none;
+    gap: 4px;
+  }
+}
+
+@container app-toolbar (max-width: 720px) {
+  .av-app-toolbar__titles,
+  .av-toolbar-status {
+    display: none;
+  }
+
+  .av-app-toolbar__start {
+    flex-basis: auto;
+    max-width: none;
+  }
+
+  .av-app-toolbar__end select {
+    max-width: 96px;
+  }
+}
+
 @media (max-width: 960px) {
   :root {
     --av-toolbar-height: 44px;
   }
 
   .av-app-toolbar {
-    grid-template-columns: minmax(96px, 0.8fr) minmax(260px, auto) minmax(96px, 0.8fr);
     gap: 6px;
     padding-inline: 8px;
   }
 
-  .av-app-toolbar__subtitle,
-  .av-app-toolbar__action-label,
-  .av-app-toolbar__optional {
-    display: none;
-  }
-
-  .av-app-toolbar__title {
-    max-width: 116px;
-    font-size: var(--av-font-size-sm);
-  }
-
-  .av-app-toolbar__end {
-    gap: 2px;
-  }
-
-  .av-app-toolbar .av-segmented__item {
-    padding-inline: 7px;
-  }
-}
-
-@media (max-width: 1280px) {
-  .av-app-toolbar {
-    grid-template-columns: auto minmax(180px, 1fr) auto;
-  }
-
-  .av-app-toolbar__titles,
-  .av-toolbar-status,
-  .av-segmented__label--responsive {
-    display: none;
-  }
-
-  .av-app-toolbar__center .av-segmented__item {
-    padding-inline: 7px;
-  }
-}
-
-@media (max-width: 960px) {
   .av-chat-drawer {
-    width: calc(100vw - 48px);
+    max-width: min(var(--av-chat-width, 520px), 48vw);
   }
 }
 
 @media (max-width: 720px) {
-  .av-app-toolbar {
-    grid-template-columns: auto 1fr auto;
-  }
-
   .av-app-toolbar__titles,
   .av-segmented__label--responsive,
   .av-toolbar-status {
     display: none;
   }
 
-  .av-app-toolbar__center {
-    justify-content: stretch;
-  }
-
-  .av-app-toolbar__center .av-segmented {
-    width: 100%;
-  }
-
-  .av-app-toolbar__center .av-segmented__item {
-    flex: 1 1 0;
+  .av-chat-drawer {
+    width: min(var(--av-chat-width, 520px), calc(100vw - 48px));
+    max-width: 100%;
   }
 }
 

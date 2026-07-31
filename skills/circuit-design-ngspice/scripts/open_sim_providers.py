@@ -244,8 +244,12 @@ def _parse_numeric_table(path: Path) -> dict[str, list[float]]:
 def _parse_measurements(text: str) -> list[dict[str, Any]]:
     metrics: list[dict[str, Any]] = []
     seen: set[str] = set()
+    # ngspice: NAME = value
+    # Xyce:    NAME = value for AT = ...
     for name, raw_value in re.findall(
-        r"(?im)^\s*([A-Za-z_][\w.:-]*)\s*=\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?)\s*$",
+        r"(?im)^\s*([A-Za-z_][\w.:-]*)\s*=\s*"
+        r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?)"
+        r"(?:\s+for\b.*)?\s*$",
         text,
     ):
         key = name.casefold()
@@ -253,6 +257,8 @@ def _parse_measurements(text: str) -> list[dict[str, Any]]:
             continue
         seen.add(key)
         metrics.append({
+            # Keep the log's original spelling so dual-sim intersects with
+            # ngspice parse_measurements; dedupe only is case-insensitive.
             "name": name,
             "value": float(raw_value),
             "measurement_status": "measured",
@@ -296,6 +302,8 @@ class XyceProvider:
                 if log_path.is_file() else "",
             ) if part
         )
+        for measure_path in sorted(run_root.glob("*.ma*")):
+            combined = f"{combined}\n{measure_path.read_text(encoding='utf-8', errors='replace')}"
         metrics = _parse_measurements(combined)
         tables: dict[str, dict[str, list[float]]] = {}
         for path in sorted(run_root.iterdir()):
