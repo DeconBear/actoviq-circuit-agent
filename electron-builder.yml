@@ -3,6 +3,10 @@ productName: Vibe Analog
 directories:
   output: release
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+# Prefer prebuilt native bindings (node-pty via actoviq-agent-sdk). Local VS
+# BuildTools may lack Spectre-mitigated libs and fail @electron/rebuild.
+npmRebuild: false
+buildDependenciesFromSource: false
 files:
   - dist/**/*
   - dist-electron/**/*
