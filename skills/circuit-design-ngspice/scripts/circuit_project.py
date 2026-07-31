@@ -1503,16 +1503,50 @@ def compile_hierarchical_project(
         if port.get("signal_type") == "analog" and port.get("direction") == "output":
             lines.append(f"Rload_{sanitize_node(port.get('id'))} {node} 0 1meg")
     lines.append(f"Xtop {' '.join(port_nodes)} {top_name}".strip())
-    # Hoist module measurement / print / actoviq-spec directives to the top deck.
+    # Hoist top-deck analysis / measurement directives. Hierarchical system nets
+    # are the top-module port nodes + Vtest_* stimulus; rewrite local names the
+    # same way flat compile_project does before appending.
+    top_node_names: dict[str, str] = {}
+    for port in top.get("ports", []) or []:
+        external = sanitize_node(str(port.get("net") or port.get("name") or port.get("id")))
+        formal = formal_subckt_port_node(port)
+        for raw in (port.get("net"), port.get("name"), port.get("id"), formal, external):
+            text = str(raw or "").strip()
+            if text:
+                top_node_names[text.casefold()] = external
+        if (
+            str(port.get("signal_type") or "").casefold() == "ground"
+            or str(port.get("net") or "").casefold() in {"0", "gnd", "gnd!"}
+        ):
+            for alias in ("0", "gnd", "GND", "gnd!"):
+                top_node_names.setdefault(alias.casefold(), external)
+    top_instance_names: dict[str, str] = {}
+    for port in top.get("ports", []) or []:
+        port_id = sanitize_node(port.get("id"))
+        node = sanitize_node(str(port.get("net") or port.get("name") or port.get("id")))
+        is_input = str(port.get("direction") or "").casefold() == "input"
+        signal = str(port.get("signal_type") or "").casefold()
+        if is_input and signal in {"analog", "power"} and node:
+            stim = f"Vtest_{port_id}"
+            top_instance_names[stim.casefold()] = stim
+            for raw in (port.get("name"), port.get("id"), port.get("net")):
+                text = str(raw or "").strip()
+                if text:
+                    top_instance_names.setdefault(text.casefold(), stim)
     directive_lines: list[str] = []
-    for module in modules.values():
+    for module_id, module in modules.items():
         spice = module.get("spice") if isinstance(module.get("spice"), dict) else {}
+        # Only the top module's nets are visible on the hierarchical system deck.
+        # Child-module .meas/.print would reference internal subckt nets.
+        if str(module_id) != str(top_id):
+            continue
         for raw in spice.get("directives", []) or []:
             stripped = str(raw).strip()
             if not stripped or stripped.lower() == ".end":
                 continue
-            if stripped not in directive_lines and stripped not in lines:
-                directive_lines.append(stripped)
+            rewritten = rewrite_analysis_directive(stripped, top_instance_names, top_node_names)
+            if rewritten not in directive_lines and rewritten not in lines:
+                directive_lines.append(rewritten)
     ac = project.get("analyses", {}).get("ac", {}) if isinstance(project.get("analyses"), dict) else {}
     has_ac = any(
         (parts := stripped.lower().split()) and parts[0] == ".ac"

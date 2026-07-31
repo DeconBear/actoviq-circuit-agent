@@ -257,7 +257,9 @@ def _parse_measurements(text: str) -> list[dict[str, Any]]:
             continue
         seen.add(key)
         metrics.append({
-            "name": key,
+            # Keep the log's original spelling so dual-sim intersects with
+            # ngspice parse_measurements; dedupe only is case-insensitive.
+            "name": name,
             "value": float(raw_value),
             "measurement_status": "measured",
         })
