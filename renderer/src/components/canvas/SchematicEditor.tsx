@@ -3977,8 +3977,9 @@ function appendCopiedComponents(
       const component = module.components.find((entry) => entry.id === componentId);
       if (!component) return null;
       const pinIndex = component.pins.findIndex((pin) => pin.id === pinId);
-      if (pinIndex < 0) return null;
-      return pinWorld(component, component.pins[pinIndex], pinIndex);
+      const pin = pinIndex >= 0 ? component.pins[pinIndex] : undefined;
+      if (!pin) return null;
+      return pinWorld(component, pin, pinIndex);
     };
     const nextWires = [...(module.wires ?? [])];
     for (const wire of storedWiresToCopy) {
