@@ -83,10 +83,10 @@ async function createNamingSdk(sessionDirectory: string): Promise<ActoviqAgentCl
   return createAgentSdk({
     workDir: WORKSPACE_ROOT,
     sessionDirectory,
-    clientName: 'actoviq-circuit-agent-namer',
+    clientName: 'vibe-analog-namer',
     clientVersion: ACTOVIQ_CIRCUIT_AGENT_VERSION,
     systemPrompt: [
-      'You are a preflight naming helper for actoviq-circuit-agent.',
+      'You are a preflight naming helper for vibe-analog.',
       'Generate short filesystem-safe English names only.',
       'Never call tools. Never emit prose around the requested JSON.',
       `Project root: ${PROJECT_ROOT}`,

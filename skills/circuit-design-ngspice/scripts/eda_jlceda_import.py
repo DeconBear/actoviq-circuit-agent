@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import EasyEDA / JLCEDA Std JSON peer edits back into Actoviq modules."""
+"""Import EasyEDA / JLCEDA Std JSON peer edits back into Vibe Analog modules."""
 
 from __future__ import annotations
 
@@ -121,7 +121,7 @@ def _merge_metadata_and_shapes(
     metadata_instances: list[dict[str, Any]],
     shape_instances: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Overlay editable EasyEDA shapes on the embedded Actoviq snapshot.
+    """Overlay editable EasyEDA shapes on the embedded Vibe Analog snapshot.
 
     The metadata block is a provenance/connectivity snapshot.  Geometry and
     editable properties in a matching LIB shape are the current peer state and

@@ -1,0 +1,113 @@
+name: Release desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to attach desktop artifacts to (e.g. v0.1.0). Leave empty to only build artifacts.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build-${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          - os: ubuntu-22.04
+            platform: linux
+          - os: macos-latest
+            platform: mac
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application sources
+        run: npm run build:all
+
+      - name: Package Electron (${{ matrix.platform }})
+        env:
+          # Unsigned CI builds for first public release.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --config electron-builder.yml --${{ matrix.platform }} --publish never
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibe-analog-${{ matrix.platform }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+            release/*.zip
+            release/*.blockmap
+            release/latest*.yml
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: publish-github-release
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: vibe-analog-*
+          merge-multiple: true
+
+      - name: List release assets
+        run: find release-assets -type f | sort
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.tag }}" ]]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Desktop build finished without a release tag; skipping GitHub Release publish."
+            echo "name=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub Release
+        if: steps.tag.outputs.name != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: Vibe Analog ${{ steps.tag.outputs.name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release-assets/**
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

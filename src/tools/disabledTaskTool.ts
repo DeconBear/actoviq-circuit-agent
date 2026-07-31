@@ -6,7 +6,7 @@ export function createDisabledTaskTool(): AgentToolDefinition {
     {
       name: 'Task',
       description: [
-        'Task delegation is disabled in actoviq-circuit-agent workflow runs.',
+        'Task delegation is disabled in vibe-analog workflow runs.',
         'Do not call this tool. Complete the current stage directly with the registered circuit tools.',
       ].join(' '),
       inputSchema: z.object({

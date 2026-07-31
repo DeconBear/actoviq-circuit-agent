@@ -93,7 +93,7 @@ function reduceDesktopAgentEvent(current: ChatRunView | null, event: DesktopAgen
       return {
         ...base,
         status: 'starting',
-        label: 'Starting Actoviq agent',
+        label: 'Starting Vibe Analog agent',
         runId: event.runId,
         sessionId: event.sessionId,
         model: event.model,
@@ -1040,7 +1040,7 @@ export function App() {
     }
 
     activeChatConversationRef.current = cid;
-    setChatRun({ status: 'starting', text: '', label: 'Connecting to Actoviq agent' });
+    setChatRun({ status: 'starting', text: '', label: 'Connecting to Vibe Analog agent' });
     setIsChatPending(true);
     isChatPendingRef.current = true;
     try {
@@ -1286,7 +1286,7 @@ export function App() {
 
         <div style={styles.mainContent}>
           <AppToolbar
-            appName="Actoviq"
+            appName="Vibe Analog"
             contextLabel={store.circuitProject?.project.name || store.activeWorkspace?.name || 'Circuit workspace'}
             mark={<CircuitBoard size={17} />}
             tabs={toolbarTabs}

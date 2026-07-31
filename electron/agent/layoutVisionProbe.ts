@@ -125,7 +125,7 @@ export async function probeLayoutVisionModel(options: LayoutVisionProbeOptions):
       runTimeoutMs: 30_000,
       workDir: options.workDir,
       sessionDirectory: options.sessionDirectory,
-      clientName: 'actoviq-circuit-agent-layout-vision-probe',
+      clientName: 'vibe-analog-layout-vision-probe',
       tools: [],
       agents: [{
         name: PROBE_AGENT_NAME,

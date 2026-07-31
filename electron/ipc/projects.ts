@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, dialog, nativeImage, type IpcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, nativeImage, type IpcMain, shell } from 'electron';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { access, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -2357,7 +2357,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle('project:choose-eda-mapping', async () => {
     const result = await dialog.showOpenDialog({
-      title: 'Select Actoviq EDA symbol mapping',
+      title: 'Select Vibe Analog EDA symbol mapping',
       properties: ['openFile'],
       filters: [{ name: 'JSON mapping', extensions: ['json'] }],
     });
@@ -2439,7 +2439,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     const result = await dialog.showOpenDialog({
       title: 'Select commercial PDK mapping pack',
       properties: ['openFile'],
-      filters: [{ name: 'Actoviq PDK mapping pack', extensions: ['json'] }],
+      filters: [{ name: 'Vibe Analog PDK mapping pack', extensions: ['json'] }],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
@@ -2592,7 +2592,7 @@ export function registerProjectHandlers(ipcMain: IpcMain): void {
     if (alreadyPresent) {
       const entries = await readdir(destination).catch(() => []);
       if (entries.length > 0) {
-        // Reuse an existing clone under the Actoviq app data directory.
+        // Reuse an existing clone under the Vibe Analog app data directory.
         receipt = {
           destination,
           reused: true,

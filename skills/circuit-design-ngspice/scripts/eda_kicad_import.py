@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import KiCad schematic peer edits back into Actoviq modules."""
+"""Import KiCad schematic peer edits back into Vibe Analog modules."""
 
 from __future__ import annotations
 

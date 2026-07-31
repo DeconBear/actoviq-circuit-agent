@@ -115,7 +115,7 @@ def main() -> int:
                 {},
                 {},
             )
-            raise AssertionError("external Xschem mode accepted an Actoviq canvas edit")
+            raise AssertionError("external Xschem mode accepted an Vibe Analog canvas edit")
         except ValueError as error:
             assert "read-only" in str(error)
 

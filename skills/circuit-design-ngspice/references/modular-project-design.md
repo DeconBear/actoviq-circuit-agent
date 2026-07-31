@@ -1,6 +1,6 @@
 # Modular Desktop Project Design
 
-Default design method for Actoviq **desktop canvas** projects
+Default design method for Vibe Analog **desktop canvas** projects
 (`workspace/.../projects/<id>/`). Prefer functional modules connected with
 `connect_ports`, not one dense netlist on a single sheet.
 

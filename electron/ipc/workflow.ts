@@ -51,7 +51,7 @@ function resolveCliPath(): string {
   if (!app.isPackaged) {
     return path.resolve(PROJECT_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   }
-  return path.resolve(PROJECT_ROOT, 'bin', 'actoviq-circuit-agent.js');
+  return path.resolve(PROJECT_ROOT, 'bin', 'vibe-analog.js');
 }
 
 function resolveCliArgs(): string[] {

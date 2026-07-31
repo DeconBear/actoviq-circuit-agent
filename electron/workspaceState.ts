@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(currentDir, '..');
 const settingsDir = path.resolve(homedir(), '.actoviq');
-const workspaceConfigPath = path.resolve(settingsDir, 'actoviq-circuit-agent-workspaces.json');
+const workspaceConfigPath = path.resolve(settingsDir, 'vibe-analog-workspaces.json');
+const legacyWorkspaceConfigPath = path.resolve(settingsDir, 'actoviq-circuit-agent-workspaces.json');
 const e2eWorkspaceRoot = process.env.ACTOVIQ_E2E_WORKSPACE_ROOT?.trim();
 const defaultWorkspaceRoot = e2eWorkspaceRoot
   ? path.resolve(e2eWorkspaceRoot)
@@ -95,24 +96,26 @@ async function ensureWorkspaceDirs(workspace: WorkspaceSummary): Promise<void> {
 }
 
 async function readConfig(): Promise<WorkspaceConfig> {
-  try {
-    const parsed = JSON.parse(await readFile(workspaceConfigPath, 'utf8')) as WorkspaceConfig;
-    if (Array.isArray(parsed.workspaces) && parsed.workspaces.length > 0) {
-      const workspaces = parsed.workspaces.map((workspace) =>
-        buildWorkspace(
-          workspace.id,
-          workspace.name,
-          workspace.root,
-          workspace.createdAt,
-        ),
-      );
-      const activeWorkspaceId = workspaces.some((workspace) => workspace.id === parsed.activeWorkspaceId)
-        ? parsed.activeWorkspaceId
-        : workspaces[0]!.id;
-      return { activeWorkspaceId, workspaces };
+  for (const candidate of [workspaceConfigPath, legacyWorkspaceConfigPath]) {
+    try {
+      const parsed = JSON.parse(await readFile(candidate, 'utf8')) as WorkspaceConfig;
+      if (Array.isArray(parsed.workspaces) && parsed.workspaces.length > 0) {
+        const workspaces = parsed.workspaces.map((workspace) =>
+          buildWorkspace(
+            workspace.id,
+            workspace.name,
+            workspace.root,
+            workspace.createdAt,
+          ),
+        );
+        const activeWorkspaceId = workspaces.some((workspace) => workspace.id === parsed.activeWorkspaceId)
+          ? parsed.activeWorkspaceId
+          : workspaces[0]!.id;
+        return { activeWorkspaceId, workspaces };
+      }
+    } catch {
+      // try next candidate / fall through to default
     }
-  } catch {
-    // Create a default config below.
   }
 
   const workspace = buildWorkspace('default', 'Default Workspace', defaultWorkspaceRoot);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analog-IC PDK and transistor-sizing audit for Actoviq projects."""
+"""Analog-IC PDK and transistor-sizing audit for Vibe Analog projects."""
 
 from __future__ import annotations
 
@@ -513,7 +513,7 @@ def audit_project(
             _diagnostic(
                 errors,
                 "embedded_subcircuit_scope_unsupported",
-                "editable analog notebooks currently support one flat scope per Actoviq module; "
+                "editable analog notebooks currently support one flat scope per Vibe Analog module; "
                 "place reusable subcircuits in the configured PDK/model library and instantiate them with X",
                 module_id=module_id,
             )
@@ -757,7 +757,7 @@ def run_audit(project_root: Path, output_path: Path | None = None) -> dict[str, 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Audit an Actoviq analog-IC project")
+    parser = argparse.ArgumentParser(description="Audit an Vibe Analog analog-IC project")
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--output-path", default="")
     return parser

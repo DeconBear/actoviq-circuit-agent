@@ -239,7 +239,7 @@ def _default_binding(target: str, component: dict[str, Any]) -> dict[str, Any]:
     if target == "virtuoso":
         library, cell = _VIRTUOSO_CELLS.get(subtype, ("ACTOVIQ", f"Block_{len(pins)}Pin"))
     else:
-        library = "ACTOVIQ_STANDARD" if target == "orcad" else "Actoviq_Standard"
+        library = "ACTOVIQ_STANDARD" if target == "orcad" else "Vibe Analog_Standard"
         base_cell = _STANDARD_CELLS.get(subtype, f"Block_{len(pins)}Pin")
         cell = _portable_symbol_variant(component, base_cell)
     pin_map: dict[str, str] = {}

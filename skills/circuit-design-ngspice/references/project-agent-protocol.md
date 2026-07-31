@@ -1,8 +1,8 @@
-# Actoviq Project Agent Protocol v2
+# Vibe Analog Project Agent Protocol v2
 
 ## Source Of Truth
 
-An Actoviq project is a revisioned CircuitDocument stored by
+An Vibe Analog project is a revisioned CircuitDocument stored by
 `project.circuit.json`, `modules/<id>/module.circuit.json` (`actoviq.module.v2`),
 and each module's netlist notebook. Design and document SVG render the same
 `actoviq.schematic-document.v1` projection of that module; Netlist, netlistsvg

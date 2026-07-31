@@ -1,4 +1,4 @@
-# actoviq-circuit-agent
+# vibe-analog
 
 [English](./README.md) | [简体中文](./README-zh.md)
 
@@ -60,7 +60,7 @@ npm run electron:start
 **App icon**
 
 - Canonical assets: `assets/icon.png` (cross-platform) and `assets/icon.ico` (Windows multi-size).
-- Runtime/packaging: Windows window/taskbar prefers `.ico` and sets `AppUserModelId` to `com.actoviq.circuit-agent`; macOS/Linux packaging uses `assets/icon.png` (`electron-builder.yml` `linux.icon`).
+- Runtime/packaging: Windows window/taskbar prefers `.ico` and sets `AppUserModelId` to `com.vibeanalog.app`; macOS/Linux packaging uses `assets/icon.png` (`electron-builder.yml` `linux.icon`).
 - When replacing branding, update both files and keep `electron-builder.yml` `win.icon` / `mac.icon` / `linux.icon` pointed at them. Do not ship draft `assets/icon-scheme-*.png` candidates as the packaged icon.
 
 **Tabs**
@@ -121,7 +121,7 @@ Details / CLI:
 After the package is published, install it globally:
 
 ```powershell
-npm install -g actoviq-circuit-agent
+npm install -g vibe-analog
 ```
 
 For local source development:
@@ -133,7 +133,7 @@ python -m pip install schemdraw
 
 ### 2. Install and Configure ngspice
 
-`actoviq-circuit-agent` does not bundle ngspice. Install ngspice separately, then configure it with either `NGSPICE_BIN` or your system `PATH`.
+`vibe-analog` does not bundle ngspice. Install ngspice separately, then configure it with either `NGSPICE_BIN` or your system `PATH`.
 
 Recommended on Windows:
 
@@ -174,11 +174,11 @@ For npm users, prefer `NGSPICE_BIN` or `PATH`. Do not edit files inside the inst
 
 During agent execution you may see red error messages in the terminal. These are produced by agent tool calls and exist to show whether the agent can detect and self-correct errors. They do **not** mean the workflow has failed. The agent often retries with alternative approaches and continues normally. If the workflow reaches the final summary stage, the design is complete regardless of intermediate tool errors.
 
-### 4. Configure the Actoviq Provider
+### 4. Configure the Vibe Analog Provider
 
-`actoviq-circuit-agent` talks to the model through an Anthropic-compatible API (the same request/response format as `https://api.anthropic.com/v1/messages`). Any provider that exposes that interface — Anthropic itself, an enterprise gateway, or a self-hosted proxy — works as long as it accepts an Anthropic-style auth header and returns Anthropic-style streaming responses.
+`vibe-analog` talks to the model through an Anthropic-compatible API (the same request/response format as `https://api.anthropic.com/v1/messages`). Any provider that exposes that interface — Anthropic itself, an enterprise gateway, or a self-hosted proxy — works as long as it accepts an Anthropic-style auth header and returns Anthropic-style streaming responses.
 
-Create an Actoviq config in the directory where you will run the CLI, or use `~/.actoviq/settings.json`.
+Create an Vibe Analog config in the directory where you will run the CLI, or use `~/.actoviq/settings.json`.
 
 ```powershell
 mkdir my-circuit-workspace
@@ -193,7 +193,7 @@ Edit `actoviq.settings.json` and fill in your provider endpoint, token, and mode
 Run the CLI from the directory you want to use as the workspace:
 
 ```powershell
-actoviq-circuit-agent
+vibe-analog
 ```
 
 The current directory becomes the workspace. Outputs are written to:
@@ -216,10 +216,10 @@ Use `/allow all` for fully automatic stage transitions, or `/allow manual` to co
 ### 6. One-Shot Run
 
 ```powershell
-actoviq-circuit-agent --approval-policy execution --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and SVG schematic."
+vibe-analog --approval-policy execution --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and SVG schematic."
 ```
 
-For source checkout development, replace `actoviq-circuit-agent` with:
+For source checkout development, replace `vibe-analog` with:
 
 ```powershell
 npm run dev -- --approval-policy execution --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and SVG schematic."
@@ -269,7 +269,7 @@ For editable local installation:
 
 ```powershell
 npm link
-actoviq-circuit-agent --help
+vibe-analog --help
 ```
 
 When installed with `npm link`, the command uses the directory where you run it as the workspace root. Outputs go to:
@@ -287,7 +287,7 @@ $env:ACTOVIQ_CIRCUIT_AGENT_WORKSPACE_ROOT='C:\path\to\workspace'
 
 ## Config Resolution
 
-Actoviq config is loaded in this order:
+Vibe Analog config is loaded in this order:
 
 1. `--config <path>` or `ACTOVIQ_AGENT_CONFIG_PATH`
 2. `./agent.settings.local.json` in the current working directory

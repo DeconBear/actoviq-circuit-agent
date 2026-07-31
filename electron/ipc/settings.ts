@@ -62,7 +62,7 @@ export interface AppSettings {
   ngspiceBin: string;
   workspaceRoot: string;
   /**
-   * One-click open-PDK install root. Empty = Actoviq app data `userData/pdks`.
+   * One-click open-PDK install root. Empty = Vibe Analog app data `userData/pdks`.
    * Users set this themselves; never ship a machine-specific path as the product default.
    */
   pdkInstallRoot: string;
@@ -104,7 +104,8 @@ interface StoredSettings extends Partial<PersistedAppSettings> {
 }
 
 const settingsDir = path.resolve(homedir(), '.actoviq');
-const settingsPath = path.join(settingsDir, 'actoviq-circuit-agent-desktop.json');
+const settingsPath = path.join(settingsDir, 'vibe-analog-desktop.json');
+const legacySettingsPath = path.join(settingsDir, 'actoviq-circuit-agent-desktop.json');
 
 const defaultSettings: PersistedAppSettings = {
   actoviqProvider: 'anthropic',
@@ -434,13 +435,16 @@ function decryptStoredToken(raw: StoredSettings): { token: string; storage: Secr
 }
 
 async function readStoredSettings(): Promise<StoredSettings> {
-  try {
-    const raw = await readFile(settingsPath, 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed as StoredSettings : {};
-  } catch {
-    return {};
+  for (const candidate of [settingsPath, legacySettingsPath]) {
+    try {
+      const raw = await readFile(candidate, 'utf8');
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed as StoredSettings;
+    } catch {
+      // try next candidate
+    }
   }
+  return {};
 }
 
 function toRendererSettings(settings: PersistedAppSettings): AppSettings {
@@ -630,7 +634,7 @@ async function testProvider(draft: AppSettings): Promise<ProviderTestResult> {
       runTimeoutMs: 20_000,
       workDir: process.cwd(),
       sessionDirectory: path.join(settingsDir, 'desktop-agent-sessions'),
-      clientName: 'actoviq-circuit-agent-desktop-provider-test',
+      clientName: 'vibe-analog-desktop-provider-test',
       tools: [],
       agents: [{
         name: 'desktop-provider-connection-check',

@@ -95,7 +95,7 @@ export function createDesktopCircuitTools(options: DesktopCircuitToolsOptions = 
     tool(
       {
         name: 'workspace_list',
-        description: 'List Actoviq workspaces available to the desktop app.',
+        description: 'List Vibe Analog workspaces available to the desktop app.',
         inputSchema: z.object({}),
         serialize: (output) => String(output),
       },
@@ -450,7 +450,7 @@ export function createDesktopCircuitTools(options: DesktopCircuitToolsOptions = 
     tool(
       {
         name: 'bridge_push',
-        description: 'Push Actoviq schematic to a linked EDA peer.',
+        description: 'Push Vibe Analog schematic to a linked EDA peer.',
         inputSchema: z.object({
           project_id: z.string().min(1),
           peer_kind: z.enum(['kicad', 'jlceda']),
@@ -465,7 +465,7 @@ export function createDesktopCircuitTools(options: DesktopCircuitToolsOptions = 
     tool(
       {
         name: 'bridge_pull',
-        description: 'Pull peer edits into Actoviq by stable_id.',
+        description: 'Pull peer edits into Vibe Analog by stable_id.',
         inputSchema: z.object({
           project_id: z.string().min(1),
           peer_kind: z.enum(['kicad', 'jlceda']),

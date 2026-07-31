@@ -24,7 +24,7 @@ const transcriptPath = path.resolve(
 );
 const storageKey = 'actoviq.desktop.chat-history.v2';
 const userDataDir = process.env.APPDATA
-  ? path.join(process.env.APPDATA, 'actoviq-circuit-agent')
+  ? path.join(process.env.APPDATA, 'vibe-analog')
   : path.resolve(root, 'output', 'playwright', 'import-chat-user-data');
 const viteUrl = process.env.ACTOVIQ_RENDERER_URL || 'http://127.0.0.1:5173';
 const electronDistDir = path.resolve(root, 'node_modules', 'electron', 'dist');
@@ -56,7 +56,7 @@ function parseTranscript(text) {
       i += 1;
       continue;
     }
-    if (line === 'Actoviq' && /^\d{1,2}:\d{2}$/.test(lines[i + 1] || '')) {
+    if ((line === 'Vibe Analog' || line === 'Vibe Analog') && /^\d{1,2}:\d{2}$/.test(lines[i + 1] || '')) {
       flush();
       role = 'assistant';
       stamp = lines[i + 1];

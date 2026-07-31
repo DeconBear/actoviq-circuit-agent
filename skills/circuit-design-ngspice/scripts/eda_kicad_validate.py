@@ -574,7 +574,7 @@ def validate_kicad_package(
             component_id = properties.get("ACTOVIQ_ID", "")
             key = (page_id, component_id)
             if not page_id or not component_id:
-                raise ValueError(f"KiCad instance {lib_id} is missing Actoviq identity properties")
+                raise ValueError(f"KiCad instance {lib_id} is missing Vibe Analog identity properties")
             if key in seen_instances:
                 raise ValueError(f"duplicate KiCad component instance: {page_id}:{component_id}")
             seen_instances.add(key)

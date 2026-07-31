@@ -54,7 +54,7 @@ function main() {
     runNode(tsxCli, [sourceEntry, ...args]);
   }
 
-  console.error('actoviq-circuit-agent bootstrap failed: neither dist/app.js nor src/app.ts is runnable.');
+  console.error('vibe-analog bootstrap failed: neither dist/app.js nor src/app.ts is runnable.');
   console.error(`package root: ${packageRoot}`);
   console.error(`checked dist entry: ${distEntry}`);
   console.error(`checked source entry: ${sourceEntry}`);

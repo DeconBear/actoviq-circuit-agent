@@ -604,7 +604,7 @@ def assert_kicad_primitive_library(output: Path) -> None:
     _write_kicad(root, "Portable_Primitives", primitive_ir, primitive_map)
     report = validate_kicad_package(root / "kicad", primitive_ir, primitive_map)
     assert report["instances"] == len(components)
-    library = (root / "kicad" / "Actoviq_Standard.kicad_sym").read_text(encoding="utf-8")
+    library = (root / "kicad" / "Vibe Analog_Standard.kicad_sym").read_text(encoding="utf-8")
     for cell in ("R", "C", "L", "Diode", "NMOS_4PIN", "NPN", "Voltage_Source", "Current_Source"):
         assert f'(symbol "{cell}"' in library, f"portable KiCad library is missing {cell}"
     schematic = (root / "kicad" / "Portable_Primitives.kicad_sch").read_text(encoding="utf-8")
@@ -870,7 +870,7 @@ def main() -> int:
     kicad_schematics = sorted((export_root / "kicad").glob("*.kicad_sch"))
     assert all(balanced(path.read_text(encoding="utf-8")) for path in kicad_schematics)
     kicad_text = "\n".join(path.read_text(encoding="utf-8") for path in kicad_schematics)
-    standard_symbols = export_root / "kicad" / "Actoviq_Standard.kicad_sym"
+    standard_symbols = export_root / "kicad" / "Vibe Analog_Standard.kicad_sym"
     assert standard_symbols.is_file(), "KiCad export must ship the standard project-local symbol library"
     symbol_text = standard_symbols.read_text(encoding="utf-8")
     package_report = validate_kicad_package(export_root / "kicad", ir, json.loads(
@@ -879,7 +879,7 @@ def main() -> int:
     assert package_report["passed"] and package_report["instances"] == sum(
         len(page["components"]) for page in ir["pages"]
     )
-    assert "Actoviq_Standard:" in kicad_text and "Actoviq_Generic:" not in kicad_text
+    assert "Vibe Analog_Standard:" in kicad_text and "Vibe Analog_Generic:" not in kicad_text
     assert "(junction (at " in kicad_text, "KiCad export must emit explicit T-junction objects"
     assert "PMOS_4PIN" in symbol_text and "(polyline " in symbol_text and ("(arc " in symbol_text or "(circle " in symbol_text), "standard library must contain recognizable device graphics"
     assert '(number "1"' in symbol_text and '(number "2"' in symbol_text
@@ -894,7 +894,7 @@ def main() -> int:
     shutil.copytree(export_root / "kicad", corrupt_package)
     corrupt_page = corrupt_package / "EDA_Export_Regression-pmos_ldo.kicad_sch"
     corrupt_text = corrupt_page.read_text(encoding="utf-8").replace(
-        '(lib_id "Actoviq_Standard:R")', '(lib_id "Actoviq_Standard:Missing_R")', 1,
+        '(lib_id "Vibe Analog_Standard:R")', '(lib_id "Vibe Analog_Standard:Missing_R")', 1,
     )
     corrupt_page.write_text(corrupt_text, encoding="utf-8")
     try:

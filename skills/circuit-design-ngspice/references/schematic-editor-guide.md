@@ -1,6 +1,6 @@
 # Schematic Editor Guide
 
-User and agent tutorial for the Actoviq desktop schematic editor.
+User and agent tutorial for the Vibe Analog desktop schematic editor.
 Editable truth remains `modules/<id>/module.circuit.json`
 (`actoviq.module.v2`). Design and SVG both render the shared
 `actoviq.schematic-document.v1` projection. Architecture decisions are in

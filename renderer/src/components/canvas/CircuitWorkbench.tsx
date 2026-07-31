@@ -2483,7 +2483,7 @@ export function CircuitWorkbench({
                   </button>
                 </div>
                 <p className="av-form-hint">
-                  Imports into the currently open module as Actoviq-native blocks.
+                  Imports into the currently open module as Vibe Analog-native blocks.
                   {edaImportForm.format === 'altium' || edaImportForm.format === 'allegro'
                     ? ' Altium/Allegro direct import is not available yet — use KiCad (.kicad_sch).'
                     : ''}
@@ -3867,7 +3867,7 @@ function ModuleSchematic({
           <>
             {moduleData.schematic_peer?.mode === 'external' ? (
               <div className="av-form-status" data-testid="schematic-external-readonly">
-                Xschem is authoritative. This Actoviq canvas is read-only until ownership is taken explicitly.
+                Xschem is authoritative. This Vibe Analog canvas is read-only until ownership is taken explicitly.
               </div>
             ) : null}
             <SchematicEditor

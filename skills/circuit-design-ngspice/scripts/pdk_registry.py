@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local-only PDK discovery and registry for Actoviq IC projects."""
+"""Local-only PDK discovery and registry for Vibe Analog IC projects."""
 
 from __future__ import annotations
 

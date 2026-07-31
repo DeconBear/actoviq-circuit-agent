@@ -586,7 +586,7 @@ test('classifyError uses structured categories', () => {
     retryable: true,
     message: 'stage timed out after 1000 ms',
   });
-  assert.equal(classifyError(new Error('No Actoviq credential was found')).kind, 'credential');
+  assert.equal(classifyError(new Error('No Vibe Analog credential was found')).kind, 'credential');
   assert.equal(classifyError(new Error('Missing required Write field: file_path')).kind, 'file_tool');
 });
 

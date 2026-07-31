@@ -52,7 +52,7 @@ operator's explicit `--commercial-boundary-attested` flag.
    result, or a provider version that differs from an archived simulation run
    fails qualification.
 
-3. In Actoviq, complete and save the hierarchical project, then run ERC,
+3. In Vibe Analog, complete and save the hierarchical project, then run ERC,
    compile the canonical netlist, run independent ngspice and Xyce profiles,
    run `simulate-dual`, **export** the module schematic with
    `schematic-export --format xschem`, and run `xschem-validate` on that

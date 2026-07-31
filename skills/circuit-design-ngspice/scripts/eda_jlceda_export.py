@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export Actoviq EDA IR to EasyEDA / JLCEDA Std JSON packages."""
+"""Export Vibe Analog EDA IR to EasyEDA / JLCEDA Std JSON packages."""
 
 from __future__ import annotations
 
@@ -90,8 +90,8 @@ def build_easyeda_document(ir: dict[str, Any]) -> dict[str, Any]:
         "head": {
             "docType": "3",
             "editorVersion": "6.5.40",
-            "title": ir.get("project", {}).get("name", ir.get("source", {}).get("project_id", "Actoviq")),
-            "description": "Actoviq EDA bridge export",
+            "title": ir.get("project", {}).get("name", ir.get("source", {}).get("project_id", "Vibe Analog")),
+            "description": "Vibe Analog EDA bridge export",
         },
         "canvas": f"CA{int(ir.get('source', {}).get('revision', 0)):04d}",
         "shape": shapes,
@@ -117,9 +117,9 @@ def write_jlceda_package(ir: dict[str, Any], peer_root: Path) -> dict[str, Any]:
     _write_json(package_root / "actoviq-ir.snapshot.json", ir)
     readme = package_root / "README.md"
     readme.write_text(
-        "# Actoviq JLCEDA / EasyEDA bridge package\n\n"
-        "`schematic.easyeda.json` is an experimental Actoviq exchange document. "
-        "It supports deterministic Actoviq-side round-trip through the embedded `actoviq` metadata, "
+        "# Vibe Analog JLCEDA / EasyEDA bridge package\n\n"
+        "`schematic.easyeda.json` is an experimental Vibe Analog exchange document. "
+        "It supports deterministic Vibe Analog-side round-trip through the embedded `actoviq` metadata, "
         "but has not been validated by an EasyEDA/JLCEDA vendor importer.\n",
         encoding="utf-8",
     )

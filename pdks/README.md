@@ -14,7 +14,7 @@ Full recursive clones (all stdcells + GDS) need tens of GB and often fail when
 `C:` / app `userData` is nearly full.
 
 **PDK install root** is a per-user desktop setting (`pdkInstallRoot` in
-`~/.actoviq/actoviq-circuit-agent-desktop.json`). Leave it blank to use
+`~/.actoviq/vibe-analog-desktop.json`). Leave it blank to use
 `userData/pdks`. Set it in **Settings → IC tools and PDKs** (Browse / App default).
 
 Retry script: `_retry-clone-all.ps1` (writes under `E:\actoviq-pdks`).

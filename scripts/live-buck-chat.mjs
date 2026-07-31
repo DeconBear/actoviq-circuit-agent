@@ -14,7 +14,7 @@ const stamp = Date.now();
 const projectName = `buck-converter-react-${stamp}`;
 const outputRoot = path.resolve(root, 'output', 'playwright', `live-buck-${stamp}`);
 const userDataDir = process.env.APPDATA
-  ? path.join(process.env.APPDATA, 'actoviq-circuit-agent')
+  ? path.join(process.env.APPDATA, 'vibe-analog')
   : path.resolve(outputRoot, 'electron-user-data');
 const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');

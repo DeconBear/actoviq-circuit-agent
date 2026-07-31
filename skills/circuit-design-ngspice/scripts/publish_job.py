@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish a skill-generated circuit job for the Actoviq desktop GUI."""
+"""Publish a skill-generated circuit job for the Vibe Analog desktop GUI."""
 
 from __future__ import annotations
 

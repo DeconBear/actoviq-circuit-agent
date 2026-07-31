@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic project editor/compiler for the Actoviq schematic canvas."""
+"""Deterministic project editor/compiler for the Vibe Analog schematic canvas."""
 
 from __future__ import annotations
 
@@ -5727,7 +5727,7 @@ def current_probe_vectors(lines: list[str]) -> list[str]:
 def advanced_directive_parts(directive: str) -> tuple[str, list[str], dict[str, str]]:
     tokens = shlex.split(directive)
     if len(tokens) < 2 or tokens[0].lower() != ".actoviq":
-        raise ValueError(f"invalid Actoviq analysis directive: {directive}")
+        raise ValueError(f"invalid Vibe Analog analysis directive: {directive}")
     positional: list[str] = []
     options: dict[str, str] = {}
     for token in tokens[2:]:
@@ -5741,7 +5741,7 @@ def advanced_directive_parts(directive: str) -> tuple[str, list[str], dict[str, 
 
 def split_analysis_decks(netlist_text: str) -> list[dict[str, Any]]:
     lines = netlist_text.splitlines()
-    title = lines[0] if lines and lines[0].strip() else "* Actoviq simulation"
+    title = lines[0] if lines and lines[0].strip() else "* Vibe Analog simulation"
     analyses: list[tuple[str, str]] = []
     advanced_directives: list[str] = []
     base_lines: list[str] = [title]
@@ -5873,7 +5873,7 @@ def split_analysis_decks(netlist_text: str) -> list[dict[str, Any]]:
             "directive_type": kind,
             "directive": directive,
             "deck": "\n".join([*base_lines, ".op", ".end", ""]),
-            "configuration_error": f"Unsupported Actoviq analysis: {kind}",
+            "configuration_error": f"Unsupported Vibe Analog analysis: {kind}",
         })
     return decks
 
@@ -8540,12 +8540,12 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_unlink_parser.add_argument("--project-root", required=True)
     bridge_unlink_parser.add_argument("--peer-kind", choices=["kicad", "jlceda"], required=True)
 
-    bridge_push_parser = subparsers.add_parser("bridge-push", help="Push Actoviq schematic to a linked peer.")
+    bridge_push_parser = subparsers.add_parser("bridge-push", help="Push Vibe Analog schematic to a linked peer.")
     bridge_push_parser.add_argument("--project-root", required=True)
     bridge_push_parser.add_argument("--peer-kind", choices=["kicad", "jlceda"], required=True)
     bridge_push_parser.add_argument("--source-revision", type=int, required=True)
 
-    bridge_pull_parser = subparsers.add_parser("bridge-pull", help="Pull peer edits into Actoviq by stable_id.")
+    bridge_pull_parser = subparsers.add_parser("bridge-pull", help="Pull peer edits into Vibe Analog by stable_id.")
     bridge_pull_parser.add_argument("--project-root", required=True)
     bridge_pull_parser.add_argument("--peer-kind", choices=["kicad", "jlceda"], required=True)
     bridge_pull_parser.add_argument(

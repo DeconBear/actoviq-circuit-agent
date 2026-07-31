@@ -75,7 +75,7 @@ audit, successful requested analyses, and passing `.actoviq spec` limits.
 Razavi-Bench benchmark materials have restricted terms, including an explicit
 written-permission requirement before incorporation into a third-party
 evaluation suite. A non-commercial acknowledgement is not a substitute.
-Actoviq therefore does not read or expose task paths, figures, golden answers,
+Vibe Analog therefore does not read or expose task paths, figures, golden answers,
 rubrics, judge prompts, netlists, PDFs, outputs/scores, or execute upstream
 Python. The only enabled command is a read-only provenance preflight:
 
@@ -86,7 +86,7 @@ python scripts/razavi_bench.py --repo <canonical-upstream-checkout>
 It records only the canonical Git remote, immutable revision, public LICENSE
 hash, and the `blocked_pending_written_permission` policy state. Obtain written
 permission from the benchmark authors before implementing the answer-agent or
-scoring adapter. Until then, any permitted use must occur outside Actoviq under
+scoring adapter. Until then, any permitted use must occur outside Vibe Analog under
 the upstream terms; do not copy results or restricted materials into this
 repository.
 

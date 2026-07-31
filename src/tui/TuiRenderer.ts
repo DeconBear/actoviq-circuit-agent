@@ -9,7 +9,7 @@ export class TuiRenderer {
     writeStdout(
       [
         '',
-        'actoviq-circuit-agent TUI',
+        'vibe-analog TUI',
         `workspace: ${WORKSPACE_ROOT}`,
         `allow: ${state.allowMode}`,
         `active job: ${state.activeJobId ?? '(none)'}`,

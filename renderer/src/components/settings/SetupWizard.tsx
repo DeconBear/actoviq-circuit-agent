@@ -118,7 +118,7 @@ export function SetupWizard({ onClose }: Props) {
     <div style={styles.overlay}>
       <div style={styles.card}>
         <div style={styles.header}>
-          <h2 style={styles.title}>Welcome to Actoviq Circuit Agent</h2>
+          <h2 style={styles.title}>Welcome to Vibe Analog</h2>
           <p style={styles.subtitle}>Let's configure the essentials to get you started.</p>
         </div>
 

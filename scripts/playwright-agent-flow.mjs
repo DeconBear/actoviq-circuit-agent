@@ -804,7 +804,7 @@ try {
   await page.getByText(/Applied 1 project operation at revision 1/).waitFor({ timeout: 30_000 });
   await page.getByTestId('chat-streaming-message').waitFor({ state: 'detached', timeout: 30_000 });
   await page.waitForFunction(() => (
-    document.querySelector('[data-testid="chat-composer"]')?.getAttribute('placeholder') === 'Ask Actoviq…'
+    document.querySelector('[data-testid="chat-composer"]')?.getAttribute('placeholder') === 'Ask Vibe Analog…'
   ));
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="module-card-filter"]')?.getAttribute('data-projection-ready') === 'true'

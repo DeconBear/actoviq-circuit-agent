@@ -29,7 +29,7 @@ export class CircuitAgentError extends Error {
 const NON_RETRYABLE_PATTERNS = [
   /HTTP\s*402/i,
   /insufficient\s+balance/i,
-  /No Actoviq credential/i,
+  /No (?:Vibe Analog|Vibe Analog) credential/i,
   /unauthorized/i,
   /forbidden/i,
   /invalid api key/i,

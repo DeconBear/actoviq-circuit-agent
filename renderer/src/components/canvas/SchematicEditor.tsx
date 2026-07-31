@@ -2952,7 +2952,7 @@ export function SchematicEditor({
       {complexity.hierarchyRecommended ? (
         <div className="av-form-status" data-testid="schematic-hierarchy-recommendation">
           <strong>Large-sheet guidance:</strong> {complexity.reason}. Consider extracting functional
-          blocks into child modules. Actoviq will not rewrite the hierarchy automatically.
+          blocks into child modules. Vibe Analog will not rewrite the hierarchy automatically.
         </div>
       ) : null}
 

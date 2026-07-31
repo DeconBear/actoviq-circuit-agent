@@ -33,7 +33,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 960,
     minHeight: 640,
-    title: 'Actoviq Circuit Agent',
+    title: 'Vibe Analog',
     icon: iconPath,
     autoHideMenuBar: true,
     webPreferences: {
@@ -110,7 +110,7 @@ process.on('unhandledRejection', (reason) => {
 
 app.whenReady().then(() => {
   if (process.platform === 'win32') {
-    app.setAppUserModelId('com.actoviq.circuit-agent');
+    app.setAppUserModelId('com.vibeanalog.app');
   }
   registerIpcHandlers();
   void inspectCircuitSkillStatus().catch((error) => {

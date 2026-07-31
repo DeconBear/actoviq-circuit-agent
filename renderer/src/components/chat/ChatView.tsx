@@ -438,7 +438,7 @@ export function ChatView({
   const thinkingChars = run?.thinking?.length ?? 0;
 
   return (
-    <section className="chat-panel" aria-label="Actoviq circuit assistant">
+    <section className="chat-panel" aria-label="Vibe Analog circuit assistant">
       <header className="chat-panel__header">
         <div className="chat-panel__identity">
           <span className={`chat-panel__status chat-panel__status--${runIsActive ? 'active' : run?.status === 'error' ? 'error' : 'idle'}`} />
@@ -593,7 +593,7 @@ export function ChatView({
           {visibleMessages.length === 0 && !outputText && !runIsActive && (
             <div className="chat-empty">
               <div className="chat-empty__icon"><CircuitBoard size={30} aria-hidden="true" /></div>
-              <h2>Design with Actoviq</h2>
+              <h2>Design with Vibe Analog</h2>
               <p>Describe a circuit, request a revision, or ask the built-in agent to compile, simulate, and explain the result.</p>
               <div className="chat-empty__examples">
                 <button type="button" onClick={() => setInput('Design a 1 kHz RC low-pass filter and verify its cutoff frequency.')}>RC low-pass filter</button>
@@ -614,7 +614,7 @@ export function ChatView({
               data-testid={message.role === 'user' ? 'chat-user-message' : 'chat-assistant-message'}
             >
               <div className="chat-message-row__meta">
-                <span>{message.role === 'user' ? 'You' : message.isError ? 'Actoviq · error' : 'Actoviq'}</span>
+                <span>{message.role === 'user' ? 'You' : message.isError ? 'Vibe Analog · error' : 'Vibe Analog'}</span>
                 <time>{formatTime(message.timestamp)}</time>
               </div>
               <div className="chat-message-row__body">
@@ -626,7 +626,7 @@ export function ChatView({
           {runIsActive && run && (
             <article className="chat-message-row chat-message-row--assistant chat-message-row--stream" data-testid="chat-streaming-message">
               <div className="chat-message-row__meta">
-                <span>Actoviq</span>
+                <span>Vibe Analog</span>
                 <time>now</time>
               </div>
               <div className="chat-message-row__body chat-stream-card">
@@ -715,8 +715,8 @@ export function ChatView({
                   handleSend();
                 }
               }}
-              placeholder={isPending ? 'Agent is responding…' : 'Ask Actoviq…'}
-              aria-label="Message Actoviq Circuit Agent"
+              placeholder={isPending ? 'Agent is responding…' : 'Ask Vibe Analog…'}
+              aria-label="Message Vibe Analog"
               data-testid="chat-composer"
               disabled={isPending && !runIsActive}
               rows={1}

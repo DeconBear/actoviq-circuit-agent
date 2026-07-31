@@ -48,16 +48,16 @@ const packageVersion = JSON.parse(readFileSync(packageJsonPath, 'utf8')).version
 function printHelp(): void {
   writeStdout(
     [
-      'actoviq-circuit-agent',
+      'vibe-analog',
       '',
       'Usage:',
-      '  actoviq-circuit-agent [options]',
+      '  vibe-analog [options]',
       '',
       'Options:',
       '  --requirement <text>   Start the workflow with a requirement string.',
       '  --requirement-file <path> Load the requirement text from a UTF-8 file.',
       '  --job-name <name>      Provide a naming hint for the generated English job slug.',
-      '  --config <path>        Load an explicit Actoviq JSON config file.',
+      '  --config <path>        Load an explicit Vibe Analog JSON config file.',
       '  --resume-job <id|path> Resume an existing workflow job from the first incomplete stage.',
       '  --revision-base-job <id|path> Start a revision based on an existing job.',
       '  --job-parent-dir <path> Directory where a new workflow job should be created.',
@@ -69,7 +69,7 @@ function printHelp(): void {
       '  -v, --version          Show the CLI version.',
       '',
       'Environment:',
-      '  ACTOVIQ_AGENT_CONFIG_PATH              Explicit Actoviq config path.',
+      '  ACTOVIQ_AGENT_CONFIG_PATH              Explicit Vibe Analog config path.',
       `  ${ACTOVIQ_CIRCUIT_AGENT_WORKSPACE_ROOT_ENV}   Workspace root override.`,
       '  NGSPICE_BIN                            Override ngspice executable path.',
       '',
@@ -82,10 +82,10 @@ function printHelp(): void {
       '  Debug config fallback: <workspace>/actoviq.settings.json',
       '',
       'Examples:',
-      '  actoviq-circuit-agent',
-      '  actoviq-circuit-agent --requirement "Design a 1 kHz RC low-pass filter"',
-      '  actoviq-circuit-agent --auto-approve --job-name rc-demo',
-      '  actoviq-circuit-agent --resume-job 20260409-215611-lna-full-regression',
+      '  vibe-analog',
+      '  vibe-analog --requirement "Design a 1 kHz RC low-pass filter"',
+      '  vibe-analog --auto-approve --job-name rc-demo',
+      '  vibe-analog --resume-job 20260409-215611-lna-full-regression',
     ].join('\n'),
   );
   writeStdout('\n');
@@ -310,7 +310,7 @@ export async function main(): Promise<void> {
     return;
   }
 
-  writeStdout(`actoviq-circuit-agent v${packageVersion}\n`);
+  writeStdout(`vibe-analog v${packageVersion}\n`);
   writeStdout(`workspace: ${WORKSPACE_ROOT}\n`);
   checkNgspice();
   if (!options.legacyCli && !options.requirement && !options.requirementFile && !options.resumeJob && !options.revisionBaseJob) {

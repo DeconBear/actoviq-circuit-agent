@@ -23,7 +23,7 @@ const REPORT_AGENT_NAME = 'actoviq-circuit-report-writer';
 const MAX_INITIAL_HISTORY_MESSAGES = 20;
 const MAX_TOOL_ITERATIONS = 60;
 
-const INTENT_SYSTEM_PROMPT = `You are Actoviq Circuit Agent, the built-in assistant in the Actoviq desktop circuit design app.
+const INTENT_SYSTEM_PROMPT = `You are Vibe Analog, the built-in assistant in the Vibe Analog desktop circuit design app.
 
 You design and revise circuits by calling tools (ReAct). Tools wrap the same circuit_project.py CLI that external Skill agents use. Do not invent file contents under build/.
 
@@ -59,7 +59,7 @@ Hard constraints:
 - After tools finish, summarize what changed (project id, revision, ERC, sim status, module count) in natural language.
 `;
 
-const REPORT_SYSTEM_PROMPT = `You are the built-in Actoviq circuit technical report writer.
+const REPORT_SYSTEM_PROMPT = `You are the built-in Vibe Analog circuit technical report writer.
 
 Write a precise engineering report in Markdown from the supplied immutable project, ERC, build, and simulation evidence.
 
@@ -219,8 +219,8 @@ async function loadCircuitDesignSkill(): Promise<ActoviqSkillDefinition | null> 
     const prompt = markdown.replace(/^---[\s\S]*?---\s*/, '').trim();
     return skill({
       name: 'circuit-design-ngspice',
-      description: 'Actoviq circuit-design-ngspice project protocol and CLI map.',
-      whenToUse: 'Use when designing, revising, simulating, or exporting Actoviq circuit projects.',
+      description: 'Vibe Analog circuit-design-ngspice project protocol and CLI map.',
+      whenToUse: 'Use when designing, revising, simulating, or exporting Vibe Analog circuit projects.',
       prompt: [
         'You are following /circuit-design-ngspice.',
         'Use the registered desktop circuit tools (same CLI as this skill).',
@@ -283,7 +283,7 @@ async function getClient(
       workDir,
       homeDir,
       sessionDirectory: path.join(homeDir, 'circuit-agent-desktop', 'sessions'),
-      clientName: 'actoviq-circuit-agent-desktop',
+      clientName: 'vibe-analog-desktop',
       clientVersion: '0.1.11',
       tools: circuitTools,
       mcpServers: [],
@@ -360,7 +360,7 @@ async function getReportClient(config: DesktopAgentConfig): Promise<ActoviqAgent
       workDir,
       homeDir,
       sessionDirectory: path.join(homeDir, 'circuit-agent-desktop-report', 'sessions'),
-      clientName: 'actoviq-circuit-agent-report',
+      clientName: 'vibe-analog-report',
       clientVersion: '0.1.11',
       tools: [],
       mcpServers: [],

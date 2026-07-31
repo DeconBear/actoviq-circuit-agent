@@ -1,6 +1,6 @@
 # PCB EDA Handoff + LCSC
 
-Actoviq keeps schematic truth in `actoviq.module.v2`. Only `pcb_schematic`
+Vibe Analog keeps schematic truth in `actoviq.module.v2`. Only `pcb_schematic`
 projects link peer EDA folders. Identity uses `stable_id` / `ACTOVIQ_ID`.
 Current pull support reconciles layout, rotation, value, and reference for
 known stable-ID components. Foreign-symbol metadata is created only while
@@ -53,6 +53,6 @@ export package / Altium-via-KiCad path until a dedicated Altium bridge exists.
 
 ## Multi-sheet
 
-Each Actoviq module maps to one IR page / peer sheet. Cold-start import creates
+Each Vibe Analog module maps to one IR page / peer sheet. Cold-start import creates
 `sheet1` and may materialize unknown KiCad symbols as `BLOCK` with
 `eda.foreign_symbol`.

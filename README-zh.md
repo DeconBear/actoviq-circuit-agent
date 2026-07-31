@@ -1,4 +1,4 @@
-# actoviq-circuit-agent
+# vibe-analog
 
 [English](./README.md) | [简体中文](./README-zh.md)
 
@@ -62,7 +62,7 @@ npm run electron:start
 **应用图标**
 
 - 正式资源：`assets/icon.png`（全平台）与 `assets/icon.ico`（Windows 多尺寸）。
-- 开发与打包：Windows 窗口/任务栏优先使用 `.ico`，并设置 `AppUserModelId` 为 `com.actoviq.circuit-agent`；macOS/Linux 打包使用 `assets/icon.png`（`electron-builder.yml` 的 `linux.icon`）。
+- 开发与打包：Windows 窗口/任务栏优先使用 `.ico`，并设置 `AppUserModelId` 为 `com.vibeanalog.app`；macOS/Linux 打包使用 `assets/icon.png`（`electron-builder.yml` 的 `linux.icon`）。
 - 更换品牌图时请同时更新这两个文件，并保持 `electron-builder.yml` 的 `win.icon` / `mac.icon` / `linux.icon` 指向它们。不要用 `assets/icon-scheme-*.png` 候选稿作为打包图标。
 
 **标签页**
@@ -118,7 +118,7 @@ npm run electron:start
 npm 包发布后，可以全局安装：
 
 ```powershell
-npm install -g actoviq-circuit-agent
+npm install -g vibe-analog
 ```
 
 如果是本地源码开发：
@@ -130,7 +130,7 @@ python -m pip install schemdraw
 
 ### 2. 安装并配置 ngspice
 
-`actoviq-circuit-agent` 不内置 ngspice。请单独安装 ngspice，然后通过 `NGSPICE_BIN` 或系统 `PATH` 配置。
+`vibe-analog` 不内置 ngspice。请单独安装 ngspice，然后通过 `NGSPICE_BIN` 或系统 `PATH` 配置。
 
 Windows 推荐方式：
 
@@ -171,11 +171,11 @@ ngspice 路径解析优先级：
 
 Agent 运行过程中终端可能会出现红色报错信息。这些是由 Agent 工具调用产生的，用于监看 Agent 是否能够检测并自我修正错误，**并不**影响设计流程。Agent 通常会尝试其他方案并继续正常执行。只要工作流抵达了最终汇总阶段，设计就是完整的，与中间工具调用报错无关。
 
-### 4. 配置 Actoviq Provider
+### 4. 配置 Vibe Analog Provider
 
-`actoviq-circuit-agent` 通过 Anthropic 兼容接口调用模型（与 `https://api.anthropic.com/v1/messages` 相同的请求/响应格式）。任何暴露该接口的 provider——Anthropic 官方、企业网关或自建代理——只要接受 Anthropic 风格的鉴权头并返回 Anthropic 风格的流式响应，都可以使用。
+`vibe-analog` 通过 Anthropic 兼容接口调用模型（与 `https://api.anthropic.com/v1/messages` 相同的请求/响应格式）。任何暴露该接口的 provider——Anthropic 官方、企业网关或自建代理——只要接受 Anthropic 风格的鉴权头并返回 Anthropic 风格的流式响应，都可以使用。
 
-在运行 CLI 的目录中创建 Actoviq 配置，或者使用 `~/.actoviq/settings.json`。
+在运行 CLI 的目录中创建 Vibe Analog 配置，或者使用 `~/.actoviq/settings.json`。
 
 ```powershell
 mkdir my-circuit-workspace
@@ -190,7 +190,7 @@ copy C:\path\to\agent.settings.example.json .\actoviq.settings.json
 在你希望作为 workspace 的目录中运行：
 
 ```powershell
-actoviq-circuit-agent
+vibe-analog
 ```
 
 当前目录会作为 workspace。输出文件会写入：
@@ -213,10 +213,10 @@ TUI 中可以输入：
 ### 6. 单次任务运行
 
 ```powershell
-actoviq-circuit-agent --approval-policy execution --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and SVG schematic."
+vibe-analog --approval-policy execution --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and SVG schematic."
 ```
 
-如果从源码目录运行，把 `actoviq-circuit-agent` 替换为：
+如果从源码目录运行，把 `vibe-analog` 替换为：
 
 ```powershell
 npm run dev -- --approval-policy execution --job-name rc-demo --requirement "Design a 1 kHz RC low-pass filter and output the netlist, simulation report, and SVG schematic."
@@ -266,7 +266,7 @@ npm run test:simulation-regression
 
 ```powershell
 npm link
-actoviq-circuit-agent --help
+vibe-analog --help
 ```
 
 使用 `npm link` 后，命令会把你运行它的目录作为 workspace root。输出路径为：
@@ -284,7 +284,7 @@ $env:ACTOVIQ_CIRCUIT_AGENT_WORKSPACE_ROOT='C:\path\to\workspace'
 
 ## 配置加载顺序
 
-Actoviq 配置按以下顺序加载：
+Vibe Analog 配置按以下顺序加载：
 
 1. `--config <path>` 或 `ACTOVIQ_AGENT_CONFIG_PATH`
 2. 当前运行目录中的 `./agent.settings.local.json`

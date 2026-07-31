@@ -1,4 +1,4 @@
-interface:
+﻿interface:
   display_name: "Circuit Design Ngspice"
-  short_description: "Design, simulate, lay out, and export Actoviq schematics"
+  short_description: "Design, simulate, lay out, and export Vibe Analog schematics"
   default_prompt: "Use $circuit-design-ngspice to design, verify, lay out, and export an editable circuit schematic."

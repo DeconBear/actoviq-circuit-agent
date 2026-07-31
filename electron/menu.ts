@@ -96,7 +96,7 @@ export function buildMenu(mainWindow: BrowserWindow): Menu {
       submenu: [
         {
           label: 'About',
-          click: () => shell.openExternal('https://github.com/DeconBear/actoviq-circuit-agent'),
+          click: () => shell.openExternal('https://github.com/DeconBear/vibe-analog'),
         },
       ],
     },

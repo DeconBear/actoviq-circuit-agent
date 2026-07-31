@@ -1,6 +1,6 @@
 # User Reference Assets
 
-Actoviq stores reusable **electrical** and **schematic-layout** references under
+Vibe Analog stores reusable **electrical** and **schematic-layout** references under
 the active workspace `references/` tree. Layout means principle-sheet placement
 and orthogonal routing — not GDS/physical IC layout and not PCB KiCad cold
 import.

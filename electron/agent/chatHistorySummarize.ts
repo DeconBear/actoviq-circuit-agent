@@ -59,7 +59,7 @@ export async function summarizeOlderChatTurns(
       runTimeoutMs: 45_000,
       workDir: path.resolve(config.workDir || process.cwd()),
       sessionDirectory: path.join(homedir(), '.actoviq', 'desktop-agent-sessions'),
-      clientName: 'actoviq-circuit-agent-desktop-history-summarizer',
+      clientName: 'vibe-analog-desktop-history-summarizer',
       tools: [],
       agents: [{
         name: SUMMARY_AGENT,

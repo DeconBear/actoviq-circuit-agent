@@ -1,7 +1,8 @@
-appId: com.actoviq.circuit-agent
-productName: Actoviq Circuit Agent
+appId: com.vibeanalog.app
+productName: Vibe Analog
 directories:
   output: release
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 files:
   - dist/**/*
   - dist-electron/**/*
@@ -29,6 +30,7 @@ mac:
   target:
     - dmg
   icon: assets/icon.png
+  category: public.app-category.developer-tools
 linux:
   target:
     - AppImage
@@ -37,3 +39,7 @@ linux:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+publish:
+  provider: github
+  owner: DeconBear
+  repo: vibe-analog

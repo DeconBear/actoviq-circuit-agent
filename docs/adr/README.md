@@ -1,6 +1,6 @@
-# Actoviq Architecture Decision Records
+# Vibe Analog Architecture Decision Records
 
-This directory records architectural decisions for the Actoviq circuit agent,
+This directory records architectural decisions for the Vibe Analog circuit agent,
 focused on the schematic editor interaction gap and refactor plan tracked in
 `plan/schematic-editor-interaction-gap-and-refactor-plan.md`.
 

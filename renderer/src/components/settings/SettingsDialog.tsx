@@ -431,7 +431,7 @@ export function SettingsDialog({ onClose }: Props) {
 
   const handleOpenPdkInstall = useCallback(async () => {
     if (pdkAdapter === 'commercial') {
-      setPdkImportStatus('Commercial PDKs must be imported in place and are never downloaded by Actoviq.');
+      setPdkImportStatus('Commercial PDKs must be imported in place and are never downloaded by Vibe Analog.');
       return;
     }
     if (!pdkLicenseAccepted) {
@@ -473,7 +473,7 @@ export function SettingsDialog({ onClose }: Props) {
     setPdkAdapter(adapterId);
     setPendingPdk(null);
     setPdkImportStatus(
-      `Downloading ${adapterId} into the Actoviq app PDK folder. Large clones (especially SKY130/GF180) can take a long time...`,
+      `Downloading ${adapterId} into the Vibe Analog app PDK folder. Large clones (especially SKY130/GF180) can take a long time...`,
     );
     try {
       const result = await window.electronAPI.installOpenPdkDefault({
@@ -860,7 +860,7 @@ export function SettingsDialog({ onClose }: Props) {
                         update('pdkInstallRoot', '');
                         setPdkDefaultRoot('(app userData/pdks after save)');
                       }}
-                      title="Clear to use the Actoviq app data folder"
+                      title="Clear to use the Vibe Analog app data folder"
                       data-testid="pdk-install-root-reset"
                     >
                       App default

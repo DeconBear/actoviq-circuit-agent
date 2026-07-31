@@ -425,7 +425,7 @@ def render_xschem(module: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 def push(module: dict[str, Any], binding: dict[str, Any], source_revision: int) -> dict[str, Any]:
     binding = validate_binding(binding)
     if binding["mode"] == "external":
-        raise ValueError("cannot push Actoviq content while Xschem is authoritative")
+        raise ValueError("cannot push Vibe Analog content while Xschem is authoritative")
     peer_file = Path(str(binding.get("peer_file") or "")).expanduser().resolve()
     if not str(binding.get("peer_file") or ""):
         raise ValueError("Xschem push requires peer_file")
@@ -580,7 +580,7 @@ def pull(module: dict[str, Any], binding: dict[str, Any]) -> dict[str, Any]:
     peer_file = Path(binding["peer_file"]).expanduser().resolve()
     sidecar_file = sidecar_path(peer_file)
     if not peer_file.is_file() or not sidecar_file.is_file():
-        raise ValueError("Xschem pull requires a peer file and Actoviq sidecar from an earlier push/link")
+        raise ValueError("Xschem pull requires a peer file and Vibe Analog sidecar from an earlier push/link")
     sidecar = json.loads(sidecar_file.read_text(encoding="utf-8"))
     if sidecar.get("schema") != SIDECAR_SCHEMA:
         raise ValueError("unsupported Xschem sidecar")
@@ -589,7 +589,7 @@ def pull(module: dict[str, Any], binding: dict[str, Any]) -> dict[str, Any]:
     local_changed = module_hash(module) != str(binding.get("base_module_hash") or sidecar.get("module_hash"))
     peer_changed = file_hash(peer_file) != str(binding.get("base_peer_hash") or sidecar.get("peer_hash"))
     if local_changed and peer_changed:
-        conflicts.append({"kind": "concurrent_edit", "message": "Actoviq and Xschem both changed since the sync base"})
+        conflicts.append({"kind": "concurrent_edit", "message": "Vibe Analog and Xschem both changed since the sync base"})
 
     local_components = {
         str(component.get("stable_id") or component.get("id")): component

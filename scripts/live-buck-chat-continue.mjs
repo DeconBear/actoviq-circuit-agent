@@ -13,7 +13,7 @@ const projectId = process.env.BUCK_PROJECT_ID || 'buck-converter-react-178482442
 const stamp = Date.now();
 const outputRoot = path.resolve(root, 'output', 'playwright', `live-buck-continue-${stamp}`);
 const userDataDir = process.env.APPDATA
-  ? path.join(process.env.APPDATA, 'actoviq-circuit-agent')
+  ? path.join(process.env.APPDATA, 'vibe-analog')
   : path.resolve(outputRoot, 'electron-user-data');
 const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const projectRoot = path.resolve(workspaceRoot, 'projects', projectId);

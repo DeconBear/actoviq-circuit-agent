@@ -1,4 +1,4 @@
-﻿import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -203,7 +203,7 @@ const STAGE_TIMEOUT_MS =
     : 10 * 60 * 1000;
 
 const GLOBAL_SYSTEM_PROMPT = [
-  'You are part of the actoviq-circuit-agent workflow.',
+  'You are part of the vibe-analog workflow.',
   'Write prose artifacts in Chinese unless the task explicitly asks for code, JSON, SPICE, or SVG.',
   'Use absolute paths exactly as given in the stage packet.',
   'Call file tools with top-level JSON arguments such as {"file_path":"...","content":"..."}; do not wrap arguments inside raw/input/payload helper objects.',
@@ -592,7 +592,7 @@ function fallbackErrorExplanation(record: StageExecutionRecord, stage: WorkflowS
       nextStep: '补充额度或切换到可用配置文件，然后 resume 当前任务。',
     },
     credential: {
-      likelyCause: '最可能是 Actoviq/provider 配置文件缺失、路径不正确或凭据无效。',
+      likelyCause: '最可能是 Vibe Analog/provider 配置文件缺失、路径不正确或凭据无效。',
       nextStep: '检查 actoviq 配置路径、API key、provider 和 model 是否生效。',
     },
     file_tool: {
@@ -1285,7 +1285,7 @@ export async function runCircuitDesignWorkflow(
   const sdk = await createAgentSdk({
     workDir: paths.jobRoot,
     sessionDirectory: SESSION_DIRECTORY,
-    clientName: 'actoviq-circuit-agent',
+    clientName: 'vibe-analog',
     clientVersion: ACTOVIQ_CIRCUIT_AGENT_VERSION,
     systemPrompt: GLOBAL_SYSTEM_PROMPT,
     maxToolIterations: 80,

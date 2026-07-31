@@ -102,7 +102,7 @@ def main() -> int:
         magic_tech = root / "magicrc"
         magic_tech.write_text("# synthetic tech\n", encoding="utf-8")
         netgen_setup = root / "setup.tcl"
-        netgen_setup.write_text("# synthetic mapping, never sourced by Actoviq\n", encoding="utf-8")
+        netgen_setup.write_text("# synthetic mapping, never sourced by Vibe Analog\n", encoding="utf-8")
 
         fake_klayout = root / "fake_klayout.py"
         fake_klayout.write_text(FAKE_KLAYOUT, encoding="utf-8")

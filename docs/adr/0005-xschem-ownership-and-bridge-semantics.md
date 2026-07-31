@@ -23,7 +23,7 @@ Xschem is never a silent co-author of `actoviq.module.v2` (see ADR-0001).
 
 **User-facing (current):**
 
-- Actoviq `module.v2` remains the editable source of truth.
+- Vibe Analog `module.v2` remains the editable source of truth.
 - Desktop Xschem integration is **file handoff only**: Export writes `.sch`
   (`schematic_handoff` → `render_xschem`); Import reads `.sch` into the active
   module (`import_xschem_into_module`). No live dual-write, no ownership modes

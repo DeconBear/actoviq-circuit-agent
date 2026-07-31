@@ -1,15 +1,15 @@
 # IC Platform Integration
 
-Actoviq is the control plane and data system for analog and mixed-signal IC work.
+Vibe Analog is the control plane and data system for analog and mixed-signal IC work.
 It does not replace a SPICE kernel, mask-layout editor, synthesis engine, or
 licensed EDA installation.
 
 ## Source-of-truth rules
 
-| Domain | Editable source of truth | Actoviq role |
+| Domain | Editable source of truth | Vibe Analog role |
 |---|---|---|
 | Native schematic | `actoviq.module.v2` | Edit and project through `actoviq.schematic-document.v1` |
-| Xschem / Virtuoso handoff | Actoviq module remains truth | Desktop **Import / Export schematic** file exchange (`.sch` / Virtuoso package); no live peer sync |
+| Xschem / Virtuoso handoff | Vibe Analog module remains truth | Desktop **Import / Export schematic** file exchange (`.sch` / Virtuoso package); no live peer sync |
 | Digital RTL | `hdl/manifest.json` and HDL sources | Monaco editing, Icarus/Yosys orchestration |
 | Mask layout | External GDS/OASIS/layout project | Batch verify, preview results, bind hashes |
 | Physical rules and PCells | Installed PDK | Reference in place; never generate, copy, or redistribute |
@@ -19,7 +19,7 @@ projects, use the workbench toolbar **Import schematic** / **Export schematic**,
 format **Xschem**. Export writes a `.sch` via `schematic_handoff.export_schematic`
 → `render_xschem`. Import reads a `.sch` into the active module via
 `import_xschem_into_module` (geometry/`ACTOVIQ_ID` preferred; foreign symbols
-become BLOCK placeholders). Actoviq never treats the `.sch` as a second live
+become BLOCK placeholders). Vibe Analog never treats the `.sch` as a second live
 source of truth.
 
 **Legacy peer CLI (not the desktop or qualification product path):** `xschem-link` /
@@ -111,7 +111,7 @@ OpenROAD is experimental. It only runs a project-local `.tcl` after an explicit
 | Xcelium / VCS / Questa AMS | Licensed AMS providers | `ams_verified` only after a qualified native run |
 
 Native PSF, TR0, FSDB, and vendor databases remain in the user's environment.
-Actoviq imports measurements/CSV and openly readable outputs. Process exit,
+Vibe Analog imports measurements/CSV and openly readable outputs. Process exit,
 measurement, specification, LVS, and AMS states remain separate.
 
 ## Migration and compatibility

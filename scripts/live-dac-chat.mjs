@@ -15,7 +15,7 @@ const projectName = `8-bit-r2r-dac-react-${stamp}`;
 const outputRoot = path.resolve(root, 'output', 'playwright', `live-dac-${stamp}`);
 // Reuse the real Electron user-data so safeStorage can decrypt the stored API key.
 const userDataDir = process.env.APPDATA
-  ? path.join(process.env.APPDATA, 'actoviq-circuit-agent')
+  ? path.join(process.env.APPDATA, 'vibe-analog')
   : path.resolve(outputRoot, 'electron-user-data');
 const workspaceRoot = path.resolve(root, 'workspace', 'workspaces', 'default');
 const viteBin = path.resolve(root, 'node_modules', 'vite', 'bin', 'vite.js');

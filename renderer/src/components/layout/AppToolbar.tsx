@@ -78,7 +78,7 @@ export function ToolbarDivider() {
 }
 
 export function AppToolbar<T extends string>({
-  appName = 'Actoviq Circuit Agent',
+  appName = 'Vibe Analog',
   contextLabel,
   mark = <Activity size={17} />,
   tabs,

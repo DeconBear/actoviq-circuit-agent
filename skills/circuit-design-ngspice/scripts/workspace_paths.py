@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Resolve Actoviq desktop workspaces the same way the Electron GUI does.
+"""Resolve Vibe Analog desktop workspaces the same way the Electron GUI does.
 
 Config file (shared with GUI):
-  ~/.actoviq/actoviq-circuit-agent-workspaces.json
+  ~/.actoviq/vibe-analog-workspaces.json
 
 Default workspace root when no config exists:
   <repo>/workspace/workspaces/default
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 
-WORKSPACE_CONFIG_NAME = "actoviq-circuit-agent-workspaces.json"
+WORKSPACE_CONFIG_NAME = "vibe-analog-workspaces.json"
 WORKSPACE_MARKER_NAME = ".actoviq-workspace.json"
 WORKSPACE_ROOT_ENV = "ACTOVIQ_CIRCUIT_AGENT_WORKSPACE_ROOT"
 E2E_WORKSPACE_ROOT_ENV = "ACTOVIQ_E2E_WORKSPACE_ROOT"

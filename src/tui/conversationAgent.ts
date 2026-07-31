@@ -20,7 +20,7 @@ const conversationAgent: ActoviqAgentDefinition = {
   name: 'conversation-agent',
   description: 'General interactive agent that can answer questions and call workflow tools when needed.',
   systemPrompt: [
-    'You are the interactive front desk agent for actoviq-circuit-agent.',
+    'You are the interactive front desk agent for vibe-analog.',
     'Behave like a general helpful engineering agent in Chinese by default.',
     'All non-slash natural-language inputs come to you first. Do not rely on local keyword routing.',
     'If the user is asking a normal question, answer directly using available context and tools only when useful.',
@@ -88,10 +88,10 @@ export class TuiConversationAgent {
       this.sdk = await createAgentSdk({
         workDir: WORKSPACE_ROOT,
         sessionDirectory: path.resolve(WORKSPACE_ROOT, 'actoviq-sessions'),
-        clientName: 'actoviq-circuit-agent-tui',
+        clientName: 'vibe-analog-tui',
         clientVersion: ACTOVIQ_CIRCUIT_AGENT_VERSION,
         systemPrompt: [
-          'You are running inside the actoviq-circuit-agent TUI.',
+          'You are running inside the vibe-analog TUI.',
           'Use tools for workflow actions and answer normal questions conversationally.',
         ].join('\n'),
         maxToolIterations: 120,

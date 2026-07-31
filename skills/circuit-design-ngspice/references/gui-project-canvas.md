@@ -1,12 +1,12 @@
 # GUI Project Canvas Contract
 
-When the Actoviq desktop GUI is open, treat the active workspace as the
+When the Vibe Analog desktop GUI is open, treat the active workspace as the
 handoff boundary between the coding agent and the visual app.
 
 ## Workspace location (do this first)
 
 The GUI and `circuit_project.py` share
-`~/.actoviq/actoviq-circuit-agent-workspaces.json`. The default workspace root
+`~/.actoviq/vibe-analog-workspaces.json`. The default workspace root
 is `<repo>/workspace/workspaces/default/` with projects under `projects/`.
 
 **Never** create projects under bare `<repo>/workspace/projects/` — the GUI
@@ -232,7 +232,7 @@ value is not a specification pass unless an explicit target evaluated it.
 
 Project simulation isolates each analysis in its own deck and stores raw
 vectors under the source revision. Native `.op`, `.dc`, `.ac`, `.tran`, `.sp`,
-`.noise`, and `.pz` directives are supported. Actoviq metadata directives add
+`.noise`, and `.pz` directives are supported. Vibe Analog metadata directives add
 analyses that are not single native ngspice deck statements:
 
 ```spice

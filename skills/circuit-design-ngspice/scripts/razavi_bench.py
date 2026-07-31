@@ -80,7 +80,7 @@ def inspect_checkout(root: Path) -> dict[str, Any]:
             "upstream_code_executed": False,
             "evaluation_integration": "blocked_pending_written_permission",
             "upstream_license": UPSTREAM_LICENSE,
-            "next_step": "Obtain written permission from the benchmark authors before enabling an Actoviq evaluation adapter.",
+            "next_step": "Obtain written permission from the benchmark authors before enabling an Vibe Analog evaluation adapter.",
         },
     }
 

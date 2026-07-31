@@ -218,7 +218,7 @@ def _component_size(component: dict[str, Any]) -> tuple[float, float]:
     else:
         width, height = 100.0, 50.0
     # KiCad's normal schematic connection grid is 50 mil (1.27 mm), which is
-    # half of an Actoviq 20-unit grid step.  Grid-aligned symbol dimensions keep
+    # half of an Vibe Analog 20-unit grid step.  Grid-aligned symbol dimensions keep
     # both pin connection points and routed wire endpoints on that grid.
     width = math.ceil(width / GRID) * GRID
     height = math.ceil(height / GRID) * GRID
@@ -3104,7 +3104,7 @@ def _kicad_binding_identity(binding: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def _kicad_snap_internal(value: float) -> float:
-    """Project an Actoviq coordinate onto KiCad's normal 50 mil grid."""
+    """Project an Vibe Analog coordinate onto KiCad's normal 50 mil grid."""
 
     connection_grid = GRID / 2
     return round(float(value) / connection_grid) * connection_grid
@@ -3169,7 +3169,7 @@ def _kicad_symbol_definition(component: dict[str, Any], binding: dict[str, Any],
         f"{indent}  (property \"Value\" {_sexpr_string(component.get('value', ''))} (at 0 {half_height+2.54:.4f} 0) (effects (font (size 1.27 1.27))))",
         f"{indent}  (property \"Footprint\" {_sexpr_string(footprint)} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
         f"{indent}  (property \"Datasheet\" \"~\" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
-        f"{indent}  (property \"Description\" {_sexpr_string('Actoviq portable ' + str(eda.get('device_class', 'symbol')))} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
+        f"{indent}  (property \"Description\" {_sexpr_string('Vibe Analog portable ' + str(eda.get('device_class', 'symbol')))} (at 0 0 0) (effects (font (size 1.27 1.27)) hide))",
         f"{indent}  (symbol {_sexpr_string(cell + '_0_1')}",
     ]
     lines.extend(_kicad_symbol_graphics(component, indent + "    "))
@@ -3177,7 +3177,7 @@ def _kicad_symbol_definition(component: dict[str, Any], binding: dict[str, Any],
     pin_map = binding["pin_map"]
     for index, pin in enumerate(component.get("pins", [])):
         point = _kicad_local_pin_position(component, pin, index)
-        # Actoviq page coordinates grow downwards; KiCad symbol-library Y
+        # Vibe Analog page coordinates grow downwards; KiCad symbol-library Y
         # coordinates grow upwards.  Reflect local Y before placement.
         x, y = point["x"] * MM_PER_UNIT, -point["y"] * MM_PER_UNIT
         side = _pin_side(component, pin, index)
@@ -3380,7 +3380,7 @@ def _write_kicad(root: Path, project_name: str, ir: dict[str, Any], symbol_map: 
     table_lines = ["(sym_lib_table", "  (version 7)"]
     filenames: dict[str, str] = {}
     for library, cells in sorted(libraries.items()):
-        filename = _safe_name(library, "Actoviq_Standard") + ".kicad_sym"
+        filename = _safe_name(library, "Vibe Analog_Standard") + ".kicad_sym"
         filename_key = filename.casefold()
         if filename_key in filenames and filenames[filename_key] != library:
             raise ValueError(
@@ -3394,7 +3394,7 @@ def _write_kicad(root: Path, project_name: str, ir: dict[str, Any], symbol_map: 
         symbol_lines.append(")\n")
         _write_text(symbols, "\n".join(symbol_lines))
         symbol_files.append(symbols)
-        table_lines.append(f"  (lib (name {_sexpr_string(library)})(type \"KiCad\")(uri {_sexpr_string('${KIPRJMOD}/' + filename)})(options \"\")(descr \"Actoviq portable symbols\"))")
+        table_lines.append(f"  (lib (name {_sexpr_string(library)})(type \"KiCad\")(uri {_sexpr_string('${KIPRJMOD}/' + filename)})(options \"\")(descr \"Vibe Analog portable symbols\"))")
     table_lines.append(")\n")
     sym_table = target / "sym-lib-table"
     _write_text(sym_table, "\n".join(table_lines))
@@ -3474,7 +3474,7 @@ def _write_orcad(root: Path, project_name: str, ir: dict[str, Any], resolved_map
     lines = [
         f"(edif {_edif_identifier(project_name)}", "  (edifVersion 2 0 0)", "  (edifLevel 0)",
         "  (keywordMap (keywordLevel 0))",
-        "  (status (written (timeStamp 2000 1 1 0 0 0) (program \"Actoviq\")))",
+        "  (status (written (timeStamp 2000 1 1 0 0 0) (program \"Vibe Analog\")))",
     ]
     libraries: dict[str, dict[str, tuple[dict[str, Any], dict[str, Any]]]] = {}
     for page in ir["pages"]:
@@ -3569,7 +3569,7 @@ def _spice_lines(
     cdl: bool = False,
     model_bindings: list[str] | None = None,
 ) -> list[str]:
-    lines = [f"* Actoviq {'CDL' if cdl else 'SPICE'} export", f"* connectivity_hash={ir['connectivity']['hash']}"]
+    lines = [f"* Vibe Analog {'CDL' if cdl else 'SPICE'} export", f"* connectivity_hash={ir['connectivity']['hash']}"]
     if model_bindings:
         lines.extend(["* PDK/model bindings", *model_bindings])
     global_net_by_endpoint = {(record.get("module_id"), record.get("component_id"), record.get("pin_id")): record["net"] for record in ir["connectivity"]["records"] if record.get("component_id")}
@@ -3678,7 +3678,7 @@ def _write_virtuoso(
         extra_files.append(profile_path)
     if model_lines:
         bindings_path = target / "model-bindings.spice"
-        _write_text(bindings_path, "* PDK/model statements preserved from Actoviq module sources\n" + "\n".join(model_lines) + "\n")
+        _write_text(bindings_path, "* PDK/model statements preserved from Vibe Analog module sources\n" + "\n".join(model_lines) + "\n")
         extra_files.append(bindings_path)
     source_root = target / "source-spice"
     source_pages: list[str] = []
@@ -3704,7 +3704,7 @@ def _write_virtuoso(
     extra_files.append(handoff_manifest)
     skill = target / "create_schematic.il"
     skill_lines = [
-        "; Actoviq Virtuoso reconstruction script",
+        "; Vibe Analog Virtuoso reconstruction script",
         "; Set actoviqLibrary before loading this file in CIW or batch mode.",
         'unless(boundp(\'actoviqLibrary) actoviqLibrary="ACTOVIQ")',
         "procedure(actoviqEnsureGenericSymbol(libName cellName pinNames)",
@@ -3793,7 +3793,7 @@ def _write_virtuoso(
             if net_name in top_net_variables:
                 skill_lines.append(f'dbCreateConnByName({top_net_variables[net_name]} pageInst{page_index} {_skill_string(port["name"])})')
     skill_lines.extend(["dbSave(topCv)", "dbClose(topCv)"])
-    skill_lines.append(f'printf("Actoviq: created {len(ir["pages"])} module schematic cell(s) and one top cell for {project_name}\\n")')
+    skill_lines.append(f'printf("Vibe Analog: created {len(ir["pages"])} module schematic cell(s) and one top cell for {project_name}\\n")')
     _write_text(skill, "\n".join(skill_lines) + "\n")
     cds = target / "cds.lib.example"
     _write_text(cds, "DEFINE ACTOVIQ ./ACTOVIQ\n")
@@ -3835,7 +3835,7 @@ def _validate_generated_target(
         libraries = list(target_root.glob("*.kicad_sym"))
         if not schematics or not libraries or not all(_balanced_sexpr(path.read_text(encoding="utf-8")) for path in [*schematics, *libraries]):
             raise ValueError(f"generated {target} package failed S-expression validation")
-        if any("Actoviq_Generic:" in path.read_text(encoding="utf-8") for path in schematics):
+        if any("Vibe Analog_Generic:" in path.read_text(encoding="utf-8") for path in schematics):
             raise ValueError(f"generated {target} package still contains legacy generic symbols")
         if target == "altium":
             validate_altium_import_package(target_root, export_root / "kicad", ir, symbol_map)

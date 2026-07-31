@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small gm/ID sizing helper for actoviq-circuit-agent."""
+"""Small gm/ID sizing helper for vibe-analog."""
 
 from __future__ import annotations
 

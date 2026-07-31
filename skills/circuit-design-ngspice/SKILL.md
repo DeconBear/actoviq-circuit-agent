@@ -2,7 +2,7 @@
 name: circuit-design-ngspice
 description: >
   Design, simulate, and render kind-scoped SPICE/PCB/analog-IC schematics with
-  ngspice and netlistsvg for the Actoviq project canvas. Use when designing circuits,
+  ngspice and netlistsvg for the Vibe Analog project canvas. Use when designing circuits,
   creating or simulating SPICE netlists, rendering schematics, optimizing
   automatic schematic placement/routing with a vision-only model, checking
   layout quality/connectivity, or exporting editable KiCad, Altium, OrCAD, and
@@ -21,7 +21,7 @@ AI coding agent can execute.
 **Scope**: schematic-level SPICE design, waveform/sweep simulation, and SVG
 rendering. Not for PCB layout, IC mask layout, or production signoff.
 
-**Default path**: Actoviq desktop project canvas (`projects/<id>/`).  
+**Default path**: Vibe Analog desktop project canvas (`projects/<id>/`).  
 **Compatibility path**: one-shot `jobs/<id>/` workflow.
 
 Read detail files only when needed — keep this page as the map.
@@ -73,7 +73,7 @@ Full contract:
 
 **Always resolve the GUI workspace before creating projects** — do not invent
 `workspace/projects/` paths. The Electron app reads
-`~/.actoviq/actoviq-circuit-agent-workspaces.json` and defaults to
+`~/.actoviq/vibe-analog-workspaces.json` and defaults to
 `<repo>/workspace/workspaces/default/projects/`.
 
 ```bash

@@ -10,7 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const storageKey = 'actoviq.desktop.chat-history.v2';
 const conversationId = 'conv-1784799770791-owgf5h';
 const userDataDir = process.env.APPDATA
-  ? path.join(process.env.APPDATA, 'actoviq-circuit-agent')
+  ? path.join(process.env.APPDATA, 'vibe-analog')
   : path.resolve(root, 'output', 'playwright', 'import-chat-user-data');
 const viteUrl = process.env.ACTOVIQ_RENDERER_URL || 'http://127.0.0.1:5173';
 const electronDistDir = path.resolve(root, 'node_modules', 'electron', 'dist');
