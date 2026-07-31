@@ -309,13 +309,14 @@ def main() -> int:
         xschem_path = write_json(project_root / "build" / "xschem-run.json", {
             "schema": "actoviq.verification-run.v1",
             "run_id": "xschem-run",
-            "kind": "schematic_reference_netlist",
+            "kind": "schematic_export_reference_netlist",
             "provider_id": "xschem",
             "executed": True,
             "status": "passed",
             "diagnostics": [],
             "artifacts": [],
             "metadata": {
+                "handoff": "schematic-export",
                 "connectivity_comparison": {
                     "ok": True,
                     "compared_instance_count": 1,

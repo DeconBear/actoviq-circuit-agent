@@ -108,13 +108,15 @@ def has_waveform(run: dict[str, Any]) -> bool:
         if not isinstance(analysis, dict):
             continue
         tables = analysis.get("tables")
-        if not isinstance(tables, dict):
-            continue
-        for table in tables.values():
-            if not isinstance(table, dict):
-                continue
-            if any(isinstance(values, list) and len(values) >= 2 for values in table.values()):
-                return True
+        if isinstance(tables, dict):
+            for table in tables.values():
+                if not isinstance(table, dict):
+                    continue
+                if any(isinstance(values, list) and len(values) >= 2 for values in table.values()):
+                    return True
+        dataset = analysis.get("dataset")
+        if isinstance(dataset, dict) and int(dataset.get("point_count") or 0) >= 2:
+            return True
     return False
 
 
@@ -412,6 +414,7 @@ def build_report(
         and xschem_metadata.get("source_connectivity_hash")
         == ordered_connectivity_hash(modules[str(xschem_metadata.get("source_module_id") or "")])
         and xschem_metadata.get("topology_writeback") is False
+        and str(xschem_metadata.get("handoff") or "") == "schematic-export"
     )
 
     source_kind = str(installation.get("source_kind") or "")
@@ -456,7 +459,11 @@ def build_report(
             "Simulation providers/versions, run IDs, profiles, revision, document hash, and compared metrics must match the archived tool and run records.",
         ),
         gate("dual_simulation_compare", dual_ok, "Dual simulation must compare common measurements for this document hash."),
-        gate("xschem_reference_compare", xschem_ok, "Xschem reference netlist connectivity must pass without topology writeback."),
+        gate(
+            "xschem_reference_compare",
+            xschem_ok,
+            "Exported Xschem .sch must headless-netlist and match module connectivity (schematic-export handoff; no topology writeback).",
+        ),
         gate("commercial_pdk_boundary", boundary_attested, "Commercial qualification requires an explicit no-copy/no-package/no-upload attestation."),
     ]
 

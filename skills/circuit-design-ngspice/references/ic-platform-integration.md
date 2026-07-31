@@ -9,14 +9,24 @@ licensed EDA installation.
 | Domain | Editable source of truth | Actoviq role |
 |---|---|---|
 | Native schematic | `actoviq.module.v2` | Edit and project through `actoviq.schematic-document.v1` |
-| Xschem external mode | `.sch/.sym` peer | Read-only display, explicit pull, netlist cross-check |
+| Xschem / Virtuoso handoff | Actoviq module remains truth | Desktop **Import / Export schematic** file exchange (`.sch` / Virtuoso package); no live peer sync |
 | Digital RTL | `hdl/manifest.json` and HDL sources | Monaco editing, Icarus/Yosys orchestration |
 | Mask layout | External GDS/OASIS/layout project | Batch verify, preview results, bind hashes |
 | Physical rules and PCells | Installed PDK | Reference in place; never generate, copy, or redistribute |
 
-Xschem modes are `native`, `bridge`, and `external`. Push and pull are explicit;
-there is no real-time dual write. Bridge merge only applies stable placement,
-rotation, text, W/L/M/NF, and wire geometry. Topology changes require review.
+**Xschem user-facing workflow (current):** on `analog_ic` / `mixed_signal_ic`
+projects, use the workbench toolbar **Import schematic** / **Export schematic**,
+format **Xschem**. Export writes a `.sch` via `schematic_handoff.export_schematic`
+→ `render_xschem`. Import reads a `.sch` into the active module via
+`import_xschem_into_module` (geometry/`ACTOVIQ_ID` preferred; foreign symbols
+become BLOCK placeholders). Actoviq never treats the `.sch` as a second live
+source of truth.
+
+**Legacy peer CLI (not the desktop or qualification product path):** `xschem-link` /
+`xschem-push` / `xschem-pull` / `schematic_peer` native/bridge/external bindings
+remain in the Python tree for older scripts. Desktop and IC qualification use
+**schematic-export → xschem-validate** only. Do not document peer modes as the
+GUI or golden-chain workflow.
 
 ## PDK setup
 
@@ -63,8 +73,9 @@ All commands use argument arrays and `shell=false`.
 python scripts/circuit_project.py pdk-scan --root /pdk/ihp-sg13g2 --adapter ihp-sg13g2
 python scripts/circuit_project.py pdk-register --root /pdk/ihp-sg13g2 --adapter ihp-sg13g2 --license-accepted
 
-python scripts/circuit_project.py xschem-link --project-root PROJECT --module-id core --mode bridge --peer-file core.sch
-python scripts/circuit_project.py xschem-validate --peer-file core.sch --run-root build/xschem/core
+python scripts/circuit_project.py schematic-export --project-root PROJECT --module-id core --format xschem --output-path core.sch --source-revision N
+python scripts/circuit_project.py schematic-import --project-root PROJECT --module-id core --format xschem --source-path core.sch
+python scripts/circuit_project.py xschem-validate --schematic-file core.sch --run-root build/xschem/core --project-root PROJECT --module-id core
 
 python scripts/circuit_project.py openvaf-compile --source models/device.va --cache-root ~/.cache/actoviq/openvaf
 python scripts/circuit_project.py simulate --project-root PROJECT --osdi CACHE/device.osdi
@@ -91,7 +102,7 @@ OpenROAD is experimental. It only runs a project-local `.tcl` after an explicit
 | ngspice | Native provider, simulation v3 | Existing regression suite |
 | Xyce | Independent deck provider | Per-PDK deck/model qualification |
 | OpenVAF | OSDI cache for ngspice | OSDI is never reused by Xyce |
-| Xschem | Three modes + headless reference netlist | Connectivity comparison is authoritative |
+| Xschem | Desktop Import/Export `.sch` handoff | File exchange only; module.v2 remains truth |
 | KLayout | Batch DRC/LVS and `.lyrdb` parsing | Open results are not foundry signoff |
 | Magic + Netgen | Controlled extraction and LVS | Requires PDK tech/setup files |
 | Icarus + Yosys | Verilog-2005 RTL, synthesis, gate replay | SystemVerilog only if the tool accepts it |

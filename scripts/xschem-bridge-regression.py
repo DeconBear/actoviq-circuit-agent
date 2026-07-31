@@ -67,6 +67,8 @@ def main() -> int:
         )
         validation = headless_validate(peer_file, root / "headless", str(fake_xschem), module)
         assert validation["status"] == "passed"
+        assert validation["kind"] == "schematic_export_reference_netlist"
+        assert validation["metadata"]["handoff"] == "schematic-export"
         assert validation["metadata"]["connectivity_comparison"]["compared_instance_count"] == 1
         assert validation["metadata"]["source_module_id"] == "core"
         assert len(validation["metadata"]["source_module_hash"]) == 64

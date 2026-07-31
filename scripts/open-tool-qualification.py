@@ -71,10 +71,22 @@ def probe(candidates: tuple[list[str], ...]) -> dict[str, object]:
         available = completed.returncode == 0
         if command[0] == "netgen" and not available:
             available = "Netgen" in text or "netgen" in text.lower()
+        version = ""
+        if text:
+            # ngspice prints a banner whose first line is "******"; prefer the
+            # "ngspice-X.Y" identity line so provider metadata can match.
+            if command[0] == "ngspice":
+                for line in text.splitlines():
+                    stripped = line.strip("* ").strip()
+                    if "ngspice-" in stripped.casefold():
+                        version = stripped[:240]
+                        break
+            if not version:
+                version = text.splitlines()[0][:240]
         return {
             "available": available,
             "executable": executable,
-            "version": text.splitlines()[0][:240] if text else "",
+            "version": version,
             "exit_code": completed.returncode,
         }
     return {"available": False, "executable": "", "version": "", "exit_code": None}
