@@ -1,6 +1,7 @@
 {
   "name": "vibe-analog",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "main": "dist-electron/main.js",
   "description": "Agent-native circuit design workbench for analog and mixed-signal workflows.",
@@ -16,20 +17,6 @@
   "bin": {
     "vibe-analog": "./bin/vibe-analog.js"
   },
-  "files": [
-    "bin",
-    "dist",
-    "dist-electron",
-    "dist-renderer",
-    "embedded/circuit-design/assets",
-    "embedded/circuit-design/scripts/*.py",
-    "embedded/circuit-design/tool_paths.json",
-    "python",
-    "skills",
-    "agent.settings.example.json",
-    "README.md",
-    "README-zh.md"
-  ],
   "scripts": {
     "dev": "tsx src/app.ts",
     "build": "tsc -p tsconfig.json",

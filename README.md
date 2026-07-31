@@ -118,17 +118,15 @@ Details / CLI:
 
 ### 1. Install the CLI
 
-After the package is published, install it globally:
+This project is **not** published to npm. Use a source checkout (or install the desktop app from [GitHub Releases](https://github.com/DeconBear/vibe-analog/releases)):
 
 ```powershell
-npm install -g vibe-analog
-```
-
-For local source development:
-
-```powershell
+git clone https://github.com/DeconBear/vibe-analog.git
+cd vibe-analog
 npm install
 python -m pip install schemdraw
+npm run build
+npm link
 ```
 
 ### 2. Install and Configure ngspice
@@ -168,7 +166,7 @@ Resolution priority:
 3. Packaged `embedded/circuit-design/tool_paths.json`
 4. `ngspice` found on system `PATH`
 
-For npm users, prefer `NGSPICE_BIN` or `PATH`. Do not edit files inside the installed npm package.
+Prefer `NGSPICE_BIN` or `PATH` over editing packaged `tool_paths.json`.
 
 ### 3. About Red Error Messages
 

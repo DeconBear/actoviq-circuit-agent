@@ -115,17 +115,15 @@ npm run electron:start
 
 ### 1. 安装 CLI
 
-npm 包发布后，可以全局安装：
+本项目**不**发布到 npm。请从源码安装（桌面版也可从 [GitHub Releases](https://github.com/DeconBear/vibe-analog/releases) 下载）：
 
 ```powershell
-npm install -g vibe-analog
-```
-
-如果是本地源码开发：
-
-```powershell
+git clone https://github.com/DeconBear/vibe-analog.git
+cd vibe-analog
 npm install
 python -m pip install schemdraw
+npm run build
+npm link
 ```
 
 ### 2. 安装并配置 ngspice
@@ -165,7 +163,7 @@ ngspice 路径解析优先级：
 3. 包内 `embedded/circuit-design/tool_paths.json`
 4. 系统 `PATH` 中的 `ngspice`
 
-对 npm 用户，推荐使用 `NGSPICE_BIN` 或 `PATH`。不要直接修改已安装 npm 包内部的文件。
+推荐使用 `NGSPICE_BIN` 或 `PATH`，不要直接改包内的 `tool_paths.json`。
 
 ### 3. 关于红色报错信息
 
